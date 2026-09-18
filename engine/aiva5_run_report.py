@@ -712,6 +712,8 @@ def rows_package_info(store, paths, settings, progress):
     for info in store.read("package_info"):
         for row in info.get("rows", []):
             add(row["group"], row["item"], row["value"])
+    for row in store.read("info_rows"):
+        add(row["group"], row["item"], row["value"])
     repairs = {}
     for repair in store.read("read_repairs"):
         repairs.setdefault(repair["file"], []).append(repair["kind"])
@@ -723,10 +725,12 @@ def rows_package_info(store, paths, settings, progress):
     add("How formulas are compared", "Sample points and seed",
         "%d points, seed %d, relative tolerance %s" % (settings["numeric_points"], settings["numeric_seed"],
                                                        shared.plain_number(settings["relative_tolerance"], 3)))
+    for label, value in call_statistics(store):
+        add("AI calls", label, value)
     return rows
 
 def chunk_note(chunk):
-    notes = []
+    notes = ["Could not be read: %s" % chunk["not_read_reason"]] if chunk.get("not_read_reason") else []
     equation = chunk.get("equation") or {}
     if chunk["kind"] == "Equation" and not equation.get("readable"):
         notes.append("Could not be read: %s" % (equation.get("not_readable_reason") or "unknown form"))
@@ -1009,20 +1013,295 @@ def build_run_summary(store, paths, progress, target):
     docx_table(document, ("Step", "Skill", "Produced", "Notes"), rows)
     document.save(target)
 
-def build_report_file(store, paths, settings, target):
-    """Placeholder until Phase 1 of the build: the report is built in build_report_file."""
-    import docx
-    document = docx.Document()
-    document.add_heading("AIVA validation report", level=1)
-    document.save(target)
+REPORT_SCOPE = (
+    "AIVA compares three things: the methodology, the model code and data in the R package, and the model "
+    "documentation. It reads all three, links what corresponds, checks formulas, values and stated rules by "
+    "code, and raises what it could not line up for a person to decide. It does not run the model, does not "
+    "judge whether the methodology is sound, and rates nothing: every flagged item is a question for a person.")
+
+def call_statistics(store):
+    """The AI call statistics shown on Model_Package_Info and in the report's annex."""
+    calls = store.read_calls()
+    if not calls:
+        return [("Questions asked", "No question has been asked yet")]
+    final = [c for c in calls if c.get("final")]
+    rejected = {}
+    for call in final:
+        if call["outcome"].startswith("rejected"):
+            rejected[call["outcome"]] = rejected.get(call["outcome"], 0) + 1
+    with_planted = [c for c in final if c.get("planted")]
+    seconds = sorted(c["seconds"] for c in calls)
+    rows = [("Questions asked", len(final)), ("Attempts made", len(calls)),
+            ("Answers accepted", sum(1 for c in final if c["outcome"] == "accepted")),
+            ("Questions that stayed without an answer", sum(1 for c in final if c["outcome"].startswith("failed")))]
+    rows += [("Answers %s" % reason, count) for reason, count in sorted(rejected.items())]
+    planted = sum(1 for c in with_planted if c["outcome"] == "rejected: " + shared.REJECTION_REASONS[3])
+    rows.append(("Answers that accepted a planted control passage", "%d of %d questions that held one" % (planted, len(with_planted))))
+    rows.append(("Median seconds per call", shared.plain_number(seconds[len(seconds) // 2], 3)))
+    return rows
+
+def call_plan(paths, settings, step_id, seconds_per_call=0.0):
+    """The call plan of one AI step, obtained by really building every question of the step
+    (building is deterministic and cheap) without asking any. Shown before the step starts."""
+    store, collected = open_store(paths, settings), []
+    step = next(s for s in load_pipeline()["steps"] if s["id"] == step_id)
+    def collect(questions):
+        collected.extend(questions)
+        return {}
+    options = dict(step.get("with") or {})
+    options.update({"inputs": list_input_files(paths), "references_dir": REFERENCES_DIR, "paths": paths,
+                    "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
+    provenance = shared.Provenance(paths.run_id, step["id"], step["skill"], step["skill_version"])
+    STEP_FUNCTIONS[step["function"]](shared.StepContext(settings, options, store.read, collect, paths.local_dir, lambda text: None, provenance))
+    by_type = {}
+    for question in collected:
+        by_type[question["question_type"]] = by_type.get(question["question_type"], 0) + 1
+    largest = max([q["estimated_tokens"] for q in collected] or [0])
+    minutes = len(collected) * seconds_per_call / max(1, int(settings["concurrency_limit"])) / 60.0
+    return {"step": step["skill"], "questions": len(collected), "by_type": by_type, "largest_estimated_tokens": largest,
+            "token_cap": settings["token_cap"], "expected_minutes": round(minutes, 1),
+            "note": "Questions that depend on earlier answers of the same step are not in this count."}
+
+# ---------------------------------------------------------------- determinations
+def find_uploads(paths, identity):
+    """Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called
+    (the behaviour of an upload onto an existing name is not documented). Returns the
+    matching files, newest last, and plain messages about files that were refused."""
+    import openpyxl
+    matching, refused = [], []
+    for name in sorted(os.listdir(paths.outputs_dir)):
+        path = os.path.join(paths.outputs_dir, name)
+        if name.lower().endswith(".xls"):
+            refused.append("%s is in the old .xls format; save it as .xlsx and upload it again." % name)
+        if not name.lower().endswith(".xlsx"):
+            continue
+        try:
+            found = json.loads(openpyxl.load_workbook(path, read_only=True).properties.description or "{}")
+        except Exception:
+            refused.append("%s could not be opened as a workbook; nothing was read from it." % name)
+            continue
+        if all(found.get(key) == identity[key] for key in ("model_id", "date_initiated", "run_id", "item_list_hash")):
+            matching.append(path)
+        else:
+            refused.append("%s belongs to another run or another list of items; nothing was read from it." % name)
+    return sorted(matching, key=os.path.getmtime), refused
+
+def read_yellow_cells(path, known_ids):
+    """The four yellow cells of every row of Flagged_Items, found by item id and never by row
+    position, because reviewers sort and filter. Returns ({item id: values}, messages)."""
+    import openpyxl
+    sheet = openpyxl.load_workbook(path, read_only=True)["Flagged_Items"]
+    rows = list(sheet.iter_rows(values_only=True))
+    header = [str(cell or "") for cell in rows[0]]
+    places = {name: header.index(name) for name in ("Item id", "Decision", "Reviewer", "Role", "Rationale")}
+    found, messages = {}, []
+    for row in rows[1:]:
+        item_id = str(row[places["Item id"]] or "").strip()
+        values = {name.lower(): str(row[places[name]] or "").strip() for name in ("Decision", "Reviewer", "Role", "Rationale")}
+        if not item_id:
+            continue
+        if item_id not in known_ids:
+            messages.append("The row with item id %s belongs to no flagged item of this run and was not read." % item_id)
+        elif item_id in found:
+            messages.append("Item %s occurs on two rows; neither was recorded." % item_id)
+            found[item_id] = None
+        else:
+            found[item_id] = values
+    return {item_id: values for item_id, values in found.items() if values is not None}, messages
 
 def record_determinations(ctx):
-    """Placeholder of Phase 0."""
-    return shared.StepResult()
+    """Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a
+    copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one
+    record for every item whose four values changed. Earlier records are never changed; a
+    cleared decision is recorded as Withdrawn. The record is a hash chain. Enforces: R4, R12"""
+    paths, settings = ctx.options["paths"], ctx.settings
+    manifest = (ctx.read("run_manifest") or [{}])[0]
+    items = {item["item_id"] for item in ctx.read("flagged_items")}
+    identity = {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id,
+                "item_list_hash": shared.sha256_text("\n".join(i["item_id"] for i in ctx.read("flagged_items"))) if items else ""}
+    uploads, messages = find_uploads(paths, identity)
+    edited = [p for p in uploads if file_sha256(p) != manifest.get("last_workbook_sha256")]
+    if not edited:
+        return shared.StepResult({}, {"determinations recorded": 0}, messages + ["No edited workbook of this run was found in Outputs/."])
+    chosen = edited[-1]
+    digest = file_sha256(chosen)
+    os.makedirs(os.path.join(paths.audit_dir, "uploads"), exist_ok=True)
+    for path in edited:
+        copy_whole(path, os.path.join(paths.audit_dir, "uploads", "%s_%s" % (file_sha256(path)[:12], os.path.basename(path))))
+    cells, notes = read_yellow_cells(chosen, items)
+    messages += notes
+    latest, records = {}, []
+    for record in ctx.read("determinations"):
+        latest[record["item_id"]] = record
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    for item_id in sorted(cells):
+        values = cells[item_id]
+        previous = latest.get(item_id)
+        decision = next((word for word in shared.DECISION_WORDS if word.lower() == values["decision"].lower()), "")
+        if values["decision"] and not decision:
+            messages.append("Item %s: the decision must be one of: %s. Nothing was recorded for it." % (item_id, ", ".join(shared.DECISION_WORDS)))
+            continue
+        if decision and not (values["reviewer"] and values["role"] and values["rationale"]):
+            messages.append("Item %s: a decision needs a reviewer, a role and a rationale. Nothing was recorded for it." % item_id)
+            continue
+        if not decision:
+            if previous and previous["decision"] != shared.DECISION_WITHDRAWN:
+                records.append(shared.Determination(item_id, shared.DECISION_WITHDRAWN, previous["reviewer"], previous["role"],
+                                                    "The recorded decision was cleared in the workbook.", now, settings["reviewer_id"], digest))
+            continue
+        same = previous and all(previous[key] == value for key, value in dict(values, decision=decision).items())
+        if not same:
+            records.append(shared.Determination(item_id, decision, values["reviewer"], values["role"], values["rationale"], now,
+                                                settings["reviewer_id"], digest))
+    for path in uploads:                                 # tidy Outputs/ back to exactly the two files AIVA writes
+        if os.path.basename(path) != "Output.xlsx":
+            os.remove(path)
+    chained = shared.chain_records(shared.chain_head(ctx.read("determinations")), [shared.to_plain(r) for r in records])
+    manifest.update(last_upload_sha256=digest)
+    return shared.StepResult({"determinations": chained, "run_manifest": [manifest]}, {"determinations recorded": len(chained)},
+                             messages + ["Text typed outside the four yellow columns is ignored."])
+
+# ---------------------------------------------------------------- Validation_Report.docx
+def build_report_file(store, paths, settings, target):
+    """The report, in the eight parts of plan 2.11, built from the same records as the
+    workbook. Items are ordered by item id and never ranked. Enforces: R10"""
+    import docx
+    from docx.enum.section import WD_ORIENT
+    identity, document = run_identity(store, paths), docx.Document()
+    items, latest = store.read("flagged_items"), latest_determinations(store)
+    decided = {k: v for k, v in latest.items() if v["decision"] != shared.DECISION_WITHDRAWN}
+    info = (store.read("package_info") or [{}])[0]
+    document.add_heading("AIVA validation report", level=1)
+    open_count = sum(1 for item in items if item["item_id"] not in decided)
+    document.add_paragraph("Every flagged item has a recorded determination." if items and not open_count
+                           else "%d of %d flagged items are still open." % (open_count, len(items)))
+    docx_table(document, ("Field", "Value"), [
+        ("Model ID", identity["model_id"]), ("Date initiated", identity["date_initiated"]), ("Run", identity["run_id"]),
+        ("Package", "%s %s" % (info.get("name", ""), info.get("version", ""))), ("Engine version", identity["engine_version"]),
+        ("Graph version id", identity["graph_version_id"]), ("Item list fingerprint", identity["item_list_hash"][:16]),
+        ("Determinations record fingerprint", identity["determinations_fingerprint"] or "No determination recorded yet")])
+    manifest = (store.read("run_manifest") or [{}])[0]
+    document.add_heading("1. What was reviewed", level=2)
+    docx_table(document, ("Input file", "SHA-256", "Bytes"), [(e["file"], e["sha256"], e["bytes"]) for e in manifest.get("inputs", [])])
+    for change in manifest.get("changes_since_previous_run", []):
+        document.add_paragraph("Changed since run %s: %s" % (manifest.get("previous_run", ""), change))
+    document.add_heading("2. What AIVA did and did not assess", level=2)
+    document.add_paragraph(REPORT_SCOPE)
+    limits = [(s["unit_ref"], s["reason_shown"]) for s in store.read("unit_status") if s["status"] == shared.ST_NOT_ASSESSED]
+    limits += [("Repair", "%s: %s" % (r["file"], r["kind"])) for r in store.read("read_repairs")][:40]
+    docx_table(document, ("Unit or file", "Limit of this run"), limits or [("None", "Nothing was left unread or unassessed")])
+    document.add_heading("3. Coverage", level=2)
+    coverage = (store.read("coverage") or [{}])[0]
+    rows = [(label, coverage.get(corner, {}).get("total", ""), coverage.get(corner, {}).get("needs_attention", "for information only"))
+            for corner, label in COVERAGE_ROWS]
+    docx_table(document, ("Corner", "Units", "Needs attention"), rows)
+    document.add_paragraph(NEEDS_ATTENTION_MEANS)
+    document.add_heading("4. Flagged items by concern and category", level=2)
+    counts = {}
+    for item in items:
+        counts[(item["concerns"], item["category"])] = counts.get((item["concerns"], item["category"]), 0) + 1
+    docx_table(document, ("Concerns", "Category", "Items"), [(c, k, n) for (c, k), n in sorted(counts.items())])
+    section = document.add_section()
+    section.orientation, section.page_width, section.page_height = WD_ORIENT.LANDSCAPE, section.page_height, section.page_width
+    document.add_heading("5. Every flagged item", level=2)
+    for item in items:
+        document.add_heading("%s - %s" % (item["item_id"], item["category"]), level=3)
+        document.add_paragraph("Concerns: %s. Units: %s." % (item["concerns"], ", ".join(item["unit_refs"])))
+        document.add_paragraph(item["observed"][:3000])
+        docx_table(document, ("Methodology says", "Code does", "Documentation says"),
+                   [(item["methodology_says"][:1500], item["code_does"][:1500], item["documentation_says"][:1500])])
+        document.add_paragraph("Suggested next step: %s" % item["suggested_next_step"])
+        record = latest.get(item["item_id"])
+        if record:
+            by = "" if record["recorded_by"] in ("", record["reviewer"]) else ", recorded by %s for reviewer %s" % (record["recorded_by"], record["reviewer"])
+            document.add_paragraph("Determination: %s, by %s (%s) at %s%s. Rationale: %s" % (
+                record["decision"], record["reviewer"], record["role"], record["recorded_at"], by, quoted(record["rationale"])))
+        else:
+            document.add_paragraph("Determination: none recorded yet (the item is open).")
+    document.add_heading("6. Methodology passages that nothing points to (for information)", level=2)
+    pointed = {e["target"] for e in store.read("graph_ledger") if e.get("record_type") == "edge" and e["kind"] == "corresponds"
+               and e["relation"] in shared.LINKING_RELATIONS}
+    unpointed = [(c["ref"], " > ".join(c["heading_chain"][-2:]), c["kind"]) for c in store.read("chunks_canon") if c["ref"] not in pointed]
+    docx_table(document, ("Passage", "Section", "Kind"), unpointed or [("None", "", "")])
+    document.add_heading("7. How to re-verify this pack", level=2)
+    document.add_paragraph("Open the notebook, enter the model ID, the date initiated and this run, and run the cell \"Verify this evidence "
+                           "pack\". It re-hashes the inputs, re-reads them, verifies both hash chains and re-checks the coverage identity.")
+    document.add_heading("Annex. AI call statistics", level=2)
+    docx_table(document, ("Measure", "Value"), call_statistics(store))
+    document.save(target)
 
 def build_report(ctx):
-    """Placeholder of Phase 0."""
-    return shared.StepResult()
+    """Step 18, skill build-report: the exports of the graph for anyone who wants to load it
+    elsewhere (nodes.csv, edges.csv, graph.graphml). The two output files themselves are
+    rebuilt by the runner after every step."""
+    import csv
+    paths, ledger = ctx.options["paths"], ctx.read("graph_ledger")
+    folder = os.path.join(paths.audit_dir, "exports")
+    os.makedirs(folder, exist_ok=True)
+    nodes = [r for r in ledger if r["record_type"] == "node"]
+    edges = [r for r in ledger if r["record_type"] == "edge"]
+    with open(os.path.join(folder, "nodes.csv"), "w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle).writerows([("ref", "kind", "corner")] + [(n["ref"], n["node_kind"], n["corner"]) for n in nodes])
+    with open(os.path.join(folder, "edges.csv"), "w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle).writerows([("source", "target", "kind", "relation", "how")] +
+                                     [(e["source"], e["target"], e["kind"], e.get("relation", ""), e["how"]) for e in edges])
+    escape = lambda text: str(text).replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<graphml xmlns="http://graphml.graphdrawing.org/xmlns">',
+             '<key id="kind" for="all" attr.name="kind" attr.type="string"/>', '<graph edgedefault="directed">']
+    lines += ['<node id="%s"><data key="kind">%s</data></node>' % (escape(n["ref"]), escape(n["node_kind"])) for n in nodes]
+    lines += ['<edge source="%s" target="%s"><data key="kind">%s</data></edge>' % (escape(e["source"]), escape(e["target"]), escape(e["kind"])) for e in edges]
+    with open(os.path.join(folder, "graph.graphml"), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines + ["</graph>", "</graphml>"]))
+    return shared.StepResult({}, {"nodes exported": len(nodes), "edges exported": len(edges)}, [])
+
+# ---------------------------------------------------------------- verify this evidence pack
+def verify_evidence_pack(paths, settings, live=None):
+    """Works from a run folder and the Inputs folder alone. Returns rows (what was checked,
+    "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
+    content hash is computed again from the input files and compared with the record."""
+    store, rows = open_store(paths, settings), []
+    def line(what, good, detail=""):
+        rows.append((what, "Confirmed" if good else "Not confirmed", detail))
+    manifest = (store.read("run_manifest") or [{}])[0]
+    changed = [e["file"] for e in manifest.get("inputs", []) if not os.path.exists(os.path.join(paths.inputs_dir, e["file"]))
+               or file_sha256(os.path.join(paths.inputs_dir, e["file"])) != e["sha256"]]
+    line("Input files have the recorded fingerprints", not changed, ", ".join(changed))
+    options = {"inputs": list_input_files(paths), "references_dir": REFERENCES_DIR}
+    context = shared.StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
+    for kind, function in (("chunks_canon", aiva1_documents.read_methodology), ("chunks_doc", aiva1_documents.read_documentation),
+                           ("model_units", aiva2_package.read_package)):
+        fresh = {shared.to_plain(r)["ref"]: shared.to_plain(r)["content_hash"] for r in function(context).records.get(kind, [])}
+        recorded = {r["ref"]: r["content_hash"] for r in store.read(kind)}
+        differing = sorted(ref for ref in set(fresh) | set(recorded) if fresh.get(ref) != recorded.get(ref))
+        line("Re-reading the inputs gives the recorded content hashes (%s)" % kind, not differing, ", ".join(differing[:5]))
+    ledger_ok, position, _ = shared.verify_chain(store.read("graph_ledger"), aiva3_mapping.LEDGER_VOLATILE)
+    line("The graph ledger chain verifies", ledger_ok, "" if ledger_ok else "record %d no longer verifies" % (position + 1))
+    decisions_ok, position, _ = shared.verify_chain(store.read("determinations"))
+    line("The determinations chain verifies", decisions_ok, "" if decisions_ok else "record %d no longer verifies" % (position + 1))
+    statuses, items = store.read("unit_status"), store.read("flagged_items")
+    named = {ref for item in items for ref in item["unit_refs"]}
+    not_clean = {s["unit_ref"] for s in statuses if not s["clean"]}
+    expected = {r["ref"] for kind in ("model_units", "chunks_doc") for r in store.read(kind)}
+    line("Every unit has one status; units that are not clean and flagged items match",
+         {s["unit_ref"] for s in statuses} == expected and len(statuses) == len(expected) and not_clean == named & expected)
+    known = expected | {r["ref"] for r in store.read("chunks_canon")}
+    line("Every citation on Flagged_Items resolves to a unit", all(ref in known for ref in named))
+    identity = run_identity(store, paths)
+    try:
+        import openpyxl
+        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, "Output.xlsx"), read_only=True).properties.description)
+        line("The workbook carries this run's ids and fingerprints", all(found.get(k) == v for k, v in identity.items()))
+    except Exception:
+        line("The workbook carries this run's ids and fingerprints", False, "Output.xlsx could not be opened")
+    secrets = [value for value in (list(live.recent_tokens) if live else []) if value]
+    leaked = []
+    for folder, _, names in os.walk(paths.run_dir):
+        for name in names:
+            with open(os.path.join(folder, name), "rb") as handle:
+                data = handle.read()
+            leaked += [name for value in secrets if value.encode("utf-8") in data]
+    line("No access token was written into the run folder", not leaked, ", ".join(sorted(set(leaked))))
+    return rows
 
 STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
     "aiva1_documents.read_methodology": aiva1_documents.read_methodology,
