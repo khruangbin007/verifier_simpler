@@ -82,14 +82,14 @@ Each Inputs folder holds a README that says what goes in. Optional files directl
 
 ## 5. The notebook, cell by cell
 
-`AIVA_Interface.ipynb` is the only file you open. It has thirteen widgets: LLM endpoint, LLM token, LLM user id, model ID, project, run, Projects folder, JFrog index URL, concurrency limit, token cap, reviewer id, reviewer role and scratch folder. Leave the scratch folder empty unless AIVA says it cannot write on the driver.
+`AIVA_Interface.ipynb` is the only file you open. It has thirteen widgets: LLM endpoint, LLM token, LLM user id, model ID, project, run, Projects folder, JFrog index URL, concurrency limit, token cap, reviewer id, reviewer role and scratch folder. Leave the scratch folder empty unless AIVA says it cannot write on the driver. `cell 2` makes them all and needs nothing installed, so they can be filled in before `cell 3` installs anything.
 
 | Cell | What it does |
 |---|---|
 | `cell 1` | How to use the notebook. |
-| `cell 2` | Installs the packages from the JFrog index and restarts Python. Once per cluster start. |
-| `cell 3` | Creates the widgets and finds the notebook's own folder. Run it again after entering the model ID to refresh the project and run lists. |
-| `cell 4` | Preflight: versions, a write-and-read-back test in the Projects folder, scratch space. |
+| `cell 2` | **Run this first.** Makes every widget at the top of the notebook. It needs nothing installed, so the widgets are there to fill in before anything else happens. Run it again after entering the model ID to refresh the project and run lists; it installs nothing. |
+| `cell 3` | Installs the packages from the index in widget `08 JFrog index URL` and restarts Python. Once per cluster start. With no URL it installs nothing and says so, rather than taking packages from an index you did not name. |
+| `cell 4` | Sets the import path, loads the engine, and runs preflight: versions, a write-and-read-back test in the Projects folder, scratch space. |
 | `cell 5` | **Use the latest widget values.** The only cell that reads the three LLM widgets. It prints the token's age and length, never the token. |
 | `cell 6` | **Your cell**: paste your `chat()` definition. Keep the signature; read the three live values with `aiva_live(...)` when `chat()` is called. |
 | `cell 7` | Self-test of `chat()`: one tiny question. It reports success or which kind of failure was seen, and measures the time per call. A switch selects the stand-in instead. |
@@ -349,7 +349,7 @@ The first page names the model ID, the date initiated, the run, the package and 
 | The status cell says the run waits for a fresh token | The token ran out. Paste a new one (mode B: then run `cell 5`). No question is repeated. |
 | "The time box of this foreground run is over" | Mode C stopped by itself. Paste a fresh token and run `cell 12` again. |
 | "Many calls in a row failed, so the run paused itself" | The gateway is not answering. Check it with `cell 7`, then run `cell 12` again. |
-| The cluster stopped | Start it, run `cell 2` to `cell 8`, choose the same run in the run widget, and run `cell 12`. The run resumes after its last finished step. |
+| The cluster stopped | Start it, run `cell 2` to `cell 8` in order, choose the same run in the run widget, and run `cell 12`. The run resumes after its last finished step. |
 | An input changed | Start a **new run** in the same project. `Model_Package_Info` lists what changed since the previous run. Never edit inputs of a run that has started. |
 | A unit of kind *File not read* | That file or expression could not be parsed. It has a flagged item with the reason; the rest of the package was still read. |
 | "... belongs to another run or another list of items" | The uploaded workbook is not this run's `Output.xlsx`. Download the current one and fill it again. |
@@ -669,7 +669,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_docs.py` | 5 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
 | `test_end_to_end.py` | 15 | End-to-end tests on the sample projects: sameness of two runs, the human round trip, the report, the wording of everything an analyst reads, replay, and verification of a run folder. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
-| `test_notebook.py` | 4 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
+| `test_notebook.py` | 5 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
 
 Sample projects under `engine/tests/sample_projects/`, all invented and rebuilt byte for byte by `tools/build_samples.py`: `A_minimal` (a neutral parcel-pricing method; XML, a Word file, four help pages), `F_capital` (XML inside a `.txt` file with four levels and a flat-numbered annex; equations as MathML, inline notation, a sentence and an image; stored tables as `.rda` and `.rds`; a help page that is out of step on purpose; a Word file and a PDF), `F_capital_known` (the same with six seeded differences, listed in its `expected_items.csv`) and `D_dosing` (another field, to keep the engine honest about rule R9; Word's web export with preserved equation markup; PDF-only documentation). Each sample has hand-made gold files: `gold_links.csv`, `gold_not_checkable.csv`, `gold_clean_units.csv`.
 
