@@ -1,0 +1,103 @@
+# equivalence_corpus.yaml - 50 pairs that are equivalent and 50 that differ by one seeded change (plan, Phase 8).
+# The hard requirement: no differing pair is ever reported as agreeing. Both sides are in AIVA's linear notation.
+pairs:
+  - {name: "product commutes", expect: equivalent, code: "y = a*b", stated: "y = b*a"}
+  - {name: "sum commutes", expect: equivalent, code: "y = a+b", stated: "y = b+a"}
+  - {name: "distribution", expect: equivalent, code: "y = a*(b+c)", stated: "y = a*b + a*c"}
+  - {name: "binomial square", expect: equivalent, code: "y = (a+b)^2", stated: "y = a^2 + 2*a*b + b^2"}
+  - {name: "division as negative power", expect: equivalent, code: "y = a/b", stated: "y = a*b^-1"}
+  - {name: "nested subtraction", expect: equivalent, code: "y = a - (b - c)", stated: "y = a - b + c"}
+  - {name: "exponential of a sum", expect: equivalent, code: "y = exp(a+b)", stated: "y = exp(a)*exp(b)"}
+  - {name: "exp of logs", expect: equivalent, code: "y = exp(ln(a) + ln(b))", stated: "y = a*b"}
+  - {name: "log of a product", expect: equivalent, code: "y = ln(a*b)", stated: "y = ln(a) + ln(b)"}
+  - {name: "log of a ratio", expect: equivalent, code: "y = ln(a/b)", stated: "y = ln(a) - ln(b)"}
+  - {name: "root times root", expect: equivalent, code: "y = sqrt(a)*sqrt(a)", stated: "y = a"}
+  - {name: "root of a product", expect: equivalent, code: "y = sqrt(a*b)", stated: "y = sqrt(a)*sqrt(b)"}
+  - {name: "normal symmetry", expect: equivalent, code: "y = 1 - N(x)", stated: "y = N(-x)"}
+  - {name: "inverse normal symmetry", expect: equivalent, code: "y = N^-1(1 - p)", stated: "y = -N^-1(p)"}
+  - {name: "maximum as piecewise", expect: equivalent, code: "y = max(a, b)", stated: "y = piecewise(a > b, a, b)"}
+  - {name: "minimum as piecewise", expect: equivalent, code: "y = min(a, b)", stated: "y = piecewise(a < b, a, b)"}
+  - {name: "floor as piecewise", expect: equivalent, code: "y = max(a, 0.5)", stated: "y = piecewise(a >= 0.5, a, 0.5)"}
+  - {name: "percent scaling", expect: equivalent, code: "y = 12.5% * x", stated: "y = 0.125 * x"}
+  - {name: "hundred percent", expect: equivalent, code: "y = x * 100%", stated: "y = x"}
+  - {name: "chained division", expect: equivalent, code: "y = a/(b*c)", stated: "y = a/b/c"}
+  - {name: "regrouped ratio", expect: equivalent, code: "y = (a*b)/c", stated: "y = a*(b/c)"}
+  - {name: "powers add", expect: equivalent, code: "y = a^2 * a", stated: "y = a^3"}
+  - {name: "negative power", expect: equivalent, code: "y = a^(-1)", stated: "y = 1/a"}
+  - {name: "negative exponent", expect: equivalent, code: "y = exp(-x)", stated: "y = 1/exp(x)"}
+  - {name: "both signs turned", expect: equivalent, code: "y = (1 - exp(-50*p))/(1 - exp(-50))", stated: "y = (exp(-50*p) - 1)/(exp(-50) - 1)"}
+  - {name: "weights collected", expect: equivalent, code: "y = 0.12*w + 0.24*(1 - w)", stated: "y = 0.24 - 0.12*w"}
+  - {name: "conditional probability rearranged", expect: equivalent, code: "y = N((N^-1(p) + sqrt(r)*N^-1(0.999))/sqrt(1 - r))", stated: "y = N(N^-1(p)/sqrt(1-r) + sqrt(r/(1-r))*N^-1(0.999))"}
+  - {name: "factor distributed", expect: equivalent, code: "y = l*(n - p)", stated: "y = l*n - l*p"}
+  - {name: "absolute difference", expect: equivalent, code: "y = abs(a - b)", stated: "y = abs(b - a)"}
+  - {name: "maximum of three", expect: equivalent, code: "y = max(a, b, c)", stated: "y = max(max(a, b), c)"}
+  - {name: "minimum of three", expect: equivalent, code: "y = min(a, min(b, c))", stated: "y = min(a, b, c)"}
+  - {name: "surcharge", expect: equivalent, code: "y = a*1.125", stated: "y = a*(1 + 0.125)"}
+  - {name: "discount", expect: equivalent, code: "y = a*(1 - d)", stated: "y = a - a*d"}
+  - {name: "mean", expect: equivalent, code: "y = (a + b)/2", stated: "y = 0.5*a + 0.5*b"}
+  - {name: "half power", expect: equivalent, code: "y = a^0.5", stated: "y = sqrt(a)"}
+  - {name: "exp of twice the log", expect: equivalent, code: "y = exp(2*ln(a))", stated: "y = a^2"}
+  - {name: "log of exp", expect: equivalent, code: "y = ln(exp(a))", stated: "y = a"}
+  - {name: "factors reordered", expect: equivalent, code: "y = k*12.5*e", stated: "y = 12.5*e*k"}
+  - {name: "cap and floor swapped", expect: equivalent, code: "y = max(min(m, 5), 1)", stated: "y = min(max(m, 1), 5)"}
+  - {name: "double negation", expect: equivalent, code: "y = -(-a)", stated: "y = a"}
+  - {name: "difference turned", expect: equivalent, code: "y = a - b", stated: "y = -(b - a)"}
+  - {name: "difference of squares", expect: equivalent, code: "y = (a - b)*(a + b)", stated: "y = a^2 - b^2"}
+  - {name: "double reciprocal", expect: equivalent, code: "y = 1/(1/a)", stated: "y = a"}
+  - {name: "common denominator", expect: equivalent, code: "y = a/b + c/b", stated: "y = (a + c)/b"}
+  - {name: "square of exp", expect: equivalent, code: "y = exp(a)^2", stated: "y = exp(2*a)"}
+  - {name: "root of a square", expect: equivalent, code: "y = sqrt(a^2)", stated: "y = abs(a)"}
+  - {name: "absolute value as piecewise", expect: equivalent, code: "y = piecewise(x > 0, x, -x)", stated: "y = abs(x)"}
+  - {name: "cap as piecewise", expect: equivalent, code: "y = piecewise(x > 1, 1, x)", stated: "y = min(x, 1)"}
+  - {name: "scaled and unscaled", expect: equivalent, code: "y = 100*x/100", stated: "y = x"}
+  - {name: "square of a product", expect: equivalent, code: "y = (a*b)^2", stated: "y = a^2 * b^2"}
+  - {name: "a sign", expect: different, code: "y = a + b", stated: "y = a - b"}
+  - {name: "an operator", expect: different, code: "y = a*b", stated: "y = a/b"}
+  - {name: "lost brackets", expect: different, code: "y = a*(b+c)", stated: "y = a*b + c"}
+  - {name: "sign in the conditional probability", expect: different, code: "y = N((N^-1(p) - sqrt(r)*N^-1(0.999))/sqrt(1-r))", stated: "y = N((N^-1(p) + sqrt(r)*N^-1(0.999))/sqrt(1-r))"}
+  - {name: "one plus r for one minus r", expect: different, code: "y = N((N^-1(p) + sqrt(r)*N^-1(0.999))/sqrt(1+r))", stated: "y = N((N^-1(p) + sqrt(r)*N^-1(0.999))/sqrt(1-r))"}
+  - {name: "a constant", expect: different, code: "y = 0.13*w + 0.24*(1-w)", stated: "y = 0.12*w + 0.24*(1-w)"}
+  - {name: "an exponent", expect: different, code: "y = a^2", stated: "y = a^3"}
+  - {name: "a slightly changed exponent", expect: different, code: "y = a^2", stated: "y = a^2.1"}
+  - {name: "a missing term", expect: different, code: "y = a*b + a", stated: "y = a*b"}
+  - {name: "swapped subtraction", expect: different, code: "y = a - b", stated: "y = b - a"}
+  - {name: "swapped division", expect: different, code: "y = a/b", stated: "y = b/a"}
+  - {name: "swapped power", expect: different, code: "y = a^b", stated: "y = b^a"}
+  - {name: "a removed floor", expect: different, code: "y = a", stated: "y = max(a, 0.5)"}
+  - {name: "a removed cap", expect: different, code: "y = a", stated: "y = min(a, 0.2)"}
+  - {name: "a changed floor", expect: different, code: "y = max(a, 0.5)", stated: "y = max(a, 0.6)"}
+  - {name: "a moved threshold", expect: different, code: "y = piecewise(x > 0.5, x, 0.5)", stated: "y = piecewise(x > 0.6, x, 0.5)"}
+  - {name: "a threshold made inclusive", expect: different, code: "y = piecewise(x > 0.5, a, b)", stated: "y = piecewise(x >= 0.5, a, b)"}
+  - {name: "a changed rate", expect: different, code: "y = exp(-50*p)", stated: "y = exp(-5*p)"}
+  - {name: "a sign inside exp", expect: different, code: "y = exp(-50*p)", stated: "y = exp(50*p)"}
+  - {name: "a shifted log", expect: different, code: "y = ln(a)", stated: "y = ln(a + 1)"}
+  - {name: "a scaled root", expect: different, code: "y = sqrt(a)", stated: "y = sqrt(2*a)"}
+  - {name: "a scaled normal argument", expect: different, code: "y = N(x)", stated: "y = N(2*x)"}
+  - {name: "the complement", expect: different, code: "y = N(x)", stated: "y = 1 - N(x)"}
+  - {name: "the other tail", expect: different, code: "y = N^-1(p)", stated: "y = N^-1(1 - p)"}
+  - {name: "percent forgotten", expect: different, code: "y = 12.5% * x", stated: "y = 12.5 * x"}
+  - {name: "a decimal place", expect: different, code: "y = x * 0.125", stated: "y = x * 0.0125"}
+  - {name: "a rounded factor", expect: different, code: "y = k*12.5*e", stated: "y = k*12*e"}
+  - {name: "a sign in a bracket", expect: different, code: "y = l*(n - p)", stated: "y = l*(n + p)"}
+  - {name: "a factor not distributed", expect: different, code: "y = l*(n - p)", stated: "y = l*n - p"}
+  - {name: "a misplaced half", expect: different, code: "y = (a + b)/2", stated: "y = a + b/2"}
+  - {name: "a denominator split", expect: different, code: "y = a/(b*c)", stated: "y = a/b*c"}
+  - {name: "a missing cross term", expect: different, code: "y = (a+b)^2", stated: "y = a^2 + b^2"}
+  - {name: "a dropped absolute value", expect: different, code: "y = abs(a - b)", stated: "y = a - b"}
+  - {name: "maximum for minimum", expect: different, code: "y = max(a, b)", stated: "y = min(a, b)"}
+  - {name: "an extra argument", expect: different, code: "y = max(a, b, a*b)", stated: "y = max(a, b)"}
+  - {name: "a sign in a weight", expect: different, code: "y = 0.12*w + 0.24*(1 - w)", stated: "y = 0.12*w + 0.24*(1 + w)"}
+  - {name: "a sign before exp", expect: different, code: "y = 1 - exp(-a)", stated: "y = 1 + exp(-a)"}
+  - {name: "discount turned into surcharge", expect: different, code: "y = a*(1 - d)", stated: "y = a*(1 + d)"}
+  - {name: "a doubled discount", expect: different, code: "y = a*(1 - d)", stated: "y = a*(1 - 2*d)"}
+  - {name: "exp of a sum taken apart", expect: different, code: "y = exp(a + b)", stated: "y = exp(a) + exp(b)"}
+  - {name: "log of a product taken apart", expect: different, code: "y = ln(a*b)", stated: "y = ln(a)*ln(b)"}
+  - {name: "brackets dropped in a subtraction", expect: different, code: "y = a - (b - c)", stated: "y = a - b - c"}
+  - {name: "division regrouped", expect: different, code: "y = a/b/c", stated: "y = a/(b/c)"}
+  - {name: "a confidence level", expect: different, code: "y = 0.999*a", stated: "y = 0.99*a"}
+  - {name: "a floor value", expect: different, code: "y = a + 0.0003", stated: "y = a + 0.003"}
+  - {name: "a moved cap", expect: different, code: "y = max(min(m, 5), 1)", stated: "y = max(min(m, 6), 1)"}
+  - {name: "a sign under the root", expect: different, code: "y = sqrt(1 - r)", stated: "y = sqrt(1 + r)"}
+  - {name: "a square that moved", expect: different, code: "y = a*b^2", stated: "y = (a*b)^2"}
+  - {name: "a surcharge rate", expect: different, code: "y = a*1.125", stated: "y = a*1.25"}
+  - {name: "a branch that lost its sign", expect: different, code: "y = piecewise(x > 0, x, -x)", stated: "y = piecewise(x > 0, x, x)"}

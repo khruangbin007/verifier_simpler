@@ -723,8 +723,8 @@ def check_values(ctx):
         family = [unit["ref"], unit.get("parent_ref")] + [c["ref"] for c in world["children"].get(unit.get("parent_ref") or "", [])]
         passages = sorted({ref for member in family if member for ref in linked(world, member, "C-")})
         cited = sorted({e["target"] for ref in passages for e in world["graph"]["out"].get(ref, []) if e["kind"] == "cross_reference"})
-        stated = [dict(n, ref=ref) for ref in passages + cited for n in shared.find_numbers(world["by_ref"][ref]["text"])]
-        cells, missing = [], False
+        stated = [dict(n, ref=ref, value=n["value"].lstrip("-")) for ref in passages + cited for n in shared.find_numbers(world["by_ref"][ref]["text"])]
+        cells, missing = [], False                       # a sign belongs to the formula, which the mathematical check covers
         for number in numbers:
             match = next((s for s in stated if compare_values(s, number, exact=True)[0] != "differs"), None)
             missing = missing or match is None

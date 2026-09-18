@@ -59,9 +59,13 @@ def snippet(text, shared_words, length=6):
 def formula_score(unit, text):
     """How alike a formula-like passage and a unit are: shared short symbols (whatever their
     capital letters) and shared whole numbers of three digits or more."""
-    if "=" not in text or not re.search(r"[-+*/^(]", text):
+    in_words = any(phrase in text.lower() for phrase in ("product of", "sum of", "divided by"))
+    if not in_words and ("=" not in text or not re.search(r"[-+*/^(]", text)):
         return 0
-    symbols = lambda t: {s.lower() for s in re.findall(r"(?<![\w.])[A-Za-z_]{1,4}(?![\w(])", t)} - {"a", "i", "in", "is", "of", "to", "if", "the"}
+    small = {"a", "i", "in", "is", "of", "to", "if", "the", "and", "by", "f"}
+    symbols = lambda t: {part.lower() for s in re.findall(r"(?<![\w.])[A-Za-z_]{1,6}(?![\w(])", t) for part in [s] + s.split("_")} - small
+    if in_words:                                     # a formula stated in words: two shared symbols are enough
+        return 3 if len(symbols(unit) & symbols(text)) >= 2 else 0
     integers = lambda t: set(re.findall(r"(?<![\w.])\d{3,}(?![\w.])", t))
     return len(symbols(unit) & symbols(text)) + 2 * len(integers(unit) & integers(text))
 

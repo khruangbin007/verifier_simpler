@@ -106,7 +106,8 @@ def roxygen_mutants(path, text):
             del changed[number]
         else:
             changed[number] = new_line
-        mutants.append({"operator": operator, "file": path, "line": number + 1, "what": what, "text": "\n".join(changed), "expected": ROXYGEN_CATEGORIES})
+        line = number if new_line is None else number + 1        # after a deletion the block ends one line earlier
+        mutants.append({"operator": operator, "file": path, "line": line, "what": what, "text": "\n".join(changed), "expected": ROXYGEN_CATEGORIES})
     for number, line in enumerate(lines):
         if not line.startswith("#'"):
             continue
@@ -161,8 +162,15 @@ def docx_mutants(name, data):
     archive = zipfile.ZipFile(io.BytesIO(data))
     parts = {item.filename: archive.read(item.filename) for item in archive.infolist()}
     document = parts["word/document.xml"].decode("utf-8")
-    mutants = []
-    for found in list(re.finditer(r"(<w:t[^>]*>[^<]*?)(\d+\.\d+)(%?)", document))[:6]:
+    mutants, candidates = [], []
+    for paragraph in re.finditer(r"<w:p[ >].*?</w:p>", document, re.S):            # headings and their numbering are left alone
+        if "<w:pStyle w:val=\"Heading" in paragraph.group(0) or "<m:oMath" in paragraph.group(0):
+            continue
+        inner = re.search(r"(<w:t[^>]*>[^<]*?)(\d+\.\d+)(%?)", paragraph.group(0))
+        if inner:
+            candidates.append((paragraph.start() + inner.start(2), paragraph.start() + inner.end(2), inner.group(2), inner.group(3)))
+    for start, end, old_value, percent in candidates[:6]:
+        found = type("Found", (), {"start": lambda self, g: start, "end": lambda self, g: end, "group": lambda self, g: old_value if g == 2 else percent})()
         new_value = changed_number(found.group(2), "a tenth more")
         changed = document[:found.start(2)] + new_value + document[found.end(2):]
         packed = io.BytesIO()
