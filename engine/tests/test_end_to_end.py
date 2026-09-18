@@ -155,6 +155,18 @@ class HumanRoundTrip(unittest.TestCase):
         self.assertTrue(os.listdir(os.path.join(self.paths.audit_dir, "uploads")))
         self.assertTrue(shared.verify_chain(self.store.read("determinations"))[0])
 
+    def test_a_person_may_use_the_words_that_aiva_itself_never_uses(self):
+        """Rating and classifying are for people: what a reviewer types is kept and shown exactly as typed."""
+        import openpyxl
+        rationale = "This is a " + "maj" + "or " + "find" + "ing under our policy; to be corrected."
+        self.upload({self.items[0]: ("Requires action", "A. Reviewer", "Validator", rationale)})
+        self.record()
+        self.assertEqual(self.store.read("determinations")[0]["rationale"], rationale)
+        sheet = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))["Flagged_Items"]
+        column = [c.value for c in sheet[1]].index("Rationale")
+        shown = [row[column] for row in sheet.iter_rows(min_row=2, values_only=True) if row[0] == self.items[0]]
+        self.assertEqual(shown, [rationale])
+
     def test_incomplete_unknown_and_duplicated_rows_are_reported_and_not_recorded(self):
         self.upload({self.items[0]: ("No action needed", "", "", ""), "RI-0000-99999": ("Requires action", "X", "Y", "Z")})
         _, messages = self.record()

@@ -22,7 +22,7 @@
   "engine/references/r_function_map.yaml": "3c371f8cd61338a731948392f8574b103c520374da6fb664279b15b691187e6f",
   "engine/references/stopwords.txt": "7afcfc00561d6f405fc1fd26b9045329121d80f0dfbe02d3815063c5339f967b",
   "engine/references/tag_rules.yaml": "ff7ab630c313c3a6243f0551726d34fcaa2fcb57949af2b89e6749f917814fa7",
-  "engine/references/workbook_layout.yaml": "5ed686444db5194ffc1cce25a83275a5541d78ff68865d55f94ffbc9ee814800",
+  "engine/references/workbook_layout.yaml": "c2e10751fd7576ad873dcf425a8f2415b3ade3d86b60ab6fe2a570137729ed6b",
   "engine/requirements.txt": "6fd73b13258eebd2c89ec36d892380a95e78025f0c7d0f259cf608e32fdc18da",
   "engine/skills/account-coverage/SKILL.md": "3a55bf9a94a38d7556a035f556f4439a638a6a740bd8c48628c9bfda54427973",
   "engine/skills/await-determinations/SKILL.md": "ee7fcefb7d7673c01a39d5341d7b2fe2169afa329b5b74f9ebddd5fce6904821",

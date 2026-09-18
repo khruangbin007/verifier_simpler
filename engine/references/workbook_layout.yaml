@@ -130,7 +130,7 @@ sheets:
       - {header: "Suggested next step", group: assessments, field: suggested_next_step, width: 44}
       - {header: "Status", group: assessments, field: status, width: 18}
       - {header: "Last decision recorded", group: assessments, field: last_decision_recorded, width: 22}
-      - {header: "Decision", group: reviewer_input, field: decision, width: 20}
-      - {header: "Reviewer", group: reviewer_input, field: reviewer, width: 20}
-      - {header: "Role", group: reviewer_input, field: role, width: 20}
-      - {header: "Rationale", group: reviewer_input, field: rationale, width: 60}
+      - {header: "Decision", group: reviewer_input, field: decision, width: 20, input_text: true}
+      - {header: "Reviewer", group: reviewer_input, field: reviewer, width: 20, input_text: true}
+      - {header: "Role", group: reviewer_input, field: role, width: 20, input_text: true}
+      - {header: "Rationale", group: reviewer_input, field: rationale, width: 60, input_text: true}
