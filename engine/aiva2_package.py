@@ -46,9 +46,11 @@ from dataclasses import dataclass, field
 import yaml
 
 import aiva0_shared as shared
+import aiva0r_reading
 import aiva1_documents
 
-SKILL_VERSIONS = {"read-package": "0.0.1"}
+SKILL_VERSIONS = {"read-package": "0.0.2"}
+TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
 PARSER_NAME = "AIVA R reader 0.0.1"
 
 class NotParsed(Exception):
@@ -1281,5 +1283,12 @@ def read_package(ctx):
     messages = ["%d units read from %d files of the package." % (len(units), len(files))]
     if len(tarballs) > 1:
         messages.append("More than one tarball was found; only %s was read." % os.path.basename(tarballs[0]))
-    return shared.StepResult({"model_units": units, "parameter_tables": tables, "package_info": [info]},
+    plain_units = [shared.to_plain(unit) for unit in units]
+    account = aiva0r_reading.account_of_package(files, plain_units, refused, lambda path: is_parsed_r_file(path) or os.path.splitext(path)[1].lower() in TEXT_MEMBERS or "/" not in path)
+    info["rows"].extend({"group": "The package", "item": "content account", "value": line}
+                        for line in aiva0r_reading.account_lines(account))
+    if not account["closed"]:
+        messages.append("The content account of the package is open; Model_Package_Info says what could not be placed.")
+    return shared.StepResult({"model_units": units, "parameter_tables": tables, "package_info": [info],
+                              "content_accounts": [account]},
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)

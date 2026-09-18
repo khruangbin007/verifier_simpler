@@ -309,7 +309,300 @@ def without_page_furniture(lines, pages, state, file_name):
         if entry["edge"] and "text" in entry:
             on_pages.setdefault(same(entry), set()).add(entry["page"])
     furniture = {key for key, found in on_pages.items() if pages >= 3 and len(found) >= max(3, pages // 2)}
+    for entry in lines:                              # a declared drop: named, counted, and shown in the account
+        if entry.get("edge") and "text" in entry and same(entry) in furniture:
+            state.dropped.append(entry["text"])
     for edge, text in sorted(furniture):
         state.notes.append("%s: left out as a page header or footer, because it repeats in the %s margin of %d of %d pages: '%s'"
                            % (file_name, edge, len(on_pages[(edge, text)]), pages, text))
     return [entry for entry in lines if not (entry["edge"] and "text" in entry and same(entry) in furniture)]
+
+# ---------------------------------------------------------------- the fidelity ledger
+# Enforces: R13. A reader may decide HOW a file is sliced. It may not add a word the file does
+# not contain, and it may not lose a word the file does contain. Neither is taken on trust: the
+# smallest countable pieces of the file are counted independently of the reader that read it,
+# and every one of them has to end in a named class.
+
+ATOM_CLASSES = ("in unit text", "relocated", "rewritten", "declared drop", "not read", "unaccounted")
+
+# An atom found in one of these places is not expected word for word in a unit, and why.
+# "rewritten" is the class R1 added to the plan's four: an equation is not lost and not carried
+# either - it is READ into AIVA's linear notation, which is a third thing and is named as one.
+EXPLAINED_BY_PLACE = {
+    "equation": ("rewritten", "read into AIVA's linear notation; what it was read from is named in the unit's equation"),
+    "attribute": ("declared drop", "an attribute the rules do not read: an identifier, a style, a namespace or a file name"),
+    "style or script": ("declared drop", "the content of a style or script element, which is not what the document says"),
+    "page without a text layer": ("not read", "a page that carries no text layer, which AIVA cannot count without reading the picture"),
+}
+
+def tokens(text):
+    """The countable pieces of a text: runs without white space, after the same normalisation
+    every chunk's text goes through. White space is not counted, because folding a list joins
+    its items with a space and collapsing runs of space is a declared transform."""
+    return [piece for piece in shared.normalise_text(text or "").split(" ") if piece]
+
+def bag(text):
+    """The tokens of a text as counts, so that a word appearing twice must be found twice."""
+    found = {}
+    for piece in tokens(text):
+        found[piece] = found.get(piece, 0) + 1
+    return found
+
+def bag_of(texts):
+    """The tokens of several texts as one set of counts."""
+    total = {}
+    for text in texts:
+        for piece, count in bag(text).items():
+            total[piece] = total.get(piece, 0) + count
+    return total
+
+def minus(left, right):
+    """What is left of `left` after taking away as much of `right` as it holds."""
+    rest = {}
+    for piece, count in left.items():
+        keep = count - right.get(piece, 0)
+        if keep > 0:
+            rest[piece] = keep
+    return rest
+
+def atom(place, locator, text):
+    """One countable piece of an input: where in the file it came from, and what it says."""
+    return {"place": place, "locator": locator, "text": text}
+
+MARKUP_METADATA = ("style", "script")
+
+def atoms_of_markup(root, file_name, rules=None):
+    """Every text node and every tail under every element, and every attribute value, each with
+    the place it was found in. Place matters to the account: text inside an equation is read
+    into AIVA's linear notation rather than kept word for word, an attribute the rules do not
+    read is metadata about the document rather than something the document says, and the
+    content of a style or script element is not prose at all. Naming the place is what lets
+    each of those be explained by a rule instead of counted as a loss."""
+    families = (rules or {}).get("family_of", {})
+    carriers = set((rules or {}).get("heading_attributes", ())) | set((rules or {}).get("numbering_attributes", ()))
+    found, position = [], 0
+    def walk(element, inside):
+        nonlocal position
+        position += 1
+        name = local_name(element.tag)
+        family = families.get(name) or inside
+        where = "%s element %d <%s>" % (file_name, position, name)
+        place = "equation" if family == "equation" else "style or script" if name in MARKUP_METADATA else "body"
+        if (element.text or "").strip():
+            found.append(atom(place, where, element.text))
+        for child in element:
+            walk(child, family if family in ("equation", "figure") else "")
+            if (child.tail or "").strip():
+                found.append(atom(place, where + " (tail)", child.tail))
+        for attribute_name, value in sorted(element.attrib.items()):
+            if value.strip():
+                found.append(atom("attribute" if local_name(attribute_name) not in carriers else "body",
+                                  "%s @%s" % (where, local_name(attribute_name)), value))
+    walk(root, "")
+    return found
+
+DOCX_PARTS = (("word/document.xml", "body"), ("word/footnotes.xml", "footnote"), ("word/endnotes.xml", "endnote"),
+              ("word/comments.xml", "comment"))
+WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+WORD_DELETED = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}delText"
+
+def atoms_of_docx(archive, parse, file_name):
+    """Every run of text in a Word file, wherever Word put it. Text boxes sit inside the body
+    part and are counted with it; footnotes, endnotes, comments, headers and footers are parts
+    of their own and are counted here even where the reader does not yet read them, so that
+    they show as unaccounted rather than vanishing without a word."""
+    found = []
+    named = list(DOCX_PARTS) + [(name, "header" if "header" in name else "footer")
+                                for name in sorted(archive.namelist())
+                                if name.startswith("word/header") or name.startswith("word/footer")]
+    for part, place in named:
+        if part not in archive.namelist():
+            continue
+        try:
+            root = parse(archive.read(part))
+        except Exception:                                # a part that will not parse is counted and named here
+            found.append(atom(place, "%s %s" % (file_name, part), ""))
+            continue
+        for position, node in enumerate(root.iter(), start=1):
+            if node.tag in (WORD_TEXT, WORD_DELETED) and (node.text or "").strip():
+                kind = "tracked change" if node.tag == WORD_DELETED else place
+                found.append(atom(kind, "%s %s run %d" % (file_name, part, position), node.text))
+    return found
+
+def atoms_of_pdf(document, file_name):
+    """Every word the text layer of every page yields. A page with no text layer is counted as
+    one atom with no text, so that a scanned page is visible in the account as a page that
+    carries something AIVA cannot count rather than as a page that carries nothing."""
+    found = []
+    for number, page in enumerate(document.pages, start=1):
+        text = page.extract_text() or ""
+        found.append(atom("body" if text.strip() else "page without a text layer", "%s p.%d" % (file_name, number), text))
+    return found
+
+def atoms_of_plain_text(text, file_name):
+    """Every non-blank line of a plain text file."""
+    return [atom("body", "%s line %d" % (file_name, number), line)
+            for number, line in enumerate(text.split("\n"), start=1) if line.strip()]
+
+# Transforms that put a word into a unit without taking it from an atom, or move it out of a
+# unit's text into another of its fields. Each is named here, once. The account closes BECAUSE
+# of this list: take an entry away and the words it explains are reported as injected or lost.
+# Enforces: R13
+DECLARED_MARKS = (
+    ("list marker", "the mark that shows an item of a folded list: '-', or the number the document gave it"),
+    ("reconstructed numbering", "a heading number Word produces automatically and does not store, counted back by AIVA and marked as reconstructed"),
+    ("linear form of an equation", "an equation written out in AIVA's linear notation; the markup it was read from is kept in the equation's source form"),
+    ("words read from a picture", "what OCR made of a picture, shown to help a person and never evidence"),
+)
+DECLARED_RELOCATIONS = (
+    ("heading chain", "a heading is not a unit of its own: its text is carried by every unit below it"),
+    ("caption", "the caption of a table or a figure is kept in the unit's caption, not in its text"),
+    ("table cells", "the cells of a table are kept in the unit's table, and shown in its display form"),
+    ("equation source", "the markup an equation was read from is kept in the unit's equation"),
+    ("numbering as written", "the number a document gives a paragraph is kept in the unit's label"),
+)
+
+def kept_and_relocated(chunks):
+    """Two bags: what the units say in their text, and what they keep in their other fields.
+
+    A relocated text is CARRIED, not copied: one heading of the file appears in the heading
+    chain of every unit below it, and the file holds it once. So the fields that repeat by
+    design - the heading chain and the section numbering - are counted once for each distinct
+    text, while a caption, a table and an equation belong to their own unit and are counted
+    every time they occur."""
+    kept, moved, carried = [], [], set()
+    for chunk in chunks:
+        kept.append(chunk.get("text") or "")
+        carried.update(chunk.get("heading_chain") or ())
+        carried.add(chunk.get("numbering") or "")
+        moved.append(chunk.get("caption") or "")
+        moved.append(chunk.get("para_label") or "")
+        table = chunk.get("table")
+        if table:
+            moved.extend(str(cell) for row in (list(table.get("header") or []),) + tuple(table.get("rows") or []) for cell in row)
+        equation = chunk.get("equation")
+        if equation:
+            moved.append(equation.get("source_form") or "")
+    return bag_of(kept), bag_of(moved + sorted(carried))
+
+
+def marks_of_rendering(chunks):
+    """Marks every reader makes, whatever the format: the form AIVA renders a table, a figure or
+    an equation in; the markup an equation was read from, whose tags are not words the document
+    says; a number a document did not write that AIVA counted back; and the place label AIVA
+    gives a paragraph of a PDF ("p.4 2") so that a person can find it again. Enforces: R13"""
+    found = []
+    for chunk in chunks:
+        if chunk.get("kind") in ("Table", "Figure", "Equation"):
+            found.append(chunk.get("text") or "")
+        equation = chunk.get("equation")
+        if equation:
+            found.append(equation.get("source_form") or "")
+            found.append(equation.get("linear") or "")
+        found.append(chunk.get("numbering") or "")
+        found.append(chunk.get("para_label") or "")
+        if chunk.get("numbering_reconstructed"):
+            found.extend(chunk.get("heading_chain") or ())
+    return found
+
+def account(file_name, atoms, chunks, dropped=(), marks=()):
+    """The content account of one file. Every atom ends in exactly one class, and every token a
+    unit shows comes from an atom or from a named mark. What a unit does not show word for word
+    is explained by WHERE it was found (EXPLAINED_BY_PLACE) before it is called a loss, so that
+    an equation read into linear notation and an identifier in an attribute are each named
+    rather than swept into the same silence. Returns the counts, what could not be placed with
+    where it was found, and what could not be explained. Enforces: R13"""
+    source = bag_of([one["text"] for one in atoms if one["place"] not in EXPLAINED_BY_PLACE])
+    kept, moved = kept_and_relocated(chunks)
+    dropped_bag = bag_of(dropped)
+    found = {"file": file_name, "in unit text": 0, "relocated": 0, "rewritten": 0, "declared drop": 0, "not read": 0}
+    left = dict(source)
+    for name, taken in (("in unit text", kept), ("relocated", moved), ("declared drop", dropped_bag)):
+        used = minus(left, minus(left, taken))
+        found[name] = sum(used.values())
+        left = minus(left, used)
+    for one in atoms:                                # what its place explains, and under which rule
+        if one["place"] in EXPLAINED_BY_PLACE:
+            name = EXPLAINED_BY_PLACE[one["place"]][0]
+            found[name] = found[name] + max(1, len(tokens(one["text"])))
+    for chunk in chunks:
+        if chunk.get("not_read_reason"):
+            found["not read"] += 1
+    placed = dict(kept)
+    for extra_bag in (moved, dropped_bag):
+        for piece, count in extra_bag.items():
+            placed[piece] = placed.get(piece, 0) + count
+    added = minus(minus(placed, source), bag_of(marks))
+    found["atoms"] = sum(source.values()) + sum(found[name] for name in ("rewritten", "declared drop", "not read"))
+    found["unaccounted"] = sum(left.values())
+    found["injected"] = sum(added.values())
+    found["where unaccounted"] = sorted(one["locator"] for one in atoms
+                                        if one["place"] not in EXPLAINED_BY_PLACE
+                                        and any(piece in left for piece in tokens(one["text"])))[:12]
+    found["what unaccounted"] = sorted(left)[:24]
+    found["what injected"] = sorted(added)[:24]
+    found["closed"] = found["unaccounted"] == 0 and found["injected"] == 0
+    return found
+
+def account_lines(found):
+    """The account of one file in the plain words an analyst reads on Model_Package_Info.
+    Enforces: R10, R13"""
+    lines = ["%d smallest pieces of text counted: %d kept in a unit, %d kept in a unit's other fields, "
+             "%d read into another form, %d left out under a named rule, %d in a part that could not be read."
+             % (found["atoms"], found["in unit text"], found["relocated"], found["rewritten"],
+                found["declared drop"], found["not read"])]
+    if found["closed"]:
+        lines.append("Content account closed: nothing was lost and nothing was added.")
+    if found["unaccounted"]:
+        lines.append("%d piece(s) of text were read from the file but are in no unit and under no rule, "
+                     "first at: %s." % (found["unaccounted"], "; ".join(found["where unaccounted"][:3]) or "not located"))
+    if found["injected"]:
+        lines.append("%d piece(s) of text are shown in a unit but were not found in the file: %s."
+                     % (found["injected"], ", ".join(found["what injected"][:6])))
+    return lines
+
+
+def account_of_package(files, units, refused, is_text_file):
+    """The content account of a package tarball. The atom of a package is a line: every
+    non-blank line of every member that holds text has to lie inside a unit, be refused with a
+    reason, or be named as not read. A member AIVA cannot read as text (a compiled object, a
+    picture, stored data in a binary form) is counted as one atom of its own, because its lines
+    cannot be counted without reading it. Extends the line coverage that read-package already
+    kept for parsed R files to every member of the tarball. Enforces: R13"""
+    inside, not_read, atoms, unaccounted = 0, 0, 0, []
+    covered = {}
+    for unit in units:
+        lines = unit.get("lines")
+        if unit.get("file") and lines:
+            covered.setdefault(unit["file"], set()).update(range(int(lines[0]), int(lines[1]) + 1))
+    for path in sorted(files):
+        if not is_text_file(path):
+            atoms += 1
+            if any(unit.get("file") == path for unit in units):
+                inside += 1
+            else:
+                not_read += 1
+            continue
+        try:
+            lines = files[path].decode("utf-8", "replace").split("\n")
+        except Exception:
+            atoms += 1
+            not_read += 1
+            continue
+        numbers = [number for number, line in enumerate(lines, start=1) if line.strip()]
+        atoms += len(numbers)
+        held = covered.get(path, set())
+        whole_file = any(unit.get("file") == path and not unit.get("lines") for unit in units)
+        for number in numbers:
+            if number in held or whole_file:
+                inside += 1
+            elif any(unit.get("file") == path and unit.get("read_problem") for unit in units):
+                not_read += 1
+            else:
+                unaccounted.append("%s line %d" % (path, number))
+    found = {"file": "the package", "atoms": atoms + len(refused), "in unit text": inside, "relocated": 0,
+             "rewritten": 0, "declared drop": len(refused), "not read": not_read,
+             "unaccounted": len(unaccounted), "injected": 0, "where unaccounted": sorted(unaccounted)[:12],
+             "what unaccounted": [], "what injected": []}
+    found["closed"] = found["unaccounted"] == 0
+    return found

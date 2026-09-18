@@ -52,7 +52,7 @@ import yaml
 import aiva0_shared as shared
 import aiva0r_reading as reading
 
-SKILL_VERSIONS = {"read-methodology": "0.0.1", "read-documentation": "0.0.1"}
+SKILL_VERSIONS = {"read-methodology": "0.0.2", "read-documentation": "0.0.2"}
 
 class NotReadable(Exception):
     """A formula or a file that AIVA cannot read. The message is a plain reason for the analyst."""
@@ -627,6 +627,8 @@ class WalkState:
     rules: dict; notation: dict; images: dict; unknown_tags: dict; blocks: list
     skip_next_image: bool = False
     notes: list = field(default_factory=list)      # what was left out or read in a fallback way, in plain words
+    atoms: list = field(default_factory=list)      # the smallest pieces of text the file holds, counted from the file itself
+    dropped: list = field(default_factory=list)    # text left out under a named rule, kept so the account can show it
     lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
 
     def __post_init__(self):
@@ -1233,6 +1235,33 @@ def outline_lines(chunks):
     return lines
 
 # ---------------------------------------------------------------- the two steps
+def atoms_of_file(data, found, file_name, state, repairs):
+    """The smallest pieces of text the file holds, counted straight from the file and NOT from
+    the blocks the reader made of it. That independence is the whole point: an account drawn
+    from the reader's own output could never show what the reader missed. Enforces: R13"""
+    try:
+        if found == "docx":
+            return reading.atoms_of_docx(zipfile.ZipFile(io.BytesIO(data)), safe_xml, file_name)
+        if found == "pdf":
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(data)) as document:
+                return reading.atoms_of_pdf(document, file_name)
+        if found == "mhtml":
+            message = email.message_from_bytes(data)
+            for part in message.walk():
+                payload = part.get_payload(decode=True)
+                if part.get_content_type() == "text/html" and payload is not None:
+                    text = payload.decode(part.get_content_charset() or "utf-8", "replace")
+                    return reading.atoms_of_markup(parse_markup(repair_markup(text, file_name, []), file_name, [], tolerant_only=True), file_name, state.rules)
+            return []
+        if found in ("xml", "html"):
+            text = repair_markup(decode_text(data), file_name, [])
+            return reading.atoms_of_markup(parse_markup(text, file_name, [], tolerant_only=found == "html"), file_name, state.rules)
+        return reading.atoms_of_plain_text(decode_text(data), file_name)
+    except Exception:                          # an account that cannot be drawn is written down, never a stopped run
+        state.notes.append("%s: the content account could not be drawn for this file." % file_name)
+        return []
+
 def read_file_blocks(path, file_name, state, repairs, max_bytes):
     """One input file to blocks, by the format found in its content. Enforces: R6"""
     if os.path.getsize(path) > max_bytes:
@@ -1240,6 +1269,7 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
     with open(path, "rb") as handle:
         data = handle.read()
     found = detect_format(data)
+    state.atoms = atoms_of_file(data, found, file_name, state, repairs)
     if found == "pdf":
         return found, blocks_from_pdf(data, file_name, state)
     if found == "docx":
@@ -1257,13 +1287,19 @@ def read_corner(ctx, corner, input_key, label):
     options = ctx.options
     rules = load_tag_rules(options["references_dir"], options["inputs"].get("tag_rules"))
     notation = load_notation(options["references_dir"])
-    chunks, repairs, info_rows, outline = [], [], [], []
+    chunks, repairs, info_rows, outline, accounts = [], [], [], [], []
     for path in options["inputs"][input_key]:
         file_name = os.path.basename(path)
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
         found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
         new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
         chunks.extend(new_chunks)
+        plain = [shared.to_plain(chunk) for chunk in new_chunks]
+        found_account = reading.account(file_name, state.atoms, plain, state.dropped,
+                                       reading.marks_of_rendering(plain) + [LIST_MARKER])
+        accounts.append(found_account)
+        info_rows.extend({"group": label, "item": "%s: content account" % file_name, "value": line}
+                         for line in reading.account_lines(found_account))
         counts = {}
         for chunk in new_chunks:
             counts[chunk.kind] = counts.get(chunk.kind, 0) + 1
@@ -1284,8 +1320,14 @@ def read_corner(ctx, corner, input_key, label):
     messages = ["%d units read from %d file(s)." % (len(chunks), len(options["inputs"][input_key]))]
     if unreadable:
         messages.append("%d equation(s) could not be read and will be raised for a person." % unreadable)
-    return shared.StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows, "outline": outline},
-                             {"units": len(chunks), "repairs": len(repairs)}, messages)
+    open_accounts = [one for one in accounts if not one["closed"]]
+    if open_accounts:
+        messages.append("The content account is open on %d file(s); Model_Package_Info says what could not be placed."
+                        % len(open_accounts))
+    return shared.StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows, "outline": outline,
+                              "content_accounts": accounts},
+                             {"units": len(chunks), "repairs": len(repairs),
+                              "content account open on": len(open_accounts)}, messages)
 
 def read_methodology(ctx):
     """Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ..."""

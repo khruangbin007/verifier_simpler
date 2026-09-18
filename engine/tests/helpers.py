@@ -89,3 +89,21 @@ def run_sample(sample, chat=None, settings=None, stop_after=""):
     paths = run.open_run(projects, "SAMPLE", "2026-09-18", scratch_root=scratch())
     result = run.run_pipeline(paths, settings, chat=chat or standin_chat.chat_well_behaved, stop_after=stop_after)
     return paths, settings, result
+
+
+def banned_wording(text):
+    """The banned-word check, so a test can assert on one line of plain words."""
+    import aiva0_shared as shared
+    return shared.has_banned_wording(text)
+
+
+def accounts_of_sample(sample, stop_after="04"):
+    """The content accounts a sample project produces, for tests that measure the ledger."""
+    import aiva5_run_report as run
+    import standin_chat
+    projects = scratch()
+    copy_sample(sample, projects, "LEDGER", "2026-09-18")
+    settings = run.make_settings({"require_outline_confirmation": False})
+    paths = run.open_run(projects, "LEDGER", "2026-09-18", scratch_root=scratch())
+    run.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after=stop_after)
+    return run.open_store(paths, settings).read("content_accounts")
