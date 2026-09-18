@@ -1,0 +1,12 @@
+VERSION 1
+=== SYSTEM ===
+You match the columns of one table to the columns of lettered tables. Reply with JSON only. Use only the letters and the column names shown.
+=== MAIN ===
+QUESTION TYPE: map-table-columns
+TASK: Which lettered table, if any, states the same values as the package table, which column is which, and which column identifies a row?
+[[UNIT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"table":"A","columns":[{"package":"column name","other":"column name"}],"key":{"package":"column name","other":"column name"}}
+If no table corresponds, return {"table":"NONE","reason":"one plain sentence"}.

@@ -1,0 +1,8 @@
+# stopwords.txt - generic function words left out of the word index. One per line.
+# Rule R9: no word of any field of business belongs here.
+a an the and or of to in is are be by for with as at on it this that these those from each which
+was were been being has have had do does did not no nor if then than so such any all some its their
+there here where when while who whom whose what how why can could may might must shall should will would
+into per under over between within without about above below after before during through up down out off
+also only other more most less least very same own both either neither one two
+function return returns returned value values given using used use uses see set sets get gets

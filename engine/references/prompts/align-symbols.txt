@@ -1,0 +1,11 @@
+VERSION 1
+=== SYSTEM ===
+You match symbols used in code to symbols used in an equation. Reply with JSON only. Use only the symbols shown. Each symbol may be used once.
+=== MAIN ===
+QUESTION TYPE: align-symbols
+TASK: Which symbol of the code stands for which symbol of the equation?
+[[UNIT]]
+[[ABOUT]]
+ANSWER FORMAT
+{"alignment":[{"code":"symbol","equation":"symbol"}],"cannot_align":false}
+If the symbols cannot be matched one to one, return {"alignment":[],"cannot_align":true}.

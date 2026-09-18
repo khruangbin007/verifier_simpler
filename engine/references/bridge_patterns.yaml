@@ -1,0 +1,18 @@
+# bridge_patterns.yaml - generic words AIVA uses to recognise where a document ties a short
+# name to a longer phrase. Reviewer 3 owns this file. Rule R9: no word of any field of business.
+definition_verbs: [denotes, represents, stands for, is defined as, means]
+symbol_headers: [symbol, variable, notation, parameter, name, term, abbreviation, column, field]
+description_headers: [description, definition, meaning, explanation, stands for, content]
+glossary_columns: {term: Term, also: Also written as}
+# words that tie a function name to neutral mathematical words (used for the called-functions field)
+function_words:
+  normal_cdf: [cumulative, normal, distribution]
+  normal_inverse: [inverse, normal, quantile]
+  max: [maximum, larger, floor, least]
+  min: [minimum, smaller, cap, capped, most]
+  exp: [exponential]
+  log: [logarithm]
+  sqrt: [square, root]
+  round: [rounded, decimals]
+  piecewise: [condition, otherwise]
+  sum_over: [sum, total]

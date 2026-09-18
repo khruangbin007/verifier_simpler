@@ -1,0 +1,18 @@
+VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-doc-to-model
+TASK: Which units of the package, if any, does this passage of the documentation describe, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: describes, inconsistent with.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.

@@ -134,7 +134,7 @@ class Chunk:
     numbering: str; para_no: Optional[int]; text: str; locator: str; content_hash: str
     table: Optional[TableData] = None; equation: Optional[EquationData] = None
     refs_out: tuple = (); checkable: Optional[bool] = None; numbering_reconstructed: bool = False
-    caption: str = ""; is_heading: bool = False
+    caption: str = ""; not_read_reason: str = ""
 
 @dataclass(frozen=True)
 class CodeDetail:

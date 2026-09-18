@@ -1,0 +1,13 @@
+VERSION 1
+=== SYSTEM ===
+You look for differences between one item and lettered passages. Reply with JSON only. Use only the letters shown. Quote exact words; do not paraphrase inside quotation fields. Naming no difference is a valid and common answer. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: second-opinion
+TASK: Identify any difference between what the unit does or states and what the passages state.
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"differences":[{"letter":"A","quote_from_passage":"exact words","quote_from_unit":"exact words","what_differs":"one plain sentence"}]}
+If there is no difference, return {"differences":[]}.
