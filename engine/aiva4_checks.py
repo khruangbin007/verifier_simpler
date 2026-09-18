@@ -1279,7 +1279,9 @@ def doc_cells(chunk, world, facts, duplicates):
         quality.append("The equation could not be read: %s" % chunk["equation"]["not_readable_reason"])
     return {"value_check": lines_or([s for r in mine.get("values", []) for s in r["sentences"]], "No number to compare" if chunk.get("checkable") else na),
             "math_check": lines_or([r["sentence"] for r in mine.get("math", [])], na),
-            "logic_consistency": lines_or(relations, na), "parameter_note_ai": na, "quality_notes": lines_or(quality, "No note")}
+            "logic_consistency": lines_or(relations, na), "quality_notes": lines_or(quality, "No note"),
+            "parameter_note_ai": lines_or(["AI-derived alignment of symbols with %s: %s = %s" % (r["target_ref"], ours, theirs)
+                                           for r in mine.get("math", []) for ours, theirs, how in r["alignment"] if how.startswith("AI")], na)}
 
 def build_items(raised, world, run_label):
     """One flagged item per unit and category; several observations of one category are listed

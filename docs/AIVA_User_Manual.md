@@ -666,7 +666,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_aiva3_mapping.py` | 20 | Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators. |
 | `test_aiva4_checks.py` | 27 | Tests of aiva4_checks: the value rule, formula comparison, tables, rules, statuses and the identity. |
 | `test_aiva5_run_report.py` | 16 | Tests of aiva5_run_report.py: the wrapper around chat(), the store, paths, the runner, Output.xlsx. |
-| `test_docs.py` | 4 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
+| `test_docs.py` | 5 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
 | `test_end_to_end.py` | 15 | End-to-end tests on the sample projects: sameness of two runs, the human round trip, the report, the wording of everything an analyst reads, replay, and verification of a run folder. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
 | `test_notebook.py` | 1 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
@@ -697,8 +697,8 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | aiva1_documents.py | 1181 | 1500 | 15% |
 | aiva2_package.py | 1285 | 1500 | 13% |
 | aiva3_mapping.py | 1123 | 1500 | 18% |
-| aiva4_checks.py | 1380 | 1500 | 14% |
-| aiva5_run_report.py | 1347 | 1500 | 14% |
+| aiva4_checks.py | 1382 | 1500 | 14% |
+| aiva5_run_report.py | 1365 | 1500 | 14% |
 
 **Dependencies.**
 
@@ -1161,9 +1161,9 @@ Generated from the source: every function and class of the engine with its line 
 | `lines_or` | 1238 | function | Several lines for one cell without repeats, or the fallback sentence when there is none. |
 | `model_cells` | 1242 | function | The assessment cells of one row of Mapping_Model_to_Canon_and_Doc. |
 | `doc_cells` | 1267 | function | The assessment cells of one row of Mapping_Doc_to_Canon_and_Model. |
-| `build_items` | 1284 | function | One flagged item per unit and category; several observations of one category are listed inside one item. |
-| `check_identity` | 1309 | function | The four-part identity of plan 2.9 (part 4 is completed by the workbook builder). |
-| `account_coverage` | 1327 | function | Step 15, skill account-coverage: one status per unit by the ordered rules, the cells of the assessment columns, one flagged item per unit and category, the identity, and the totals that the workbook builder must reproduce by counting its rows. |
+| `build_items` | 1286 | function | One flagged item per unit and category; several observations of one category are listed inside one item. |
+| `check_identity` | 1311 | function | The four-part identity of plan 2.9 (part 4 is completed by the workbook builder). |
+| `account_coverage` | 1329 | function | Step 15, skill account-coverage: one status per unit by the ordered rules, the cells of the assessment columns, one flagged item per unit and category, the identity, and the totals that the workbook builder must reproduce by counting its rows. |
 
 **aiva5_run_report.py**
 
@@ -1210,41 +1210,42 @@ Generated from the source: every function and class of the engine with its line 
 | `record_step` | 588 | function | Leave the step record that makes a finished step visible and resume possible. |
 | `log_line` | 597 | function | Technical text (exception messages, Python names) belongs in run_log.txt only. |
 | `fingerprint_file` | 606 | function | Name, corner, size, SHA-256 and content identifier of one input file. |
-| `prepare_run` | 613 | function | Step 01. |
-| `previous_run_inputs` | 644 | function | The manifest of the latest earlier run of this project, or None. |
-| `quoted` | 664 | function | Text taken from an input or from the AI is always shown visibly quoted, with its citation. |
-| `plain_cell` | 670 | function | The last gate before a cell is written. |
-| `lines_by_ref` | 690 | function | Several values in one cell: each on its own line, prefixed with its reference. |
-| `texts_by_ref` | 694 | function | Several quoted texts in one cell, separated by a line of dashes. |
-| `run_identity` | 698 | function | What ties a workbook to its run: also written into the workbook's properties. |
-| `rows_package_info` | 708 | function | The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls. |
-| `chunk_note` | 748 | function | What a reader should know about one chunk: unreadable, how an equation was read, reconstructed numbering. |
-| `rows_chunks` | 762 | function | The rows of Chunks_Canon and Chunks_Doc. |
-| `unit_expression` | 772 | function | A unit's formula or arguments as shown on Chunks_Model. |
-| `rows_model_units` | 785 | function | The rows of Chunks_Model. |
-| `link_columns` | 799 | function | The block of columns that shows what one unit was linked to in one corner. |
-| `rows_mapping` | 814 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
-| `rows_coverage` | 844 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
-| `latest_determinations` | 864 | function | The last recorded determination of every item. |
-| `rows_flagged` | 871 | function | The rows of Flagged_Items with the latest determination of each item. |
-| `sheet_rows` | 885 | function | The rows of all eight sheets, by sheet name. |
-| `check_written_totals` | 898 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
-| `load_layout` | 912 | function | The workbook layout from references/workbook_layout.yaml. |
-| `write_sheet` | 917 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
-| `build_workbook` | 953 | function | Build Output.xlsx on local disk from the audit records. |
-| `file_sha256` | 971 | function | SHA-256 of a file's bytes. |
-| `progress_text` | 976 | function | Where the run stands, in one or two plain sentences. |
-| `rebuild_outputs` | 985 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
-| `docx_table` | 1014 | function | A plain table in a Word document, header row in bold. |
-| `build_run_summary` | 1027 | function | Where the run stands, in plain words; refreshed after every step. |
-| `call_statistics` | 1049 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
-| `call_plan` | 1070 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
-| `find_uploads` | 1093 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
-| `read_yellow_cells` | 1116 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
-| `record_determinations` | 1139 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
-| `build_report_file` | 1192 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
-| `build_report` | 1260 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
-| `verify_evidence_pack` | 1285 | function | Works from a run folder and the Inputs folder alone. |
+| `engine_file_hashes` | 613 | function | SHA-256 of every file that makes up the engine (code, pipeline, skills, references), so that an evidence pack names exactly the code that produced it (the same list as in docs/release_manifest.json). |
+| `prepare_run` | 625 | function | Step 01. |
+| `previous_run_inputs` | 656 | function | The manifest of the latest earlier run of this project, or None. |
+| `quoted` | 676 | function | Text taken from an input or from the AI is always shown visibly quoted, with its citation. |
+| `plain_cell` | 682 | function | The last gate before a cell is written. |
+| `lines_by_ref` | 702 | function | Several values in one cell: each on its own line, prefixed with its reference. |
+| `texts_by_ref` | 706 | function | Several quoted texts in one cell, separated by a line of dashes. |
+| `run_identity` | 710 | function | What ties a workbook to its run: also written into the workbook's properties. |
+| `rows_package_info` | 720 | function | The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls. |
+| `chunk_note` | 763 | function | What a reader should know about one chunk: unreadable, how an equation was read, reconstructed numbering. |
+| `rows_chunks` | 777 | function | The rows of Chunks_Canon and Chunks_Doc. |
+| `unit_expression` | 787 | function | A unit's formula or arguments as shown on Chunks_Model. |
+| `rows_model_units` | 800 | function | The rows of Chunks_Model. |
+| `link_columns` | 814 | function | The block of columns that shows what one unit was linked to in one corner. |
+| `rows_mapping` | 829 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
+| `rows_coverage` | 859 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
+| `latest_determinations` | 879 | function | The last recorded determination of every item. |
+| `rows_flagged` | 886 | function | The rows of Flagged_Items with the latest determination of each item. |
+| `sheet_rows` | 900 | function | The rows of all eight sheets, by sheet name. |
+| `check_written_totals` | 913 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
+| `load_layout` | 927 | function | The workbook layout from references/workbook_layout.yaml. |
+| `write_sheet` | 932 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
+| `build_workbook` | 968 | function | Build Output.xlsx on local disk from the audit records. |
+| `file_sha256` | 986 | function | SHA-256 of a file's bytes. |
+| `progress_text` | 991 | function | Where the run stands, in one or two plain sentences. |
+| `rebuild_outputs` | 1000 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
+| `docx_table` | 1029 | function | A plain table in a Word document, header row in bold. |
+| `build_run_summary` | 1042 | function | Where the run stands, in plain words; refreshed after every step. |
+| `call_statistics` | 1064 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
+| `call_plan` | 1085 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
+| `find_uploads` | 1108 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
+| `read_yellow_cells` | 1131 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
+| `record_determinations` | 1154 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
+| `build_report_file` | 1207 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
+| `build_report` | 1275 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
+| `verify_evidence_pack` | 1300 | function | Works from a run folder and the Inputs folder alone. |
 
 ## Appendix D. Change history
 

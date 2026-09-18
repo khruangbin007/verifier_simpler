@@ -610,6 +610,18 @@ def fingerprint_file(path, corner, inputs_dir):
     return {"corner": corner, "file": os.path.relpath(path, inputs_dir).replace(os.sep, "/"),
             "bytes": len(data), "sha256": shared.sha256_bytes(data), "swhid": shared.swhid_content(data)}
 
+def engine_file_hashes():
+    """SHA-256 of every file that makes up the engine (code, pipeline, skills, references), so
+    that an evidence pack names exactly the code that produced it (the same list as in
+    docs/release_manifest.json)."""
+    import glob
+    found = {}
+    for pattern in ("*.py", "pipeline.yaml", "requirements.txt", "skills/*/SKILL.md", "references/**/*"):
+        for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
+            if os.path.isfile(path):
+                found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
+    return found
+
 def prepare_run(ctx):
     """Step 01. Fingerprint every input, record the environment and the allow-listed
     settings, and say what changed since the previous run of the same project."""
@@ -634,7 +646,7 @@ def prepare_run(ctx):
         changes = ["%s: changed" % n for n in sorted(now) if n in before and before[n] != now[n]]
         changes += ["%s: new" % n for n in sorted(now) if n not in before]
         changes += ["%s: no longer present" % n for n in sorted(before) if n not in now]
-    manifest = dict(ctx.options["run"], engine_version=shared.ENGINE_VERSION, versions=versions,
+    manifest = dict(ctx.options["run"], engine_version=shared.ENGINE_VERSION, versions=versions, engine_files=engine_file_hashes(),
                     settings=ctx.settings, inputs=fingerprints, changes_since_previous_run=changes,
                     previous_run=previous["run_id"] if previous else "",
                     started_at=datetime.datetime.now().isoformat(timespec="seconds"))
@@ -719,6 +731,9 @@ def rows_package_info(store, paths, settings, progress):
     add("Identity", "Determinations record fingerprint", identity["determinations_fingerprint"] or "No determination recorded yet")
     add("Identity", "Item list fingerprint", identity["item_list_hash"] or shared.NOT_RUN_YET)
     manifest = (store.read("run_manifest") or [{}])[0]
+    if manifest.get("engine_files"):
+        add("Identity", "Engine files fingerprint", shared.sha256_text(shared.canonical_json(manifest["engine_files"]))[:16] +
+            " (%d files; the full list is in the run manifest)" % len(manifest["engine_files"]))
     for entry in manifest.get("inputs", []):
         add("Inputs", entry["file"], "SHA-256 %s (%d bytes)" % (entry["sha256"], entry["bytes"]))
     for change in manifest.get("changes_since_previous_run", []):
@@ -1293,6 +1308,9 @@ def verify_evidence_pack(paths, settings, live=None):
     changed = [e["file"] for e in manifest.get("inputs", []) if not os.path.exists(os.path.join(paths.inputs_dir, e["file"]))
                or file_sha256(os.path.join(paths.inputs_dir, e["file"])) != e["sha256"]]
     line("Input files have the recorded fingerprints", not changed, ", ".join(changed))
+    installed, recorded = engine_file_hashes(), manifest.get("engine_files", {})
+    other = sorted(name for name in set(installed) | set(recorded) if installed.get(name) != recorded.get(name))
+    line("The engine files that produced this run are the ones installed here", not other, ", ".join(other[:5]))
     options = {"inputs": list_input_files(paths), "references_dir": REFERENCES_DIR}
     context = shared.StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
     for kind, function in (("chunks_canon", aiva1_documents.read_methodology), ("chunks_doc", aiva1_documents.read_documentation),

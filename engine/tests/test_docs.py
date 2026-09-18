@@ -31,5 +31,15 @@ class Release(unittest.TestCase):
         self.assertEqual(make_release_manifest.main(["--check"]), 0, "run python tools/make_release_manifest.py as the last step of a change")
 
 
+    def test_every_run_names_exactly_the_engine_files_that_produced_it(self):
+        import json
+        import aiva5_run_report as run
+        paths, settings, _ = helpers.run_sample("A_minimal", stop_after="01")
+        recorded = run.open_store(paths, settings).read("run_manifest")[0]["engine_files"]
+        with open(os.path.join(helpers.ROOT_DIR, "docs", "release_manifest.json"), encoding="utf-8") as handle:
+            released = {name: digest for name, digest in json.load(handle)["files"].items() if name.startswith("engine/")}
+        self.assertEqual(recorded, released)
+
+
 if __name__ == "__main__":
     unittest.main()
