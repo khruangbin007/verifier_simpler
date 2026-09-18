@@ -982,14 +982,18 @@ def infer_levels(blocks, rules):
     headings = [b for b in blocks if b["type"] == "heading"]
     hints = sorted({b["level_hint"] for b in headings if b["level_hint"] is not None})
     nested = len(hints) > 1
-    scheme_level, current = {}, 0
+    scheme_level, current, run_hint, run_schemes = {}, 0, None, {}
     for block in headings:
         written, scheme = first_numbering(block["text"], rules)
         if block["numbering"] and not scheme:
             written, scheme = first_numbering(block["numbering"] + " ", rules)
         block["numbering"] = block["numbering"] or written
-        if nested:
-            block["level"] = hints.index(block["level_hint"]) + 1
+        if nested:                                       # a flat-numbered stretch inside a nested file (an annex)
+            if block["level_hint"] != run_hint:
+                run_hint, run_schemes = block["level_hint"], {}
+            if scheme and scheme != "dotted":
+                run_schemes.setdefault(scheme, len(run_schemes))
+            block["level"] = hints.index(block["level_hint"]) + 1 + run_schemes.get(scheme, 0)
         elif scheme == "dotted":
             depth = block["numbering"].strip(".").count(".") + 1
             block["level"] = scheme_level.get("number", 1) + depth - 1

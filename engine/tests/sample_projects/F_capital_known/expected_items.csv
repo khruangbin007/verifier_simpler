@@ -1,0 +1,7 @@
+seeded_difference,file,line_contains,expected_categories
+a flipped sign in cond_pd,R/pd.R,pnorm((a - b),Code differs from methodology
+a changed constant,R/correlation.R,0.13 * w,Code differs from methodology;Hard-coded number not traced
+a removed floor,R/pd.R,floor_pd <- function,Code differs from methodology
+a changed cell in a parameter table,data/lgd_floors.rda,,Value differs from methodology
+a roxygen block that no longer matches its function,R/pd.R,@param rho_a,Package documentation differs from code
+a stale value in the documentation,capreq_model_documentation.docx,99.5th percentile,Documentation differs from methodology

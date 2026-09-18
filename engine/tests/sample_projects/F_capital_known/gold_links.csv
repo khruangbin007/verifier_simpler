@@ -1,0 +1,29 @@
+unit_ref,unit,acceptable_methodology_refs
+M-0004,function capital_k,C-0018;C-0019;C-0016
+M-0005,statement lgd_f,C-0016;C-0017
+M-0006,statement ul,C-0018
+M-0007,statement capital_k (last),C-0019
+M-0009,function rwa,C-0021;C-0020
+M-0010,statement rwa,C-0021;C-0020
+M-0012,function effective_maturity,C-0022;C-0023
+M-0013,statement effective_maturity,C-0022;C-0023
+M-0015,function asset_correlation,C-0014;C-0015
+M-0016,statement w,C-0014
+M-0017,statement asset_correlation (last),C-0014
+M-0021,function floor_pd,C-0009;C-0027
+M-0022,statement floor_pd,C-0009;C-0027
+M-0024,function cond_pd,C-0012;C-0011
+M-0025,statement a,C-0012
+M-0026,statement b,C-0012
+M-0027,statement cond_pd (last),C-0012
+M-0030,parameter table lgd_floors,C-0017
+M-0031,parameter table confidence,C-0013;C-0025
+D-0003,documentation,C-0009;C-0027
+D-0004,documentation,C-0011;C-0012
+D-0005,documentation equation,C-0012
+D-0006,documentation,C-0014;C-0015
+D-0008,documentation table,C-0017
+D-0010,documentation,C-0021
+D-0011,documentation,C-0022;C-0023
+D-0016,documentation,C-0021
+D-0018,documentation table,C-0017
