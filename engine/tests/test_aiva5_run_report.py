@@ -96,6 +96,80 @@ class TokenRefresh(unittest.TestCase):
         self.assertEqual([failure for _, failure, _ in seen], ["authentication"] * 3)
         self.assertTrue(all("TESTTOKEN" not in text for _, _, text in seen))
 
+    def gateway_reply(self, answer="OK.", finish_reason="stop", **more):
+        """A reply shaped like the real gateway's: the answer at the top, the OpenAI-shaped
+        part underneath, and the prompts echoed back."""
+        reply = {"query": "Say OK.", "documents": [], "thread_id": "default", "app": "sparkair",
+                 "flow_name": "secure_ai_chat", "maxtoken": 4096, "temperature": 0.01, "top_k": 1,
+                 "defaultprompt": "You are a connectivity test.", "chat_id": "6aad41b6361d41df126b3b4c",
+                 "user_id": "mel_lorenzo", "datetime": "2026-09-18 13:50:48.697807+00:00",
+                 "history": [], "intent": "LLM",
+                 "source": [{"doc_name": "Referred Prompt", "source_content": "You are a connectivity test."}],
+                 "answer": answer,
+                 "response": {"id": "chatcmpl-3729b8fc", "object": "chat.completion",
+                              "model": "google/gemma-4-26B-A4B-it",
+                              "choices": [{"index": 0, "finish_reason": finish_reason,
+                                           "message": {"role": "assistant", "content": answer}}],
+                              "usage": {"prompt_tokens": 308, "completion_tokens": 3, "total_tokens": 311}}}
+        reply.update(more)
+        return reply
+
+    def test_the_real_gateway_reply_gives_its_answer_and_its_record(self):
+        live = run.LiveValues(); live.update("e", "TESTTOKEN-secret", "u")
+        outcome = run.call_chat(lambda s, m, history=[]: self.gateway_reply(), "s", "m", live)
+        answer, failure, seen = outcome
+        self.assertEqual((answer, failure, seen), ("OK.", "", ""))
+        self.assertEqual(outcome.meta["model"], "google/gemma-4-26B-A4B-it")
+        self.assertEqual(outcome.meta["total_tokens"], 311)
+        self.assertEqual(outcome.meta["chat_id"], "6aad41b6361d41df126b3b4c")
+        self.assertEqual(outcome.meta["finish_reason"], "stop")
+
+    def test_history_is_sent_empty_and_only_when_chat_takes_it(self):
+        live = run.LiveValues(); live.update("e", "TESTTOKEN-0001-secret", "u")
+        seen_history = []
+
+        def three_argument_chat(SystemPrompt, MainPrompt, history=[]):
+            seen_history.append(history)
+            return self.gateway_reply()
+
+        def two_argument_chat(SystemPrompt, MainPrompt):
+            return {"answer": "OK."}
+
+        self.assertEqual(run.call_chat(three_argument_chat, "s", "m", live)[0], "OK.")
+        self.assertEqual(seen_history, [[]])
+        self.assertTrue(run.accepts_history(three_argument_chat))
+        self.assertFalse(run.accepts_history(two_argument_chat))
+        self.assertEqual(run.call_chat(two_argument_chat, "s", "m", live)[0], "OK.")
+
+    def test_an_answer_cut_off_at_the_token_limit_is_a_failure_not_an_answer(self):
+        live = run.LiveValues(); live.update("e", "TESTTOKEN-0001-secret", "u")
+        answer, failure, seen = run.call_chat(
+            lambda s, m, history=[]: self.gateway_reply(answer='{"matches": [', finish_reason="length"),
+            "s", "m", live)
+        self.assertIsNone(answer)
+        self.assertEqual(failure, "truncated")
+        self.assertIn("cut off", seen)
+
+    def test_the_answer_is_read_from_the_nested_part_when_the_top_one_is_empty(self):
+        live = run.LiveValues(); live.update("e", "TESTTOKEN-0001-secret", "u")
+        reply = self.gateway_reply(answer="the text")
+        reply["answer"] = ""
+        self.assertEqual(run.call_chat(lambda s, m, history=[]: reply, "s", "m", live)[0], "the text")
+        self.assertEqual(run.call_chat(lambda s, m: "plain text", "s", "m", live)[0], "plain text")
+
+    def test_a_failed_reply_is_recorded_without_the_echoed_prompts(self):
+        live = run.LiveValues(); live.update("e", "TESTTOKEN-secret", "u")
+        reply = self.gateway_reply()
+        reply["answer"], reply["response"] = "", {}
+        reply["status"], reply["message"] = 503, "service overloaded"
+        reply["defaultprompt"] = "x" * 5000
+        answer, failure, seen = run.call_chat(lambda s, m, history=[]: reply, "s", "m", live)
+        self.assertIsNone(answer)
+        self.assertEqual(failure, "overload")
+        self.assertNotIn("x" * 100, seen)
+        self.assertNotIn("Say OK.", seen)
+        self.assertIn("503", seen)
+
     def test_stop_mode_pauses_the_run_instead_of_waiting(self):
         store, _ = fresh_store()
         os.makedirs(store.local_dir)

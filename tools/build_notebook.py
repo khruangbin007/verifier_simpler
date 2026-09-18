@@ -145,13 +145,35 @@ print("Endpoint set:", bool(LIVE.get("llm_endpoint")), "| user id set:", bool(LI
 
 code("Cell 6 - YOUR CELL: paste your chat() definition below", '''
 # Keep the signature. Return a dictionary with the generated text under "answer".
-# Read the three live values when chat() is CALLED, never when it is defined:
-def chat(SystemPrompt, MainPrompt):
-    endpoint = aiva_live("llm_endpoint")
-    token    = aiva_live("llm_token")
-    user_id  = aiva_live("llm_user_id")
-    ...                       # your gateway call
-    return {"answer": text}
+# Read the three live values when chat() is CALLED, never when it is defined.
+# AIVA always calls chat() with an empty history: every question stands on its own.
+import requests
+
+def chat(SystemPrompt, MainPrompt, history=[]):
+    payload = {
+        "app": "sparkair",
+        "enable_streaming": False,
+        "flow_name": "general_chat",
+        "history": history,
+        "optionalParameter": {
+            "maxtoken": 250000,
+            "contextlength": 250000,
+            "Temperature": 0.01,          # low: the same question gives the same answer
+            "Top_k": 1,
+            "Penalty": 1.1,
+            "DefaultPrompt": SystemPrompt,
+        },
+        "query": MainPrompt,
+        "select_all": False,
+    }
+    headers = {
+        "Authorization": f'Bearer {aiva_live("llm_token")}',
+        "SP_SSO_UID": aiva_live("llm_user_id"),
+        "Content-Type": "application/json",
+    }
+    url = f'{aiva_live("llm_endpoint")}'
+    resp = requests.post(url, json=payload, headers=headers, timeout=24000000)
+    return resp.json()        # the generated text is under "answer"
 ''')
 
 code("Cell 7 - chat() self-test (or switch to the stand-in)", '''
@@ -164,10 +186,12 @@ if USE_STANDIN:
 else:
     ACTIVE_CHAT = chat
     started = time.time()
-    answer, failure, seen = aiva.call_chat(ACTIVE_CHAT, "You answer with one word.", "Answer with the single word: ready", LIVE)
+    answer_of_call = aiva.call_chat(ACTIVE_CHAT, "You answer with one word.", "Answer with the single word: ready", LIVE)
+    answer, failure, seen = answer_of_call
     SECONDS_PER_CALL = time.time() - started
     if answer:
         print("chat() answered in %.1f seconds: %r" % (SECONDS_PER_CALL, answer[:60]))
+        print("The gateway also reported: %s" % (answer_of_call.meta or "nothing beyond the answer"))
     else:
         print("chat() gave no usable answer. AIVA read this as: %s. What was seen (token removed): %s" % (failure, seen[:300]))
 ''')

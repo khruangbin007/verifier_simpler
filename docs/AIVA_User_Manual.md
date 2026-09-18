@@ -561,7 +561,7 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | R2 | `aiva1_documents.not_read_block`, `aiva1_documents.blocks_to_chunks`, `aiva2_package.parse_r_source`, `aiva2_package.units_from_r_source`, `aiva2_package.read_package`, `aiva3_mapping.find_candidates`, `aiva4_checks.check_identity`, `aiva4_checks.account_coverage`, `aiva5_run_report.rows_coverage` |
 | R3 | `aiva3_mapping.validate_answer`, `aiva3_mapping.judge_links`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva4_checks.check_values`, `aiva5_run_report.ask_one`, `aiva5_run_report.make_asker` |
 | R4 | `aiva0_shared.content_hash`, `aiva0_shared.chain_records`, `aiva1_documents.blocks_to_chunks`, `aiva3_mapping.ledger_records`, `aiva3_mapping.judge_links`, `aiva4_checks.numeric_step`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva5_run_report.record_determinations` |
-| R5 | `aiva0_shared.canonical_json`, `aiva0_shared.chain_records`, `aiva2_package.read_package`, `aiva3_mapping.ledger_records`, `aiva3_mapping.ranked`, `aiva3_mapping.fuse`, `aiva3_mapping.assemble_question`, `aiva4_checks.sample_points`, `aiva5_run_report.run_batch`, `aiva5_run_report.make_asker`, `aiva5_run_report.replay_chat` |
+| R5 | `aiva0_shared.canonical_json`, `aiva0_shared.chain_records`, `aiva2_package.read_package`, `aiva3_mapping.ledger_records`, `aiva3_mapping.ranked`, `aiva3_mapping.fuse`, `aiva3_mapping.assemble_question`, `aiva4_checks.sample_points`, `aiva5_run_report.call_chat`, `aiva5_run_report.run_batch`, `aiva5_run_report.make_asker`, `aiva5_run_report.replay_chat` |
 | R6 | `aiva1_documents.read_file_blocks`, `aiva2_package.unpack_package`, `aiva5_run_report.open_run`, `aiva5_run_report.rebuild_outputs` |
 | R7 | `aiva1_documents.parse_formula`, `aiva2_package.parse_r_source`, `aiva2_package.to_expr`, `aiva2_package.decode_data_file`, `aiva4_checks.to_sympy`, `aiva4_checks.evaluate` |
 | R8 | `aiva5_run_report.make_settings`, `aiva5_run_report.LiveValues` |
@@ -665,7 +665,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_aiva2_package.py` | 12 | Tests of aiva2_package: safe unpacking, the R reader, documentation units and stored data. |
 | `test_aiva3_mapping.py` | 20 | Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators. |
 | `test_aiva4_checks.py` | 27 | Tests of aiva4_checks: the value rule, formula comparison, tables, rules, statuses and the identity. |
-| `test_aiva5_run_report.py` | 16 | Tests of aiva5_run_report.py: the wrapper around chat(), the store, paths, the runner, Output.xlsx. |
+| `test_aiva5_run_report.py` | 21 | Tests of aiva5_run_report.py: the wrapper around chat(), the store, paths, the runner, Output.xlsx. |
 | `test_docs.py` | 5 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
 | `test_end_to_end.py` | 15 | End-to-end tests on the sample projects: sameness of two runs, the human round trip, the report, the wording of everything an analyst reads, replay, and verification of a run folder. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
@@ -698,7 +698,7 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | aiva2_package.py | 1285 | 1500 | 13% |
 | aiva3_mapping.py | 1123 | 1500 | 18% |
 | aiva4_checks.py | 1382 | 1500 | 14% |
-| aiva5_run_report.py | 1365 | 1500 | 14% |
+| aiva5_run_report.py | 1461 | 1500 | 15% |
 
 **Dependencies.**
 
@@ -1169,83 +1169,90 @@ Generated from the source: every function and class of the engine with its line 
 
 | Name | Line | Kind | What it does |
 |---|---|---|---|
-| `RunPaused` | 60 | class | The run stopped on purpose and can be resumed. |
-| `make_settings` | 81 | function | The settings of a run. |
-| `RunPaths` | 104 | class | Where one run lives. |
-| `check_model_id` | 110 | function | Return "" when the model ID is usable, otherwise a plain sentence saying why not. |
-| `setup_project` | 117 | function | Create the project skeleton and say what is still missing. |
-| `new_run_id` | 136 | function | Run_<date>_<HHMM>, with a letter added when that folder already exists. |
-| `open_run` | 145 | function | Create or re-open a run folder and its local scratch folder. |
-| `list_input_files` | 167 | function | The input files of a project, by corner, in file-name order. |
-| `LiveValues` | 181 | class | The three values chat() reads when it is CALLED: endpoint, token, user id. |
-| `LiveValues.update` | 189 | function | Take the latest widget values; a different token starts a new generation. |
-| `LiveValues.get` | 198 | function | One live value, read at the moment chat() is called. |
-| `LiveValues.token_age_minutes` | 203 | function | Minutes since the current token was pasted. |
-| `LiveValues.redact` | 207 | function | Remove the current and recent token strings from any text before it is kept. |
-| `copy_whole` | 217 | function | Copy one whole file: to a temporary name, then replace; a plain copy if the file system does not support replace (probe P-5). |
-| `AuditStore` | 230 | class | All audit files are read and written on local disk; sync() copies changed files whole into _audit/ in the Workspace. |
-| `AuditStore.path` | 236 | function | The local path of one kind of audit file. |
-| `AuditStore.read` | 241 | function | Every record of one kind, in the order written. |
-| `AuditStore.append` | 252 | function | Append records of one kind; the three single-object kinds are rewritten whole. |
-| `AuditStore.call_files` | 262 | function | The gzip files of call records, in order. |
-| `AuditStore.append_calls` | 267 | function | Call records go to gzip files that roll over at the size limit. |
-| `AuditStore.read_calls` | 279 | function | Every call record of the run, in the order written. |
-| `AuditStore.sync` | 287 | function | Copy every file that changed since the last sync, whole. |
-| `AuditStore.restore` | 302 | function | On resume: copy the run folder's audit files back to local disk first. |
-| `open_store` | 307 | function | The audit store of a run, restored from the run folder when local scratch is empty. |
-| `classify_failure` | 317 | function | Sort a failure into one of three classes by the words it contains (probe P-13 matches these lists to what the real gateway returns). |
-| `call_chat` | 327 | function | Call chat() once and bring the three ways a failure can surface (an exception; a dictionary that carries a status or code; a dictionary with no "answer") into one shape: (answer text or None, failure class or "", what was seen with tokens removed). |
-| `AskState` | 342 | class | What the workers of one run share: the pause and stop switches, the consecutive- failure count of the circuit breaker, and the generation of the token that failed. |
-| `wait_until_allowed` | 350 | function | Called before every call. |
-| `ask_one` | 368 | function | Ask one question until it has a final outcome. |
-| `run_batch` | 408 | function | Ask one batch of questions with a thread pool. |
-| `make_asker` | 425 | function | Build ask(), the only place chat() is ever called. |
-| `replay_chat` | 450 | function | A chat() that answers from the recorded answers of an earlier run. |
-| `load_pipeline` | 480 | function | Read pipeline.yaml and refuse anything that is not a known skill and function. |
-| `update_manifest` | 500 | function | Change fields of the run manifest and write it back. |
-| `confirm_outline` | 507 | function | Record that a person has checked the outline of the methodology (notebook cell 10). |
-| `human_step_open` | 515 | function | Is this human step still waiting for its person? |
-| `run_pipeline` | 522 | function | Run, or resume, the pipeline. |
-| `run_step` | 563 | function | Build the context, call the step function, write what it returns, record the step, rebuild the outputs and sync. |
-| `record_step` | 588 | function | Leave the step record that makes a finished step visible and resume possible. |
-| `log_line` | 597 | function | Technical text (exception messages, Python names) belongs in run_log.txt only. |
-| `fingerprint_file` | 606 | function | Name, corner, size, SHA-256 and content identifier of one input file. |
-| `engine_file_hashes` | 613 | function | SHA-256 of every file that makes up the engine (code, pipeline, skills, references), so that an evidence pack names exactly the code that produced it (the same list as in docs/release_manifest.json). |
-| `prepare_run` | 625 | function | Step 01. |
-| `previous_run_inputs` | 656 | function | The manifest of the latest earlier run of this project, or None. |
-| `quoted` | 676 | function | Text taken from an input or from the AI is always shown visibly quoted, with its citation. |
-| `plain_cell` | 682 | function | The last gate before a cell is written. |
-| `lines_by_ref` | 702 | function | Several values in one cell: each on its own line, prefixed with its reference. |
-| `texts_by_ref` | 706 | function | Several quoted texts in one cell, separated by a line of dashes. |
-| `run_identity` | 710 | function | What ties a workbook to its run: also written into the workbook's properties. |
-| `rows_package_info` | 720 | function | The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls. |
-| `chunk_note` | 763 | function | What a reader should know about one chunk: unreadable, how an equation was read, reconstructed numbering. |
-| `rows_chunks` | 777 | function | The rows of Chunks_Canon and Chunks_Doc. |
-| `unit_expression` | 787 | function | A unit's formula or arguments as shown on Chunks_Model. |
-| `rows_model_units` | 800 | function | The rows of Chunks_Model. |
-| `link_columns` | 814 | function | The block of columns that shows what one unit was linked to in one corner. |
-| `rows_mapping` | 829 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
-| `rows_coverage` | 859 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
-| `latest_determinations` | 879 | function | The last recorded determination of every item. |
-| `rows_flagged` | 886 | function | The rows of Flagged_Items with the latest determination of each item. |
-| `sheet_rows` | 900 | function | The rows of all eight sheets, by sheet name. |
-| `check_written_totals` | 913 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
-| `load_layout` | 927 | function | The workbook layout from references/workbook_layout.yaml. |
-| `write_sheet` | 932 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
-| `build_workbook` | 968 | function | Build Output.xlsx on local disk from the audit records. |
-| `file_sha256` | 986 | function | SHA-256 of a file's bytes. |
-| `progress_text` | 991 | function | Where the run stands, in one or two plain sentences. |
-| `rebuild_outputs` | 1000 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
-| `docx_table` | 1029 | function | A plain table in a Word document, header row in bold. |
-| `build_run_summary` | 1042 | function | Where the run stands, in plain words; refreshed after every step. |
-| `call_statistics` | 1064 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
-| `call_plan` | 1085 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
-| `find_uploads` | 1108 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
-| `read_yellow_cells` | 1131 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
-| `record_determinations` | 1154 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
-| `build_report_file` | 1207 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
-| `build_report` | 1275 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
-| `verify_evidence_pack` | 1300 | function | Works from a run folder and the Inputs folder alone. |
+| `RunPaused` | 61 | class | The run stopped on purpose and can be resumed. |
+| `make_settings` | 82 | function | The settings of a run. |
+| `RunPaths` | 105 | class | Where one run lives. |
+| `check_model_id` | 111 | function | Return "" when the model ID is usable, otherwise a plain sentence saying why not. |
+| `setup_project` | 118 | function | Create the project skeleton and say what is still missing. |
+| `new_run_id` | 137 | function | Run_<date>_<HHMM>, with a letter added when that folder already exists. |
+| `open_run` | 146 | function | Create or re-open a run folder and its local scratch folder. |
+| `list_input_files` | 168 | function | The input files of a project, by corner, in file-name order. |
+| `LiveValues` | 182 | class | The three values chat() reads when it is CALLED: endpoint, token, user id. |
+| `LiveValues.update` | 190 | function | Take the latest widget values; a different token starts a new generation. |
+| `LiveValues.get` | 199 | function | One live value, read at the moment chat() is called. |
+| `LiveValues.token_age_minutes` | 204 | function | Minutes since the current token was pasted. |
+| `LiveValues.redact` | 208 | function | Remove the current and recent token strings from any text before it is kept. |
+| `copy_whole` | 218 | function | Copy one whole file: to a temporary name, then replace; a plain copy if the file system does not support replace (probe P-5). |
+| `AuditStore` | 231 | class | All audit files are read and written on local disk; sync() copies changed files whole into _audit/ in the Workspace. |
+| `AuditStore.path` | 237 | function | The local path of one kind of audit file. |
+| `AuditStore.read` | 242 | function | Every record of one kind, in the order written. |
+| `AuditStore.append` | 253 | function | Append records of one kind; the three single-object kinds are rewritten whole. |
+| `AuditStore.call_files` | 263 | function | The gzip files of call records, in order. |
+| `AuditStore.append_calls` | 268 | function | Call records go to gzip files that roll over at the size limit. |
+| `AuditStore.read_calls` | 280 | function | Every call record of the run, in the order written. |
+| `AuditStore.sync` | 288 | function | Copy every file that changed since the last sync, whole. |
+| `AuditStore.restore` | 303 | function | On resume: copy the run folder's audit files back to local disk first. |
+| `open_store` | 308 | function | The audit store of a run, restored from the run folder when local scratch is empty. |
+| `classify_failure` | 318 | function | Sort a failure into a class by the words it contains (probe P-13 matches these lists to what the real gateway returns). |
+| `ChatOutcome` | 328 | class | What one call to chat() came to. |
+| `ChatOutcome.__new__` | 334 | function |  |
+| `first_choice` | 350 | function | The first choice of an OpenAI-shaped reply, or an empty dictionary. |
+| `chat_metadata` | 356 | function | What the gateway said about the call itself: which conversation it belonged to, which model answered, how many tokens it took and why it stopped. |
+| `answer_text_of` | 370 | function | The generated text. |
+| `summarise_response` | 380 | function | A failed reply, shortened for the audit record: the fields that say what went wrong, without the echoed prompts. |
+| `accepts_history` | 393 | function | Whether the analyst's chat() takes the third `history` argument. |
+| `call_chat` | 407 | function | Call chat() once and bring every way a failure can surface (an exception; a dictionary that carries a status or code; a dictionary with no answer in either place; an answer the model was cut off in the middle of) into one shape. |
+| `AskState` | 436 | class | What the workers of one run share: the pause and stop switches, the consecutive- failure count of the circuit breaker, and the generation of the token that failed. |
+| `wait_until_allowed` | 444 | function | Called before every call. |
+| `ask_one` | 462 | function | Ask one question until it has a final outcome. |
+| `run_batch` | 504 | function | Ask one batch of questions with a thread pool. |
+| `make_asker` | 521 | function | Build ask(), the only place chat() is ever called. |
+| `replay_chat` | 546 | function | A chat() that answers from the recorded answers of an earlier run. |
+| `load_pipeline` | 576 | function | Read pipeline.yaml and refuse anything that is not a known skill and function. |
+| `update_manifest` | 596 | function | Change fields of the run manifest and write it back. |
+| `confirm_outline` | 603 | function | Record that a person has checked the outline of the methodology (notebook cell 10). |
+| `human_step_open` | 611 | function | Is this human step still waiting for its person? |
+| `run_pipeline` | 618 | function | Run, or resume, the pipeline. |
+| `run_step` | 659 | function | Build the context, call the step function, write what it returns, record the step, rebuild the outputs and sync. |
+| `record_step` | 684 | function | Leave the step record that makes a finished step visible and resume possible. |
+| `log_line` | 693 | function | Technical text (exception messages, Python names) belongs in run_log.txt only. |
+| `fingerprint_file` | 702 | function | Name, corner, size, SHA-256 and content identifier of one input file. |
+| `engine_file_hashes` | 709 | function | SHA-256 of every file that makes up the engine (code, pipeline, skills, references), so that an evidence pack names exactly the code that produced it (the same list as in docs/release_manifest.json). |
+| `prepare_run` | 721 | function | Step 01. |
+| `previous_run_inputs` | 752 | function | The manifest of the latest earlier run of this project, or None. |
+| `quoted` | 772 | function | Text taken from an input or from the AI is always shown visibly quoted, with its citation. |
+| `plain_cell` | 778 | function | The last gate before a cell is written. |
+| `lines_by_ref` | 798 | function | Several values in one cell: each on its own line, prefixed with its reference. |
+| `texts_by_ref` | 802 | function | Several quoted texts in one cell, separated by a line of dashes. |
+| `run_identity` | 806 | function | What ties a workbook to its run: also written into the workbook's properties. |
+| `rows_package_info` | 816 | function | The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls. |
+| `chunk_note` | 859 | function | What a reader should know about one chunk: unreadable, how an equation was read, reconstructed numbering. |
+| `rows_chunks` | 873 | function | The rows of Chunks_Canon and Chunks_Doc. |
+| `unit_expression` | 883 | function | A unit's formula or arguments as shown on Chunks_Model. |
+| `rows_model_units` | 896 | function | The rows of Chunks_Model. |
+| `link_columns` | 910 | function | The block of columns that shows what one unit was linked to in one corner. |
+| `rows_mapping` | 925 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
+| `rows_coverage` | 955 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
+| `latest_determinations` | 975 | function | The last recorded determination of every item. |
+| `rows_flagged` | 982 | function | The rows of Flagged_Items with the latest determination of each item. |
+| `sheet_rows` | 996 | function | The rows of all eight sheets, by sheet name. |
+| `check_written_totals` | 1009 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
+| `load_layout` | 1023 | function | The workbook layout from references/workbook_layout.yaml. |
+| `write_sheet` | 1028 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
+| `build_workbook` | 1064 | function | Build Output.xlsx on local disk from the audit records. |
+| `file_sha256` | 1082 | function | SHA-256 of a file's bytes. |
+| `progress_text` | 1087 | function | Where the run stands, in one or two plain sentences. |
+| `rebuild_outputs` | 1096 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
+| `docx_table` | 1125 | function | A plain table in a Word document, header row in bold. |
+| `build_run_summary` | 1138 | function | Where the run stands, in plain words; refreshed after every step. |
+| `call_statistics` | 1160 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
+| `call_plan` | 1181 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
+| `find_uploads` | 1204 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
+| `read_yellow_cells` | 1227 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
+| `record_determinations` | 1250 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
+| `build_report_file` | 1303 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
+| `build_report` | 1371 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
+| `verify_evidence_pack` | 1396 | function | Works from a run folder and the Inputs folder alone. |
 
 ## Appendix D. Change history
 
