@@ -19,6 +19,8 @@ The blended industry risk score is a weighted average of those industry scores.<
 <section name=""c) Market Position (60% weighting) "">
 <paranum num=""43."" style=""Pleading Paragraph"">
 Our market position assessment focuses on the role a provider plays within its industry.</paranum>
+<paranum num=""44."" style=""Pleading Paragraph"">
+Table 2 includes guidance on the characteristics we typically expect to see for each assessment level by asset class.</paranum>
 <table>
 <tablerow>
 <tablenumber width=""208"">
@@ -33,14 +35,26 @@ Market Position Assessment By Asset Class</tabletitle>
 <tablecell> </tablecell>
 </tablerow>
 <tablerow>
-<tablecell>Asset class</tablecell>
-<tablecell>Extremely strong</tablecell>
-<tablecell>Vulnerable</tablecell>
+<tablecolhead align=""left"">
+Extremely Strong</tablecolhead>
+<tablecolhead align=""left"">
+Adequate</tablecolhead>
+<tablecolhead align=""left"">
+Highly Vulnerable</tablecolhead>
 </tablerow>
 <tablerow>
-<tablecell>Toll roads</tablecell>
-<tablecell>Dominant position</tablecell>
-<tablecell>Weak position</tablecell>
+<tablesub>
+Airports</tablesub>
+<tablecell> </tablecell>
+<tablecell> </tablecell>
+</tablerow>
+<tablerow>
+<tabletext>
+Airport that provides essential air service with no apparent constraints on increasing rates. </tabletext>
+<tabletext>
+Airport with an adequate competitive position. </tabletext>
+<tabletext>
+Airport that functions as a major connecting hub with extremely high air carrier concentration. </tabletext>
 </tablerow>
 </table>
 </section>
@@ -95,15 +109,19 @@ class UnfamiliarSchema(unittest.TestCase):
         tables = [c for c in chunks if c["kind"] == "Table"]
         self.assertEqual(len(tables), 1, "the table is one chunk")
         table = tables[0]["table"]
-        self.assertEqual(list(table["header"]), ["Asset class", "Extremely strong", "Vulnerable"])
-        self.assertEqual([list(r) for r in table["rows"]], [["Toll roads", "Dominant position", "Weak position"]])
-        self.assertIn("Table 2", tables[0]["caption"])
-        self.assertIn("Market Position Assessment By Asset Class", tables[0]["caption"])
+        self.assertEqual(list(table["header"]), ["Extremely Strong", "Adequate", "Highly Vulnerable"])
+        self.assertEqual([list(r) for r in table["rows"]],
+                         [["Airports", "", ""],
+                          ["Airport that provides essential air service with no apparent constraints on increasing rates.",
+                           "Airport with an adequate competitive position.",
+                           "Airport that functions as a major connecting hub with extremely high air carrier concentration."]])
+        self.assertEqual(tables[0]["caption"], "Table 2. Market Position Assessment By Asset Class")
+        self.assertIn("Extremely Strong", tables[0]["text"], "the table's words are in the chunk, not only in its parts")
 
     def test_the_number_the_document_gives_a_paragraph_is_the_number_shown(self):
         chunks, _ = self.chunks()
         labels = [c["para_label"] for c in chunks if c["kind"] == "Paragraph"]
-        self.assertEqual(labels, ["36.", "37.", "38.", "42.", "43."])
+        self.assertEqual(labels, ["36.", "37.", "38.", "42.", "43.", "44."])
 
     def test_a_heading_carried_in_an_attribute_is_not_lost(self):
         chunks, _ = self.chunks()
@@ -120,7 +138,7 @@ class UnfamiliarSchema(unittest.TestCase):
     def test_every_inferred_tag_is_reported_with_its_reason(self):
         _, result = self.chunks()
         said = " ".join(row["value"] for row in result.records["info_rows"] if "unrecognised" in row["item"])
-        for tag in ("paranum", "tablerow", "tablecell", "tabletitle"):
+        for tag in ("paranum", "tablerow", "tablecell", "tabletitle", "tablecolhead", "tabletext"):
             self.assertIn("'%s'" % tag, said)
         self.assertIn("because it", said, "each one says why it was read that way")
 

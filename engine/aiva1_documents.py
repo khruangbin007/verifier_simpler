@@ -612,7 +612,8 @@ def load_tag_rules(references_dir, override_path=None):
         for tag in tags:
             rules["family_of"][str(tag).lower()] = family
     rules.setdefault("heading_attributes", ["name", "title", "heading", "label", "caption"])
-    rules.setdefault("caption_tag_words", ["title", "number", "caption", "head", "label", "name"])
+    rules.setdefault("caption_tag_words", ["title", "number", "caption", "legend"])
+    rules.setdefault("header_tag_words", ["head", "header"])
     return rules
 
 # ---------------------------------------------------------------- discovering an unfamiliar schema
@@ -623,6 +624,8 @@ def attribute_text(element, names):
         if value and not value.isdigit():
             return value, name
     return "", ""
+
+BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_item", "table")
 
 def written_numbering(element, rules):
     """The numbering this element carries in an attribute, exactly as the document wrote it
@@ -645,13 +648,19 @@ def child_tags(element):
 
 def discover_table_shape(element, rules):
     """Decide whether this element is a table by its shape rather than by its name, and if it
-    is, say which tag its rows use and which tag its cells use.
+    is, give a family to every tag used inside it.
 
     A table is the one structure in a document that repeats twice over: an element holding
-    several children of one tag, each of which holds several children of one tag. That shape
+    several children of one tag, each of which holds several children of its own. That shape
     is what is recognised here, so `tablerow`/`tablecell`, `zeile`/`zelle` or any other pair of
-    names is read as a table without anyone having to list the names first. Returns
-    (row_tag, cell_tag, caption_tags) or None."""
+    names is read as a table without anyone having to list the names first.
+
+    Everything sitting in a row is a cell, because a real table puts nothing else there. Two
+    kinds of cell are told apart by their name, since only the name says what they are for:
+    one that holds the table's number or title (<tablenumber>, <tabletitle>) is read as the
+    caption, and one that holds a column heading (<tablecolhead>) as a header cell. A tag
+    nobody anticipated, such as <tablesub> or <tabletext>, is simply a cell and keeps its
+    text. Returns (row_tag, {tag: family}) or None."""
     row_counts = child_tags(element)
     if not row_counts:
         return None
@@ -659,35 +668,30 @@ def discover_table_shape(element, rules):
     if row_counts[row_tag] < 2:
         return None
     rows = [child for child in element if local_name(child.tag) == row_tag]
-    cell_counts = {}
+    cell_tags, widths = {}, set()
     for row in rows:
-        for name, count in child_tags(row).items():
-            cell_counts[name] = cell_counts.get(name, 0) + count
-    if not cell_counts:
+        children = [cell for cell in row if local_name(cell.tag)]
+        widths.add(len(children))
+        for cell in children:
+            name = local_name(cell.tag)
+            cell_tags[name] = cell_tags.get(name, 0) + 1
+            # A cell holds words. Anything holding a block of the document is a part of the
+            # document, not a cell, and this element is its skeleton rather than a table.
+            if any(rules["family_of"].get(local_name(below.tag)) in BLOCK_FAMILIES for below in cell):
+                return None
+    if not cell_tags or row_tag in cell_tags or len(widths) > 1 or max(widths, default=0) < 2:
         return None
-    cell_tag = max(cell_counts, key=lambda name: (cell_counts[name], name))
-    if cell_counts[cell_tag] < 2 * len(rows) or cell_tag == row_tag:
+    families = {}
+    for name in cell_tags:
+        if any(word in name for word in rules["caption_tag_words"]):
+            families[name] = "caption"
+        elif any(word in name for word in rules["header_tag_words"]):
+            families[name] = "header_cell"
+        else:
+            families[name] = "cell"
+    if "cell" not in families.values() and "header_cell" not in families.values():
         return None
-    # Two guards against reading a document's own skeleton as a table. A chapter holding
-    # sections holding paragraphs has the same doubly repeating shape as a table, so shape
-    # alone is not enough:
-    #   - a cell holds words, not blocks. Anything with element children of its own is a
-    #     part of the document, not a cell.
-    #   - a table is rectangular. Rows of differing width are a skeleton, not a table.
-    cells = [cell for row in rows for cell in row if local_name(cell.tag) == cell_tag]
-    if any(len(cell) for cell in cells):
-        return None
-    # Width counts every child of the row, because a table number or a title stands in the
-    # place of a cell in the row it appears in.
-    widths = {sum(1 for child in row if local_name(child.tag)) for row in rows}
-    if len(widths) > 1:
-        return None
-    # Tags that sit beside the cells but are not cells: a table number, a title, a row label.
-    words = rules["caption_tag_words"]
-    caption_tags = tuple(sorted(name for name in cell_counts if name != cell_tag
-                                and cell_counts[name] <= len(rows)
-                                and any(word in name for word in words)))
-    return row_tag, cell_tag, caption_tags
+    return row_tag, families
 
 def discover_families(root, rules, report):
     """Work out a family for each tag this document uses that the rules do not name, from the
@@ -735,12 +739,14 @@ def discover_families(root, rules, report):
         if known.get(name) == "table" or name not in known:
             shape = discover_table_shape(element, rules)
             if shape:
-                row_tag, cell_tag, caption_tags = shape
-                note(name, "table", "holds repeated <%s>, each holding several <%s>" % (row_tag, cell_tag))
-                note(row_tag, "row", "repeats inside <%s>" % name)
-                note(cell_tag, "cell", "repeats inside <%s>" % row_tag)
-                for caption_tag in caption_tags:
-                    note(caption_tag, "caption", "sits beside the cells of <%s>, once per row" % row_tag)
+                row_tag, families = shape
+                note(name, "table", "holds repeated <%s>, each holding cells" % row_tag)
+                note(row_tag, "row", "repeats inside <%s>, each row the same width" % name)
+                reasons = {"caption": "holds the number or the title of <%s>" % name,
+                           "header_cell": "holds a column heading of <%s>" % name,
+                           "cell": "sits in a row of <%s>" % name}
+                for tag, family in families.items():
+                    note(tag, family, reasons[family])
                 continue
         if name in known or name in found:
             continue

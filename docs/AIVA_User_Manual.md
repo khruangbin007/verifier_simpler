@@ -694,7 +694,7 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | File | Lines | Budget | Docstrings and comments |
 |---|---|---|---|
 | aiva0_shared.py | 450 | 450 | 23% |
-| aiva1_documents.py | 1357 | 1500 | 17% |
+| aiva1_documents.py | 1363 | 1500 | 17% |
 | aiva2_package.py | 1285 | 1500 | 13% |
 | aiva3_mapping.py | 1123 | 1500 | 18% |
 | aiva4_checks.py | 1382 | 1500 | 14% |
@@ -939,44 +939,44 @@ Generated from the source: every function and class of the engine with its line 
 | `TolerantReader.finish` | 575 | function | Close whatever is still open and return the root element. |
 | `parse_markup` | 583 | function | Strict XML parsing first; when that still fails after the repairs, the tolerant reader. |
 | `load_tag_rules` | 598 | function | The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml. |
-| `attribute_text` | 619 | function | The first of the named attributes that holds text worth reading, with its name. |
-| `written_numbering` | 627 | function | The numbering this element carries in an attribute, exactly as the document wrote it (num="36." gives "36."). |
-| `child_tags` | 637 | function | How often each tag occurs directly below this element. |
-| `discover_table_shape` | 646 | function | Decide whether this element is a table by its shape rather than by its name, and if it is, say which tag its rows use and which tag its cells use. |
-| `discover_families` | 692 | function | Work out a family for each tag this document uses that the rules do not name, from the way the tag behaves here. |
-| `element_text` | 762 | function | The running text of an element without the text of figures, equations and captions in it. |
-| `new_block` | 771 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
-| `not_read_block` | 779 | function | A whole file, or a part, that could not be read still becomes one block. |
-| `WalkState` | 784 | class | What the walker carries along: the rules, the notation, images by name, the report of tags it met that are in no family, and what discovery made of those tags in this document. |
-| `WalkState.__post_init__` | 790 | function | Each file reads with its own view of the rules, so a tag discovered in one file never changes how the next file is read. |
-| `WalkState.family` | 796 | function | The family of a tag: what the rules say, else what discovery made of it here. |
-| `walk_element` | 800 | function | Turn one element and everything below it into blocks, in reading order. |
-| `walk_mixed` | 846 | function | An element that may hold both running text and blocks. |
-| `table_block` | 871 | function | A table is always one block: header cells, body rows and its caption stay together. |
-| `table_from_rows` | 894 | function | The one-cell display form of a table: cells joined by "; ", one row per line, header first. |
-| `figure_block` | 910 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
-| `equation_block` | 923 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
-| `blocks_from_markup` | 945 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
-| `blocks_from_mhtml` | 953 | function | Parts are read with the standard `email` package. |
-| `word_value` | 982 | function | The value of a Word property such as a style id or an outline level, or None. |
-| `docx_paragraph_facts` | 987 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
-| `docx_paragraph_parts` | 1007 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
-| `docx_figure` | 1023 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image. |
-| `safe_xml` | 1035 | function | Parse one XML part of an Office file. |
-| `blocks_from_docx` | 1041 | function | Body elements in document order, so that tables stay where they are. |
-| `blocks_from_pdf` | 1100 | function | PDF keeps no structure, so this reader is the weakest (the manual says so and recommends .docx where both exist). |
-| `blocks_from_pdf_text_only` | 1159 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
-| `first_numbering` | 1175 | function | The numbering at the start of a heading as written, and the name of its scheme. |
-| `infer_levels` | 1183 | function | Give every heading its level. |
-| `cross_references` | 1215 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
-| `states_something_checkable` | 1221 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
-| `blocks_to_chunks` | 1235 | function | Blocks to chunks. |
-| `block_is_under_reconstructed` | 1271 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
-| `outline_lines` | 1281 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
-| `read_file_blocks` | 1298 | function | One input file to blocks, by the format found in its content. |
-| `read_corner` | 1317 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
-| `read_methodology` | 1351 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
-| `read_documentation` | 1355 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
+| `attribute_text` | 620 | function | The first of the named attributes that holds text worth reading, with its name. |
+| `written_numbering` | 630 | function | The numbering this element carries in an attribute, exactly as the document wrote it (num="36." gives "36."). |
+| `child_tags` | 640 | function | How often each tag occurs directly below this element. |
+| `discover_table_shape` | 649 | function | Decide whether this element is a table by its shape rather than by its name, and if it is, give a family to every tag used inside it. |
+| `discover_families` | 696 | function | Work out a family for each tag this document uses that the rules do not name, from the way the tag behaves here. |
+| `element_text` | 768 | function | The running text of an element without the text of figures, equations and captions in it. |
+| `new_block` | 777 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
+| `not_read_block` | 785 | function | A whole file, or a part, that could not be read still becomes one block. |
+| `WalkState` | 790 | class | What the walker carries along: the rules, the notation, images by name, the report of tags it met that are in no family, and what discovery made of those tags in this document. |
+| `WalkState.__post_init__` | 796 | function | Each file reads with its own view of the rules, so a tag discovered in one file never changes how the next file is read. |
+| `WalkState.family` | 802 | function | The family of a tag: what the rules say, else what discovery made of it here. |
+| `walk_element` | 806 | function | Turn one element and everything below it into blocks, in reading order. |
+| `walk_mixed` | 852 | function | An element that may hold both running text and blocks. |
+| `table_block` | 877 | function | A table is always one block: header cells, body rows and its caption stay together. |
+| `table_from_rows` | 900 | function | The one-cell display form of a table: cells joined by "; ", one row per line, header first. |
+| `figure_block` | 916 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
+| `equation_block` | 929 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
+| `blocks_from_markup` | 951 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
+| `blocks_from_mhtml` | 959 | function | Parts are read with the standard `email` package. |
+| `word_value` | 988 | function | The value of a Word property such as a style id or an outline level, or None. |
+| `docx_paragraph_facts` | 993 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
+| `docx_paragraph_parts` | 1013 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
+| `docx_figure` | 1029 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image. |
+| `safe_xml` | 1041 | function | Parse one XML part of an Office file. |
+| `blocks_from_docx` | 1047 | function | Body elements in document order, so that tables stay where they are. |
+| `blocks_from_pdf` | 1106 | function | PDF keeps no structure, so this reader is the weakest (the manual says so and recommends .docx where both exist). |
+| `blocks_from_pdf_text_only` | 1165 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
+| `first_numbering` | 1181 | function | The numbering at the start of a heading as written, and the name of its scheme. |
+| `infer_levels` | 1189 | function | Give every heading its level. |
+| `cross_references` | 1221 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
+| `states_something_checkable` | 1227 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
+| `blocks_to_chunks` | 1241 | function | Blocks to chunks. |
+| `block_is_under_reconstructed` | 1277 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
+| `outline_lines` | 1287 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
+| `read_file_blocks` | 1304 | function | One input file to blocks, by the format found in its content. |
+| `read_corner` | 1323 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
+| `read_methodology` | 1357 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
+| `read_documentation` | 1361 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
 
 **aiva2_package.py**
 
