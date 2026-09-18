@@ -45,6 +45,8 @@ Two things hold for every bundle. Nothing taken from an input or from the model 
 
 **Contracts.** In: the input files. Out: chunks_canon, chunks_doc, read_repairs, info_rows, outline. Shown on `Chunks_Canon`, `Chunks_Doc` and `Model_Package_Info`.
 
+**Hard samples.** Three sample projects exist to be read badly and to make the badness measurable: `G_schema` (an XML schema whose tags are named nothing the rules know, with lists inside table cells), `H_twocolumn` (a PDF in two columns with a running header, a footnote and an unnumbered annex) and `I_wordtraps` (a Word file whose headings are bold paragraphs, with a text box and tracked changes). Each carries a `gold_reading.csv` naming a phrase a correct reading puts in some unit and the depth of the heading it belongs under. `engine/tests/test_hard_reading_samples.py` holds what the reader manages today as a floor that may not fall, and records what a correct reading would do as an expectation that is allowed to be short. Measured in `evaluation/hard_reading_samples_2026-09-18.md`.
+
 **Known limitations.** PDF layout is guessed from positions: a heading is a short line set larger or bolder than the body, and a header or footer is a line that repeats in a page margin, so an unusual layout can be misread and `Model_Package_Info` says what was left out. Juxtaposition is read as a product only inside structured markup, never in running text. The words OCR reads from a picture are shown to help a person and are never evidence; the bundled OCR model can drop the spaces between words.
 
 **Checklist.**

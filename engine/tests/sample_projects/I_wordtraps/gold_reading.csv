@@ -1,0 +1,9 @@
+must_appear,where_it_sits,expected_level
+Base pay,a heading made of nothing but bold,1
+base rate of nine units,the first paragraph under a bold-only heading,1
+rounded up to the nearest quarter of an hour,"a text box, which is not in the run of paragraphs",
+zero point four units a kilometre in the outer zone,an unaccepted insertion,
+zero point two units a kilometre everywhere,"an unaccepted deletion, which says the opposite",
+capped at forty units,a paragraph after a tracked change,
+Night premium,the third bold-only heading,1
+never on distance pay,an italic paragraph standing in for a footnote,

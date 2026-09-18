@@ -6,6 +6,7 @@ when a sample has to change. Everything a sample contains is written down in thi
 reviewer can read what the engine is tested against. Samples are invented; none is real.
 """
 import io
+import csv
 import os
 import sys
 import tarfile
@@ -707,6 +708,427 @@ def build_d_dosing():
 
 
 BUILDERS = {"A_minimal": build_a_minimal, "F_capital": build_f_capital, "F_capital_known": build_f_capital_known, "D_dosing": build_d_dosing}
+
+
+
+# ================================================================== the hard reading samples (plan 0.0.2, R6)
+# G, H and I exist to be READ badly by the rules AIVA ships, and to say so out loud where they
+# are. Each stresses one corner: G an XML schema whose tags are named nothing the rules know,
+# H a PDF laid out in two columns with running headers and footnotes, I a Word file whose
+# headings are bold paragraphs and whose words hide in text boxes and tracked changes. Every
+# distinctive phrase is listed in the sample's gold_reading.csv and must end in some unit.
+# R9 holds: the flavour is invented and carries no domain concept.
+
+# ------------------------------------------------------------------ G_schema: tags nobody anticipated
+G_METHODOLOGY = """<?xml version="1.0" encoding="utf-8"?>
+<lendingrules xmlns="urn:example:lending:1">
+  <ruleblock idx="1.">
+    <blockcaption>Loan periods</blockcaption>
+    <statementbody>A standard loan runs for fourteen days from the day of issue.</statementbody>
+    <statementbody>A short loan runs for two days and may not be renewed.</statementbody>
+    <gridholder>
+      <gridcaption>Table 1. Loan period by item class</gridcaption>
+      <gridline>
+        <gridcolhead>Item class</gridcolhead><gridcolhead>Days</gridcolhead><gridcolhead>Conditions</gridcolhead>
+      </gridline>
+      <gridline>
+        <gridcell>Standard</gridcell><gridcell>14</gridcell>
+        <gridcell><bullets><point>renewable twice</point><point>no fine in the first two days</point></bullets></gridcell>
+      </gridline>
+      <gridline>
+        <gridcell>Short</gridcell><gridcell>2</gridcell>
+        <gridcell><bullets><point>not renewable</point><point>fine from the first day</point></bullets></gridcell>
+      </gridline>
+      <gridline>
+        <gridcell>Reference</gridcell><gridcell>0</gridcell>
+        <gridcell>consulted on the premises only</gridcell>
+      </gridline>
+    </gridholder>
+  </ruleblock>
+  <ruleblock idx="2.">
+    <blockcaption>Fines</blockcaption>
+    <statementbody>The fine is the number of days overdue multiplied by the daily rate for the item class.</statementbody>
+    <statementbody>The fine for one item is capped at eight units.</statementbody>
+    <statementbody>No fine is charged where the overdue period is two days or fewer for a standard loan.</statementbody>
+    <sidenote>Librarians may waive a fine; a waiver is recorded but does not change the calculation.</sidenote>
+  </ruleblock>
+  <ruleblock idx="3.">
+    <blockcaption>Renewals</blockcaption>
+    <statementbody>A standard loan may be renewed twice, each renewal running for a further fourteen days.</statementbody>
+    <statementbody>A loan with a reservation against it may not be renewed.</statementbody>
+  </ruleblock>
+</lendingrules>
+"""
+
+G_R = '''#\' Loan period in days for an item class
+#\'
+#\' @param item_class one of "Standard", "Short" or "Reference"
+#\' @return the loan period in days
+#\' @export
+loan_days <- function(item_class) {
+  periods <- c(Standard = 14, Short = 2, Reference = 0)
+  unname(periods[item_class])
+}
+
+#\' Fine for an overdue item
+#\'
+#\' @param days_overdue whole number of days overdue
+#\' @param item_class one of "Standard", "Short" or "Reference"
+#\' @param daily_rate rate charged per day
+#\' @return the fine, capped at eight units
+#\' @export
+fine_due <- function(days_overdue, item_class, daily_rate) {
+  free <- if (item_class == "Standard") 2 else 0
+  charged <- max(0, days_overdue - free)
+  min(charged * daily_rate, 8)
+}
+
+#\' Whether a loan may be renewed
+#\'
+#\' @param item_class one of "Standard", "Short" or "Reference"
+#\' @param renewals_so_far how many renewals have already been made
+#\' @param reserved whether another borrower has reserved the item
+#\' @export
+may_renew <- function(item_class, renewals_so_far, reserved) {
+  item_class == "Standard" && renewals_so_far < 2 && !reserved
+}
+'''
+
+G_DOCUMENTATION = [
+    ("h", 1, "Lending calculator"),
+    ("p", "The package works out loan periods, fines and whether a loan may be renewed."),
+    ("h", 2, "Loan periods"),
+    ("p", "A standard loan runs for fourteen days. A short loan runs for two days."),
+    ("table", "Table 1. Loan period by item class", [["Item class", "Days"], ["Standard", "14"], ["Short", "2"], ["Reference", "0"]]),
+    ("h", 2, "Fines"),
+    ("p", "The fine is the days overdue times the daily rate, capped at eight units. A standard loan has two free days."),
+    ("h", 2, "Renewals"),
+    ("p", "A standard loan may be renewed twice unless another borrower has reserved the item."),
+]
+
+# expected_level is the DEPTH of the heading a unit sits under, not the number the document
+# prints beside it. Every block of G is a top-level section, so its statements sit at depth 1.
+G_GOLD = [
+    ("A standard loan runs for fourteen days", "a statement in a tag the rules do not know", "1"),
+    ("Loan periods", "a heading in a tag the rules do not know", "1"),
+    ("renewable twice", "a list item inside a table cell", ""),
+    ("no fine in the first two days", "a second list item inside the same table cell", ""),
+    ("consulted on the premises only", "a table cell holding plain text beside cells holding lists", ""),
+    ("capped at eight units", "a statement in the second block", "1"),
+    ("Librarians may waive a fine", "a side note in a tag that appears only once", ""),
+    ("A loan with a reservation against it may not be renewed", "the last statement of the last block", "1"),
+]
+
+
+def build_g_schema():
+    import pandas
+    sample = "G_schema"
+    write_bytes(sample, "canon", "lending_rules.xml", G_METHODOLOGY.encode("utf-8"))
+    rates = pandas.DataFrame({"item_class": ["Standard", "Short", "Reference"], "daily_rate": [0.20, 0.50, 0.00]})
+    files = {"DESCRIPTION": "Package: lendcalc\nTitle: Lending Calculator\nVersion: 0.3.0\nLicense: MIT\nEncoding: UTF-8\n",
+             "NAMESPACE": "export(loan_days)\nexport(fine_due)\nexport(may_renew)\n",
+             "R/lending.R": G_R,
+             "R/data.R": "#' Daily rate by item class\n#'\n#' @format A data frame with 3 rows and 2 columns.\n\"daily_rates\"\n",
+             "data/daily_rates.rda": r_data({"daily_rates": rates}),
+             "man/loan_days.Rd": rd_page("loan_days", "Loan period in days", [("item_class", None, "one of Standard, Short or Reference")], "R/lending.R"),
+             "man/fine_due.Rd": rd_page("fine_due", "Fine for an overdue item", [("days_overdue", None, "whole number of days overdue"), ("item_class", None, "the item class"), ("daily_rate", None, "rate charged per day")], "R/lending.R")}
+    write_bytes(sample, "package", "lendcalc_0.3.0.tar.gz", tarball("lendcalc", files))
+    write_bytes(sample, "doc", "lendcalc_documentation.docx", docx_file(G_DOCUMENTATION))
+    write_gold(sample, G_GOLD)
+
+
+# ------------------------------------------------------------------ H_twocolumn: a PDF laid out the hard way
+def two_column_pdf(title, running_header, footer, columns, annex):
+    """A PDF in two columns with a running header and footer on every page and a footnote at the
+    foot of the first, followed by an annex whose heading carries no number."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer
+    styles = getSampleStyleSheet()
+    body = styles["BodyText"]
+    note = ParagraphStyle("note", parent=body, fontSize=7, leading=9)
+    head = ParagraphStyle("hd", parent=styles["Heading2"], spaceBefore=6)
+    raw = io.BytesIO()
+
+    def furniture(canvas, document):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.drawString(20 * mm, A4[1] - 12 * mm, running_header)
+        canvas.drawString(20 * mm, 10 * mm, "%s - page %d" % (footer, document.page))
+        canvas.restoreState()
+
+    document = BaseDocTemplate(raw, pagesize=A4, invariant=1,
+                               leftMargin=20 * mm, rightMargin=20 * mm, topMargin=22 * mm, bottomMargin=18 * mm)
+    width = (document.width - 8 * mm) / 2
+    frames = [Frame(document.leftMargin, document.bottomMargin, width, document.height, id="left"),
+              Frame(document.leftMargin + width + 8 * mm, document.bottomMargin, width, document.height, id="right")]
+    document.addPageTemplates([PageTemplate(id="two", frames=frames, onPage=furniture)])
+    story = [Paragraph(title, styles["Heading1"]), Spacer(1, 4)]
+    for heading, paragraphs in columns:
+        story.append(Paragraph(heading, head))
+        for text in paragraphs:
+            story.append(Paragraph(text, body))
+            story.append(Spacer(1, 3))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("__________", note))
+    story.append(Paragraph("1 " + annex["footnote"], note))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(annex["heading"], head))
+    for text in annex["paragraphs"]:
+        story.append(Paragraph(text, body))
+        story.append(Spacer(1, 3))
+    document.build(story)
+    return raw.getvalue()
+
+
+H_COLUMNS = [
+    ("1. Watering windows", [
+        "Watering runs only between four and seven in the morning, when evaporation is lowest.",
+        "A bed is watered at most once a day. A second run on the same day is refused.",
+        "Where the forecast gives more than five millimetres of rain, the run is skipped.<sup>1</sup>"]),
+    ("2. Volume per bed", [
+        "The volume for a bed is its area in square metres times the depth in millimetres set for its crop group.",
+        "The depth is four millimetres for leaf crops, six for root crops and nine for fruiting crops.",
+        "The volume for one bed is capped at two hundred litres in a single run."]),
+    ("3. Sensors", [
+        "A bed with a moisture reading above sixty per cent is skipped whatever the schedule says.",
+        "Where a sensor has not reported for two days its bed is watered on the schedule alone."]),
+]
+
+H_ANNEX = {
+    "footnote": "Rain is taken from the forecast issued at midnight, not from the gauge, because the run is planned before dawn.",
+    "heading": "Annex: how a skipped run is recorded",
+    "paragraphs": [
+        "A skipped run is written to the log with the reason, so that a dry bed can be told from an unwatered one.",
+        "The log keeps skipped runs for ninety days."],
+}
+
+H_R = '''#\' Volume of water for one bed
+#\'
+#\' @param area_m2 the area of the bed in square metres
+#\' @param crop_group one of "leaf", "root" or "fruiting"
+#\' @return the volume in litres, capped at two hundred
+#\' @export
+bed_volume <- function(area_m2, crop_group) {
+  depths <- c(leaf = 4, root = 6, fruiting = 9)
+  min(area_m2 * unname(depths[crop_group]), 200)
+}
+
+#\' Whether a bed is watered on a given run
+#\'
+#\' @param moisture_pct the latest moisture reading, as a percentage
+#\' @param forecast_mm rain in the forecast, in millimetres
+#\' @param watered_today whether the bed has already been watered today
+#\' @export
+water_bed <- function(moisture_pct, forecast_mm, watered_today) {
+  !watered_today && moisture_pct <= 60 && forecast_mm <= 5
+}
+'''
+
+H_METHODOLOGY = """<?xml version="1.0" encoding="utf-8"?>
+<document>
+  <section num="1."><title>Watering windows</title>
+    <para>Watering runs only between four and seven in the morning.</para>
+    <para>A bed is watered at most once a day.</para>
+    <para>Where the forecast gives more than five millimetres of rain, the run is skipped.</para>
+  </section>
+  <section num="2."><title>Volume per bed</title>
+    <para>The volume for a bed is its area in square metres times the depth in millimetres set for its crop group.</para>
+    <para>The depth is four millimetres for leaf crops, six for root crops and nine for fruiting crops.</para>
+    <para>The volume for one bed is capped at two hundred litres in a single run.</para>
+  </section>
+  <section num="3."><title>Sensors</title>
+    <para>A bed with a moisture reading above sixty per cent is skipped whatever the schedule says.</para>
+  </section>
+</document>
+"""
+
+# The guide's own title sits at depth 1, so every numbered section of it sits at depth 2.
+H_GOLD = [
+    ("evaporation is lowest", "the first column of a two-column page", "2"),
+    ("capped at two hundred litres", "the second column of a two-column page", "2"),
+    ("watered on the schedule alone", "the last paragraph before the footnote", "2"),
+    ("not from the gauge", "a footnote at the foot of the page", ""),
+    ("Annex: how a skipped run is recorded", "a heading carrying no number at all", ""),
+    ("a dry bed can be told from an unwatered one", "a paragraph under the unnumbered annex heading", ""),
+    ("keeps skipped runs for ninety days", "the last paragraph of the annex", ""),
+]
+
+
+def build_h_twocolumn():
+    import pandas
+    sample = "H_twocolumn"
+    write_bytes(sample, "canon", "irrigation_method.xml", H_METHODOLOGY.encode("utf-8"))
+    depths = pandas.DataFrame({"crop_group": ["leaf", "root", "fruiting"], "depth_mm": [4.0, 6.0, 9.0]})
+    files = {"DESCRIPTION": "Package: irrigate\nTitle: Irrigation Schedule\nVersion: 0.4.0\nLicense: MIT\nEncoding: UTF-8\n",
+             "NAMESPACE": "export(bed_volume)\nexport(water_bed)\n",
+             "R/irrigation.R": H_R,
+             "R/data.R": "#' Watering depth by crop group\n#'\n#' @format A data frame with 3 rows and 2 columns.\n\"crop_depths\"\n",
+             "data/crop_depths.rda": r_data({"crop_depths": depths}),
+             "man/bed_volume.Rd": rd_page("bed_volume", "Volume of water for one bed", [("area_m2", None, "area of the bed in square metres"), ("crop_group", None, "one of leaf, root or fruiting")], "R/irrigation.R")}
+    write_bytes(sample, "package", "irrigate_0.4.0.tar.gz", tarball("irrigate", files))
+    write_bytes(sample, "doc", "irrigate_field_guide.pdf",
+                two_column_pdf("Irrigation field guide", "Irrigation field guide", "Greenhouse operations", H_COLUMNS, H_ANNEX))
+    write_gold(sample, H_GOLD)
+
+
+# ------------------------------------------------------------------ I_wordtraps: a Word file that hides things
+W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def bold_paragraph(document, text):
+    """A heading made of nothing but bold: no outline level, no heading style, no number. This
+    is how a great many real documents mark a section, and AIVA cannot see it as a heading from
+    the style, only from the way the paragraph is set."""
+    paragraph = document.add_paragraph()
+    run_in = paragraph.add_run(text)
+    run_in.bold = True
+    run_in.font.size = None
+    return paragraph
+
+
+def text_box(document, text):
+    """A paragraph holding a text box. Word puts the words inside w:txbxContent, which sits in
+    the body part but not in the run of paragraphs a plain reader walks."""
+    from docx.oxml import parse_xml
+    paragraph = document.add_paragraph()
+    paragraph._p.append(parse_xml(
+        '<w:r xmlns:w="%s"><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" style="width:200pt;height:40pt">'
+        '<v:textbox><w:txbxContent><w:p><w:r><w:t>%s</w:t></w:r></w:p></w:txbxContent></v:textbox>'
+        '</v:shape></w:pict></w:r>' % (W, text)))
+    return paragraph
+
+
+def tracked_paragraph(document, kept, inserted, deleted):
+    """A paragraph carrying an unaccepted insertion and an unaccepted deletion."""
+    from docx.oxml import parse_xml
+    paragraph = document.add_paragraph()
+    paragraph._p.append(parse_xml('<w:r xmlns:w="%s"><w:t xml:space="preserve">%s </w:t></w:r>' % (W, kept)))
+    paragraph._p.append(parse_xml(
+        '<w:ins xmlns:w="%s" w:id="901" w:author="A" w:date="2026-01-01T00:00:00Z">'
+        '<w:r><w:t xml:space="preserve">%s </w:t></w:r></w:ins>' % (W, inserted)))
+    paragraph._p.append(parse_xml(
+        '<w:del xmlns:w="%s" w:id="902" w:author="A" w:date="2026-01-01T00:00:00Z">'
+        '<w:r><w:delText xml:space="preserve">%s</w:delText></w:r></w:del>' % (W, deleted)))
+    return paragraph
+
+
+def word_traps_docx():
+    import docx
+    document = docx.Document()
+    document.add_heading("Shift pay calculator", level=1)
+    document.add_paragraph("The package works out what a courier is paid for a shift.")
+    bold_paragraph(document, "Base pay")
+    document.add_paragraph("A courier is paid a base rate of nine units for every hour of the shift.")
+    document.add_paragraph("A shift shorter than two hours is paid as two hours.")
+    text_box(document, "Rounding note: hours are rounded up to the nearest quarter of an hour before pay is worked out.")
+    bold_paragraph(document, "Distance pay")
+    document.add_paragraph("Distance pay is the kilometres ridden times the distance rate for the zone.")
+    document.add_table(rows=1, cols=1)
+    tracked_paragraph(document,
+                      "The distance rate is",
+                      "zero point four units a kilometre in the outer zone and",
+                      "zero point two units a kilometre everywhere.")
+    document.add_paragraph("Distance pay for one shift is capped at forty units.")
+    bold_paragraph(document, "Night premium")
+    document.add_paragraph("A shift beginning after ten at night earns a premium of one quarter of the base pay.")
+    footnote_like = document.add_paragraph()
+    footnote_like.add_run("The premium is worked out on base pay only and never on distance pay.").italic = True
+    raw = io.BytesIO()
+    document.save(raw)
+    return raw.getvalue()
+
+
+I_R = '''#\' Base pay for a shift
+#\'
+#\' @param hours length of the shift in hours
+#\' @param base_rate pay for one hour
+#\' @return the base pay, with a minimum of two hours
+#\' @export
+base_pay <- function(hours, base_rate) {
+  max(hours, 2) * base_rate
+}
+
+#\' Distance pay for a shift
+#\'
+#\' @param km kilometres ridden
+#\' @param zone one of "inner" or "outer"
+#\' @return the distance pay, capped at forty units
+#\' @export
+distance_pay <- function(km, zone) {
+  rates <- c(inner = 0.2, outer = 0.4)
+  min(km * unname(rates[zone]), 40)
+}
+
+#\' Night premium on a shift
+#\'
+#\' @param base the base pay for the shift
+#\' @param starts_after_ten whether the shift began after ten at night
+#\' @export
+night_premium <- function(base, starts_after_ten) {
+  if (starts_after_ten) base * 0.25 else 0
+}
+'''
+
+I_METHODOLOGY = """<?xml version="1.0" encoding="utf-8"?>
+<document>
+  <section num="1."><title>Base pay</title>
+    <para>A courier is paid a base rate of nine units for every hour of the shift.</para>
+    <para>A shift shorter than two hours is paid as two hours.</para>
+  </section>
+  <section num="2."><title>Distance pay</title>
+    <para>Distance pay is the kilometres ridden times the distance rate for the zone.</para>
+    <para>The distance rate is zero point four units a kilometre in the outer zone.</para>
+    <para>Distance pay for one shift is capped at forty units.</para>
+  </section>
+  <section num="3."><title>Night premium</title>
+    <para>A shift beginning after ten at night earns a premium of one quarter of the base pay.</para>
+  </section>
+</document>
+"""
+
+I_GOLD = [
+    ("Base pay", "a heading made of nothing but bold", "1"),
+    ("base rate of nine units", "the first paragraph under a bold-only heading", "1"),
+    ("rounded up to the nearest quarter of an hour", "a text box, which is not in the run of paragraphs", ""),
+    ("zero point four units a kilometre in the outer zone", "an unaccepted insertion", ""),
+    ("zero point two units a kilometre everywhere", "an unaccepted deletion, which says the opposite", ""),
+    ("capped at forty units", "a paragraph after a tracked change", ""),
+    ("Night premium", "the third bold-only heading", "1"),
+    ("never on distance pay", "an italic paragraph standing in for a footnote", ""),
+]
+
+
+def build_i_wordtraps():
+    import pandas
+    sample = "I_wordtraps"
+    write_bytes(sample, "canon", "shift_pay_method.xml", I_METHODOLOGY.encode("utf-8"))
+    rates = pandas.DataFrame({"zone": ["inner", "outer"], "rate_per_km": [0.20, 0.40]})
+    files = {"DESCRIPTION": "Package: shiftpay\nTitle: Shift Pay Calculator\nVersion: 0.5.0\nLicense: MIT\nEncoding: UTF-8\n",
+             "NAMESPACE": "export(base_pay)\nexport(distance_pay)\nexport(night_premium)\n",
+             "R/shiftpay.R": I_R,
+             "R/data.R": "#' Distance rate by zone\n#'\n#' @format A data frame with 2 rows and 2 columns.\n\"zone_rates\"\n",
+             "data/zone_rates.rda": r_data({"zone_rates": rates}),
+             "man/base_pay.Rd": rd_page("base_pay", "Base pay for a shift", [("hours", None, "length of the shift in hours"), ("base_rate", None, "pay for one hour")], "R/shiftpay.R"),
+             "man/distance_pay.Rd": rd_page("distance_pay", "Distance pay for a shift", [("km", None, "kilometres ridden"), ("zone", None, "one of inner or outer")], "R/shiftpay.R")}
+    write_bytes(sample, "package", "shiftpay_0.5.0.tar.gz", tarball("shiftpay", files))
+    write_bytes(sample, "doc", "shiftpay_documentation.docx", word_traps_docx())
+    write_gold(sample, I_GOLD)
+
+
+def write_gold(sample, rows):
+    """gold_reading.csv: a phrase that must end in some unit, where it sits in the file, and the
+    heading level the unit should carry where the file makes that plain. It is READING gold: it
+    says nothing about links, checks or statuses."""
+    path = os.path.join(SAMPLES, sample, "gold_reading.csv")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("must_appear", "where_it_sits", "expected_level"))
+        writer.writerows(rows)
+
+BUILDERS.update({"G_schema": build_g_schema, "H_twocolumn": build_h_twocolumn, "I_wordtraps": build_i_wordtraps})
 
 if __name__ == "__main__":
     for name in (sys.argv[1:] or list(BUILDERS)):

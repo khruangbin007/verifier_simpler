@@ -419,6 +419,8 @@ Two things hold for every bundle. Nothing taken from an input or from the model 
 
 **Contracts.** In: the input files. Out: chunks_canon, chunks_doc, read_repairs, info_rows, outline. Shown on `Chunks_Canon`, `Chunks_Doc` and `Model_Package_Info`.
 
+**Hard samples.** Three sample projects exist to be read badly and to make the badness measurable: `G_schema` (an XML schema whose tags are named nothing the rules know, with lists inside table cells), `H_twocolumn` (a PDF in two columns with a running header, a footnote and an unnumbered annex) and `I_wordtraps` (a Word file whose headings are bold paragraphs, with a text box and tracked changes). Each carries a `gold_reading.csv` naming a phrase a correct reading puts in some unit and the depth of the heading it belongs under. `engine/tests/test_hard_reading_samples.py` holds what the reader manages today as a floor that may not fall, and records what a correct reading would do as an expectation that is allowed to be short. Measured in `evaluation/hard_reading_samples_2026-09-18.md`.
+
 **Known limitations.** PDF layout is guessed from positions: a heading is a short line set larger or bolder than the body, and a header or footer is a line that repeats in a page margin, so an unusual layout can be misread and `Model_Package_Info` says what was left out. Juxtaposition is read as a product only inside structured markup, never in running text. The words OCR reads from a picture are shown to help a person and are never evidence; the bundled OCR model can drop the spaces between words.
 
 **Checklist.**
@@ -587,7 +589,7 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | R10 | `aiva0_shared.plain_number`, `aiva0r_reading.account_lines`, `aiva5_run_report.plain_cell`, `aiva5_run_report.rows_model_units`, `aiva5_run_report.build_report_file` |
 | R11 | `aiva5_run_report.load_pipeline` |
 | R12 | `aiva5_run_report.copy_whole`, `aiva5_run_report.rebuild_outputs`, `aiva5_run_report.record_determinations` |
-| R13 | `aiva0r_reading.without_page_furniture`, `aiva0r_reading.marks_of_rendering`, `aiva0r_reading.account`, `aiva0r_reading.account_lines`, `aiva0r_reading.account_of_package`, `aiva1_documents.not_read_block`, `aiva1_documents.atoms_of_file` |
+| R13 | `aiva0r_reading.without_page_furniture`, `aiva0r_reading.marks_of_rendering`, `aiva0r_reading.account`, `aiva0r_reading.account_lines`, `aiva0r_reading.account_of_package`, `aiva1_documents.element_text`, `aiva1_documents.not_read_block`, `aiva1_documents.atoms_of_file` |
 
 ## 22. Settings
 
@@ -692,6 +694,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_docs.py` | 5 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
 | `test_end_to_end.py` | 15 | End-to-end tests on the sample projects: sameness of two runs, the human round trip, the report, the wording of everything an analyst reads, replay, and verification of a run folder. |
 | `test_frozen_interface.py` | 4 | test_frozen_interface.py - the 0.0.2 reading rebuild is allowed to change HOW a file is sliced. |
+| `test_hard_reading_samples.py` | 10 | test_hard_reading_samples.py - G, H and I exist to be read badly, and to make the badness measurable. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
 | `test_notebook.py` | 5 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
 
@@ -719,7 +722,7 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 |---|---|---|---|
 | aiva0_shared.py | 450 | 450 | 23% |
 | aiva0r_reading.py | 608 | 1100 | 29% |
-| aiva1_documents.py | 1338 | 1500 | 17% |
+| aiva1_documents.py | 1347 | 1500 | 18% |
 | aiva2_package.py | 1294 | 1500 | 13% |
 | aiva3_mapping.py | 1151 | 1500 | 18% |
 | aiva4_checks.py | 1382 | 1500 | 14% |
@@ -997,43 +1000,43 @@ Generated from the source: every function and class of the engine with its line 
 | `TolerantReader.finish` | 556 | function | Close whatever is still open and return the root element. |
 | `parse_markup` | 564 | function | Strict XML parsing first; when that still fails after the repairs, the tolerant reader. |
 | `load_tag_rules` | 579 | function | The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml. |
-| `element_text` | 601 | function | The running text of an element without the text of figures, equations and captions in it. |
-| `new_block` | 610 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
-| `not_read_block` | 618 | function | A whole file, or a part, that could not be read still becomes one block: the "not read" class of the content account, never a silent gap. |
-| `WalkState` | 624 | class | What the walker carries along: the rules, the notation, images by name, the report of tags it met that are in no family, and what discovery made of those tags in this document. |
-| `WalkState.__post_init__` | 634 | function | Each file reads with its own view of the rules, so a tag discovered in one file never changes how the next file is read. |
-| `WalkState.family` | 640 | function | The family of a tag: what the rules say, else what discovery made of it here. |
-| `walk_element` | 644 | function | Turn one element and everything below it into blocks, in reading order. |
-| `walk_mixed` | 695 | function | An element that may hold both running text and blocks. |
-| `table_block` | 720 | function | A table is always one block: header cells, body rows and its caption stay together. |
-| `table_from_rows` | 747 | function | The one-cell display form of a table. |
-| `read_picture` | 777 | function | The words in a picture, read by OCR, as lines to show under the Figure; "" when there are none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside the package, so nothing is fetched when it runs). |
-| `picture_words` | 803 | function | PDF: the part of the page that a picture covers, drawn at 150 dpi and read by OCR. |
-| `figure_block` | 815 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
-| `equation_block` | 828 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
-| `blocks_from_markup` | 850 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
-| `blocks_from_mhtml` | 858 | function | Parts are read with the standard `email` package. |
-| `word_value` | 887 | function | The value of a Word property such as a style id or an outline level, or None. |
-| `docx_paragraph_facts` | 892 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
-| `docx_number_formats` | 915 | function | How each numbering of a Word file shows its items, by numbering id and level: "bullet", "decimal", "lowerLetter" ... |
-| `docx_paragraph_parts` | 925 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
-| `docx_figure` | 941 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image, and the words in it where OCR is installed. |
-| `safe_xml` | 955 | function | Parse one XML part of an Office file. |
-| `blocks_from_docx` | 961 | function | Body elements in document order, so that tables stay where they are. |
-| `pdf_lines` | 1036 | function | Every line, table and picture of a PDF in reading order, each with its page, its place on the page, and whether it sits in the top or bottom margin ("edge"). |
-| `blocks_from_pdf` | 1060 | function | PDF keeps no structure, so this reader is the weakest (the manual recommends .docx where both exist). |
-| `blocks_from_pdf_text_only` | 1120 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
-| `cross_references` | 1137 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
-| `states_something_checkable` | 1143 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
-| `fold_lists` | 1158 | function | A list belongs to the paragraph that introduces it: "We apply the following principles:" and its three bullets are one thought, and a bullet alone cannot be traced to anything. |
-| `blocks_to_chunks` | 1175 | function | Blocks to chunks. |
-| `block_is_under_reconstructed` | 1211 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
-| `outline_lines` | 1221 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
-| `atoms_of_file` | 1238 | function | The smallest pieces of text the file holds, counted straight from the file and NOT from the blocks the reader made of it. |
-| `read_file_blocks` | 1265 | function | One input file to blocks, by the format found in its content. |
-| `read_corner` | 1285 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
-| `read_methodology` | 1332 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
-| `read_documentation` | 1336 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
+| `element_text` | 603 | function | The running text of an element without the text of figures, equations and captions in it. |
+| `new_block` | 619 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
+| `not_read_block` | 627 | function | A whole file, or a part, that could not be read still becomes one block: the "not read" class of the content account, never a silent gap. |
+| `WalkState` | 633 | class | What the walker carries along: the rules, the notation, images by name, the report of tags it met that are in no family, and what discovery made of those tags in this document. |
+| `WalkState.__post_init__` | 643 | function | Each file reads with its own view of the rules, so a tag discovered in one file never changes how the next file is read. |
+| `WalkState.family` | 649 | function | The family of a tag: what the rules say, else what discovery made of it here. |
+| `walk_element` | 653 | function | Turn one element and everything below it into blocks, in reading order. |
+| `walk_mixed` | 704 | function | An element that may hold both running text and blocks. |
+| `table_block` | 729 | function | A table is always one block: header cells, body rows and its caption stay together. |
+| `table_from_rows` | 756 | function | The one-cell display form of a table. |
+| `read_picture` | 786 | function | The words in a picture, read by OCR, as lines to show under the Figure; "" when there are none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside the package, so nothing is fetched when it runs). |
+| `picture_words` | 812 | function | PDF: the part of the page that a picture covers, drawn at 150 dpi and read by OCR. |
+| `figure_block` | 824 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
+| `equation_block` | 837 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
+| `blocks_from_markup` | 859 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
+| `blocks_from_mhtml` | 867 | function | Parts are read with the standard `email` package. |
+| `word_value` | 896 | function | The value of a Word property such as a style id or an outline level, or None. |
+| `docx_paragraph_facts` | 901 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
+| `docx_number_formats` | 924 | function | How each numbering of a Word file shows its items, by numbering id and level: "bullet", "decimal", "lowerLetter" ... |
+| `docx_paragraph_parts` | 934 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
+| `docx_figure` | 950 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image, and the words in it where OCR is installed. |
+| `safe_xml` | 964 | function | Parse one XML part of an Office file. |
+| `blocks_from_docx` | 970 | function | Body elements in document order, so that tables stay where they are. |
+| `pdf_lines` | 1045 | function | Every line, table and picture of a PDF in reading order, each with its page, its place on the page, and whether it sits in the top or bottom margin ("edge"). |
+| `blocks_from_pdf` | 1069 | function | PDF keeps no structure, so this reader is the weakest (the manual recommends .docx where both exist). |
+| `blocks_from_pdf_text_only` | 1129 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
+| `cross_references` | 1146 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
+| `states_something_checkable` | 1152 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
+| `fold_lists` | 1167 | function | A list belongs to the paragraph that introduces it: "We apply the following principles:" and its three bullets are one thought, and a bullet alone cannot be traced to anything. |
+| `blocks_to_chunks` | 1184 | function | Blocks to chunks. |
+| `block_is_under_reconstructed` | 1220 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
+| `outline_lines` | 1230 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
+| `atoms_of_file` | 1247 | function | The smallest pieces of text the file holds, counted straight from the file and NOT from the blocks the reader made of it. |
+| `read_file_blocks` | 1274 | function | One input file to blocks, by the format found in its content. |
+| `read_corner` | 1294 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
+| `read_methodology` | 1341 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
+| `read_documentation` | 1345 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
 
 **aiva2_package.py**
 

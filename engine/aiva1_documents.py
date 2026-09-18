@@ -598,11 +598,20 @@ def load_tag_rules(references_dir, override_path=None):
     return rules
 
 # ---------------------------------------------------------------- discovering an unfamiliar schema
+BLOCKS_INSIDE = ("paragraph", "list_item", "list_container", "heading", "container", "row", "cell", "header_cell")
+
 def element_text(element, rules, skip=("figure", "equation", "ignore", "caption")):
-    """The running text of an element without the text of figures, equations and captions in it."""
+    """The running text of an element without the text of figures, equations and captions in it.
+
+    A child that is a block of its own - a list item inside a table cell, say - is separated by
+    a space rather than run straight onto what came before it. Without that, two items of a
+    list in one cell arrive as one word that the document does not contain ("renewable twice" +
+    "no fine" giving "twiceno"), which is text AIVA made up. Enforces: R13"""
     pieces = [element.text or ""]
     for child in element:
         if rules["family_of"].get(reading.local_name(child.tag)) not in skip:
+            if rules["family_of"].get(reading.local_name(child.tag)) in BLOCKS_INSIDE and "".join(pieces).strip():
+                pieces.append(" ")
             pieces.append(element_text(child, rules, skip))
         pieces.append(child.tail or "")
     return "".join(pieces)
