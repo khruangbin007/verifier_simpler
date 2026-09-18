@@ -235,7 +235,6 @@ def to_plain(value):
 def canonical_json(value):
     """One JSON text per content: sorted keys, no spare white space. Enforces: R5"""
     return json.dumps(to_plain(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-
 def sha256_bytes(data):
     """SHA-256 of bytes, in hexadecimal."""
     return hashlib.sha256(data).hexdigest()

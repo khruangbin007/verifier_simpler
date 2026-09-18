@@ -853,24 +853,24 @@ Generated from the source: every function and class of the engine with its line 
 
 | Name | Line | Kind | What it does |
 |---|---|---|---|
-| `has_banned_wording` | 113 | function | Return the first word in `text` that AIVA's own wording may not use, or "". |
-| `TableData` | 120 | class | A table kept whole: header cells, body rows, and which column identifies a row. |
-| `EquationData` | 125 | class | An equation as found: its source form, whether AIVA could read it, and its tree. |
-| `Chunk` | 131 | class | One citable unit of a document: a paragraph, a table, a figure or an equation. |
-| `CodeDetail` | 140 | class | What the R reader learned about a function or a statement, without running it. |
-| `ParameterDataDetail` | 148 | class | The profile of one stored data object. |
-| `RoxygenDetail` | 156 | class | A roxygen block: what it documents, its tags with their lines, and its formulas. |
-| `HelpPageDetail` | 162 | class | A help page as read from its macro format. |
-| `ModelUnit` | 168 | class | One citable unit of the package (see UNIT_KINDS). |
-| `Provenance` | 177 | class | Which run, step and skill produced a record, and from which AI exchange if any. |
-| `Edge` | 183 | class | A recorded connection between two nodes of the graph. |
-| `Candidate` | 190 | class | A passage the search stage proposes for a unit, with the reason in plain words. |
-| `FlaggedItem` | 197 | class | Something AIVA could not line up, raised for a person. |
-| `Determination` | 204 | class | A named person's recorded decision on one flagged item. |
-| `StepContext` | 210 | class | What every step function receives. |
-| `StepResult` | 216 | class | What every step function returns: records by kind, counts, and plain notes. |
-| `to_plain` | 222 | function | Turn dataclasses, tuples and Decimals into plain JSON-ready values. |
-| `canonical_json` | 234 | function | One JSON text per content: sorted keys, no spare white space. |
+| `has_banned_wording` | 114 | function | Return the first word in `text` that AIVA's own wording may not use, or "". |
+| `TableData` | 121 | class | A table kept whole: header cells, body rows, and which column identifies a row. |
+| `EquationData` | 126 | class | An equation as found: its source form, whether AIVA could read it, and its tree. |
+| `Chunk` | 132 | class | One citable unit of a document: a paragraph, a table, a figure or an equation. |
+| `CodeDetail` | 141 | class | What the R reader learned about a function or a statement, without running it. |
+| `ParameterDataDetail` | 149 | class | The profile of one stored data object. |
+| `RoxygenDetail` | 157 | class | A roxygen block: what it documents, its tags with their lines, and its formulas. |
+| `HelpPageDetail` | 163 | class | A help page as read from its macro format. |
+| `ModelUnit` | 169 | class | One citable unit of the package (see UNIT_KINDS). |
+| `Provenance` | 178 | class | Which run, step and skill produced a record, and from which AI exchange if any. |
+| `Edge` | 184 | class | A recorded connection between two nodes of the graph. |
+| `Candidate` | 191 | class | A passage the search stage proposes for a unit, with the reason in plain words. |
+| `FlaggedItem` | 198 | class | Something AIVA could not line up, raised for a person. |
+| `Determination` | 205 | class | A named person's recorded decision on one flagged item. |
+| `StepContext` | 211 | class | What every step function receives. |
+| `StepResult` | 217 | class | What every step function returns: records by kind, counts, and plain notes. |
+| `to_plain` | 223 | function | Turn dataclasses, tuples and Decimals into plain JSON-ready values. |
+| `canonical_json` | 235 | function | One JSON text per content: sorted keys, no spare white space. |
 | `sha256_bytes` | 238 | function | SHA-256 of bytes, in hexadecimal. |
 | `sha256_text` | 241 | function | SHA-256 of a text in UTF-8, in hexadecimal. |
 | `swhid_content` | 244 | function | The ISO/IEC 18670 content identifier of a file; the same value Git computes. |
