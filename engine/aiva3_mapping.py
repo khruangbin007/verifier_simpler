@@ -51,7 +51,7 @@ import yaml
 import aiva0_shared as shared
 import aiva1_documents
 
-SKILL_VERSIONS = {"build-graph": "0.0.1", "find-candidates": "0.0.1", "judge-links": "0.0.1"}
+SKILL_VERSIONS = {"build-graph": "0.0.1", "find-candidates": "0.0.1", "judge-links": "0.0.1", "interpret-code": "0.0.1"}
 LEDGER_VOLATILE = ("created_at", "run_id")
 CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model": "the package"}
 
@@ -951,6 +951,11 @@ def validate_narrow(question, answer):
                 raise Rejected(shared.REJECTION_REASONS[1])
             check_quote(difference.get("quote_from_passage"), question["passage_texts"][difference["letter"]])
             check_quote(difference.get("quote_from_unit"), question["unit_text"])
+    elif kind == "interpret-code":
+        words = answer.get("interpretation")
+        if not isinstance(words, str) or not 3 <= len(words.split()) <= 150:
+            raise Rejected(shared.REJECTION_REASONS[0])
+        check_quote(answer.get("quote_from_unit"), question["code_text"])     # it has to rest on code that is there
     elif kind == "check-rule":
         if answer.get("outcome") not in ("applied", "applied differently", "not applied"):
             raise Rejected(shared.REJECTION_REASONS[0])
@@ -1035,6 +1040,84 @@ def needs_second_opinion(settings, target):
     mode = settings["second_opinion"]
     backed = bool(target.get("table")) or bool((target.get("equation") or {}).get("readable"))
     return mode == "all" or (mode == "unchecked_only" and not backed and target.get("heading_chain") is not None)
+
+# ---------------------------------------------------------------- what each piece of code does, in plain words
+INTERPRETED_KINDS = (shared.KIND_FUNCTION, shared.KIND_FORMULA, shared.KIND_TOPLEVEL, shared.KIND_TEST)
+
+def package_outline(units, package):
+    """The whole package in a few lines, as every interpretation question sees it: its name and
+    title, then for each file the functions defined there with their arguments and the first
+    line of their documentation, and the stored data. Also returns the documentation block of
+    each unit, by the reference of the unit it documents."""
+    described = {u["roxygen"]["documents_ref"]: u for u in units if u.get("roxygen") and u["roxygen"].get("documents_ref")}
+    title = next((row["value"] for row in package.get("rows", []) if row.get("item") == "Title"), "")
+    lines, by_file = ["Package %s %s: %s" % (package.get("name", ""), package.get("version", ""), title)], {}
+    for unit in units:
+        if unit["kind"] == shared.KIND_FUNCTION and not unit["inside"]:
+            tags = described[unit["ref"]]["roxygen"]["tags"] if unit["ref"] in described else []
+            says = next((tag["text"].split("\n")[0] for tag in tags if tag["tag"] in ("title", "description")), "")
+            formals = ", ".join(name for name, _ in (unit.get("code") or {}).get("formals", []))
+            by_file.setdefault(unit["file"], []).append("%s(%s)%s" % (unit["name"], formals, " - " + says if says else ""))
+        elif unit["kind"] in (shared.KIND_TABLE, shared.KIND_OBJECT):
+            by_file.setdefault(unit["file"], []).append("stored data %s" % unit["name"])
+    return "\n".join(lines + ["%s: %s" % (file, "; ".join(by_file[file])) for file in sorted(by_file)]), described
+
+def interpret_question(unit, functions, outline, described, references_dir, settings):
+    """The question about one piece of code. The piece is shown whole; around it goes what a
+    person would look up to understand it: the function a statement sits inside, the
+    documentation the package gives, what calls it and what it calls, the stored data it reads,
+    and the outline of the whole package cut around the piece's own name."""
+    inside = functions.get(unit["inside"]) if unit["inside"] else None
+    about, owner = [], inside or unit
+    if inside is not None:
+        about.append("This piece is one statement inside the function %s. The whole function:\n%s" % (inside["name"], cut_code(inside["text"], settings["max_unit_chars"])))
+    if owner["ref"] in described:
+        about.append("What the package's own documentation says:\n%s" % cut_text(described[owner["ref"]]["text"], settings["max_passage_chars"]))
+    code = owner.get("code") or {}
+    callers = sorted(name for name, other in functions.items() if owner["name"] and owner["name"] in (other.get("code") or {}).get("calls", []))
+    facts = [("It is called by", callers), ("Within this package it calls", sorted(c for c in code.get("calls", []) if c in functions)),
+             ("It reads the stored data", sorted({r["object"] for r in code.get("reads_data", [])}))]
+    about.extend("%s: %s." % (says, ", ".join(names)) for says, names in facts if names)
+    about.append("The whole package:\n%s" % cut_text(outline, 4000, keep_words=(owner["name"],)))
+    where = "%s%s, %s%s" % (unit["kind"], " " + unit["name"] if unit["name"] else "", unit["file"],
+                           " lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "")
+    blocks = [("THE PIECE OF CODE (%s)" % where, cut_code(unit["text"], settings["max_unit_chars"])),
+              ("WHERE IT SITS IN THE PACKAGE", "\n\n".join(about))]
+    return narrow_question("interpret-code", unit["ref"], blocks, references_dir, settings, more={"code_text": unit["text"]})
+
+def interpret_code(ctx):
+    """Step 07a, skill interpret-code. One question per function, formula statement, top-level
+    statement and test block: what does this piece do, given where it sits in the package?
+    Accepted answers fill the column "LLM Interpretation" of Chunks_Model. An interpretation
+    is an aid to reading and nothing more: it gives no status, raises no flagged item and takes
+    no part in the coverage identity, and a question that fails leaves a plain note. Enforces: R3"""
+    units = ctx.read("model_units")
+    if not ctx.settings.get("interpret_code", True):
+        return shared.StepResult(messages=["Interpreting the code is switched off (setting interpret_code)."])
+    outline, described = package_outline(units, (ctx.read("package_info") or [{}])[0])
+    functions = {u["name"]: u for u in units if u["kind"] == shared.KIND_FUNCTION and not u["inside"]}
+    questions, records = {}, []
+    for unit in units:
+        if unit["kind"] in INTERPRETED_KINDS and unit["text"].strip():
+            question = interpret_question(unit, functions, outline, described, ctx.options["references_dir"], ctx.settings)
+            if question["too_large"]:
+                records.append({"unit_ref": unit["ref"], "interpretation": "", "question_id": "", "note": "Not asked: the question was too large to ask."})
+            else:
+                questions[question["question_id"]] = question
+    answers = ctx.ask(list(questions.values())) if questions and ctx.ask else {}
+    for question_id in sorted(questions, key=lambda key: questions[key]["unit_ref"]):
+        final = answers.get(question_id)
+        if final is not None and final["outcome"] == "accepted":
+            records.append({"unit_ref": questions[question_id]["unit_ref"], "interpretation": final["answer"]["interpretation"].strip(),
+                            "quote_from_unit": final["answer"]["quote_from_unit"], "question_id": question_id, "note": ""})
+        else:
+            reason = (final or {}).get("outcome", "failed: no answer was obtained").split(": ", 1)[-1]
+            records.append({"unit_ref": questions[question_id]["unit_ref"], "interpretation": "", "question_id": question_id,
+                            "note": "The AI's answer could not be used: %s." % reason})
+    done = sum(1 for record in records if record["interpretation"])
+    return shared.StepResult({"interpretations": sorted(records, key=lambda record: record["unit_ref"])},
+                             counts={"pieces_of_code": len(records), "interpreted": done},
+                             messages=["%d of %d pieces of code were given an interpretation by the AI." % (done, len(records))])
 
 def judge_links(ctx):
     """Steps 07 and 09, skill judge-links. Builds one question per unit and corner, asks them

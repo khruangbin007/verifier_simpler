@@ -170,6 +170,16 @@ def second_opinion(prompt, name_a_difference):
                              "what_differs": "The two texts do not state the same thing."}]}
 
 
+def interpret_code(main_prompt):
+    """No model reads the code here: the stand-in names the piece and the symbols in it, and quotes
+    its first line, which is what makes the answer pass the check that the quotation is in the code."""
+    label, code = re.search(r"THE PIECE OF CODE \((.*?)\)\n<<<\n(.*?)\n>>>", main_prompt, re.S).groups()
+    first = next(line.strip() for line in code.split("\n") if line.strip())
+    names = list(dict.fromkeys(re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", code)))[:6]
+    return {"interpretation": "Stand-in reading of %s: it works with %s." % (label.split(",")[0], ", ".join(names)),
+            "quote_from_unit": first[:200]}
+
+
 def answer_for(system_prompt, main_prompt, misbehave):
     match = re.search(r"QUESTION TYPE: ([a-z-]+)", main_prompt)
     question_type = match.group(1) if match else "self-test"
@@ -195,6 +205,10 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(read_formula_from_prose(main_prompt))
     if question_type == "check-rule":
         return json.dumps(check_rule(main_prompt))
+    if question_type == "interpret-code":
+        if misbehave and bucket == 0:
+            return json.dumps({"interpretation": "It works out the price.", "quote_from_unit": "words that are not in the code at all"})
+        return json.dumps(interpret_code(main_prompt))
     if question_type == "second-opinion":
         return json.dumps(second_opinion(main_prompt, misbehave and bucket in (4, 5)))
     return json.dumps({"ok": True})

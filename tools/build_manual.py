@@ -50,6 +50,7 @@ SETTING_NOTES = {
     "max_unit_chars": "A longer unit is cut around its formula lines before it is shown to the model.", "max_passage_chars": "A longer passage is cut around the matched words.",
     "max_file_mb": "A larger input file is not read and becomes a not-read unit.", "reviewer_id": "Who runs the notebook; recorded with confirmations and determinations.",
     "reviewer_role": "The role of that person.",
+    "interpret_code": "Ask the AI to say in plain words what each function, formula statement, top-level statement and test block does, shown with where it sits in the whole package. Fills the column LLM Interpretation on Chunks_Model. One question per piece of code; switch it off to save the calls.",
     "read_pictures": "Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review.",
     "signals": "The search signals in use; the ablation ladder of tools/recall_at_k.py switches them off one by one."}
 COLUMN_NOTES = {

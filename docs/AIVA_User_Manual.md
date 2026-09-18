@@ -96,7 +96,7 @@ Each Inputs folder holds a README that says what goes in. Optional files directl
 | `cell 8` | Project setup: creates the folders and says which Inputs folder is still empty. |
 | `cell 9` | Starts or resumes the run: the reading steps, without any AI. Ends with the outline of the methodology as AIVA read it. |
 | `cell 10` | Confirms that you checked the outline (chapter 7). The AI steps do not start without it. |
-| `cell 11` | The call plan: questions by type, the largest prompt against the token cap, the expected duration. |
+| `cell 11` | The call plan of the two steps that ask the most: questions by type, the largest prompt against the token cap, the expected duration. Step `07a` asks one question per piece of code to fill *LLM Interpretation*; on a large package that is the larger share, and the setting `interpret_code` switches it off. |
 | `cell 12` | Runs the AI steps and the checks, in mode A, B or C. |
 | `cell 13` | Status: finished steps, call statistics, token age, whether the run waits for a fresh token; pause and stop switches. |
 | `cell 14` | Determinations: run after uploading the completed workbook (chapter 8). |
@@ -213,6 +213,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Name | identity |  |
 | Inside | identity |  |
 | Text | code text |  |
+| LLM Interpretation | assessments |  |
 | Expression / arguments | code text |  |
 | Numbers used | code text |  |
 | Exported | identity |  |
@@ -359,6 +360,7 @@ The first page names the model ID, the date initiated, the run, the package and 
 ## 12. Known limitations
 
 - The content of images is never evidence. Formulas given only as pictures end *Not assessed* or make the linked code *Traced - check undecided*. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself. The Figure still ends *Not assessed - for manual review*.
+- **LLM Interpretation** on `Chunks_Model` says in plain words what a function, a formula statement, a top-level statement or a test block does. The AI is shown the piece itself together with where it sits in the whole package: the function a statement is inside, the package's own documentation of it, what calls it, what it calls, the stored data it reads, and an outline of every file. The words are the model's, so the cell shows them in quotation marks. They are an aid to reading and nothing more: an interpretation gives a unit no status, raises no flagged item, and is never used in a check. AIVA only accepts an answer whose quotation is in the code word for word; where an answer could not be used the cell says why. Other kinds of unit (documentation blocks, help pages, stored data) are not asked about.
 - **Para no.** shows the paragraph number the document itself gives (`36.`), gaps included, where it gives one. A PDF gives none, so its paragraphs are labelled with their page and their place on it (`p.4 ¶2`); so are the paragraphs of a Word file in which Word noted where its pages ended. Otherwise it is AIVA's own count under the heading.
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
 - A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
@@ -425,7 +427,7 @@ Two things hold for every bundle. Nothing taken from an input or from the model 
 
 **Walk through.** Safe unpacking (`aiva2_package.unpack_package`); DESCRIPTION and NAMESPACE; the tokenizer and the operator-precedence parser (`aiva2_package.tokenize_r`, `aiva2_package.parse_r_source`), which recovers expression by expression; facts about code (`aiva2_package.code_facts`, `aiva2_package.has_arithmetic`); conversion to the neutral tree through `engine/references/r_function_map.yaml` (`aiva2_package.to_expr`) and composition of straight-line functions (`aiva2_package.compose_function`); units from R files, roxygen, help pages and vignettes; stored data (`aiva2_package.decode_data_file`, `aiva2_package.table_of`); reads of stored data (`aiva2_package.data_reads`); the step (`aiva2_package.read_package`).
 
-**Contracts.** In: the tarball. Out: model_units, parameter_tables, package_info. Shown on `Chunks_Model` and `Model_Package_Info`.
+**Contracts.** In: the tarball. Out: model_units, parameter_tables, package_info. Shown on `Chunks_Model` and `Model_Package_Info`. The column *LLM Interpretation* of `Chunks_Model` is filled later, by step `07a` in `aiva3_mapping.interpret_code` (Reviewer 3), from the record kind `interpretations`.
 
 **Known limitations.** No second, independent reader of stored data and no extraction of R classes and attributes beyond what the decoder gives. S4 and R5 classes are read as code, not as structures. Missing values of different kinds are not told apart.
 
@@ -545,6 +547,7 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | 05 | build-graph | 0.0.1 | aiva3_mapping.build_graph | Builds the append-only graph of chunks, model units and anchors, and harvests the bridge vocabulary. Use after all three corners are read. |
 | 06 | find-candidates | 0.0.1 | aiva3_mapping.find_candidates | Proposes, for every unit and target corner, a short list of passages with a plain reason. Use before each judge-links pass. |
 | 07 | confirm-outline | 0.0.1 | a person | A person confirms that Level and Section on Chunks_Canon match the methodology's own outline. Use before any chat() call is spent. |
+| 07a | interpret-code | 0.0.1 | aiva3_mapping.interpret_code | Asks the language model to say in plain words what each piece of code does, shown together with where the piece sits in the whole package. Use after read-package and confirm-outline, before judge-links. |
 | 08 | judge-links | 0.0.1 | aiva3_mapping.judge_links | Asks the language model narrow, lettered questions about one unit and its shortlist, and validates every answer by code. Use after find-candidates. |
 | 09 | find-candidates | 0.0.1 | aiva3_mapping.find_candidates | Proposes, for every unit and target corner, a short list of passages with a plain reason. Use before each judge-links pass. |
 | 10 | judge-links | 0.0.1 | aiva3_mapping.judge_links | Asks the language model narrow, lettered questions about one unit and its shortlist, and validates every answer by code. Use after find-candidates. |
@@ -563,14 +566,14 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 |---|---|
 | R1 | `aiva0_shared.has_banned_wording`, `aiva4_checks.build_items`, `aiva4_checks.account_coverage`, `aiva5_run_report.quoted`, `aiva5_run_report.plain_cell`, `aiva5_run_report.build_report_file` |
 | R2 | `aiva1_documents.not_read_block`, `aiva1_documents.read_picture`, `aiva1_documents.without_page_furniture`, `aiva1_documents.blocks_to_chunks`, `aiva2_package.parse_r_source`, `aiva2_package.units_from_r_source`, `aiva2_package.read_package`, `aiva3_mapping.find_candidates`, `aiva4_checks.check_identity`, `aiva4_checks.account_coverage`, `aiva5_run_report.rows_coverage` |
-| R3 | `aiva3_mapping.validate_answer`, `aiva3_mapping.judge_links`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva4_checks.check_values`, `aiva5_run_report.ask_one`, `aiva5_run_report.make_asker` |
+| R3 | `aiva3_mapping.validate_answer`, `aiva3_mapping.interpret_code`, `aiva3_mapping.judge_links`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva4_checks.check_values`, `aiva5_run_report.ask_one`, `aiva5_run_report.make_asker` |
 | R4 | `aiva0_shared.content_hash`, `aiva0_shared.chain_records`, `aiva1_documents.blocks_to_chunks`, `aiva3_mapping.ledger_records`, `aiva3_mapping.judge_links`, `aiva4_checks.numeric_step`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva5_run_report.record_determinations` |
 | R5 | `aiva0_shared.canonical_json`, `aiva0_shared.chain_records`, `aiva2_package.read_package`, `aiva3_mapping.ledger_records`, `aiva3_mapping.ranked`, `aiva3_mapping.fuse`, `aiva3_mapping.assemble_question`, `aiva4_checks.sample_points`, `aiva5_run_report.call_chat`, `aiva5_run_report.run_batch`, `aiva5_run_report.make_asker`, `aiva5_run_report.replay_chat` |
 | R6 | `aiva1_documents.read_file_blocks`, `aiva2_package.unpack_package`, `aiva5_run_report.open_run`, `aiva5_run_report.rebuild_outputs` |
 | R7 | `aiva1_documents.parse_formula`, `aiva2_package.parse_r_source`, `aiva2_package.to_expr`, `aiva2_package.decode_data_file`, `aiva4_checks.to_sympy`, `aiva4_checks.evaluate` |
 | R8 | `aiva5_run_report.make_settings`, `aiva5_run_report.LiveValues` |
 | R9 | `aiva1_documents.discover_families`, `aiva3_mapping.load_word_lists` |
-| R10 | `aiva0_shared.plain_number`, `aiva5_run_report.plain_cell`, `aiva5_run_report.build_report_file` |
+| R10 | `aiva0_shared.plain_number`, `aiva5_run_report.plain_cell`, `aiva5_run_report.rows_model_units`, `aiva5_run_report.build_report_file` |
 | R11 | `aiva5_run_report.load_pipeline` |
 | R12 | `aiva5_run_report.copy_whole`, `aiva5_run_report.rebuild_outputs`, `aiva5_run_report.record_determinations` |
 
@@ -622,6 +625,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `reviewer_id` |  | Who runs the notebook; recorded with confirmations and determinations. |
 | `reviewer_role` |  | The role of that person. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
+| `interpret_code` | True | Ask the AI to say in plain words what each function, formula statement, top-level statement and test block does, shown with where it sits in the whole package. Fills the column LLM Interpretation on Chunks_Model. One question per piece of code; switch it off to save the calls. |
 | `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the ablation ladder of tools/recall_at_k.py switches them off one by one. |
 
 ## 23. The files in _audit
@@ -651,6 +655,7 @@ One template per question type under `engine/references/prompts/`; each has a ve
 |---|---|---|
 | align-symbols | VERSION 1 | Which symbol of the code stands for which symbol of the equation? |
 | check-rule | VERSION 1 | Does the code apply the rule as stated? |
+| interpret-code | VERSION 1 | Say what the piece of code does and what it is for within the package, in at most 80 words. Name what it takes in and what it produces. Where it applies a number, a limit or a condition, say so with the number exactly as written. Use what you are told about the package only to say what the piece is for; describe the piece, not the package. |
 | judge-doc-to-canon | VERSION 1 | Which passages of the methodology, if any, does this passage of the documentation correspond to, and how? |
 | judge-doc-to-model | VERSION 1 | Which units of the package, if any, does this passage of the documentation describe, and how? |
 | judge-unit-to-canon | VERSION 1 | Which passages of the methodology, if any, does this unit of the package correspond to, and how? |
@@ -668,7 +673,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_aiva0_shared.py` | 19 | Tests of aiva0_shared.py: contracts, canonical JSON, hashes, numbers, symbols, the expression tree. |
 | `test_aiva1_documents.py` | 36 | Tests of aiva1_documents: reading methodology and documentation files of every supported form. |
 | `test_aiva2_package.py` | 12 | Tests of aiva2_package: safe unpacking, the R reader, documentation units and stored data. |
-| `test_aiva3_mapping.py` | 20 | Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators. |
+| `test_aiva3_mapping.py` | 27 | Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators. |
 | `test_aiva4_checks.py` | 27 | Tests of aiva4_checks: the value rule, formula comparison, tables, rules, statuses and the identity. |
 | `test_aiva5_run_report.py` | 23 | Tests of aiva5_run_report.py: the wrapper around chat(), the store, paths, the runner, Output.xlsx. |
 | `test_docs.py` | 5 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
@@ -701,9 +706,9 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | aiva0_shared.py | 450 | 450 | 23% |
 | aiva1_documents.py | 1497 | 1500 | 18% |
 | aiva2_package.py | 1285 | 1500 | 13% |
-| aiva3_mapping.py | 1123 | 1500 | 18% |
+| aiva3_mapping.py | 1206 | 1500 | 18% |
 | aiva4_checks.py | 1382 | 1500 | 14% |
-| aiva5_run_report.py | 1491 | 1500 | 16% |
+| aiva5_run_report.py | 1493 | 1500 | 16% |
 
 **Dependencies.**
 
@@ -1118,11 +1123,14 @@ Generated from the source: every function and class of the engine with its line 
 | `check_quote` | 907 | function | A quotation must be verbatim after white-space normalisation, contiguous, without an ellipsis, and of a sensible length. |
 | `validate_judge` | 922 | function | The answer to a judge question: its shape, the letters it names, its quotations, planted passages, self-contradiction. |
 | `validate_narrow` | 943 | function | The narrow question types. |
-| `validate_answer` | 995 | function | The validators, in a fixed order: remove any thought block and code fence; take the last balanced JSON object; parse it strictly; check its shape, its letters, its quotations, the planted passages and self-contradiction. |
-| `shown_ai_text` | 1024 | function | Text written by the model passes the same plain-language filter as AIVA's own wording: if it rates seriousness or uses a policy term, a fixed sentence is shown instead and the full text stays in the audit records. |
-| `needs_second_opinion` | 1032 | function | `unchecked_only`: a second, oppositely framed question is asked for accepted links that no deterministic check will back, that is, passages without a formula or a table. |
-| `judge_links` | 1039 | function | Steps 07 and 09, skill judge-links. |
-| `second_opinions` | 1102 | function | The oppositely framed question ("identify any difference ...") for links no check can back. |
+| `validate_answer` | 1000 | function | The validators, in a fixed order: remove any thought block and code fence; take the last balanced JSON object; parse it strictly; check its shape, its letters, its quotations, the planted passages and self-contradiction. |
+| `shown_ai_text` | 1029 | function | Text written by the model passes the same plain-language filter as AIVA's own wording: if it rates seriousness or uses a policy term, a fixed sentence is shown instead and the full text stays in the audit records. |
+| `needs_second_opinion` | 1037 | function | `unchecked_only`: a second, oppositely framed question is asked for accepted links that no deterministic check will back, that is, passages without a formula or a table. |
+| `package_outline` | 1047 | function | The whole package in a few lines, as every interpretation question sees it: its name and title, then for each file the functions defined there with their arguments and the first line of their documentation, and the stored data. |
+| `interpret_question` | 1065 | function | The question about one piece of code. |
+| `interpret_code` | 1088 | function | Step 07a, skill interpret-code. |
+| `judge_links` | 1122 | function | Steps 07 and 09, skill judge-links. |
+| `second_opinions` | 1185 | function | The oppositely framed question ("identify any difference ...") for links no check can back. |
 
 **aiva4_checks.py**
 
@@ -1249,29 +1257,29 @@ Generated from the source: every function and class of the engine with its line 
 | `rows_chunks` | 902 | function | The rows of Chunks_Canon and Chunks_Doc. |
 | `unit_expression` | 913 | function | A unit's formula or arguments as shown on Chunks_Model. |
 | `rows_model_units` | 926 | function | The rows of Chunks_Model. |
-| `link_columns` | 940 | function | The block of columns that shows what one unit was linked to in one corner. |
-| `rows_mapping` | 955 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
-| `rows_coverage` | 985 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
-| `latest_determinations` | 1005 | function | The last recorded determination of every item. |
-| `rows_flagged` | 1012 | function | The rows of Flagged_Items with the latest determination of each item. |
-| `sheet_rows` | 1026 | function | The rows of all eight sheets, by sheet name. |
-| `check_written_totals` | 1039 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
-| `load_layout` | 1053 | function | The workbook layout from references/workbook_layout.yaml. |
-| `write_sheet` | 1058 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
-| `build_workbook` | 1094 | function | Build Output.xlsx on local disk from the audit records. |
-| `file_sha256` | 1112 | function | SHA-256 of a file's bytes. |
-| `progress_text` | 1117 | function | Where the run stands, in one or two plain sentences. |
-| `rebuild_outputs` | 1126 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
-| `docx_table` | 1155 | function | A plain table in a Word document, header row in bold. |
-| `build_run_summary` | 1168 | function | Where the run stands, in plain words; refreshed after every step. |
-| `call_statistics` | 1190 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
-| `call_plan` | 1211 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
-| `find_uploads` | 1234 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
-| `read_yellow_cells` | 1257 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
-| `record_determinations` | 1280 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
-| `build_report_file` | 1333 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
-| `build_report` | 1401 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
-| `verify_evidence_pack` | 1426 | function | Works from a run folder and the Inputs folder alone. |
+| `link_columns` | 942 | function | The block of columns that shows what one unit was linked to in one corner. |
+| `rows_mapping` | 957 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
+| `rows_coverage` | 987 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
+| `latest_determinations` | 1007 | function | The last recorded determination of every item. |
+| `rows_flagged` | 1014 | function | The rows of Flagged_Items with the latest determination of each item. |
+| `sheet_rows` | 1028 | function | The rows of all eight sheets, by sheet name. |
+| `check_written_totals` | 1041 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
+| `load_layout` | 1055 | function | The workbook layout from references/workbook_layout.yaml. |
+| `write_sheet` | 1060 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
+| `build_workbook` | 1096 | function | Build Output.xlsx on local disk from the audit records. |
+| `file_sha256` | 1114 | function | SHA-256 of a file's bytes. |
+| `progress_text` | 1119 | function | Where the run stands, in one or two plain sentences. |
+| `rebuild_outputs` | 1128 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
+| `docx_table` | 1157 | function | A plain table in a Word document, header row in bold. |
+| `build_run_summary` | 1170 | function | Where the run stands, in plain words; refreshed after every step. |
+| `call_statistics` | 1192 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
+| `call_plan` | 1213 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
+| `find_uploads` | 1236 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
+| `read_yellow_cells` | 1259 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
+| `record_determinations` | 1282 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
+| `build_report_file` | 1335 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
+| `build_report` | 1403 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
+| `verify_evidence_pack` | 1428 | function | Works from a run folder and the Inputs folder alone. |
 
 ## Appendix D. Change history
 

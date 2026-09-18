@@ -10,6 +10,7 @@ steps:
   - {id: "05", skill: build-graph,           function: aiva3_mapping.build_graph}
   - {id: "06", skill: find-candidates,       function: aiva3_mapping.find_candidates, with: {pass: 1}}
   - {id: "07", skill: confirm-outline,       human: true}
+  - {id: "07a", skill: interpret-code,       function: aiva3_mapping.interpret_code}
   - {id: "08", skill: judge-links,           function: aiva3_mapping.judge_links, with: {pass: 1}}
   - {id: "09", skill: find-candidates,       function: aiva3_mapping.find_candidates, with: {pass: 2}}
   - {id: "10", skill: judge-links,           function: aiva3_mapping.judge_links, with: {pass: 2}}

@@ -244,11 +244,14 @@ print(aiva.confirm_outline(PATHS, SETTINGS, dbutils.widgets.get("reviewer_id")))
 ''')
 
 code("Cell 11 - call plan", '''
-plan = aiva.call_plan(PATHS, SETTINGS, "08", seconds_per_call=SECONDS_PER_CALL)
-print("Questions for step %s: %d" % (plan["step"], plan["questions"]))
-for question_type, count in sorted(plan["by_type"].items()):
-    print("  %-26s %d" % (question_type, count))
-print("Largest prompt: about %d tokens (cap %d). Expected duration: about %s minutes." % (plan["largest_estimated_tokens"], plan["token_cap"], plan["expected_minutes"]))
+# The two steps that ask the most questions. "07a" asks one per piece of code, to fill the column
+# "LLM Interpretation" on Chunks_Model; to save those calls, set interpret_code to False in cell 8.
+for step_id in ("07a", "08"):
+    plan = aiva.call_plan(PATHS, SETTINGS, step_id, seconds_per_call=SECONDS_PER_CALL)
+    print("Questions for step %s (%s): %d" % (step_id, plan["step"], plan["questions"]))
+    for question_type, count in sorted(plan["by_type"].items()):
+        print("  %-26s %d" % (question_type, count))
+    print("  Largest prompt: about %d tokens (cap %d). Expected duration: about %s minutes." % (plan["largest_estimated_tokens"], plan["token_cap"], plan["expected_minutes"]))
 print(plan["note"])
 ''')
 

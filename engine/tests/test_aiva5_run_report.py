@@ -318,7 +318,7 @@ class RunnerAndWorkbook(unittest.TestCase):
         run.confirm_outline(self.paths, self.settings, "reviewer-1")
         second = run.run_pipeline(self.paths, self.settings, chat=standin_chat.chat)
         self.assertNotIn("prepare-run", second["steps_run"], "a finished step was repeated")
-        self.assertEqual(second["steps_run"][0], "judge-links")
+        self.assertEqual(second["steps_run"][:2], ["interpret-code", "judge-links"], "the AI steps begin once a person has confirmed the outline")
 
     def test_pipeline_refuses_unknown_functions_and_version_drift(self):
         saved = dict(run.SKILL_VERSIONS)
