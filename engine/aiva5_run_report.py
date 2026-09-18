@@ -1259,7 +1259,7 @@ def verify_evidence_pack(paths, settings, live=None):
     """Works from a run folder and the Inputs folder alone. Returns rows (what was checked,
     "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
     content hash is computed again from the input files and compared with the record."""
-    store, rows = open_store(paths, settings), []
+    store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
     def line(what, good, detail=""):
         rows.append((what, "Confirmed" if good else "Not confirmed", detail))
     manifest = (store.read("run_manifest") or [{}])[0]
