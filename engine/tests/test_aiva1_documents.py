@@ -6,6 +6,47 @@ import aiva0_shared as shared
 import aiva1_documents as documents
 import build_samples
 
+UNFAMILIAR_SCHEMA = """<section name=""b) Industry Risk"">
+<paranum num=""36."" style=""Pleading Paragraph"">
+The moderate weight assigned to industry risk is because such enterprises have higher barriers to entry.</paranum>
+<paranum num=""37."">
+Industry risk is assessed by applying &#34;<marked_data hyperlink=""yes"" rev_id=""18"" type=""article"">Methodology: Industry Risk</marked_data>.&#34; See Appendix III.</paranum>
+<paranum num=""38."" style=""Pleading Paragraph"">
+This paragraph has been deleted.</paranum>
+<paranum num=""42."" style=""Pleading Paragraph"">
+The blended industry risk score is a weighted average of those industry scores.</paranum>
+</section>
+<section name=""c) Market Position (60% weighting) "">
+<paranum num=""43."" style=""Pleading Paragraph"">
+Our market position assessment focuses on the role a provider plays within its industry.</paranum>
+<table>
+<tablerow>
+<tablenumber width=""208"">
+Table 2</tablenumber>
+<tablecell width=""204""> </tablecell>
+<tablecell width=""204""> </tablecell>
+</tablerow>
+<tablerow>
+<tabletitle>
+Market Position Assessment By Asset Class</tabletitle>
+<tablecell> </tablecell>
+<tablecell> </tablecell>
+</tablerow>
+<tablerow>
+<tablecell>Asset class</tablecell>
+<tablecell>Extremely strong</tablecell>
+<tablecell>Vulnerable</tablecell>
+</tablerow>
+<tablerow>
+<tablecell>Toll roads</tablecell>
+<tablecell>Dominant position</tablecell>
+<tablecell>Weak position</tablecell>
+</tablerow>
+</table>
+</section>
+"""
+
+
 NOTATION = documents.load_notation(helpers.os.path.join(helpers.ENGINE_DIR, "references"))
 
 
@@ -41,6 +82,54 @@ class FormulaNotation(unittest.TestCase):
         tree = documents.parse_formula(latex, NOTATION, implicit_product=True)
         self.assertIn("normal_inverse", [n.name for n in shared.expr_walk(tree)])
         self.assertIn("rho", shared.expr_symbols(tree))
+
+
+class UnfamiliarSchema(unittest.TestCase):
+    """A schema nobody listed in tag_rules.yaml, read by the shape of its own markup."""
+
+    def chunks(self):
+        return helpers.chunks_of("method.txt", UNFAMILIAR_SCHEMA)
+
+    def test_a_table_is_read_without_its_tags_being_listed_anywhere(self):
+        chunks, _ = self.chunks()
+        tables = [c for c in chunks if c["kind"] == "Table"]
+        self.assertEqual(len(tables), 1, "the table is one chunk")
+        table = tables[0]["table"]
+        self.assertEqual(list(table["header"]), ["Asset class", "Extremely strong", "Vulnerable"])
+        self.assertEqual([list(r) for r in table["rows"]], [["Toll roads", "Dominant position", "Weak position"]])
+        self.assertIn("Table 2", tables[0]["caption"])
+        self.assertIn("Market Position Assessment By Asset Class", tables[0]["caption"])
+
+    def test_the_number_the_document_gives_a_paragraph_is_the_number_shown(self):
+        chunks, _ = self.chunks()
+        labels = [c["para_label"] for c in chunks if c["kind"] == "Paragraph"]
+        self.assertEqual(labels, ["36.", "37.", "38.", "42.", "43."])
+
+    def test_a_heading_carried_in_an_attribute_is_not_lost(self):
+        chunks, _ = self.chunks()
+        chains = {c["heading_chain"][-1] for c in chunks if c["heading_chain"]}
+        self.assertIn("b) Industry Risk", chains)
+        self.assertIn("c) Market Position (60% weighting)", chains)
+
+    def test_a_tag_inside_running_text_stays_in_its_sentence(self):
+        chunks, _ = self.chunks()
+        paragraph = next(c for c in chunks if c["para_label"] == "37.")
+        self.assertIn("Methodology: Industry Risk", paragraph["text"])
+        self.assertEqual(sum(1 for c in chunks if "Methodology: Industry Risk" in c["text"]), 1)
+
+    def test_every_inferred_tag_is_reported_with_its_reason(self):
+        _, result = self.chunks()
+        said = " ".join(row["value"] for row in result.records["info_rows"] if "unrecognised" in row["item"])
+        for tag in ("paranum", "tablerow", "tablecell", "tabletitle"):
+            self.assertIn("'%s'" % tag, said)
+        self.assertIn("because it", said, "each one says why it was read that way")
+
+    def test_the_skeleton_of_a_document_is_never_mistaken_for_a_table(self):
+        """<methodology> holding <part>s holding <section>s repeats twice over exactly as a
+        table does. What separates them is that a cell holds words and a section holds blocks."""
+        chunks, _ = helpers.chunks_of("method.txt", build_samples.F_METHODOLOGY)
+        self.assertEqual(sum(1 for c in chunks if c["kind"] == "Table"), 2)
+        self.assertGreater(sum(1 for c in chunks if c["kind"] == "Paragraph"), 10)
 
 
 class ReadingFiles(unittest.TestCase):

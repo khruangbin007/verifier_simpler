@@ -875,7 +875,8 @@ def rows_chunks(chunks):
     rows = []
     for chunk in chunks:
         rows.append({"ref": chunk["ref"], "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
-                     "para_no": chunk["para_no"], "kind": chunk["kind"], "text": chunk["text"],
+                     "para_no": chunk.get("para_label") or chunk["para_no"],
+                     "kind": chunk["kind"], "text": chunk["text"],
                      "source_file": chunk["source_file"], "refs_out": "; ".join(chunk["refs_out"]),
                      "checkable": chunk.get("checkable"), "reading_note": chunk_note(chunk)})
     return rows

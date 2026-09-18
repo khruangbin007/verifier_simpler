@@ -565,7 +565,7 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | R6 | `aiva1_documents.read_file_blocks`, `aiva2_package.unpack_package`, `aiva5_run_report.open_run`, `aiva5_run_report.rebuild_outputs` |
 | R7 | `aiva1_documents.parse_formula`, `aiva2_package.parse_r_source`, `aiva2_package.to_expr`, `aiva2_package.decode_data_file`, `aiva4_checks.to_sympy`, `aiva4_checks.evaluate` |
 | R8 | `aiva5_run_report.make_settings`, `aiva5_run_report.LiveValues` |
-| R9 | `aiva3_mapping.load_word_lists` |
+| R9 | `aiva1_documents.discover_families`, `aiva3_mapping.load_word_lists` |
 | R10 | `aiva0_shared.plain_number`, `aiva5_run_report.plain_cell`, `aiva5_run_report.build_report_file` |
 | R11 | `aiva5_run_report.load_pipeline` |
 | R12 | `aiva5_run_report.copy_whole`, `aiva5_run_report.rebuild_outputs`, `aiva5_run_report.record_determinations` |
@@ -661,7 +661,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | Test file | Tests | What it covers |
 |---|---|---|
 | `test_aiva0_shared.py` | 19 | Tests of aiva0_shared.py: contracts, canonical JSON, hashes, numbers, symbols, the expression tree. |
-| `test_aiva1_documents.py` | 17 | Tests of aiva1_documents: reading methodology and documentation files of every supported form. |
+| `test_aiva1_documents.py` | 23 | Tests of aiva1_documents: reading methodology and documentation files of every supported form. |
 | `test_aiva2_package.py` | 12 | Tests of aiva2_package: safe unpacking, the R reader, documentation units and stored data. |
 | `test_aiva3_mapping.py` | 20 | Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators. |
 | `test_aiva4_checks.py` | 27 | Tests of aiva4_checks: the value rule, formula comparison, tables, rules, statuses and the identity. |
@@ -694,11 +694,11 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | File | Lines | Budget | Docstrings and comments |
 |---|---|---|---|
 | aiva0_shared.py | 450 | 450 | 23% |
-| aiva1_documents.py | 1181 | 1500 | 15% |
+| aiva1_documents.py | 1357 | 1500 | 17% |
 | aiva2_package.py | 1285 | 1500 | 13% |
 | aiva3_mapping.py | 1123 | 1500 | 18% |
 | aiva4_checks.py | 1382 | 1500 | 14% |
-| aiva5_run_report.py | 1461 | 1500 | 15% |
+| aiva5_run_report.py | 1462 | 1500 | 15% |
 
 **Dependencies.**
 
@@ -939,37 +939,44 @@ Generated from the source: every function and class of the engine with its line 
 | `TolerantReader.finish` | 575 | function | Close whatever is still open and return the root element. |
 | `parse_markup` | 583 | function | Strict XML parsing first; when that still fails after the repairs, the tolerant reader. |
 | `load_tag_rules` | 598 | function | The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml. |
-| `element_text` | 616 | function | The running text of an element without the text of figures, equations and captions in it. |
-| `new_block` | 625 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
-| `not_read_block` | 633 | function | A whole file, or a part, that could not be read still becomes one block. |
-| `WalkState` | 638 | class | What the walker carries along: the rules, the notation, images by name, and the report of tags it met that are in no family. |
-| `walk_element` | 644 | function | Turn one element and everything below it into blocks, in reading order. |
-| `walk_mixed` | 683 | function | An element that may hold both running text and blocks. |
-| `table_block` | 708 | function | A table is always one block: header cells, body rows and its caption stay together. |
-| `table_from_rows` | 722 | function | The one-cell display form of a table: cells joined by "; ", one row per line, header first. |
-| `figure_block` | 738 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
-| `equation_block` | 751 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
-| `blocks_from_markup` | 773 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
-| `blocks_from_mhtml` | 780 | function | Parts are read with the standard `email` package. |
-| `word_value` | 809 | function | The value of a Word property such as a style id or an outline level, or None. |
-| `docx_paragraph_facts` | 814 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
-| `docx_paragraph_parts` | 834 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
-| `docx_figure` | 850 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image. |
-| `safe_xml` | 862 | function | Parse one XML part of an Office file. |
-| `blocks_from_docx` | 868 | function | Body elements in document order, so that tables stay where they are. |
-| `blocks_from_pdf` | 927 | function | PDF keeps no structure, so this reader is the weakest (the manual says so and recommends .docx where both exist). |
-| `blocks_from_pdf_text_only` | 986 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
-| `first_numbering` | 1002 | function | The numbering at the start of a heading as written, and the name of its scheme. |
-| `infer_levels` | 1010 | function | Give every heading its level. |
-| `cross_references` | 1042 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
-| `states_something_checkable` | 1048 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
-| `blocks_to_chunks` | 1062 | function | Blocks to chunks. |
-| `block_is_under_reconstructed` | 1097 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
-| `outline_lines` | 1107 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
-| `read_file_blocks` | 1124 | function | One input file to blocks, by the format found in its content. |
-| `read_corner` | 1143 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
-| `read_methodology` | 1175 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
-| `read_documentation` | 1179 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
+| `attribute_text` | 619 | function | The first of the named attributes that holds text worth reading, with its name. |
+| `written_numbering` | 627 | function | The numbering this element carries in an attribute, exactly as the document wrote it (num="36." gives "36."). |
+| `child_tags` | 637 | function | How often each tag occurs directly below this element. |
+| `discover_table_shape` | 646 | function | Decide whether this element is a table by its shape rather than by its name, and if it is, say which tag its rows use and which tag its cells use. |
+| `discover_families` | 692 | function | Work out a family for each tag this document uses that the rules do not name, from the way the tag behaves here. |
+| `element_text` | 762 | function | The running text of an element without the text of figures, equations and captions in it. |
+| `new_block` | 771 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
+| `not_read_block` | 779 | function | A whole file, or a part, that could not be read still becomes one block. |
+| `WalkState` | 784 | class | What the walker carries along: the rules, the notation, images by name, the report of tags it met that are in no family, and what discovery made of those tags in this document. |
+| `WalkState.__post_init__` | 790 | function | Each file reads with its own view of the rules, so a tag discovered in one file never changes how the next file is read. |
+| `WalkState.family` | 796 | function | The family of a tag: what the rules say, else what discovery made of it here. |
+| `walk_element` | 800 | function | Turn one element and everything below it into blocks, in reading order. |
+| `walk_mixed` | 846 | function | An element that may hold both running text and blocks. |
+| `table_block` | 871 | function | A table is always one block: header cells, body rows and its caption stay together. |
+| `table_from_rows` | 894 | function | The one-cell display form of a table: cells joined by "; ", one row per line, header first. |
+| `figure_block` | 910 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
+| `equation_block` | 923 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
+| `blocks_from_markup` | 945 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
+| `blocks_from_mhtml` | 953 | function | Parts are read with the standard `email` package. |
+| `word_value` | 982 | function | The value of a Word property such as a style id or an outline level, or None. |
+| `docx_paragraph_facts` | 987 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
+| `docx_paragraph_parts` | 1007 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
+| `docx_figure` | 1023 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image. |
+| `safe_xml` | 1035 | function | Parse one XML part of an Office file. |
+| `blocks_from_docx` | 1041 | function | Body elements in document order, so that tables stay where they are. |
+| `blocks_from_pdf` | 1100 | function | PDF keeps no structure, so this reader is the weakest (the manual says so and recommends .docx where both exist). |
+| `blocks_from_pdf_text_only` | 1159 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
+| `first_numbering` | 1175 | function | The numbering at the start of a heading as written, and the name of its scheme. |
+| `infer_levels` | 1183 | function | Give every heading its level. |
+| `cross_references` | 1215 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
+| `states_something_checkable` | 1221 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
+| `blocks_to_chunks` | 1235 | function | Blocks to chunks. |
+| `block_is_under_reconstructed` | 1271 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
+| `outline_lines` | 1281 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
+| `read_file_blocks` | 1298 | function | One input file to blocks, by the format found in its content. |
+| `read_corner` | 1317 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
+| `read_methodology` | 1351 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
+| `read_documentation` | 1355 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
 
 **aiva2_package.py**
 
@@ -1228,31 +1235,31 @@ Generated from the source: every function and class of the engine with its line 
 | `rows_package_info` | 816 | function | The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls. |
 | `chunk_note` | 859 | function | What a reader should know about one chunk: unreadable, how an equation was read, reconstructed numbering. |
 | `rows_chunks` | 873 | function | The rows of Chunks_Canon and Chunks_Doc. |
-| `unit_expression` | 883 | function | A unit's formula or arguments as shown on Chunks_Model. |
-| `rows_model_units` | 896 | function | The rows of Chunks_Model. |
-| `link_columns` | 910 | function | The block of columns that shows what one unit was linked to in one corner. |
-| `rows_mapping` | 925 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
-| `rows_coverage` | 955 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
-| `latest_determinations` | 975 | function | The last recorded determination of every item. |
-| `rows_flagged` | 982 | function | The rows of Flagged_Items with the latest determination of each item. |
-| `sheet_rows` | 996 | function | The rows of all eight sheets, by sheet name. |
-| `check_written_totals` | 1009 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
-| `load_layout` | 1023 | function | The workbook layout from references/workbook_layout.yaml. |
-| `write_sheet` | 1028 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
-| `build_workbook` | 1064 | function | Build Output.xlsx on local disk from the audit records. |
-| `file_sha256` | 1082 | function | SHA-256 of a file's bytes. |
-| `progress_text` | 1087 | function | Where the run stands, in one or two plain sentences. |
-| `rebuild_outputs` | 1096 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
-| `docx_table` | 1125 | function | A plain table in a Word document, header row in bold. |
-| `build_run_summary` | 1138 | function | Where the run stands, in plain words; refreshed after every step. |
-| `call_statistics` | 1160 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
-| `call_plan` | 1181 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
-| `find_uploads` | 1204 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
-| `read_yellow_cells` | 1227 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
-| `record_determinations` | 1250 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
-| `build_report_file` | 1303 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
-| `build_report` | 1371 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
-| `verify_evidence_pack` | 1396 | function | Works from a run folder and the Inputs folder alone. |
+| `unit_expression` | 884 | function | A unit's formula or arguments as shown on Chunks_Model. |
+| `rows_model_units` | 897 | function | The rows of Chunks_Model. |
+| `link_columns` | 911 | function | The block of columns that shows what one unit was linked to in one corner. |
+| `rows_mapping` | 926 | function | One row per model unit (corner "model") or per documentation unit (corner "doc"). |
+| `rows_coverage` | 956 | function | Counted from the rows actually written: the second, independent route of the coverage identity (part 4). |
+| `latest_determinations` | 976 | function | The last recorded determination of every item. |
+| `rows_flagged` | 983 | function | The rows of Flagged_Items with the latest determination of each item. |
+| `sheet_rows` | 997 | function | The rows of all eight sheets, by sheet name. |
+| `check_written_totals` | 1010 | function | Identity part 4: what account-coverage counted must equal what the workbook holds. |
+| `load_layout` | 1024 | function | The workbook layout from references/workbook_layout.yaml. |
+| `write_sheet` | 1029 | function | One generic writer for all eight sheets: header row and first column frozen, filter on the header, wrapped text, no merged cells, reviewer columns yellow and unlocked. |
+| `build_workbook` | 1065 | function | Build Output.xlsx on local disk from the audit records. |
+| `file_sha256` | 1083 | function | SHA-256 of a file's bytes. |
+| `progress_text` | 1088 | function | Where the run stands, in one or two plain sentences. |
+| `rebuild_outputs` | 1097 | function | Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy them whole into Outputs/. |
+| `docx_table` | 1126 | function | A plain table in a Word document, header row in bold. |
+| `build_run_summary` | 1139 | function | Where the run stands, in plain words; refreshed after every step. |
+| `call_statistics` | 1161 | function | The AI call statistics shown on Model_Package_Info and in the report's annex. |
+| `call_plan` | 1182 | function | The call plan of one AI step, obtained by really building every question of the step (building is deterministic and cheap) without asking any. |
+| `find_uploads` | 1205 | function | Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called (the behaviour of an upload onto an existing name is not documented). |
+| `read_yellow_cells` | 1228 | function | The four yellow cells of every row of Flagged_Items, found by item id and never by row position, because reviewers sort and filter. |
+| `record_determinations` | 1251 | function | Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one record for every item whose four values changed. |
+| `build_report_file` | 1304 | function | The report, in the eight parts of plan 2.11, built from the same records as the workbook. |
+| `build_report` | 1372 | function | Step 18, skill build-report: the exports of the graph for anyone who wants to load it elsewhere (nodes.csv, edges.csv, graph.graphml). |
+| `verify_evidence_pack` | 1397 | function | Works from a run folder and the Inputs folder alone. |
 
 ## Appendix D. Change history
 
