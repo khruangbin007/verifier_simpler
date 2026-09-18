@@ -1,0 +1,23 @@
+# The AIVA pipeline. Each step names a skill (the contract, in skills/<name>/SKILL.md)
+# and a plain function. Only functions listed in STEP_FUNCTIONS of aiva5_run_report.py
+# can be named here; there is no loading of scripts by path.
+engine_version: "0.0.1"
+steps:
+  - {id: "01", skill: prepare-run,           function: aiva5_run_report.prepare_run}
+  - {id: "02", skill: read-methodology,      function: aiva1_documents.read_methodology}
+  - {id: "03", skill: read-documentation,    function: aiva1_documents.read_documentation}
+  - {id: "04", skill: read-package,          function: aiva2_package.read_package}
+  - {id: "05", skill: build-graph,           function: aiva3_mapping.build_graph}
+  - {id: "06", skill: find-candidates,       function: aiva3_mapping.find_candidates, with: {pass: 1}}
+  - {id: "07", skill: confirm-outline,       human: true}
+  - {id: "08", skill: judge-links,           function: aiva3_mapping.judge_links, with: {pass: 1}}
+  - {id: "09", skill: find-candidates,       function: aiva3_mapping.find_candidates, with: {pass: 2}}
+  - {id: "10", skill: judge-links,           function: aiva3_mapping.judge_links, with: {pass: 2}}
+  - {id: "11", skill: check-mathematics,     function: aiva4_checks.check_mathematics}
+  - {id: "12", skill: check-values,          function: aiva4_checks.check_values}
+  - {id: "13", skill: check-rules,           function: aiva4_checks.check_rules}
+  - {id: "14", skill: check-package-docs,    function: aiva4_checks.check_package_docs}
+  - {id: "15", skill: account-coverage,      function: aiva4_checks.account_coverage}
+  - {id: "16", skill: await-determinations,  human: true}
+  - {id: "17", skill: record-determinations, function: aiva5_run_report.record_determinations}
+  - {id: "18", skill: build-report,          function: aiva5_run_report.build_report}

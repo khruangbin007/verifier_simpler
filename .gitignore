@@ -1,0 +1,6 @@
+# Review projects hold confidential inputs and evidence packs: never in Git.
+Projects/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+/tmp_runs/
