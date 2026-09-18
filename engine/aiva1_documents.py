@@ -44,7 +44,7 @@ import os
 import re
 import xml.etree.ElementTree as ElementTree
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 import yaml
@@ -611,7 +611,159 @@ def load_tag_rules(references_dir, override_path=None):
     for family, tags in rules["families"].items():
         for tag in tags:
             rules["family_of"][str(tag).lower()] = family
+    rules.setdefault("heading_attributes", ["name", "title", "heading", "label", "caption"])
+    rules.setdefault("caption_tag_words", ["title", "number", "caption", "legend"])
+    rules.setdefault("header_tag_words", ["head", "header"])
     return rules
+
+# ---------------------------------------------------------------- discovering an unfamiliar schema
+def attribute_text(element, names):
+    """The first of the named attributes that holds text worth reading, with its name."""
+    for name in names:
+        value = (element.get(name) or "").strip()
+        if value and not value.isdigit():
+            return value, name
+    return "", ""
+
+BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_item", "table")
+
+def written_numbering(element, rules):
+    """The numbering this element carries in an attribute, exactly as the document wrote it
+    (num="36." gives "36."). A document that numbers its own paragraphs is always more
+    faithful than a count made by AIVA, including where the document skips a number."""
+    for name in rules["numbering_attributes"]:
+        value = (element.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+def child_tags(element):
+    """How often each tag occurs directly below this element."""
+    counts = {}
+    for child in element:
+        name = local_name(child.tag)
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+def discover_table_shape(element, rules):
+    """Decide whether this element is a table by its shape rather than by its name, and if it
+    is, give a family to every tag used inside it.
+
+    A table is the one structure in a document that repeats twice over: an element holding
+    several children of one tag, each of which holds several children of its own. That shape
+    is what is recognised here, so `tablerow`/`tablecell`, `zeile`/`zelle` or any other pair of
+    names is read as a table without anyone having to list the names first.
+
+    Everything sitting in a row is a cell, because a real table puts nothing else there. Two
+    kinds of cell are told apart by their name, since only the name says what they are for:
+    one that holds the table's number or title (<tablenumber>, <tabletitle>) is read as the
+    caption, and one that holds a column heading (<tablecolhead>) as a header cell. A tag
+    nobody anticipated, such as <tablesub> or <tabletext>, is simply a cell and keeps its
+    text. Returns (row_tag, {tag: family}) or None."""
+    row_counts = child_tags(element)
+    if not row_counts:
+        return None
+    row_tag = max(row_counts, key=lambda name: (row_counts[name], name))
+    if row_counts[row_tag] < 2:
+        return None
+    rows = [child for child in element if local_name(child.tag) == row_tag]
+    cell_tags, widths = {}, set()
+    for row in rows:
+        children = [cell for cell in row if local_name(cell.tag)]
+        widths.add(len(children))
+        for cell in children:
+            name = local_name(cell.tag)
+            cell_tags[name] = cell_tags.get(name, 0) + 1
+            # A cell holds words. Anything holding a block of the document is a part of the
+            # document, not a cell, and this element is its skeleton rather than a table.
+            if any(rules["family_of"].get(local_name(below.tag)) in BLOCK_FAMILIES for below in cell):
+                return None
+    if not cell_tags or row_tag in cell_tags or len(widths) > 1 or max(widths, default=0) < 2:
+        return None
+    families = {}
+    for name in cell_tags:
+        if any(word in name for word in rules["caption_tag_words"]):
+            families[name] = "caption"
+        elif any(word in name for word in rules["header_tag_words"]):
+            families[name] = "header_cell"
+        else:
+            families[name] = "cell"
+    if "cell" not in families.values() and "header_cell" not in families.values():
+        return None
+    return row_tag, families
+
+def discover_families(root, rules, report):
+    """Work out a family for each tag this document uses that the rules do not name, from the
+    way the tag behaves here. The rules always win, so a document written in a schema AIVA
+    already knows is read exactly as before; discovery only speaks where they are silent.
+
+    What it looks for, in order: the doubly repeating shape of a table; an element that
+    carries its own heading in an attribute; an element that holds other blocks (a container);
+    an element that holds text (a paragraph). Every decision is recorded with the reason in
+    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml.
+    Enforces: R9"""
+    known, found = rules["family_of"], {}
+
+    def note(tag, family, reason):
+        if tag not in known and tag not in found:
+            found[tag] = family
+            report[tag] = {"family": family, "reason": reason, "count": 0}
+
+    # A tag that sits in running text, never holding a block of its own, is read inline: its
+    # words belong to the sentence around it, not to a paragraph of their own.
+    def readable_elements(element):
+        """Every element the walker will actually read. Discovery stops where the walker
+        stops: the inside of an equation or a figure is read by its own reader, and what the
+        rules ignore is never read at all, so neither is catalogued here."""
+        yield element
+        if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
+            return
+        for child in element:
+            if local_name(child.tag):
+                yield from readable_elements(child)
+
+    elements = list(readable_elements(root))
+    inline_looking = set()
+    for element in elements:
+        for child in element:
+            if (child.tail or "").strip() or (element.text or "").strip():
+                inline_looking.add(local_name(child.tag))
+
+    for element in elements:
+        name = local_name(element.tag)
+        if not name:
+            continue
+        # Table shape is looked for under a known table too: the element may be named in the
+        # rules while the row and cell tags inside it are not.
+        if known.get(name) == "table" or name not in known:
+            shape = discover_table_shape(element, rules)
+            if shape:
+                row_tag, families = shape
+                note(name, "table", "holds repeated <%s>, each holding cells" % row_tag)
+                note(row_tag, "row", "repeats inside <%s>, each row the same width" % name)
+                reasons = {"caption": "holds the number or the title of <%s>" % name,
+                           "header_cell": "holds a column heading of <%s>" % name,
+                           "cell": "sits in a row of <%s>" % name}
+                for tag, family in families.items():
+                    note(tag, family, reasons[family])
+                continue
+        if name in known or name in found:
+            continue
+        blocks_below = any(local_name(child.tag) and known.get(local_name(child.tag)) not in ("inline", "ignore")
+                           for child in element)
+        heading, attribute = attribute_text(element, rules["heading_attributes"])
+        if heading and blocks_below:
+            note(name, "container", "carries its own heading in the %s attribute" % attribute)
+        elif blocks_below:
+            note(name, "container", "holds other blocks")
+        elif name in inline_looking and not len(element):
+            note(name, "inline", "appears inside running text")
+        elif (element.text or "").strip() or len(element):
+            note(name, "paragraph", "holds text")
+        else:
+            note(name, "paragraph", "empty")
+    return found
 
 def element_text(element, rules, skip=("figure", "equation", "ignore", "caption")):
     """The running text of an element without the text of figures, equations and captions in it."""
@@ -636,15 +788,25 @@ def not_read_block(file_name, reason):
 
 @dataclass
 class WalkState:
-    """What the walker carries along: the rules, the notation, images by name, and the report
-    of tags it met that are in no family."""
+    """What the walker carries along: the rules, the notation, images by name, the report of
+    tags it met that are in no family, and what discovery made of those tags in this document."""
     rules: dict; notation: dict; images: dict; unknown_tags: dict; blocks: list
     skip_next_image: bool = False
+
+    def __post_init__(self):
+        """Each file reads with its own view of the rules, so a tag discovered in one file
+        never changes how the next file is read."""
+        self.rules = dict(self.rules)
+        self.rules["family_of"] = dict(self.rules["family_of"])
+
+    def family(self, tag):
+        """The family of a tag: what the rules say, else what discovery made of it here."""
+        return self.rules["family_of"].get(tag)
 
 def walk_element(element, path, depth, state):
     """Turn one element and everything below it into blocks, in reading order."""
     name = local_name(element.tag)
-    family = state.rules["family_of"].get(name)
+    family = state.family(name)
     here = "%s/%s" % (path, name)
     if name == "aiva-preserved-equation":
         state.blocks.append(equation_block(element, here, state))
@@ -653,21 +815,28 @@ def walk_element(element, path, depth, state):
     if family == "ignore" or not name:
         return
     if family is None:
-        has_blocks = any(state.rules["family_of"].get(local_name(child.tag)) not in (None, "inline", "ignore")
+        has_blocks = any(state.family(local_name(child.tag)) not in (None, "inline", "ignore")
                          for child in element)
         family = "container" if has_blocks else "paragraph"
-        seen = state.unknown_tags.setdefault(name, {"count": 0, "read_as": family})
+        seen = state.unknown_tags.setdefault(name, {"count": 0, "family": family,
+                                                    "reason": "holds blocks" if family == "container" else "holds text"})
         seen["count"] += 1
+    numbering = written_numbering(element, state.rules)
     if family == "heading":
         text = element_text(element, state.rules)
         digit = re.fullmatch(r"h([1-6])", name)
-        numbering = next((element.get(a) for a in state.rules["numbering_attributes"] if element.get(a)), "")
         state.blocks.append(new_block("heading", text, here, numbering=numbering,
                                       level_hint=int(digit.group(1)) if digit else depth))
     elif family in ("container", "list_container", "inline"):
+        # A container that carries its own heading in an attribute (<section name="4. Market">)
+        # gives that heading a block of its own, so the chain below it is not lost.
+        heading, _ = attribute_text(element, state.rules["heading_attributes"]) if family == "container" else ("", "")
+        if heading:
+            state.blocks.append(new_block("heading", heading, here, numbering=numbering, level_hint=depth))
         walk_mixed(element, here, depth + (1 if family == "container" else 0), state)
     elif family in ("paragraph", "list_item"):
-        walk_mixed(element, here, depth, state, own_kind="list_item" if family == "list_item" else "paragraph")
+        walk_mixed(element, here, depth, state, own_kind="list_item" if family == "list_item" else "paragraph",
+                   numbering=numbering)
     elif family == "table":
         state.blocks.append(table_block(element, here, state))
     elif family == "figure":
@@ -680,44 +849,53 @@ def walk_element(element, path, depth, state):
     elif family == "caption" and state.blocks and state.blocks[-1]["type"] in ("figure", "table", "equation"):
         state.blocks[-1]["caption"] = shared.normalise_text(element_text(element, state.rules, skip=()))
 
-def walk_mixed(element, here, depth, state, own_kind=None):
+def walk_mixed(element, here, depth, state, own_kind=None, numbering=""):
     """An element that may hold both running text and blocks. Its own text becomes one
     paragraph; a formula that fills the paragraph alone becomes an Equation block instead."""
     block_families = ("heading", "container", "list_container", "paragraph", "list_item", "table",
                       "figure", "equation", "caption", None)
     children = [c for c in element if local_name(c.tag) and
-                (state.rules["family_of"].get(local_name(c.tag)) in block_families or local_name(c.tag) == "aiva-preserved-equation")]
-    inline_only = [c for c in children if state.rules["family_of"].get(local_name(c.tag)) is None and not len(c)
+                (state.family(local_name(c.tag)) in block_families or local_name(c.tag) == "aiva-preserved-equation")]
+    inline_only = [c for c in children if state.family(local_name(c.tag)) is None and not len(c)
                    and own_kind]
     children = [c for c in children if c not in inline_only]
     text = shared.normalise_text(element_text(element, state.rules, skip=("figure", "equation", "ignore", "caption",
                                  "table", "list_container")) if own_kind or not children else (element.text or ""))
-    equations = [c for c in children if state.rules["family_of"].get(local_name(c.tag)) == "equation"]
+    equations = [c for c in children if state.family(local_name(c.tag)) == "equation"]
     if own_kind and text and equations:                  # text around a formula: show the formula in place
         text = shared.normalise_text(text + " " + " ".join(math_to_linear(c) for c in equations))
         children = [c for c in children if c not in equations]
     if text and (own_kind or not children):
-        state.blocks.append(new_block(own_kind or "paragraph", text, here))
+        state.blocks.append(new_block(own_kind or "paragraph", text, here, numbering=numbering))
     for position, child in enumerate(children, start=1):
-        if own_kind and state.rules["family_of"].get(local_name(child.tag)) in ("paragraph", "inline"):
+        if own_kind and state.family(local_name(child.tag)) in ("paragraph", "inline"):
             continue                                     # already part of the paragraph's own text
         walk_element(child, "%s[%d]" % (here, position), depth, state)
         if not own_kind and child.tail and child.tail.strip():
             state.blocks.append(new_block("paragraph", child.tail, here))
 
 def table_block(element, here, state):
-    """A table is always one block: header cells, body rows and its caption stay together."""
-    rows, caption = [], ""
+    """A table is always one block: header cells, body rows and its caption stay together.
+
+    Some schemas put the table's number and its title in their own tags inside the first
+    rows, beside empty cells (<tablenumber>Table 2</tablenumber>, <tabletitle>...</tabletitle>).
+    Those tags are read as caption, every part of the caption is kept in the order written,
+    and the rows they leave empty are dropped so that the first row with content is the
+    header the analyst sees."""
+    rows, captions = [], []
     for node in element.iter():
-        family = state.rules["family_of"].get(local_name(node.tag))
+        family = state.family(local_name(node.tag))
         if family == "row":
             cells = [shared.normalise_text(element_text(cell, state.rules, skip=())) for cell in node
-                     if state.rules["family_of"].get(local_name(cell.tag)) in ("cell", "header_cell")]
+                     if state.family(local_name(cell.tag)) in ("cell", "header_cell")]
             if cells:
                 rows.append(cells)
-        elif family == "caption" and not caption:
-            caption = shared.normalise_text(element_text(node, state.rules, skip=()))
-    return table_from_rows(rows, here, caption)
+        elif family == "caption":
+            part = shared.normalise_text(element_text(node, state.rules, skip=()))
+            if part and part not in captions:
+                captions.append(part)
+    rows = [row for row in rows if any(cell.strip() for cell in row)]
+    return table_from_rows(rows, here, ". ".join(captions))
 
 def table_from_rows(rows, locator, caption=""):
     """The one-cell display form of a table: cells joined by "; ", one row per line, header first."""
@@ -773,6 +951,7 @@ def equation_block(element, here, state):
 def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
     """XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules."""
     root = parse_markup(text, file_name, repairs, tolerant_only)
+    state.rules["family_of"].update(discover_families(root, state.rules, state.unknown_tags))
     walk_element(root, "", 0, state)
     return state.blocks
 
@@ -1091,7 +1270,8 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             table=block["table"], equation=equation, refs_out=cross_references(text + " " + block["caption"], state.rules),
             checkable=states_something_checkable(block, state.rules) if corner == "doc" else None,
             numbering_reconstructed=bool(chain) and block_is_under_reconstructed(blocks, block),
-            caption=block["caption"], not_read_reason=block["not_read_reason"]))
+            caption=block["caption"], not_read_reason=block["not_read_reason"],
+            para_label=block["numbering"] if kind == "Paragraph" else ""))
     return chunks
 
 def block_is_under_reconstructed(blocks, block):
@@ -1160,9 +1340,11 @@ def read_corner(ctx, corner, input_key, label):
         info_rows.append({"group": label, "item": file_name, "value": "Read as %s: %d units (%s)" % (found, len(new_chunks), summary)})
         for tag in sorted(state.unknown_tags):
             seen = state.unknown_tags[tag]
+            because = ", because it %s" % seen["reason"] if seen.get("reason") else ""
             info_rows.append({"group": label, "item": "%s: unrecognised tag" % file_name, "value":
-                              "Unrecognised tag '%s', %d times, read as %s. It can be added to Inputs/tag_rules.yaml."
-                              % (tag, seen["count"], seen["read_as"])})
+                              "Unrecognised tag '%s', %d times, read as %s%s. "
+                              "It can be added to Inputs/tag_rules.yaml."
+                              % (tag, seen["count"], seen.get("family") or seen.get("read_as"), because)})
     outline.append({"corner": corner, "lines": outline_lines(chunks)})
     kind = "chunks_canon" if corner == "canon" else "chunks_doc"
     unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)

@@ -1,6 +1,6 @@
 """build_notebook.py - writes AIVA_Interface.ipynb, the only file an analyst opens (plan 2.14).
 
-Twelve widgets and eighteen cells. The notebook holds no logic of its own: every cell calls a
+Thirteen widgets and eighteen cells. The notebook holds no logic of its own: every cell calls a
 function of the engine. Run `python tools/build_notebook.py` after changing anything here.
 """
 import json
@@ -25,7 +25,7 @@ markdown("""
 
 **How to use this notebook.** Run the cells from top to bottom; every cell says in plain words what it did and what comes next.
 
-1. Cell 2 installs the packages (once per cluster start). Cell 3 creates the widgets at the top of the notebook.
+1. Run cell 2 first: it makes the widgets. Fill in **08 JFrog index URL**, then run cell 3 to install the packages (once per cluster start). Cell 4 loads the engine and checks the environment.
 2. Enter the **model ID**. Paste your `chat()` definition into cell 6, the only cell you edit. Paste the LLM endpoint, token and user id into their widgets.
 3. Cell 8 creates the project folders. Upload the methodology, the package tarball and the model documentation into the three `Inputs` folders it names.
 4. Cell 9 reads the inputs. Open `Outputs/Output.xlsx`, check *Level* and *Section (heading chain)* on sheet `Chunks_Canon` against the methodology's own outline, then run cell 10.
@@ -35,28 +35,56 @@ markdown("""
 AIVA raises *flagged items* for a person to decide. It rates nothing, and it never changes your input files.
 """)
 
-code("Cell 2 - install packages from the JFrog index, then restart Python", '''
-# Run once after the cluster starts. The index URL comes from the widget "JFrog index URL" (cell 3 creates it;
-# on the very first run the default below is used). After the restart, continue with cell 3.
-import os, subprocess, sys
-try:
-    index_url = dbutils.widgets.get("jfrog_index_url")
-except Exception:
-    index_url = ""
-here = os.getcwd()
-requirements = next((p for p in (os.path.join(here, "engine", "requirements.txt"), os.path.join(os.path.dirname(here), "engine", "requirements.txt")) if os.path.exists(p)), "")
-command = [sys.executable, "-m", "pip", "install", "-r", requirements] + (["--index-url", index_url] if index_url else [])
-print("Installing from", requirements or "(requirements.txt was not found beside the notebook)")
-if requirements:
-    print(subprocess.run(command, capture_output=True, text=True).stdout[-1500:])
-    try:
-        dbutils.library.restartPython()
-    except Exception:
-        print("Please restart the Python process by hand, then go on with cell 3.")
+WIDGETS = '\ndef notebook_folder():\n    """The folder this notebook lives in, worked out explicitly (the working directory is not relied on)."""\n    try:\n        path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()\n        return os.path.dirname(path if path.startswith("/Workspace") else "/Workspace" + path)\n    except Exception:\n        return os.getcwd()\n\nAIVA_HOME = notebook_folder()\n\ndef existing(folder):\n    return sorted((n for n in os.listdir(folder) if os.path.isdir(os.path.join(folder, n))), reverse=True) if os.path.isdir(folder) else []\n\ndef make_widgets():\n    """Every widget at the top of the notebook. Nothing here needs an installed package, which is\n    why cell 2 can make them before anything is installed; running it again refreshes the two lists."""\n    w = dbutils.widgets\n    w.text("llm_endpoint", "", "01 LLM endpoint"); w.text("llm_token", "", "02 LLM token"); w.text("llm_user_id", "", "03 LLM user id")\n    w.text("model_id", "", "04 Model ID")\n    projects_dir = os.path.join(AIVA_HOME, "Projects")\n    try:\n        projects_dir = w.get("projects_dir") or projects_dir\n        model_id = w.get("model_id")\n    except Exception:\n        model_id = ""\n    dates = existing(os.path.join(projects_dir, model_id)) if model_id else []\n    w.dropdown("project", "New project, dated today", ["New project, dated today"] + dates, "05 Project")\n    try:\n        chosen = w.get("project")\n    except Exception:\n        chosen = ""\n    runs = [n for n in existing(os.path.join(projects_dir, model_id, chosen)) if n.startswith("Run_")] if model_id and chosen in dates else []\n    w.dropdown("run", runs[0] if runs else "New run", ["New run"] + runs, "06 Run")\n    w.text("projects_dir", projects_dir, "07 Projects folder"); w.text("jfrog_index_url", "", "08 JFrog index URL")\n    w.text("concurrency_limit", "4", "09 Concurrency limit"); w.text("token_cap", "40000", "10 Token cap")\n    w.text("reviewer_id", "", "11 Reviewer id"); w.text("reviewer_role", "", "12 Reviewer role")\n    w.text("scratch_dir", "", "13 Scratch folder (leave empty unless AIVA says it cannot write on the driver)")\n\nmake_widgets()\n'
+
+code("Cell 2 - make the widgets", '''
+# RUN THIS FIRST, on a freshly opened notebook and after every cluster start. It makes every widget
+# at the top of the notebook and needs nothing installed, so the widgets are there to be filled in
+# before anything else happens. Fill in at least "08 JFrog index URL", then run cell 3.
+# Run this cell again at any time to refresh the Project and Run lists; it installs nothing.
+import os, sys
+''' + WIDGETS + '''
+print("AIVA folder:", AIVA_HOME)
+print("The widgets are at the top of the notebook. Fill in '08 JFrog index URL', then run cell 3.")
 ''')
 
-code("Cell 3 - widgets and import path", '''
-import datetime, os, sys, threading, time
+code("Cell 3 - install the packages from the JFrog index, then restart Python", r"""
+# Once per cluster start. The index URL is the widget "08 JFrog index URL" that cell 2 made.
+# Restarting Python clears every name, so cell 4 sets the import path up again afterwards.
+import os, re, subprocess, sys
+
+ALLOW_DEFAULT_INDEX = False      # True only on a cluster meant to install from pip's own default index
+
+index_url = dbutils.widgets.get("jfrog_index_url").strip()
+here = os.getcwd()
+requirements = next((p for p in (os.path.join(here, "engine", "requirements.txt"), os.path.join(os.path.dirname(here), "engine", "requirements.txt")) if os.path.exists(p)), "")
+hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")        # an index URL can carry a credential
+
+if not requirements:
+    print("requirements.txt was not found beside the notebook. Nothing was installed.")
+elif not index_url and not ALLOW_DEFAULT_INDEX:
+    print("No index URL yet, so nothing was installed: packages are never taken from an index you did not name.")
+    print("Paste it into the widget '08 JFrog index URL' at the top of this notebook, then run this cell again.")
+    print("To use pip's own default index instead, set ALLOW_DEFAULT_INDEX = True above.")
+else:
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements] + (["--index-url", index_url] if index_url else [])
+    print("Installing", requirements, "from", "the index in the widget." if index_url else "pip's own default index.")
+    done = subprocess.run(command, capture_output=True, text=True)
+    print(hide(done.stdout)[-1500:])
+    if done.returncode:
+        print("The install did not finish, so do not go on to cell 4. What pip said:")
+        print(hide(done.stderr)[-1500:])
+    else:
+        try:
+            dbutils.library.restartPython()
+        except Exception:
+            print("Please restart the Python process by hand, then go on with cell 4.")
+""")
+
+code("Cell 4 - the import path, the engine, and preflight", '''
+# Cell 3 restarts Python, which clears everything, so the notebook's folder is worked out again here.
+# Each cell imports what it uses, so that the order cells are run in does not matter.
+import importlib, os, shutil, sys, tempfile
 
 def notebook_folder():
     """The folder this notebook lives in, worked out explicitly (the working directory is not relied on)."""
@@ -72,45 +100,14 @@ for folder in (os.path.join(AIVA_HOME, "engine"), os.path.join(AIVA_HOME, "engin
         sys.path.insert(0, folder)
 import aiva5_run_report as aiva
 
-def existing(folder):
-    return sorted((n for n in os.listdir(folder) if os.path.isdir(os.path.join(folder, n))), reverse=True) if os.path.isdir(folder) else []
-
-def make_widgets():
-    w = dbutils.widgets
-    w.text("llm_endpoint", "", "01 LLM endpoint"); w.text("llm_token", "", "02 LLM token"); w.text("llm_user_id", "", "03 LLM user id")
-    w.text("model_id", "", "04 Model ID")
-    projects_dir = os.path.join(AIVA_HOME, "Projects")
-    try:
-        projects_dir = w.get("projects_dir") or projects_dir
-        model_id = w.get("model_id")
-    except Exception:
-        model_id = ""
-    dates = existing(os.path.join(projects_dir, model_id)) if model_id else []
-    w.dropdown("project", "New project, dated today", ["New project, dated today"] + dates, "05 Project")
-    try:
-        chosen = w.get("project")
-    except Exception:
-        chosen = ""
-    runs = [n for n in existing(os.path.join(projects_dir, model_id, chosen)) if n.startswith("Run_")] if model_id and chosen in dates else []
-    w.dropdown("run", runs[0] if runs else "New run", ["New run"] + runs, "06 Run")
-    w.text("projects_dir", projects_dir, "07 Projects folder"); w.text("jfrog_index_url", "", "08 JFrog index URL")
-    w.text("concurrency_limit", "4", "09 Concurrency limit"); w.text("token_cap", "40000", "10 Token cap")
-    w.text("reviewer_id", "", "11 Reviewer id"); w.text("reviewer_role", "", "12 Reviewer role")
-
-make_widgets()
 print("AIVA folder:", AIVA_HOME)
-print("Widgets are ready. After entering the model ID, run this cell again to refresh the Project and Run lists.")
-''')
-
-code("Cell 4 - preflight", '''
-import importlib, shutil, tempfile
 print("Python", sys.version.split()[0])
 for name in ("yaml", "openpyxl", "docx", "numpy", "scipy", "sympy", "pdfplumber", "pypdf", "rdata"):
     try:
         module = importlib.import_module(name)
         print("  %-11s %s" % (name, getattr(module, "__version__", "installed")))
     except Exception:
-        print("  %-11s is NOT installed: run cell 2" % name)
+        print("  %-11s is NOT installed: run cell 3" % name)
 projects_dir = dbutils.widgets.get("projects_dir")
 os.makedirs(projects_dir, exist_ok=True)
 probe = os.path.join(projects_dir, "aiva_preflight.txt")
@@ -145,16 +142,39 @@ print("Endpoint set:", bool(LIVE.get("llm_endpoint")), "| user id set:", bool(LI
 
 code("Cell 6 - YOUR CELL: paste your chat() definition below", '''
 # Keep the signature. Return a dictionary with the generated text under "answer".
-# Read the three live values when chat() is CALLED, never when it is defined:
-def chat(SystemPrompt, MainPrompt):
-    endpoint = aiva_live("llm_endpoint")
-    token    = aiva_live("llm_token")
-    user_id  = aiva_live("llm_user_id")
-    ...                       # your gateway call
-    return {"answer": text}
+# Read the three live values when chat() is CALLED, never when it is defined.
+# AIVA always calls chat() with an empty history: every question stands on its own.
+import requests
+
+def chat(SystemPrompt, MainPrompt, history=[]):
+    payload = {
+        "app": "sparkair",
+        "enable_streaming": False,
+        "flow_name": "general_chat",
+        "history": history,
+        "optionalParameter": {
+            "maxtoken": 250000,
+            "contextlength": 250000,
+            "Temperature": 0.01,          # low: the same question gives the same answer
+            "Top_k": 1,
+            "Penalty": 1.1,
+            "DefaultPrompt": SystemPrompt,
+        },
+        "query": MainPrompt,
+        "select_all": False,
+    }
+    headers = {
+        "Authorization": f'Bearer {aiva_live("llm_token")}',
+        "SP_SSO_UID": aiva_live("llm_user_id"),
+        "Content-Type": "application/json",
+    }
+    url = f'{aiva_live("llm_endpoint")}'
+    resp = requests.post(url, json=payload, headers=headers, timeout=24000000)
+    return resp.json()        # the generated text is under "answer"
 ''')
 
 code("Cell 7 - chat() self-test (or switch to the stand-in)", '''
+import time
 USE_STANDIN = False           # True: a deterministic stand-in answers instead of the real model (for trying AIVA out)
 if USE_STANDIN:
     import standin_chat
@@ -164,10 +184,12 @@ if USE_STANDIN:
 else:
     ACTIVE_CHAT = chat
     started = time.time()
-    answer, failure, seen = aiva.call_chat(ACTIVE_CHAT, "You answer with one word.", "Answer with the single word: ready", LIVE)
+    answer_of_call = aiva.call_chat(ACTIVE_CHAT, "You answer with one word.", "Answer with the single word: ready", LIVE)
+    answer, failure, seen = answer_of_call
     SECONDS_PER_CALL = time.time() - started
     if answer:
         print("chat() answered in %.1f seconds: %r" % (SECONDS_PER_CALL, answer[:60]))
+        print("The gateway also reported: %s" % (answer_of_call.meta or "nothing beyond the answer"))
     else:
         print("chat() gave no usable answer. AIVA read this as: %s. What was seen (token removed): %s" % (failure, seen[:300]))
 ''')
@@ -184,7 +206,8 @@ def current_paths(new_run_allowed=True):
     run_id = "" if run_id == "New run" else run_id
     if not run_id and "PATHS" in globals() and PATHS.model_id == dbutils.widgets.get("model_id") and (not project_date or PATHS.project_date == project_date):
         return PATHS                                   # keep working on the run this session opened
-    return aiva.open_run(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), project_date, run_id)
+    return aiva.open_run(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), project_date, run_id,
+                         scratch_root=dbutils.widgets.get("scratch_dir"))
 
 project = dbutils.widgets.get("project")
 project_dir, missing = aiva.setup_project(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), "" if project.startswith("New project") else project)
@@ -220,6 +243,7 @@ print(plan["note"])
 ''')
 
 code("Cell 12 - run the AI steps and the checks", '''
+import threading
 MODE = "A"                    # "A" or "B": background thread (cell 13 shows progress). "C": foreground, stops by itself after FOREGROUND_MINUTES.
 FOREGROUND_MINUTES = 12
 STATE = aiva.AskState()
@@ -275,13 +299,14 @@ for what, verdict, detail in aiva.verify_evidence_pack(PATHS, SETTINGS, live=LIV
 ''')
 
 code("Cell 16 - appendix: environment probe (run once per environment; writes docs/environment_probe_<date>.md)", '''
+import os
 import environment_probe
 print(environment_probe.run_probe(dbutils.widgets.get("projects_dir"), os.path.join(AIVA_HOME, "docs"), chat=chat if "chat" in globals() else None, live=LIVE))
 ''')
 
 code("Cell 17 - appendix: reviewer sanity checks, one per bundle (stand-in chat, sample projects; change REVIEWER and run)", '''
 REVIEWER = 1                  # 1 documents, 2 package, 3 mapping, 4 checks, 5 run and report
-import shutil, tempfile, standin_chat
+import datetime, os, shutil, tempfile, standin_chat
 SAMPLE, STOP_AFTER = {1: ("F_capital", "02"), 2: ("F_capital", "04"), 3: ("A_minimal", "08"), 4: ("F_capital_known", ""), 5: ("A_minimal", "")}[REVIEWER]
 demo_projects = tempfile.mkdtemp(prefix="aiva_sanity_")
 shutil.copytree(os.path.join(AIVA_HOME, "engine", "tests", "sample_projects", SAMPLE, "Inputs"), os.path.join(demo_projects, "SANITY", datetime.date.today().isoformat(), "Inputs"))

@@ -4,7 +4,7 @@ AIVA helps a model validator compare three things: a **methodology**, the **R pa
 
 | Where | What |
 |---|---|
-| `AIVA_Interface.ipynb` | the only file an analyst opens (Databricks notebook, 12 widgets, 18 cells) |
+| `AIVA_Interface.ipynb` | the only file an analyst opens (Databricks notebook, 13 widgets, 18 cells) |
 | `engine/` | five flat bundles `aiva1_documents.py` ... `aiva5_run_report.py` and the shared `aiva0_shared.py`; `pipeline.yaml`; `skills/` (the written contract of every step); `references/` (layout, tag rules, function map, prompts, word lists) |
 | `engine/tests/` | the test suite, the stand-in `chat()`, four invented sample projects with hand-made gold files, the equivalence and bad-answer corpora |
 | `tools/` | `build_samples.py`, `build_notebook.py`, `build_manual.py`, `check_docs.py`, `count_lines.py`, `seed_differences.py`, `run_harness.py`, `recall_at_k.py`, `live_trial.py`, `environment_probe.py`, `make_release_manifest.py` |

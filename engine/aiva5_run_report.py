@@ -33,7 +33,9 @@ HOW TO SANITY-CHECK IT
 """
 import concurrent.futures
 import datetime
+import getpass
 import gzip
+import inspect
 import json
 import os
 import re
@@ -142,13 +144,41 @@ def new_run_id(project_dir, now=None):
             return base + suffix
     raise ValueError("Too many runs were started in the same minute; please wait a minute.")
 
+def pick_scratch_root(preferred=""):
+    """The first folder on the driver AIVA can actually write in, tried in order.
+
+    A run is built on the driver's own disk and copied whole into the Workspace afterwards
+    (R12), so this folder is needed before anything else can happen. A cluster is shared, and
+    a scratch folder made by one user cannot be written into by another; the folders tried
+    here therefore carry the user's own name. Writing is tested, not assumed, because a
+    folder can exist and still refuse."""
+    user = re.sub(r"[^A-Za-z0-9_.-]", "_", getpass.getuser() or "user")
+    refused = []
+    for root in ([preferred] if preferred else []) + [
+            os.path.join(tempfile.gettempdir(), "aiva_scratch_" + user),
+            os.path.join("/local_disk0", "aiva_scratch_" + user)]:
+        try:
+            os.makedirs(root, exist_ok=True)
+            probe = os.path.join(root, ".aiva_write_test")
+            with open(probe, "w") as handle:
+                handle.write("x")
+            os.remove(probe)
+            return root
+        except OSError as problem:
+            refused.append("%s (%s)" % (root, problem.strerror or problem))
+    raise PermissionError(
+        "AIVA builds each run on the driver's own disk and copies the finished files into the "
+        "Workspace, so it needs one folder it may write in. These were refused: %s. Put a "
+        "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
+        "cluster." % "; ".join(refused))
+
 def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root="", now=None):
     """Create or re-open a run folder and its local scratch folder. Enforces: R6"""
     project_dir, _ = setup_project(projects_dir, model_id, project_date)
     project_date = os.path.basename(project_dir)
     run_id = run_id or new_run_id(project_dir, now)
     run_dir = os.path.join(project_dir, run_id)
-    scratch_root = scratch_root or os.path.join(tempfile.gettempdir(), "aiva_scratch")
+    scratch_root = pick_scratch_root(scratch_root)
     place = shared.sha256_text(os.path.abspath(run_dir))[:8]       # two Projects folders never share scratch space
     local_dir = os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run_id, place))
     paths = RunPaths(projects_dir, model_id, project_date, project_dir,
@@ -315,8 +345,8 @@ AUTH_WORDS = ("401", "403", "unauthor", "expired", "forbidden", "invalid token",
 OVERLOAD_WORDS = ("429", "502", "503", "504", "overload", "rate limit", "too many", "timeout", "timed out", "busy")
 
 def classify_failure(text):
-    """Sort a failure into one of three classes by the words it contains (probe P-13 matches
-    these lists to what the real gateway returns)."""
+    """Sort a failure into a class by the words it contains (probe P-13 matches these lists to
+    what the real gateway returns). call_chat adds one more class of its own, "truncated"."""
     lowered = (text or "").lower()
     if any(word in lowered for word in AUTH_WORDS):
         return "authentication"
@@ -324,19 +354,112 @@ def classify_failure(text):
         return "overload"
     return "other"
 
-def call_chat(chat, system_prompt, main_prompt, live):
-    """Call chat() once and bring the three ways a failure can surface (an exception; a
-    dictionary that carries a status or code; a dictionary with no "answer") into one
-    shape: (answer text or None, failure class or "", what was seen with tokens removed)."""
+class ChatOutcome(tuple):
+    """What one call to chat() came to. It unpacks as the three values the rest of AIVA has
+    always read - (answer text or None, failure class or "", what was seen with tokens
+    removed) - and carries the gateway's own record of the call as .meta, so that adding
+    metadata did not change a single existing call site."""
+
+    def __new__(cls, answer, failure, seen, meta=None):
+        outcome = super().__new__(cls, (answer, failure, seen))
+        outcome.meta = dict(meta or {})
+        return outcome
+
+    answer = property(lambda self: self[0])
+    failure = property(lambda self: self[1])
+    seen = property(lambda self: self[2])
+
+# Fields of the gateway's reply that are worth keeping in the audit record. The reply also
+# echoes the prompts back (query, defaultprompt, source) and those are dropped: AIVA already
+# stores the prompts it sent, and an echo would double the size of every call record.
+META_FIELDS = ("chat_id", "thread_id", "prompt_id", "datetime", "user_id", "intent")
+RESPONSE_META_FIELDS = ("id", "model", "created", "system_fingerprint", "service_tier")
+USAGE_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+def first_choice(response):
+    """The first choice of an OpenAI-shaped reply, or an empty dictionary."""
+    nested = response.get("response") if isinstance(response.get("response"), dict) else {}
+    choices = nested.get("choices")
+    return choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+
+def chat_metadata(response):
+    """What the gateway said about the call itself: which conversation it belonged to, which
+    model answered, how many tokens it took and why it stopped. Kept for the audit record so
+    that a run can be accounted for afterwards; none of it reaches a status or a check."""
+    meta = {name: response[name] for name in META_FIELDS if response.get(name) not in (None, "")}
+    nested = response.get("response") if isinstance(response.get("response"), dict) else {}
+    meta.update({name: nested[name] for name in RESPONSE_META_FIELDS if nested.get(name) not in (None, "")})
+    usage = nested.get("usage") if isinstance(nested.get("usage"), dict) else {}
+    meta.update({name: usage[name] for name in USAGE_FIELDS if isinstance(usage.get(name), int)})
+    choice = first_choice(response)
+    if choice.get("finish_reason"):
+        meta["finish_reason"] = choice["finish_reason"]
+    return meta
+
+def answer_text_of(response):
+    """The generated text. The gateway puts it under "answer"; if that key is missing or
+    empty, the same text is read from the OpenAI-shaped part of the reply, so that a
+    gateway that only fills one of the two is still usable."""
+    if isinstance(response.get("answer"), str) and response["answer"].strip():
+        return response["answer"]
+    content = first_choice(response).get("message", {})
+    content = content.get("content") if isinstance(content, dict) else None
+    return content if isinstance(content, str) and content.strip() else None
+
+def summarise_response(response, live):
+    """A failed reply, shortened for the audit record: the fields that say what went wrong,
+    without the echoed prompts. Falls back to the whole reply when it has no known shape."""
+    if not isinstance(response, dict):
+        return live.redact(json.dumps(response, default=str)[:2000])
+    keep = ("status", "code", "message", "detail", "reason", "answer", "finish_reason")
+    kept = {name: response[name] for name in keep if name in response}
+    kept.update(chat_metadata(response))
+    if not kept:
+        kept = {name: value for name, value in response.items()
+                if name not in ("query", "defaultprompt", "source", "documents", "history")}
+    return live.redact(json.dumps(kept, default=str)[:2000])
+
+def accepts_history(chat):
+    """Whether the analyst's chat() takes the third `history` argument. The real gateway cell
+    has the signature chat(SystemPrompt, MainPrompt, history=[]); the stand-in and the older
+    cell take two arguments. AIVA works with either and never depends on which."""
     try:
-        response = chat(system_prompt, main_prompt)
+        parameters = inspect.signature(chat).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return "history" in parameters
+    positional = [p for p in parameters.values()
+                  if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    return "history" in parameters or len(positional) >= 3
+
+def call_chat(chat, system_prompt, main_prompt, live):
+    """Call chat() once and bring every way a failure can surface (an exception; a dictionary
+    that carries a status or code; a dictionary with no answer in either place; an answer the
+    model was cut off in the middle of) into one shape. Returns a ChatOutcome, which unpacks
+    as (answer, failure, seen).
+
+    History is always sent empty. Every question AIVA asks is self-contained and is asked in
+    its own call, so nothing the model said about an earlier unit may colour the next one;
+    an empty history is also what makes a question repeatable. Enforces: R5"""
+    try:
+        response = chat(system_prompt, main_prompt, []) if accepts_history(chat) else chat(system_prompt, main_prompt)
     except Exception as problem:                     # shape 1: chat() raised
         seen = live.redact("%s: %s" % (type(problem).__name__, problem))
-        return None, classify_failure(seen), seen
-    if isinstance(response, dict) and isinstance(response.get("answer"), str) and response["answer"].strip():
-        return live.redact(response["answer"]), "", ""
-    seen = live.redact(json.dumps(response, default=str)[:2000])      # shapes 2 and 3
-    return None, classify_failure(seen), seen
+        return ChatOutcome(None, classify_failure(seen), seen)
+    if isinstance(response, str):                    # a gateway that returns the text alone
+        response = {"answer": response}
+    if not isinstance(response, dict):
+        seen = live.redact(json.dumps(response, default=str)[:2000])
+        return ChatOutcome(None, classify_failure(seen), seen)
+    meta, text = chat_metadata(response), answer_text_of(response)
+    if text is None:                                 # shapes 2 and 3: a reply with no answer
+        seen = summarise_response(response, live)
+        return ChatOutcome(None, classify_failure(seen), seen, meta)
+    if meta.get("finish_reason") == "length":        # shape 4: the answer stops in mid-air
+        seen = "the model was cut off at the token limit; the answer is incomplete"
+        return ChatOutcome(None, "truncated", seen, meta)
+    return ChatOutcome(live.redact(text), "", "", meta)
 
 @dataclass
 class AskState:
@@ -377,7 +500,8 @@ def ask_one(question, chat, live, settings, validate, state, sleep):
         started, clock = datetime.datetime.now().isoformat(timespec="seconds"), time.time()
         with state.lock:
             state.calls_made += 1
-        answer_text, failure, seen = call_chat(chat, system_prompt, question["main_prompt"], live)
+        outcome_of_call = call_chat(chat, system_prompt, question["main_prompt"], live)
+        answer_text, failure, seen = outcome_of_call
         attempt += 1
         outcome, answer = ("failed: " + failure, None) if failure else validate(question, answer_text)
         with state.lock:
@@ -394,7 +518,8 @@ def ask_one(question, chat, live, settings, validate, state, sleep):
             "system_prompt": live.redact(system_prompt), "main_prompt": live.redact(question["main_prompt"]),
             "response_text": answer_text if answer_text is not None else seen, "outcome": outcome,
             "answer": answer, "final": final, "started_at": started,
-            "seconds": round(time.time() - clock, 3), "estimated_tokens": question.get("estimated_tokens", 0)})
+            "seconds": round(time.time() - clock, 3), "estimated_tokens": question.get("estimated_tokens", 0),
+            "gateway": outcome_of_call.meta})
         if final:
             return records
         if failure == "authentication":
@@ -779,7 +904,8 @@ def rows_chunks(chunks):
     rows = []
     for chunk in chunks:
         rows.append({"ref": chunk["ref"], "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
-                     "para_no": chunk["para_no"], "kind": chunk["kind"], "text": chunk["text"],
+                     "para_no": chunk.get("para_label") or chunk["para_no"],
+                     "kind": chunk["kind"], "text": chunk["text"],
                      "source_file": chunk["source_file"], "refs_out": "; ".join(chunk["refs_out"]),
                      "checkable": chunk.get("checkable"), "reading_note": chunk_note(chunk)})
     return rows
