@@ -34,7 +34,7 @@ Each Inputs folder holds a README that says what goes in. Optional files directl
 | `cell 8` | Project setup: creates the folders and says which Inputs folder is still empty. |
 | `cell 9` | Starts or resumes the run: the reading steps, without any AI. Ends with the outline of the methodology as AIVA read it. |
 | `cell 10` | Confirms that you checked the outline (chapter 7). The AI steps do not start without it. |
-| `cell 11` | The call plan: questions by type, the largest prompt against the token cap, the expected duration. |
+| `cell 11` | The call plan of the two steps that ask the most: questions by type, the largest prompt against the token cap, the expected duration. Step `07a` asks one question per piece of code to fill *LLM Interpretation*; on a large package that is the larger share, and the setting `interpret_code` switches it off. |
 | `cell 12` | Runs the AI steps and the checks, in mode A, B or C. |
 | `cell 13` | Status: finished steps, call statistics, token age, whether the run waits for a fresh token; pause and stop switches. |
 | `cell 14` | Determinations: run after uploading the completed workbook (chapter 8). |
@@ -122,7 +122,12 @@ The first page names the model ID, the date initiated, the run, the package and 
 
 ## 12. Known limitations
 
-- The content of images is never read. Formulas given only as pictures end *Not assessed* or make the linked code *Traced - check undecided*.
+- The content of images is never evidence. Formulas given only as pictures end *Not assessed* or make the linked code *Traced - check undecided*. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself. The Figure still ends *Not assessed - for manual review*.
+- **LLM Interpretation** on `Chunks_Model` says in plain words what a function, a formula statement, a top-level statement or a test block does. The AI is shown the piece itself together with where it sits in the whole package: the function a statement is inside, the package's own documentation of it, what calls it, what it calls, the stored data it reads, and an outline of every file. The words are the model's, so the cell shows them in quotation marks. They are an aid to reading and nothing more: an interpretation gives a unit no status, raises no flagged item, and is never used in a check. AIVA only accepts an answer whose quotation is in the code word for word; where an answer could not be used the cell says why. Other kinds of unit (documentation blocks, help pages, stored data) are not asked about.
+- **Para no.** shows the paragraph number the document itself gives (`36.`), gaps included, where it gives one. A PDF gives none, so its paragraphs are labelled with their page and their place on it (`p.4 ¶2`); so are the paragraphs of a Word file in which Word noted where its pages ended. Otherwise it is AIVA's own count under the heading.
+- The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
+- A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
+- Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
 - PDF input is read by position on the page; multi-column layouts and tables without ruling lines may be cut wrongly. Check the outline.
 - R code is parsed by AIVA's own reader, not by R. Unusual syntax becomes a *File not read* unit for that expression only. Functions with loops or branches are compared statement by statement; R semantics that AIVA's evaluator does not cover (recycling of vectors, matrix products) end as "uses operations AIVA cannot evaluate".
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described and not compared; missing values of different kinds are not told apart.

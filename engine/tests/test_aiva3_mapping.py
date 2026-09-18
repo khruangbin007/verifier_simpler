@@ -189,3 +189,80 @@ class QuestionsAndValidators(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InterpretingTheCode(unittest.TestCase):
+    """Step 07a: what each piece of code does, in plain words, for the column LLM Interpretation."""
+
+    @classmethod
+    def setUpClass(cls):
+        import standin_chat
+        cls.paths, cls.settings, cls.outcome = helpers.run_sample("A_minimal", chat=standin_chat.make_chat(misbehave=False), stop_after="07a")
+        cls.store = run.open_store(cls.paths, cls.settings)
+        cls.units = {u["ref"]: u for u in cls.store.read("model_units")}
+        cls.records = cls.store.read("interpretations")
+        cls.calls = [c for c in cls.store.read_calls() if c["question_type"] == "interpret-code"]
+
+    def test_every_piece_of_code_is_asked_about_once_and_nothing_else_is(self):
+        asked = sorted(r["unit_ref"] for r in self.records)
+        code = sorted(ref for ref, u in self.units.items() if u["kind"] in mapping.INTERPRETED_KINDS)
+        self.assertEqual(asked, code)
+        self.assertEqual(len(asked), len(set(asked)))
+        self.assertFalse([r for r in self.records if self.units[r["unit_ref"]]["kind"] in ("Roxygen block", "Help page", "Parameter table")])
+
+    def test_a_statement_is_shown_with_where_it_sits_in_the_whole_package(self):
+        statement = next(ref for ref, u in self.units.items() if u["kind"] == "Formula statement" and u["name"] == "price")
+        prompt = next(c["main_prompt"] for c in self.calls if c["unit_ref"] == statement)
+        piece, about = prompt.split("WHERE IT SITS IN THE PACKAGE")
+        self.assertIn("price <- base + rate * cw", piece)
+        self.assertIn("one statement inside the function parcel_price", about)
+        self.assertIn('base <- zone_rates[zone_rates$zone == zone, "base_rate"]', about, "the whole function it sits in")
+        self.assertIn("Base rate plus rate per kilogram times chargeable weight", about, "the package's own documentation")
+        self.assertIn("Within this package it calls: volume_discount.", about)
+        self.assertIn("It reads the stored data: zone_rates.", about)
+        self.assertIn("Package parcelcost 1.2.0: Parcel Pricing", about)
+        self.assertIn("R/weights.R: dim_weight(l, w, h, divisor) - Dimensional weight", about, "every file of the package, not only its own")
+
+    def test_a_function_is_told_what_calls_it(self):
+        called = next(ref for ref, u in self.units.items() if u["kind"] == "Function" and u["name"] == "volume_discount")
+        prompt = next(c["main_prompt"] for c in self.calls if c["unit_ref"] == called)
+        self.assertIn("It is called by: parcel_price.", prompt)
+
+    def test_an_answer_that_quotes_code_that_is_not_there_is_refused(self):
+        question = {"question_type": "interpret-code", "code_text": "  price <- base + rate * cw", "strip_patterns": []}
+        good = '{"interpretation": "It adds the base rate to the rate per kilogram times the weight.", "quote_from_unit": "base + rate * cw"}'
+        self.assertEqual(mapping.validate_answer(question, good)[0], "accepted")
+        invented = '{"interpretation": "It adds the base rate to the rate per kilogram times the weight.", "quote_from_unit": "price <- base * 2"}'
+        self.assertEqual(mapping.validate_answer(question, invented), ("rejected: " + shared.REJECTION_REASONS[2], None))
+        empty = '{"interpretation": "", "quote_from_unit": "base + rate * cw"}'
+        self.assertEqual(mapping.validate_answer(question, empty)[0], "rejected: " + shared.REJECTION_REASONS[0])
+        rambling = '{"interpretation": "%s", "quote_from_unit": "base + rate * cw"}' % ("word " * 200)
+        self.assertEqual(mapping.validate_answer(question, rambling)[0], "rejected: " + shared.REJECTION_REASONS[0])
+
+    def test_the_column_shows_the_models_words_as_a_quotation_and_a_refusal_as_a_plain_note(self):
+        units = [self.units[r["unit_ref"]] for r in self.records[:2]]
+        told = [dict(self.records[0], interpretation='It adds \u201cbase\u201d to the rest.', note=""),
+                dict(self.records[1], interpretation="", note="The AI's answer could not be used: it quoted words that are not in the text.")]
+        rows = run.rows_model_units(units, told)
+        self.assertEqual(rows[0]["llm_interpretation"], '\u201cIt adds "base" to the rest.\u201d')
+        self.assertEqual(rows[1]["llm_interpretation"], "The AI's answer could not be used: it quoted words that are not in the text.")
+        self.assertEqual(run.rows_model_units(units)[0]["llm_interpretation"], "", "before the step has run the column is empty")
+
+    def test_a_model_that_speaks_of_an_error_in_the_code_does_not_get_its_cell_withheld(self):
+        """Code that calls stop() will be described with the very word AIVA never uses of its own
+        results. The words are the model's, shown as a quotation, so the wording gate lets them by."""
+        row = run.rows_model_units([self.units[self.records[0]["unit_ref"]]],
+                                   [dict(self.records[0], interpretation="It stops with an error when the zone is unknown.", note="")])[0]
+        self.assertEqual(run.plain_cell(row["llm_interpretation"], False, self.store), row["llm_interpretation"])
+        self.assertEqual(run.plain_cell("It stops with an error.", False, self.store), run.CELL_WITHHELD, "AIVA's own words are still held to the rule")
+
+    def test_an_interpretation_is_outside_the_accounting(self):
+        """It is an aid to reading: no status, no flagged item, no part in the coverage identity."""
+        import standin_chat
+        with_it = helpers.run_sample("A_minimal", chat=standin_chat.make_chat(misbehave=False))
+        without = helpers.run_sample("A_minimal", chat=standin_chat.make_chat(misbehave=False), settings={"interpret_code": False})
+        kept = lambda item: {k: v for k, v in item.items() if k not in ("provenance", "created_at", "item_id")}
+        first, second = (run.open_store(p, s) for p, s, _ in (with_it, without))
+        self.assertEqual([kept(i) for i in first.read("flagged_items")], [kept(i) for i in second.read("flagged_items")])
+        self.assertEqual(helpers.without_times(first.read("coverage")), helpers.without_times(second.read("coverage")))
+        self.assertEqual(second.read("interpretations"), [], "switched off, the step asks nothing")

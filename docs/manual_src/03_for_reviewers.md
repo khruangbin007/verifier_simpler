@@ -35,7 +35,7 @@ Two things hold for every bundle. Nothing taken from an input or from the model 
 
 **Contracts.** In: the input files. Out: chunks_canon, chunks_doc, read_repairs, info_rows, outline. Shown on `Chunks_Canon`, `Chunks_Doc` and `Model_Package_Info`.
 
-**Known limitations.** PDF layout is guessed from positions. Juxtaposition is read as a product only inside structured markup, never in running text. Images are never read.
+**Known limitations.** PDF layout is guessed from positions: a heading is a short line set larger or bolder than the body, and a header or footer is a line that repeats in a page margin, so an unusual layout can be misread and `Model_Package_Info` says what was left out. Juxtaposition is read as a product only inside structured markup, never in running text. The words OCR reads from a picture are shown to help a person and are never evidence; the bundled OCR model can drop the spaces between words.
 
 **Checklist.**
 
@@ -54,7 +54,7 @@ Two things hold for every bundle. Nothing taken from an input or from the model 
 
 **Walk through.** Safe unpacking (`aiva2_package.unpack_package`); DESCRIPTION and NAMESPACE; the tokenizer and the operator-precedence parser (`aiva2_package.tokenize_r`, `aiva2_package.parse_r_source`), which recovers expression by expression; facts about code (`aiva2_package.code_facts`, `aiva2_package.has_arithmetic`); conversion to the neutral tree through `engine/references/r_function_map.yaml` (`aiva2_package.to_expr`) and composition of straight-line functions (`aiva2_package.compose_function`); units from R files, roxygen, help pages and vignettes; stored data (`aiva2_package.decode_data_file`, `aiva2_package.table_of`); reads of stored data (`aiva2_package.data_reads`); the step (`aiva2_package.read_package`).
 
-**Contracts.** In: the tarball. Out: model_units, parameter_tables, package_info. Shown on `Chunks_Model` and `Model_Package_Info`.
+**Contracts.** In: the tarball. Out: model_units, parameter_tables, package_info. Shown on `Chunks_Model` and `Model_Package_Info`. The column *LLM Interpretation* of `Chunks_Model` is filled later, by step `07a` in `aiva3_mapping.interpret_code` (Reviewer 3), from the record kind `interpretations`.
 
 **Known limitations.** No second, independent reader of stored data and no extraction of R classes and attributes beyond what the decoder gives. S4 and R5 classes are read as code, not as structures. Missing values of different kinds are not told apart.
 

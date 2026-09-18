@@ -47,6 +47,7 @@ sheets:
       - {header: "Name", group: identity, field: name, width: 24, input_text: true}
       - {header: "Inside", group: identity, field: inside, width: 20}
       - {header: "Text", group: code_text, field: text, width: 80, input_text: true}
+      - {header: "LLM Interpretation", group: assessments, field: llm_interpretation, width: 60}
       - {header: "Expression / arguments", group: code_text, field: expression, width: 50, input_text: true}
       - {header: "Numbers used", group: code_text, field: numbers, width: 20}
       - {header: "Exported", group: identity, field: exported, width: 10}

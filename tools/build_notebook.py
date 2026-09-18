@@ -75,6 +75,11 @@ else:
         print("The install did not finish, so do not go on to cell 4. What pip said:")
         print(hide(done.stderr)[-1500:])
     else:
+        optional = requirements.replace("requirements.txt", "requirements-optional.txt")
+        if os.path.exists(optional):                 # allowed to fail: AIVA works without these, and says what it then leaves out
+            extra = subprocess.run(command[:4] + ["-r", optional] + command[6:], capture_output=True, text=True)
+            print("Optional packages (reading the words inside pictures):", "installed." if not extra.returncode else
+                  "not installed - they may be missing from the index. AIVA runs without them; pictures are then not read.")
         try:
             dbutils.library.restartPython()
         except Exception:
@@ -108,6 +113,11 @@ for name in ("yaml", "openpyxl", "docx", "numpy", "scipy", "sympy", "pdfplumber"
         print("  %-11s %s" % (name, getattr(module, "__version__", "installed")))
     except Exception:
         print("  %-11s is NOT installed: run cell 3" % name)
+try:
+    importlib.import_module("rapidocr_onnxruntime")
+    print("  %-11s installed (optional): the words inside pictures are read" % "rapidocr")
+except Exception:
+    print("  %-11s not installed (optional): pictures stay Figures, their words are not read" % "rapidocr")
 projects_dir = dbutils.widgets.get("projects_dir")
 os.makedirs(projects_dir, exist_ok=True)
 probe = os.path.join(projects_dir, "aiva_preflight.txt")
@@ -234,11 +244,14 @@ print(aiva.confirm_outline(PATHS, SETTINGS, dbutils.widgets.get("reviewer_id")))
 ''')
 
 code("Cell 11 - call plan", '''
-plan = aiva.call_plan(PATHS, SETTINGS, "08", seconds_per_call=SECONDS_PER_CALL)
-print("Questions for step %s: %d" % (plan["step"], plan["questions"]))
-for question_type, count in sorted(plan["by_type"].items()):
-    print("  %-26s %d" % (question_type, count))
-print("Largest prompt: about %d tokens (cap %d). Expected duration: about %s minutes." % (plan["largest_estimated_tokens"], plan["token_cap"], plan["expected_minutes"]))
+# The two steps that ask the most questions. "07a" asks one per piece of code, to fill the column
+# "LLM Interpretation" on Chunks_Model; to save those calls, set interpret_code to False in cell 8.
+for step_id in ("07a", "08"):
+    plan = aiva.call_plan(PATHS, SETTINGS, step_id, seconds_per_call=SECONDS_PER_CALL)
+    print("Questions for step %s (%s): %d" % (step_id, plan["step"], plan["questions"]))
+    for question_type, count in sorted(plan["by_type"].items()):
+        print("  %-26s %d" % (question_type, count))
+    print("  Largest prompt: about %d tokens (cap %d). Expected duration: about %s minutes." % (plan["largest_estimated_tokens"], plan["token_cap"], plan["expected_minutes"]))
 print(plan["note"])
 ''')
 

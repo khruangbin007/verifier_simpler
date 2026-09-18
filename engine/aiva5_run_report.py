@@ -77,7 +77,7 @@ DEFAULT_SETTINGS = {
     "relative_tolerance": 1e-9, "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "",
+    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "", "read_pictures": True, "interpret_code": True,
     "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
 
 def make_settings(overrides=None):
@@ -594,7 +594,7 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("judge-links", "check-mathematics", "check-values", "check-rules")
+CHAT_STEPS = ("interpret-code", "judge-links", "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
     "confirm-outline": "Waiting for a person: check Level and Section (heading chain) on Chunks_Canon "
@@ -923,17 +923,19 @@ def unit_expression(unit):
                                                " x ".join(str(d) for d in data.get("dims", [])))
     return ""
 
-def rows_model_units(units):
-    """The rows of Chunks_Model."""
-    rows = []
+def rows_model_units(units, interpretations=()):
+    """The rows of Chunks_Model. What the AI said a piece of code does is shown as a quotation
+    (in \u201c \u201d), because the words are the model's and not AIVA's own. Enforces: R10"""
+    rows, said = [], {record["unit_ref"]: record for record in interpretations}
     for unit in units:
-        code = unit.get("code") or {}
+        code, told = unit.get("code") or {}, said.get(unit["ref"], {})
         lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else ""
         rows.append({"ref": unit["ref"], "kind": unit["kind"], "file": unit["file"], "lines": lines,
                      "name": unit["name"], "inside": unit["inside"], "text": unit["text"],
                      "expression": unit_expression(unit), "exported": code.get("exported"),
                      "numbers": "; ".join(n["as_written"] for n in code.get("numbers", [])),
-                     "reading_note": unit.get("read_problem") or "",
+                     "reading_note": unit.get("read_problem") or "", "llm_interpretation": told.get("note") or (
+                         "\u201c%s\u201d" % re.sub("[\u201c\u201d]", '"', told["interpretation"]) if told.get("interpretation") else ""),
                      "where": "%s%s" % (unit["file"], " lines " + lines if lines else "")})
     return rows
 
@@ -1032,7 +1034,7 @@ def sheet_rows(store, paths, settings, progress):
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
             "Chunks_Canon": rows_chunks(store.read("chunks_canon")),
             "Chunks_Doc": rows_chunks(store.read("chunks_doc")),
-            "Chunks_Model": rows_model_units(store.read("model_units")),
+            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations")),
             "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
             "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
 
@@ -1480,7 +1482,7 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "aiva2_package.read_package": aiva2_package.read_package,
     "aiva3_mapping.build_graph": aiva3_mapping.build_graph,
     "aiva3_mapping.find_candidates": aiva3_mapping.find_candidates,
-    "aiva3_mapping.judge_links": aiva3_mapping.judge_links,
+    "aiva3_mapping.judge_links": aiva3_mapping.judge_links, "aiva3_mapping.interpret_code": aiva3_mapping.interpret_code,
     "aiva4_checks.check_mathematics": aiva4_checks.check_mathematics,
     "aiva4_checks.check_values": aiva4_checks.check_values,
     "aiva4_checks.check_rules": aiva4_checks.check_rules,
