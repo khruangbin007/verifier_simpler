@@ -103,6 +103,7 @@ CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
 AI_WORDING_NOT_SHOWN = ("The AI's wording is not displayed here; the full text is in the audit records.")
 
 # The lint (tests/test_layout_rules.py) skips this one assignment, which has to name the words.
+# These terminologies CAN BE USED ONLY by HUMAN reviewers/validators. Machines cannot make these determinations.
 BANNED_WORDING_PATTERNS = (
     r"\bfindings?\b", r"\berrors?\b", r"\bseverity\b", r"\bsevere\b", r"\bcritical\b",
     r"\bmajor\b", r"\bminor\b",
