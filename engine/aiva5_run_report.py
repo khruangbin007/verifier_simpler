@@ -74,7 +74,8 @@ DEFAULT_SETTINGS = {
     "numeric_points": 200, "numeric_seed": 20260917, "min_valid_points": 50,
     "relative_tolerance": 1e-9, "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
-    "walk_rounds": 30, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "",
+    "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
+    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "",
     "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
 
 def make_settings(overrides=None):
