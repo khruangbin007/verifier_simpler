@@ -49,7 +49,9 @@ SETTING_NOTES = {
     "rrf_constant": "The constant of reciprocal rank fusion.", "reserved_places": "Places of the shortlist kept for candidates that only the anchors or propagation found.",
     "max_unit_chars": "A longer unit is cut around its formula lines before it is shown to the model.", "max_passage_chars": "A longer passage is cut around the matched words.",
     "max_file_mb": "A larger input file is not read and becomes a not-read unit.", "reviewer_id": "Who runs the notebook; recorded with confirmations and determinations.",
-    "reviewer_role": "The role of that person.", "signals": "The search signals in use; the ablation ladder of tools/recall_at_k.py switches them off one by one."}
+    "reviewer_role": "The role of that person.",
+    "read_pictures": "Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review.",
+    "signals": "The search signals in use; the ablation ladder of tools/recall_at_k.py switches them off one by one."}
 COLUMN_NOTES = {
     "Math check": "Result of comparing the unit's formula with every linked formula: the aligned symbols, then agrees, differs with a counterexample, or could not be decided with its reason.",
     "Parameter completeness": "For a stored table: the cell-by-cell comparison with the linked table. For code: which symbol of the formula each code symbol stands for.",

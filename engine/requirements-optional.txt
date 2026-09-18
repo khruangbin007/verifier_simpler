@@ -1,0 +1,7 @@
+# Optional packages. Cell 3 installs these in a second step that is allowed to fail, so that a
+# package missing from the internal index never stops the required ones in requirements.txt.
+# Each one missing degrades a named capability into a plain note; nothing else changes.
+#
+# Reads the words inside pictures (OCR). Its models come inside the package, so nothing is
+# fetched when it runs. Without it a picture is still a Figure, only its words are not shown.
+rapidocr-onnxruntime>=1.3

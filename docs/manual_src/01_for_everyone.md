@@ -12,7 +12,7 @@ AIVA reads all three, cuts them into units, links what corresponds, checks formu
 
 **An evidence pack, not a verdict.** A run produces `Output.xlsx`, `Validation_Report.docx` and an `_audit` folder from which every statement in the two files can be re-verified. A named person records a determination against every flagged item. AIVA never decides whether a model is acceptable.
 
-**What AIVA does not do.** It does not run the model, does not execute any R code, does not judge whether the methodology itself is sound, and does not read the content of images: a formula given only as a picture is raised for manual review, never skipped.
+**What AIVA does not do.** It does not run the model, does not execute any R code, does not judge whether the methodology itself is sound, and never treats the content of an image as evidence: a formula given only as a picture is raised for manual review, never skipped. Where the optional OCR package is installed, the words inside a picture are shown under it as a machine reading, to help a person find and judge it.
 
 **The wording rule.** <!-- wording-policy-sentence -->AIVA rates nothing: words that grade seriousness (such as "severity", "critical", "major", "minor" or "high risk") and the policy terms "finding" and "error" never appear in anything AIVA produces, because grading and classifying are decisions of the validation policy and of people, not of a tool.<!-- end --> AIVA says what it observed, where, and what a sensible next step would be. A test scans the engine, the workbook and the report for these words on every build.
 
