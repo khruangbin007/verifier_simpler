@@ -25,15 +25,17 @@ WHICH SHEETS SHOW ITS RESULTS
   Flagged_Items, and the comparison rule on Model_Package_Info.
 
 DESIGN RULES ENFORCED HERE (function names in brackets)
-  R1  no claim without evidence: "differs" only with a counterexample     [compare_formulas]
-  R2  nothing is dropped: every unit gets exactly one status; every unit that is not clean
+  R1  AIVA flags, people decide: items carry a category and a neutral next step, and no
+      field rates seriousness                                  [build_items, account_coverage]
+  R2  closed accounting: every unit gets exactly one status; every unit that is not clean
       is named by a flagged item; the run stops if this does not hold     [check_identity]
-  R3  the AI proposes, code disposes: alignment by AI is validated one-to-one and fixed
-      before the comparison, never chosen because it makes two sides agree [align]
+  R3  the model's opinion is never the last word: linked formulas and values are checked by
+      code; alignment by AI is validated one-to-one and fixed before the comparison, never
+      chosen because it makes two sides agree            [align, compare_formulas, check_values]
+  R4  evidence is shown: "differs" only ever comes with a counterexample    [numeric_step]
   R5  same input, same output: fixed seed, fixed orders                   [sample_points]
   R7  no input text is executed: trees are evaluated by AIVA's own evaluator and are turned
       into SymPy objects node by node; no string is ever parsed by SymPy  [evaluate, to_sympy]
-  R10 no field rates seriousness: items carry a category and a neutral next step only
 
 HOW TO SANITY-CHECK IT
   Run `python -m unittest engine/tests/test_aiva4_checks.py`. In the notebook run the
@@ -227,7 +229,7 @@ def sample_points(trees, symbols, settings, data_values):
 def numeric_step(code_tree, stated_tree, symbols, settings, data_values):
     """Evaluate both trees at every sample point. Returns (result text, valid points,
     counterexample or None). Any disagreement beyond the relative tolerance is a difference,
-    recorded with the inputs and both results. Enforces: R1"""
+    recorded with the inputs and both results. Enforces: R4"""
     valid, tolerance = 0, float(settings["relative_tolerance"])
     for point in sample_points([code_tree, stated_tree], symbols, settings, data_values):
         ours, theirs = evaluate(code_tree, point), evaluate(stated_tree, point)
@@ -284,6 +286,7 @@ def rename(tree, mapping, substitute):
     return shared.Expr(tree.op, name=tree.name, value=tree.value, args=tuple(rename(arg, mapping, substitute) for arg in tree.args))
 
 def right_side(tree):
+    """The right-hand side of an equation; an expression that is no equation is returned whole."""
     return tree.args[1] if tree.op == "eq" else tree
 
 def prepare_alignment(code_tree, stated_tree, defaults, bridge_by_term):
@@ -304,7 +307,7 @@ def prepare_alignment(code_tree, stated_tree, defaults, bridge_by_term):
 
 def compare_formulas(prepared, settings, data_values):
     """Symbolic step, then numeric step, on an alignment that is already fixed. Returns the
-    outcome fields of a MathCheck. Enforces: R1, R3"""
+    outcome fields of a MathCheck. Enforces: R3, R4"""
     if prepared["left_code"] or prepared["left_stated"]:
         return {"outcome": shared.CHECK_UNDECIDED, "undecided_reason": shared.UNDECIDED_REASONS[2], "symbolic": "not run",
                 "numeric": "not run", "counterexample": None, "points_valid": 0}
@@ -363,6 +366,7 @@ def check_edge(ctx, world, source, target, how, sentence, relation=None):
                        confidence=previous.get("confidence"), evidence={"how_text": text, "check": True})
 
 def number_text(value):
+    """A computed number for a cell: at most six significant digits, never in Python's own notation."""
     return shared.plain_number(float("%.6g" % value)) if isinstance(value, float) else str(value)
 
 # ---------------------------------------------------------------- step 11: check-mathematics
@@ -435,7 +439,7 @@ def check_mathematics(ctx):
     a passage that states a formula; every roxygen \\deqn formula against the function it
     documents; every documentation equation against the methodology equation it is linked
     to. Alignment is settled first (by code, then by the validated align-symbols answer)
-    and only then are the two sides compared. Enforces: R1, R3"""
+    and only then are the two sides compared. Enforces: R3, R4"""
     world, settings, references = load_world(ctx), ctx.settings, ctx.options["references_dir"]
     notation, values = aiva1_documents.load_notation(references), stored_values(world)
     pairs = [(world["by_ref"][s], world["by_ref"][t]) for (s, t), e in sorted(world["links"].items())
@@ -539,9 +543,11 @@ def quote(text, citation=""):
     return "\u201c%s\u201d%s" % (inner, " (%s)" % citation if citation else "")
 
 def plain_key(text):
+    """A row key or header as compared: lower case, single spaces, underscores as spaces."""
     return re.sub(r"[\s_]+", " ", str(text)).strip().lower()
 
 def header_words(header, stop):
+    """The index words of a column header, without its unit in brackets."""
     return frozenset(aiva3_mapping.split_words(re.sub(r"\(.*?\)|%", " ", header), stop))
 
 def map_columns(ours, theirs, stop):
@@ -684,7 +690,7 @@ def check_values(ctx):
     """Step 12, skill check-values: parameter tables against the tables they are linked to
     (a table that the judge did not link is still matched by its shape); documentation
     tables against methodology tables; numbers written in linked code; numbers in
-    documentation passages and roxygen text. All under compare_values. Enforces: R1"""
+    documentation passages and roxygen text. All under compare_values. Enforces: R3"""
     world, settings = load_world(ctx), ctx.settings
     stop = aiva3_mapping.load_word_lists(ctx.options["references_dir"])["stop"]
     trivial, checks, edges = set(settings["trivial_numbers"]), [], []
@@ -963,7 +969,30 @@ NEXT_STEPS = {
     shared.CAT_AI_UNUSABLE: "Review this unit by hand, or run AIVA again; the AI's answer could not be used.",
     shared.CAT_AI_DISAGREE: "Read both quotations and decide whether the unit and the passage state the same thing."}
 
+STATUS_RULES = (      # applied top to bottom; the first rule that fits decides. The manual's table is generated from this list.
+    ("model", "could not be read or assessed", shared.ST_NOT_ASSESSED, "A file that could not be read, compiled code, or a stored object that is not compared."),
+    ("model", "test block", shared.ST_UNIT_TEST, "A test_that block. Which function it tests is shown in the column Unit test."),
+    ("model", "package file without code", shared.ST_SUPPORTING, "DESCRIPTION, NAMESPACE and other files that hold no code."),
+    ("model", "example code in a vignette", shared.ST_SUPPORTING, "Code inside a vignette; it illustrates the package and is not part of the model."),
+    ("model", "its own checks", shared.ST_DIFFERS + " / " + shared.ST_UNDECIDED, "A roxygen block or help page whose own deterministic checks differ or are undecided."),
+    ("model", "documents no single object", shared.ST_SUPPORTING, "A roxygen block or help page that documents no single object of the package."),
+    ("model", "takes the tracing of what it documents", "the status of the documented object", "A roxygen block or help page whose own checks pass."),
+    ("model", "a check or the judge reports a difference", shared.ST_DIFFERS, "Linked, and a check, the judge or the second question reports a difference."),
+    ("model", "a required check is undecided", shared.ST_UNDECIDED, "Linked, and a required check could not be decided."),
+    ("model", "linked and all required checks agree", shared.ST_TRACED, "Linked to the methodology, and every required check agrees."),
+    ("model", "covered by the check of the whole function", shared.ST_TRACED, "A statement without a link of its own, inside a function whose agreeing check ran through it."),
+    ("model", "supporting code by syntax", shared.ST_SUPPORTING, "No link, and no arithmetic and no number other than the trivial ones; the reason is shown."),
+    ("model", "vignette prose without checkable statements", shared.ST_SUPPORTING, "Vignette text that states no number and no formula."),
+    ("model", "not linked", shared.ST_NOT_TRACED, "Anything else without a link to the methodology."),
+    ("doc", "content cannot be read", shared.ST_NOT_ASSESSED, "A figure, an equation that could not be read, or a part of a file that could not be read."),
+    ("doc", "states nothing checkable", shared.ST_NARRATIVE, "No formula, number, rule or definition, by code or by the judge's answer."),
+    ("doc", "a check or the judge reports a difference", shared.ST_DIFFERS, "Linked, and a check, the judge or the second question reports a difference."),
+    ("doc", "a required check is undecided", shared.ST_UNDECIDED, "Linked, and a required check could not be decided."),
+    ("doc", "linked and consistent", shared.ST_TRACED, "Linked to the methodology, directly or through a linked unit of the package, and consistent."),
+    ("doc", "checkable and not linked", shared.ST_NOT_TRACED, "States something checkable, and nothing was linked to it."))
+
 def concerns_of(record):
+    """Which of the four Concerns a unit falls under, from its kind."""
     if record.get("heading_chain") is not None:
         return shared.CONCERNS[3] if record["corner"] == "doc" else shared.CONCERNS[0]
     if record.get("data") or record["kind"] in (shared.KIND_TABLE, shared.KIND_OBJECT):
@@ -1169,6 +1198,7 @@ def doc_unit_outcome(chunk, world, facts, raised):
     return shared.ST_NOT_TRACED, "checkable and not linked", "no link to the methodology"
 
 def lines_or(lines, fallback):
+    """Several lines for one cell without repeats, or the fallback sentence when there is none."""
     return "\n".join(dict.fromkeys(lines)) if lines else fallback
 
 def model_cells(unit, world, facts):
@@ -1215,7 +1245,8 @@ def doc_cells(chunk, world, facts, duplicates):
 
 def build_items(raised, world, run_label):
     """One flagged item per unit and category; several observations of one category are listed
-    inside one item. Item ids are given once, in a fixed order: concerns, unit, category."""
+    inside one item. Item ids are given once, in a fixed order: concerns, unit, category. An
+    item says what was observed and suggests a neutral next step; it rates nothing. Enforces: R1"""
     order = sorted(raised, key=lambda key: (shared.CONCERNS.index(concerns_of(world["by_ref"][key[0]])), key[0], shared.CATEGORIES.index(key[1])))
     items = []
     for number, (ref, category) in enumerate(order, start=1):
@@ -1258,7 +1289,7 @@ def check_identity(units, doc, statuses, items, world, package_info):
 def account_coverage(ctx):
     """Step 15, skill account-coverage: one status per unit by the ordered rules, the cells of
     the assessment columns, one flagged item per unit and category, the identity, and the
-    totals that the workbook builder must reproduce by counting its rows. Enforces: R2, R10"""
+    totals that the workbook builder must reproduce by counting its rows. Enforces: R1, R2"""
     world = load_world(ctx)
     facts, raised, statuses = gather(ctx, world), {}, []
     outcomes = {u["ref"]: model_unit_outcome(u, world, facts, raised) for u in world["units"]}

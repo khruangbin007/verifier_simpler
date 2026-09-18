@@ -236,10 +236,11 @@ def canonical_json(value):
     return json.dumps(to_plain(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 def sha256_bytes(data):
+    """SHA-256 of bytes, in hexadecimal."""
     return hashlib.sha256(data).hexdigest()
 def sha256_text(text):
+    """SHA-256 of a text in UTF-8, in hexadecimal."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
 def swhid_content(data):
     """The ISO/IEC 18670 content identifier of a file; the same value Git computes."""
     return "swh:1:cnt:" + hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
@@ -278,7 +279,6 @@ def chain_records(prev_hash, records, volatile=()):
         prev_hash = body["record_hash"]
         chained.append(body)
     return chained
-
 def verify_chain(records, volatile=()):
     """Re-compute a chain. Returns (True, -1, "") or (False, position, plain reason)."""
     prev_hash = GENESIS_HASH
@@ -290,8 +290,8 @@ def verify_chain(records, volatile=()):
             return False, position, "record %d has been changed" % (position + 1)
         prev_hash = record["record_hash"]
     return True, -1, ""
-
 def chain_head(records):
+    """The hash of the last record of a chain, or the fixed starting value for an empty one."""
     return records[-1]["record_hash"] if records else GENESIS_HASH
 
 # ---------------------------------------------------------------- numbers

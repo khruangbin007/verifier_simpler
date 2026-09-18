@@ -21,12 +21,15 @@ WHICH SHEETS SHOW ITS RESULTS
   columns; "Why not mapped" for rows without a link.
 
 DESIGN RULES ENFORCED HERE (function names in brackets)
-  R1  no link without evidence: every edge names how it was established     [judge_links]
-  R3  the AI proposes, code disposes: validate_answer decides what is usable [validate_answer]
-  R4  the ledger is append-only and hash-chained; there is no function that changes or
-      removes a record                                                       [ledger_records]
+  R2  closed accounting: every searched unit gets a search record, also when nothing was
+      proposed                                                               [find_candidates]
+  R3  the model's opinion is never the last word: validate_answer decides what is usable,
+      and a rejected answer leaves the unit without a link                   [validate_answer]
+  R4  every link says how it was established and carries provenance; the ledger is
+      append-only and hash-chained, and no function changes or removes a record
+                                                                  [judge_links, ledger_records]
   R5  same input, same output: fixed orders, hash-derived letter order, no random choices
-  R8  every unit gets a search record, also when nothing was proposed        [find_candidates]
+                                                                  [fuse, assemble_question]
   R9  no domain concept: word lists live in references/                      [load_word_lists]
 
 HOW TO SANITY-CHECK IT
@@ -54,6 +57,7 @@ CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model":
 
 # ---------------------------------------------------------------- the ledger and the graph in memory
 def node_record(ref, node_kind, corner):
+    """The ledger record of one node."""
     return {"record_type": "node", "ref": ref, "node_kind": node_kind, "corner": corner}
 
 def ledger_records(existing, new_records):
@@ -72,6 +76,7 @@ def verify_ledger(records):
     return shared.verify_chain(records, LEDGER_VOLATILE)
 
 def graph_version_id(records):
+    """G- and the first twelve characters of the ledger's head hash."""
     return "G-" + shared.chain_head(records)[:12]
 
 def load_graph(records):
@@ -712,7 +717,7 @@ def find_candidates(ctx):
     searched model unit in the methodology and the documentation, and for every checkable
     documentation passage in the methodology. Pass 2 searches again, with propagation, only
     for units still without a methodology link, and looks in the package for documentation
-    passages still without any link. Every search leaves a search record. Enforces: R8"""
+    passages still without any link. Every search leaves a search record. Enforces: R2"""
     search_pass = int(ctx.options.get("pass", 1))
     world = build_world(ctx, search_pass)
     graph = load_graph(ctx.read("graph_ledger"))
@@ -801,6 +806,7 @@ def passage_text(node, settings, keep_words=()):
     return cut_text(node["text"], int(settings["max_passage_chars"]), keep_words)
 
 def passage_label(node):
+    """The heading line of a lettered passage: where it stands, never its reference."""
     if node.get("heading_chain") is not None:
         place = " > ".join(node["heading_chain"][-3:]) or node["source_file"]
         return "%s, %s%s" % (place, node["kind"].lower(), " %d" % node["para_no"] if node.get("para_no") else "")
@@ -808,6 +814,7 @@ def passage_label(node):
     return "%s `%s`, %s %s" % (node["kind"].lower(), node["name"], node["file"], lines)
 
 def letters_for(count):
+    """A, B, ... Z, AA, AB, ... for the passages of one question."""
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     return [alphabet[i] if i < 26 else alphabet[i // 26 - 1] + alphabet[i % 26] for i in range(count)]
 
@@ -913,6 +920,7 @@ JUDGE_RELATIONS = {"judge-unit-to-canon": ("implements", "partly implements", "d
                    "judge-doc-to-model": ("describes", "inconsistent with")}
 
 def validate_judge(question, answer):
+    """The answer to a judge question: its shape, the letters it names, its quotations, planted passages, self-contradiction."""
     allowed = {"matches", "none_reason", "states_nothing_checkable"}
     if not isinstance(answer.get("matches"), list) or set(answer) - allowed:
         raise Rejected(shared.REJECTION_REASONS[0])
@@ -1032,7 +1040,7 @@ def judge_links(ctx):
     """Steps 07 and 09, skill judge-links. Builds one question per unit and corner, asks them
     through ask(), and turns ACCEPTED answers into `corresponds` edges with the relation
     word, the confidence, both quotations and the proposal reason. Rejected answers leave
-    the unit without a link and are recorded for account-coverage. Enforces: R1, R3"""
+    the unit without a link and are recorded for account-coverage. Enforces: R3, R4"""
     search_pass, settings = int(ctx.options.get("pass", 1)), ctx.settings
     world = build_world(ctx, search_pass)
     world["search_records"] = [r for r in ctx.read("search_records") if r["search_pass"] == search_pass]

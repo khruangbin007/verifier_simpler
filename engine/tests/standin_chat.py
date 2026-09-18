@@ -56,7 +56,7 @@ def snippet(text, shared_words, length=6):
     return text[:60]
 
 
-def formula_score(unit, text):
+def formula_score(unit, text, code=None):
     """How alike a formula-like passage and a unit are: shared short symbols (whatever their
     capital letters) and shared whole numbers of three digits or more."""
     in_words = any(phrase in text.lower() for phrase in ("product of", "sum of", "divided by"))
@@ -67,7 +67,10 @@ def formula_score(unit, text):
     if in_words:                                     # a formula stated in words: two shared symbols are enough
         return 3 if len(symbols(unit) & symbols(text)) >= 2 else 0
     integers = lambda t: set(re.findall(r"(?<![\w.])\d{3,}(?![\w.])", t))
-    return len(symbols(unit) & symbols(text)) + 2 * len(integers(unit) & integers(text))
+    single = {s for s in symbols(text) if len(s) == 1}
+    initials = {s[0] for s in symbols(unit if code is None else code) if len(s) > 1}       # names in the code itself, not in prose about it
+    by_initial = len(single) if len(single) >= 2 and single <= initials else 0          # W for weight, R for rate: only when every letter fits
+    return len(symbols(unit) & symbols(text)) + by_initial + 2 * len(integers(unit) & integers(text))
 
 
 def judge(question_type, prompt, agree_with_all=False):
@@ -79,8 +82,8 @@ def judge(question_type, prompt, agree_with_all=False):
         score = len(shared_words) + 2 * len(unit_numbers & numbers_of(text))
         if agree_with_all or score >= 4:
             scored.append((score, letter, text, shared_words))
-        elif formula_score(unit, text) >= 3:
-            formulas.append((formula_score(unit, text), letter, text, shared_words))
+        elif formula_score(unit, text, block_after(prompt, "UNIT")) >= 3:
+            formulas.append((formula_score(unit, text, block_after(prompt, "UNIT")), letter, text, shared_words))
     scored.sort(key=lambda entry: (-entry[0], entry[1]))
     formulas.sort(key=lambda entry: (-entry[0], entry[1]))
     matches = []

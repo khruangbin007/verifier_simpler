@@ -187,6 +187,7 @@ class LiveValues:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def update(self, llm_endpoint="", llm_token="", llm_user_id=""):
+        """Take the latest widget values; a different token starts a new generation."""
         with self.lock:
             if llm_token and llm_token != self.values.get("llm_token"):
                 self.generation += 1
@@ -195,10 +196,12 @@ class LiveValues:
             self.values = {"llm_endpoint": llm_endpoint, "llm_token": llm_token, "llm_user_id": llm_user_id}
 
     def get(self, name):
+        """One live value, read at the moment chat() is called."""
         with self.lock:
             return self.values.get(name, "")
 
     def token_age_minutes(self):
+        """Minutes since the current token was pasted."""
         return (time.time() - self.set_at) / 60.0 if self.set_at else 0.0
 
     def redact(self, text):
@@ -231,10 +234,12 @@ class AuditStore:
     synced: dict = field(default_factory=dict)
 
     def path(self, kind):
+        """The local path of one kind of audit file."""
         extension = ".json" if kind in AUDIT_OBJECTS else ".jsonl"
         return os.path.join(self.local_dir, kind + extension)
 
     def read(self, kind):
+        """Every record of one kind, in the order written."""
         if kind == "llm_calls":
             return self.read_calls()
         if not os.path.exists(self.path(kind)):
@@ -245,6 +250,7 @@ class AuditStore:
             return [json.loads(line) for line in handle if line.strip()]
 
     def append(self, kind, records):
+        """Append records of one kind; the three single-object kinds are rewritten whole."""
         if kind in AUDIT_OBJECTS:
             with open(self.path(kind), "w", encoding="utf-8") as handle:
                 handle.write(json.dumps(shared.to_plain(records[-1]), sort_keys=True, indent=1, ensure_ascii=False))
@@ -254,6 +260,7 @@ class AuditStore:
                 handle.write(shared.canonical_json(record) + "\n")
 
     def call_files(self):
+        """The gzip files of call records, in order."""
         names = sorted(n for n in os.listdir(self.local_dir) if re.fullmatch(r"llm_calls_\d{3}\.jsonl\.gz", n))
         return [os.path.join(self.local_dir, n) for n in names]
 
@@ -270,6 +277,7 @@ class AuditStore:
                     handle.write((shared.canonical_json(record) + "\n").encode("utf-8"))
 
     def read_calls(self):
+        """Every call record of the run, in the order written."""
         records = []
         for path in self.call_files():
             with gzip.open(path, "rt", encoding="utf-8") as handle:
@@ -297,6 +305,7 @@ class AuditStore:
             shutil.copytree(self.remote_dir, self.local_dir, dirs_exist_ok=True)
 
 def open_store(paths, settings):
+    """The audit store of a run, restored from the run folder when local scratch is empty."""
     store = AuditStore(paths.local_dir, paths.audit_dir, int(settings["llm_file_roll_mb"] * 1024 * 1024))
     store.restore()
     return store
@@ -469,7 +478,7 @@ HUMAN_MESSAGES = {
                             "yellow columns on Flagged_Items, upload it into Outputs/ and run cell 14."}
 
 def load_pipeline(engine_dir=ENGINE_DIR):
-    """Read pipeline.yaml and refuse anything that is not a known skill and function."""
+    """Read pipeline.yaml and refuse anything that is not a known skill and function. Enforces: R11"""
     with open(os.path.join(engine_dir, "pipeline.yaml"), encoding="utf-8") as handle:
         pipeline = yaml.safe_load(handle)
     declared = dict(SKILL_VERSIONS)
@@ -489,6 +498,7 @@ def load_pipeline(engine_dir=ENGINE_DIR):
     return pipeline
 
 def update_manifest(store, changes):
+    """Change fields of the run manifest and write it back."""
     manifest = (store.read("run_manifest") or [{}])[0]
     manifest.update(changes)
     store.append("run_manifest", [manifest])
@@ -576,6 +586,7 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     store.sync()
 
 def record_step(store, step, result, seconds):
+    """Leave the step record that makes a finished step visible and resume possible."""
     produced = {kind: len(records) for kind, records in sorted(result.records.items())}
     store.append("step_records", [{
         "step_id": step["id"], "skill": step["skill"], "skill_version": step["skill_version"],
@@ -593,6 +604,7 @@ PACKAGES_RECORDED = ("PyYAML", "openpyxl", "python-docx", "numpy", "scipy", "sym
                      "pdfplumber", "pypdf", "pyreadr")
 
 def fingerprint_file(path, corner, inputs_dir):
+    """Name, corner, size, SHA-256 and content identifier of one input file."""
     with open(path, "rb") as handle:
         data = handle.read()
     return {"corner": corner, "file": os.path.relpath(path, inputs_dir).replace(os.sep, "/"),
@@ -694,6 +706,7 @@ def run_identity(store, paths):
             "determinations_fingerprint": "DR-" + shared.chain_head(decisions)[:12] if decisions else ""}
 
 def rows_package_info(store, paths, settings, progress):
+    """The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls."""
     identity, rows = run_identity(store, paths), []
     def add(group, item, value):
         rows.append({"group": group, "item": item, "value": value})
@@ -733,6 +746,7 @@ def rows_package_info(store, paths, settings, progress):
     return rows
 
 def chunk_note(chunk):
+    """What a reader should know about one chunk: unreadable, how an equation was read, reconstructed numbering."""
     notes = ["Could not be read: %s" % chunk["not_read_reason"]] if chunk.get("not_read_reason") else []
     equation = chunk.get("equation") or {}
     if chunk["kind"] == "Equation" and not equation.get("readable"):
@@ -746,6 +760,7 @@ def chunk_note(chunk):
     return "; ".join(notes)
 
 def rows_chunks(chunks):
+    """The rows of Chunks_Canon and Chunks_Doc."""
     rows = []
     for chunk in chunks:
         rows.append({"ref": chunk["ref"], "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
@@ -755,6 +770,7 @@ def rows_chunks(chunks):
     return rows
 
 def unit_expression(unit):
+    """A unit's formula or arguments as shown on Chunks_Model."""
     code, data = unit.get("code") or {}, unit.get("data") or {}
     if unit["kind"] == shared.KIND_FUNCTION:
         formals = ["%s = %s" % (n, d) if d not in (None, "") else n for n, d in code.get("formals", [])]
@@ -767,6 +783,7 @@ def unit_expression(unit):
     return ""
 
 def rows_model_units(units):
+    """The rows of Chunks_Model."""
     rows = []
     for unit in units:
         code = unit.get("code") or {}
@@ -845,12 +862,14 @@ def rows_coverage(model_rows, doc_rows, store):
     return rows
 
 def latest_determinations(store):
+    """The last recorded determination of every item."""
     latest = {}
     for record in store.read("determinations"):
         latest[record["item_id"]] = record
     return latest
 
 def rows_flagged(store):
+    """The rows of Flagged_Items with the latest determination of each item."""
     latest, rows = latest_determinations(store), []
     for item in store.read("flagged_items"):
         decided = latest.get(item["item_id"])
@@ -864,6 +883,7 @@ def rows_flagged(store):
     return rows
 
 def sheet_rows(store, paths, settings, progress):
+    """The rows of all eight sheets, by sheet name."""
     model_rows, doc_rows = rows_mapping(store, "model"), rows_mapping(store, "doc")
     for row in model_rows + doc_rows:
         for name, text in row.pop("cells").items():
@@ -890,6 +910,7 @@ def check_written_totals(rows, store):
                 "from the rows written to the workbook. This is a defect in AIVA, not in the model under review." % corner)
 
 def load_layout():
+    """The workbook layout from references/workbook_layout.yaml."""
     with open(os.path.join(REFERENCES_DIR, "workbook_layout.yaml"), encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 
@@ -948,10 +969,12 @@ def build_workbook(store, paths, settings, progress, target):
 
 # ---------------------------------------------------------------- rebuilding the outputs
 def file_sha256(path):
+    """SHA-256 of a file's bytes."""
     with open(path, "rb") as handle:
         return shared.sha256_bytes(handle.read())
 
 def progress_text(store, waiting_message):
+    """Where the run stands, in one or two plain sentences."""
     records = store.read("step_records")
     if not records:
         return "The run has been opened; no step has finished yet."
@@ -989,6 +1012,7 @@ def rebuild_outputs(store, paths, settings, waiting_message):
 
 # ---------------------------------------------------------------- Run_Summary.docx
 def docx_table(document, header, rows):
+    """A plain table in a Word document, header row in bold."""
     table = document.add_table(rows=1, cols=len(header))
     table.style = "Table Grid"
     for cell, text in zip(table.rows[0].cells, header):
@@ -1167,7 +1191,7 @@ def record_determinations(ctx):
 # ---------------------------------------------------------------- Validation_Report.docx
 def build_report_file(store, paths, settings, target):
     """The report, in the eight parts of plan 2.11, built from the same records as the
-    workbook. Items are ordered by item id and never ranked. Enforces: R10"""
+    workbook. Items are ordered by item id and never ranked. Enforces: R1, R10"""
     import docx
     from docx.enum.section import WD_ORIENT
     identity, document = run_identity(store, paths), docx.Document()

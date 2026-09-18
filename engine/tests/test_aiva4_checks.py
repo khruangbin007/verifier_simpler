@@ -217,6 +217,15 @@ class SeededSample(unittest.TestCase):
         with self.assertRaisesRegex(checks.AivaDefect, "Part 3"):
             checks.check_identity([u for u in units if u["file"] != "R/utils.R"], doc, [s for s in statuses if self.units.get(s["unit_ref"], {}).get("file") != "R/utils.R"], items, world, info)
 
+    def test_every_status_was_decided_by_a_rule_of_the_ordered_list(self):
+        listed = {(corner, name) for corner, name, _, _ in checks.STATUS_RULES}
+        for status in self.status.values():
+            self.assertIn((status["corner"], status["decided_by_rule"]), listed)
+        import inspect
+        source = inspect.getsource(checks.model_unit_outcome) + inspect.getsource(checks.doc_unit_outcome) + inspect.getsource(checks.account_coverage)
+        for corner, name, _, _ in checks.STATUS_RULES:
+            self.assertIn('"%s"' % name, source, "a listed rule that the code does not use: " + name)
+
     def test_items_carry_a_path_side_by_side_texts_and_a_neutral_next_step(self):
         item = next(i for i in self.items if i["category"] == shared.CAT_VALUE_DIFFERS)
         self.assertIn("Supporting path:", item["observed"])

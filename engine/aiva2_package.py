@@ -21,7 +21,7 @@ DESIGN RULES ENFORCED HERE (function names in brackets)
   R2  no file and no line is lost: a file or expression that cannot be read becomes a unit
       of kind "File not read" with a plain reason      [units_from_r_source, read_package]
   R5  same tarball, same units in the same order       [read_package sorts the inventory]
-  R6  the tarball is only read; unpacking goes to scratch space, member by member, refusing
+  R6  the tarball is only read; it is unpacked in memory, member by member, refusing
       absolute paths, parent-directory escapes, links and oversized members [unpack_package]
   R7  nothing from the package is executed: code is parsed, data is decoded, example code
       is parsed only                                   [parse_r_source, decode_data_file]
@@ -106,6 +106,7 @@ def read_namespace(text):
     return {"exports": exports, "patterns": patterns}
 
 def is_exported(name, namespace):
+    """Is `name` exported by this NAMESPACE (by name, by pattern or as an S3 method)? None when there is no NAMESPACE."""
     if namespace is None:
         return None
     return name in namespace["exports"] or any(re.search(pattern, name) for pattern in namespace["patterns"])
@@ -190,11 +191,13 @@ class RParser:
         self.tokens, self.position, self.open_brackets, self.last_line = tokens, 0, [], 1
 
     def peek(self):
+        """The token at the reading position, without taking it."""
         while self.tokens[self.position].kind == "newline" and self.open_brackets and self.open_brackets[-1] != "{":
             self.position += 1
         return self.tokens[self.position]
 
     def take(self, text=None):
+        """Take the next token; with `text`, insist that it is that token."""
         token = self.peek()
         if text is not None and not (token.kind == "op" and token.text == text):
             raise NotParsed("line %d: '%s' was expected where '%s' stands" % (token.line, text, token.text or "the end of the file"))
@@ -203,14 +206,17 @@ class RParser:
         return token
 
     def skip_newlines(self):
+        """Skip line ends where R allows an expression to go on."""
         while self.tokens[self.position].kind == "newline":
             self.position += 1
 
     def is_op(self, *texts):
+        """Is the next token one of these operators?"""
         token = self.peek()
         return token.kind == "op" and token.text in texts
 
     def expression(self, minimum=0):
+        """Operator-precedence parsing of one expression; `minimum` is the weakest binding still accepted."""
         left = self.prefix()
         while True:
             token = self.peek()
@@ -235,6 +241,7 @@ class RParser:
                 left = Node("binary", "^" if token.text == "**" else token.text, (left, right), line=left.line, end_line=self.last_line)
 
     def finish_paren(self):
+        """A bracketed expression, after its opening bracket."""
         self.open_brackets.append("(")
         inner = self.expression()
         self.open_brackets.pop()
@@ -242,6 +249,7 @@ class RParser:
         return inner
 
     def prefix(self):
+        """What an expression can start with: a literal, a name, a unary sign, a bracket, a block or a keyword."""
         token = self.take()
         if token.kind in ("num", "str"):
             return Node(token.kind, token.text, line=token.line, end_line=token.line)
@@ -266,6 +274,7 @@ class RParser:
         raise NotParsed("line %d: '%s' stands where an expression should start" % (token.line, token.text or "the end of the file"))
 
     def block(self, opening):
+        """The expressions between curly brackets."""
         self.open_brackets.append("{")
         statements = []
         while True:
@@ -281,6 +290,7 @@ class RParser:
         return Node("block", args=tuple(statements), line=opening.line, end_line=self.last_line)
 
     def condition(self):
+        """The bracketed condition of if and while."""
         self.take("(")
         self.open_brackets.append("(")
         inner = self.expression()
@@ -290,6 +300,7 @@ class RParser:
         return inner
 
     def keyword(self, token):
+        """if, for, while, repeat, function and the other reserved words."""
         if token.text == "function":
             return self.function(token)
         if token.text == "if":
@@ -326,6 +337,7 @@ class RParser:
         raise NotParsed("line %d: '%s' stands where an expression should start" % (token.line, token.text))
 
     def function(self, token):
+        """A function definition: its formal arguments with their defaults as written, and its body."""
         self.take("(")
         self.open_brackets.append("(")
         names, defaults = [], []
@@ -348,6 +360,7 @@ class RParser:
         return Node("function", args=tuple(defaults) + (body,), names=tuple(names), line=token.line, end_line=self.last_line)
 
     def call_or_index(self, target):
+        """Calls and the three kinds of indexing that may follow an expression."""
         opening = self.take()
         closer = ")" if opening.text == "(" else "]"
         self.open_brackets.append("(" if opening.text == "(" else "[")
@@ -576,6 +589,7 @@ def to_expr(node, function_map, known):
     raise CannotConvert("it uses '%s', which AIVA cannot turn into a formula" % unparse(node)[:40])
 
 def call_to_expr(node, function_map, known):
+    """A call in R to the neutral expression tree, through r_function_map.yaml; anything else cannot be converted."""
     name = callee_name(node)
     if name == "return" and len(node.args) == 2:
         return to_expr(node.args[1], function_map, known)
@@ -645,6 +659,7 @@ def draft(kind, path, lines, name, text, **more):
     return unit
 
 def code_detail(node, function_map, settings, **more):
+    """The facts about a piece of code that later steps use: symbols, numbers, calls, strings, expression."""
     facts = code_facts(node)
     return dict(facts, formals=(), exported=None, expression=None, reads_data=(), plumbing=False,
                 plumbing_reason="", composed=None, not_composed_reason="", **more)
@@ -981,6 +996,7 @@ def table_of(value):
     return None
 
 def column_kind(cells):
+    """Is a column made of numbers, of text, or of both?"""
     values = [cell for cell in cells if cell != "NA"]
     if values and all(re.fullmatch(r"-?\d+", cell) for cell in values):
         return "integer"
@@ -1075,6 +1091,7 @@ def decode_data_file(path, data, settings):
     return units, tables, fact
 
 def data_object_unit_from_rows(name, header, rows, path, settings):
+    """A unit for a table given as header and rows (delimited text files under data/ or inst/extdata/)."""
     import pandas
     width = len(header)
     frame = pandas.DataFrame([list(row) + [""] * (width - len(row)) for row in rows], columns=header)
@@ -1117,12 +1134,14 @@ def data_reads(function_node, formals, data_names, data_files):
 DATA_EXTENSIONS = (".rda", ".rdata", ".rds")
 
 def is_data_file(path):
+    """Does this path name a stored-data file that AIVA decodes?"""
     lowered = path.lower()
     if lowered.endswith(DATA_EXTENSIONS):
         return True
     return lowered.endswith((".csv", ".tsv")) and lowered.split("/")[0] in ("data", "inst")
 
 def is_parsed_r_file(path):
+    """Is this an R source file in a folder whose code AIVA parses?"""
     return path.lower().endswith(".r") and path.lower().split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo")
 
 def file_units(path, data, context, facts):

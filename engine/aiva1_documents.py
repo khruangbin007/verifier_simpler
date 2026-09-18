@@ -101,10 +101,12 @@ class FormulaReader:
         self.functions, self.implicit_product = notation.get("functions", {}), implicit_product
 
     def peek(self, offset=0):
+        """The token at the reading position (or further on), without taking it."""
         index = self.position + offset
         return self.tokens[index] if index < len(self.tokens) else ("end", "")
 
     def take(self, sign=None):
+        """Take the next token; with `sign`, insist that it is that sign."""
         token = self.peek()
         if sign is not None and token != ("sign", sign):
             raise NotReadable("a '%s' was expected where '%s' stands" % (sign, token[1] or "the end"))
@@ -112,6 +114,7 @@ class FormulaReader:
         return token
 
     def statement(self):
+        """A whole formula: an expression, or `left = right`."""
         left = self.comparison()
         if self.peek() == ("sign", "="):
             self.take()
@@ -121,6 +124,7 @@ class FormulaReader:
         return left
 
     def comparison(self):
+        """An expression, optionally compared with another one."""
         left = self.sum()
         if self.peek()[0] == "sign" and self.peek()[1] in ("<", ">", "<=", ">="):
             sign = self.take()[1]
@@ -128,6 +132,7 @@ class FormulaReader:
         return left
 
     def sum(self):
+        """Terms joined by + and -, from left to right."""
         left = self.product()
         while self.peek() in (("sign", "+"), ("sign", "-")):
             op = "add" if self.take()[1] == "+" else "sub"
@@ -135,6 +140,7 @@ class FormulaReader:
         return left
 
     def product(self):
+        """Factors joined by * and /, from left to right; juxtaposition only where the source allows it."""
         left = self.unary()
         while True:
             if self.peek() in (("sign", "*"), ("sign", "/")):
@@ -146,10 +152,12 @@ class FormulaReader:
                 return left
 
     def term_follows(self):
+        """Does another factor start here without a sign in between?"""
         kind, text = self.peek()
         return kind in ("number", "name") or (kind == "sign" and text in ("(", "\u221a"))
 
     def unary(self):
+        """A leading minus or plus. It binds less tightly than a power, as in mathematics and in R."""
         if self.peek() == ("sign", "-"):
             self.take()
             return shared.Expr("neg", args=(self.unary(),))
@@ -159,6 +167,7 @@ class FormulaReader:
         return self.power()
 
     def power(self):
+        """A base with an optional power (right-associative), an inverse-function mark or a percent sign."""
         base = self.atom()
         if self.peek() == ("sign", "^"):
             self.take()
@@ -178,6 +187,7 @@ class FormulaReader:
         return 0
 
     def atom(self):
+        """A number, a symbol, a function call or a bracketed expression."""
         kind, text = self.take()
         if kind == "number":
             return shared.Expr("num", value=text)
@@ -259,12 +269,14 @@ def local_name(tag):
     return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
 
 def attribute(element, name):
+    """The value of an attribute, whatever namespace prefix it carries."""
     for key, value in element.attrib.items():
         if local_name(key) == name:
             return value
     return ""
 
 def child_named(element, name):
+    """The first child with this local tag name, or None."""
     for child in element:
         if local_name(child.tag) == name:
             return child
@@ -350,6 +362,7 @@ def math_children(element):
     return re.sub(r"\s+", " ", "".join(pieces)).strip()
 
 def strip_outer_brackets(text):
+    """Remove one pair of brackets that encloses the whole text."""
     text = text.strip()
     return text[1:-1] if text.startswith("(") and text.endswith(")") and text.count("(") == 1 else text
 
@@ -503,6 +516,7 @@ class TolerantReader(html.parser.HTMLParser):
         self.builder.start("aiva-root", {})
 
     def handle_starttag(self, tag, attrs):
+        """Open an element, first closing what HTML closes implicitly."""
         while self.open_tags and self.open_tags[-1] in IMPLIED_END.get(tag, ()):       # <p> ends an open <p>, as browsers read it
             self.builder.end(self.open_tags.pop())
         self.builder.start(tag, {name: value or "" for name, value in attrs})
@@ -512,10 +526,12 @@ class TolerantReader(html.parser.HTMLParser):
             self.open_tags.append(tag)
 
     def handle_startendtag(self, tag, attrs):
+        """An element written as empty: opened and closed at once."""
         self.builder.start(tag, {name: value or "" for name, value in attrs})
         self.builder.end(tag)
 
     def handle_endtag(self, tag):
+        """Close the nearest open element of this name; a stray end tag is recorded as a repair."""
         if tag not in self.open_tags:
             return                                       # an end tag that closes nothing is ignored
         while self.open_tags:
@@ -525,9 +541,11 @@ class TolerantReader(html.parser.HTMLParser):
                 return
 
     def handle_data(self, data):
+        """Text between tags."""
         self.builder.data(data)
 
     def handle_comment(self, data):
+        """Keep equation markup that Word's web export hides in conditional comments; drop other comments."""
         preserved = re.match(r"\[if[^\]]*msEquation[^\]]*\]>(.*)<!\[endif\]", data, re.S)
         if preserved and "omath" in preserved.group(1).lower():
             self.builder.start("aiva-preserved-equation", {})
@@ -535,6 +553,7 @@ class TolerantReader(html.parser.HTMLParser):
             self.builder.end("aiva-preserved-equation")
 
     def feed_inner(self, markup):
+        """Read preserved equation markup found inside a comment into the tree being built."""
         inner = TolerantReader()
         inner.feed(markup)
         for child in inner.finish():
@@ -543,6 +562,7 @@ class TolerantReader(html.parser.HTMLParser):
             self.builder.end(child.tag)
 
     def copy_children(self, element):
+        """Copy an element read elsewhere into the tree being built."""
         if element.text:
             self.builder.data(element.text)
         for child in element:
@@ -553,6 +573,7 @@ class TolerantReader(html.parser.HTMLParser):
                 self.builder.data(child.tail)
 
     def finish(self):
+        """Close whatever is still open and return the root element."""
         self.close()
         while self.open_tags:
             self.builder.end(self.open_tags.pop())
@@ -602,6 +623,7 @@ def element_text(element, rules, skip=("figure", "equation", "ignore", "caption"
     return "".join(pieces)
 
 def new_block(kind, text="", locator="", **more):
+    """One block of a document before numbering: kind, text, where it was found, and what its kind needs."""
     block = {"type": kind, "text": shared.normalise_text(text), "locator": locator, "level_hint": None,
              "numbering": "", "caption": "", "table": None, "equation": None, "reconstructed": False,
              "not_read_reason": ""}
@@ -714,6 +736,7 @@ def table_from_rows(rows, locator, caption=""):
     return new_block("table", "", locator, table=table, caption=caption, display=display)
 
 def figure_block(element, here, state):
+    """A figure: never read, kept with its caption or alternative text and the fingerprint of the image."""
     source = element.get("src") or element.get("href") or element.get("fileref") or ""
     inner = next((n for n in element.iter() if n is not element and (n.get("src") or n.get("fileref"))), None)
     if not source and inner is not None:
@@ -748,6 +771,7 @@ def equation_block(element, here, state):
     return new_block("equation", text, here, equation=equation)
 
 def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
+    """XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules."""
     root = parse_markup(text, file_name, repairs, tolerant_only)
     walk_element(root, "", 0, state)
     return state.blocks
@@ -783,6 +807,7 @@ WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
            "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
 
 def word_value(element, path, attribute_name="val"):
+    """The value of a Word property such as a style id or an outline level, or None."""
     found = element.find(path, WORD_NS)
     return found.get("{%s}%s" % (WORD_NS["w"], attribute_name)) if found is not None else None
 
@@ -823,6 +848,7 @@ def docx_paragraph_parts(paragraph):
     return "".join(pieces), formulas, pictures
 
 def docx_figure(picture, related, locator):
+    """A picture in a Word file as a figure block with the fingerprint of the embedded image."""
     description = next((n.get("descr") or n.get("title") or n.get("name") or "" for n in picture.iter()
                         if local_name(n.tag) == "docpr"), "")
     fingerprint = ""
@@ -958,6 +984,7 @@ def blocks_from_pdf(data, file_name, state):
     return blocks
 
 def blocks_from_pdf_text_only(data, file_name, state):
+    """The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file."""
     try:
         import pypdf
     except ImportError:

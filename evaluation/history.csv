@@ -2,3 +2,7 @@ date,sample,chat,mutants,flagged_as_expected,flagged_otherwise,not_flagged,false
 2026-09-18,F_capital,stand-in,3,1,0,2,1,36
 2026-09-18,F_capital,stand-in,56,44,1,11,1,36
 2026-09-18,F_capital,stand-in,56,54,1,1,0,36
+2026-09-18,D_dosing,stand-in,16,14,0,2,0,9
+2026-09-18,D_dosing,stand-in,16,15,0,1,0,9
+2026-09-18,D_dosing,stand-in,16,15,0,1,0,9
+2026-09-18,D_dosing,stand-in,16,15,0,1,0,9

@@ -101,6 +101,23 @@ class Search(unittest.TestCase):
         weights = mapping.anchor_weights(mentions, dict(self.settings, anchor_max_share=0.10))
         self.assertEqual(list(weights), [("number", "0.999")])
 
+    def test_the_walk_agrees_with_an_independent_personalised_pagerank(self):
+        try:
+            import networkx
+        except ImportError:
+            self.skipTest("networkx is only present in the build environment")
+        mentions = {("number", "0.999"): ["M-1", "C-1", "C-4"], ("symbol", "rho"): ["M-1", "C-1", "C-2"], ("term", "floor"): ["M-2", "C-3", "C-2"], ("number", "0.03"): ["M-2", "C-3"]}
+        weights = mapping.anchor_weights(mentions, dict(self.settings, anchor_max_share=1.0))
+        ours = mapping.restart_walk(mentions, weights, ["M-1"], dict(self.settings, walk_rounds=200))["M-1"]
+        graph = networkx.Graph()
+        for anchor, refs in mentions.items():
+            for ref in refs:
+                graph.add_edge(ref, "anchor:%s:%s" % anchor, weight=weights[anchor])
+        theirs = networkx.pagerank(graph, alpha=1 - self.settings["walk_restart"], personalization={"M-1": 1.0}, weight="weight", tol=1e-12, max_iter=1000)
+        for ref in ("C-1", "C-2", "C-3", "C-4"):
+            self.assertAlmostEqual(ours.get(ref, 0.0), theirs[ref], places=6)
+        self.assertEqual(sorted(ours, key=lambda ref: -ours[ref])[0], "C-1")
+
     def test_fusion_is_by_rank_only_and_ties_break_by_reference(self):
         fused = mapping.fuse({"fields": ["C-2", "C-1"], "anchors": ["C-1", "C-2"]}, self.settings)
         self.assertEqual([ref for ref, _, _ in fused], ["C-1", "C-2"])
