@@ -1,5 +1,6 @@
 """The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a
 change in the engine that would break a cell is seen before an analyst sees it."""
+import ast
 import contextlib
 import io
 import json
@@ -31,6 +32,29 @@ class FakeDbutils:
 
 
 class NotebookCells(unittest.TestCase):
+    def test_every_code_cell_is_valid_python(self):
+        """The cells are written as text by build_notebook.py, where a mis-escaped backslash
+        can put a real line break inside a string. An analyst would meet that as a syntax
+        problem in the notebook, so it is caught here instead."""
+        notebook = json.load(open(os.path.join(helpers.ROOT_DIR, "AIVA_Interface.ipynb"), encoding="utf-8"))
+        for number, cell in enumerate(notebook["cells"], start=1):
+            if cell["cell_type"] == "code":
+                source = "".join(cell["source"])
+                try:
+                    ast.parse(source)
+                except SyntaxError as problem:
+                    self.fail("cell %d does not parse: %s" % (number, problem))
+
+    def test_no_package_is_installed_from_an_index_nobody_named(self):
+        """Cell 2 runs before cell 3 makes the widgets, so on a fresh notebook the index URL
+        is not there yet. It must not fall through to pip's own default index in silence."""
+        source = "".join(json.load(open(os.path.join(helpers.ROOT_DIR, "AIVA_Interface.ipynb"),
+                                        encoding="utf-8"))["cells"][1]["source"])
+        self.assertIn('dbutils.widgets.text("jfrog_index_url"', source,
+                      "cell 2 makes the widget itself, because cell 3 cannot run before the packages are in")
+        self.assertIn("ALLOW_DEFAULT_INDEX", source, "pip's own default index is a decision, never a fallback")
+        self.assertIn("returncode", source, "a failed install must not look like a finished one")
+
     def test_the_cells_run_from_setup_to_verification_with_the_stand_in(self):
         with open(os.path.join(helpers.ROOT_DIR, "AIVA_Interface.ipynb"), encoding="utf-8") as handle:
             cells = ["".join(c["source"]) for c in json.load(handle)["cells"]]

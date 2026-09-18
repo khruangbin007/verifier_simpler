@@ -25,7 +25,7 @@ markdown("""
 
 **How to use this notebook.** Run the cells from top to bottom; every cell says in plain words what it did and what comes next.
 
-1. Cell 2 installs the packages (once per cluster start). Cell 3 creates the widgets at the top of the notebook.
+1. Paste your index URL into the widget **08 JFrog index URL**, then run cell 2 to install the packages (once per cluster start). Cell 3 makes the remaining widgets.
 2. Enter the **model ID**. Paste your `chat()` definition into cell 6, the only cell you edit. Paste the LLM endpoint, token and user id into their widgets.
 3. Cell 8 creates the project folders. Upload the methodology, the package tarball and the model documentation into the three `Inputs` folders it names.
 4. Cell 9 reads the inputs. Open `Outputs/Output.xlsx`, check *Level* and *Section (heading chain)* on sheet `Chunks_Canon` against the methodology's own outline, then run cell 10.
@@ -35,25 +35,43 @@ markdown("""
 AIVA raises *flagged items* for a person to decide. It rates nothing, and it never changes your input files.
 """)
 
-code("Cell 2 - install packages from the JFrog index, then restart Python", '''
-# Run once after the cluster starts. The index URL comes from the widget "JFrog index URL" (cell 3 creates it;
-# on the very first run the default below is used). After the restart, continue with cell 3.
-import os, subprocess, sys
+code("Cell 2 - install packages from the JFrog index, then restart Python", r"""
+# Run once after the cluster starts. This cell makes the "08 JFrog index URL" widget itself, because
+# cell 3 cannot run until these packages are in. Paste your index URL into that widget at the top of
+# the notebook, then run this cell again. After the restart, continue with cell 3.
+import os, re, subprocess, sys
+
+ALLOW_DEFAULT_INDEX = False      # True only on a cluster meant to install from pip's own default index
+
 try:
-    index_url = dbutils.widgets.get("jfrog_index_url")
+    dbutils.widgets.text("jfrog_index_url", "", "08 JFrog index URL")    # the widget cell 3 makes; the value is kept
+    index_url = dbutils.widgets.get("jfrog_index_url").strip()
 except Exception:
     index_url = ""
 here = os.getcwd()
 requirements = next((p for p in (os.path.join(here, "engine", "requirements.txt"), os.path.join(os.path.dirname(here), "engine", "requirements.txt")) if os.path.exists(p)), "")
-command = [sys.executable, "-m", "pip", "install", "-r", requirements] + (["--index-url", index_url] if index_url else [])
-print("Installing from", requirements or "(requirements.txt was not found beside the notebook)")
-if requirements:
-    print(subprocess.run(command, capture_output=True, text=True).stdout[-1500:])
-    try:
-        dbutils.library.restartPython()
-    except Exception:
-        print("Please restart the Python process by hand, then go on with cell 3.")
-''')
+hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")         # an index URL can carry a credential
+
+if not requirements:
+    print("requirements.txt was not found beside the notebook. Nothing was installed.")
+elif not index_url and not ALLOW_DEFAULT_INDEX:
+    print("No index URL yet, so nothing was installed: packages are never taken from an index you did not name.")
+    print("Paste it into the widget '08 JFrog index URL' at the top of this notebook, then run this cell again.")
+    print("To use pip's own default index instead, set ALLOW_DEFAULT_INDEX = True above.")
+else:
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements] + (["--index-url", index_url] if index_url else [])
+    print("Installing", requirements, "from", "the index in the widget." if index_url else "pip's own default index.")
+    done = subprocess.run(command, capture_output=True, text=True)
+    print(hide(done.stdout)[-1500:])
+    if done.returncode:
+        print("The install did not finish, so do not go on to cell 3. What pip said:")
+        print(hide(done.stderr)[-1500:])
+    else:
+        try:
+            dbutils.library.restartPython()
+        except Exception:
+            print("Please restart the Python process by hand, then go on with cell 3.")
+""")
 
 code("Cell 3 - widgets and import path", '''
 import datetime, os, sys, threading, time

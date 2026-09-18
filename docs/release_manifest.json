@@ -1,7 +1,7 @@
 {
  "engine_version": "0.0.1",
  "files": {
-  "AIVA_Interface.ipynb": "3f70eaf20138c77ea6a238b2dbcc838f5bb0c8ef7aeb7d06b11fd35e6f1ff189",
+  "AIVA_Interface.ipynb": "2a98e003615f90cd62d36f0cd3cfdcb33f15ccfe1ad18efb6c11e30ab1807dcf",
   "engine/aiva0_shared.py": "f7505038dce430157854b37e647ddc8088b3e6d368a6f852161f11be1870e635",
   "engine/aiva1_documents.py": "19591fb9cce4ac5e1cc0de23d5df7a0fdcfc33c59443ae4175c1ffb914fcb6ee",
   "engine/aiva2_package.py": "40a6eb5d378e15d1e12679c3b81edb62cee261823085afab0b0abc72b190bdcd",
@@ -41,7 +41,7 @@
   "engine/skills/read-package/SKILL.md": "2dbd7c6de54a376943c460b7596a678b570540d81feca9ef521713a6e8e1a41d",
   "engine/skills/record-determinations/SKILL.md": "ee3ce5e06e9d3b421594961dff7c2c1174df2254a74cc18dac86ab772939e769",
   "tools/build_manual.py": "55712efa2fe573311e6921135bf6020b035ce4d57a6e189f34c6376ce1cba391",
-  "tools/build_notebook.py": "d9b7aa400aef118eb0497f09a3f83159b0b9084b981584cbe541f8a761e001d9",
+  "tools/build_notebook.py": "d1a57b1520bc923566c910c0de73ffbca0a1c50e087bf4a7898cbbd812dda589",
   "tools/build_samples.py": "afff6fb860d0a618ca6aa3a83be6079b79a86d5cab94f982bfbd94a9ff1d5c9e",
   "tools/check_docs.py": "ccf2d7d929bfd0d275549bf9af1f064cb146188200c4f37dfea54b748cff5705",
   "tools/count_lines.py": "cc541ed7cd894c6ad9c0319139b2a1b73e285700e8bb57a3a430bea0996177f8",
