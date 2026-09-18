@@ -33,6 +33,7 @@ HOW TO SANITY-CHECK IT
 """
 import concurrent.futures
 import datetime
+import getpass
 import gzip
 import inspect
 import json
@@ -143,13 +144,41 @@ def new_run_id(project_dir, now=None):
             return base + suffix
     raise ValueError("Too many runs were started in the same minute; please wait a minute.")
 
+def pick_scratch_root(preferred=""):
+    """The first folder on the driver AIVA can actually write in, tried in order.
+
+    A run is built on the driver's own disk and copied whole into the Workspace afterwards
+    (R12), so this folder is needed before anything else can happen. A cluster is shared, and
+    a scratch folder made by one user cannot be written into by another; the folders tried
+    here therefore carry the user's own name. Writing is tested, not assumed, because a
+    folder can exist and still refuse."""
+    user = re.sub(r"[^A-Za-z0-9_.-]", "_", getpass.getuser() or "user")
+    refused = []
+    for root in ([preferred] if preferred else []) + [
+            os.path.join(tempfile.gettempdir(), "aiva_scratch_" + user),
+            os.path.join("/local_disk0", "aiva_scratch_" + user)]:
+        try:
+            os.makedirs(root, exist_ok=True)
+            probe = os.path.join(root, ".aiva_write_test")
+            with open(probe, "w") as handle:
+                handle.write("x")
+            os.remove(probe)
+            return root
+        except OSError as problem:
+            refused.append("%s (%s)" % (root, problem.strerror or problem))
+    raise PermissionError(
+        "AIVA builds each run on the driver's own disk and copies the finished files into the "
+        "Workspace, so it needs one folder it may write in. These were refused: %s. Put a "
+        "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
+        "cluster." % "; ".join(refused))
+
 def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root="", now=None):
     """Create or re-open a run folder and its local scratch folder. Enforces: R6"""
     project_dir, _ = setup_project(projects_dir, model_id, project_date)
     project_date = os.path.basename(project_dir)
     run_id = run_id or new_run_id(project_dir, now)
     run_dir = os.path.join(project_dir, run_id)
-    scratch_root = scratch_root or os.path.join(tempfile.gettempdir(), "aiva_scratch")
+    scratch_root = pick_scratch_root(scratch_root)
     place = shared.sha256_text(os.path.abspath(run_dir))[:8]       # two Projects folders never share scratch space
     local_dir = os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run_id, place))
     paths = RunPaths(projects_dir, model_id, project_date, project_dir,

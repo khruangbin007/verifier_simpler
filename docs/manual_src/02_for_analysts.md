@@ -20,7 +20,7 @@ Each Inputs folder holds a README that says what goes in. Optional files directl
 
 ## 5. The notebook, cell by cell
 
-`AIVA_Interface.ipynb` is the only file you open. It has twelve widgets: LLM endpoint, LLM token, LLM user id, model ID, project, run, Projects folder, JFrog index URL, concurrency limit, token cap, reviewer id and reviewer role.
+`AIVA_Interface.ipynb` is the only file you open. It has thirteen widgets: LLM endpoint, LLM token, LLM user id, model ID, project, run, Projects folder, JFrog index URL, concurrency limit, token cap, reviewer id, reviewer role and scratch folder. Leave the scratch folder empty unless AIVA says it cannot write on the driver.
 
 | Cell | What it does |
 |---|---|

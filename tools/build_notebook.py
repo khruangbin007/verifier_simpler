@@ -1,6 +1,6 @@
 """build_notebook.py - writes AIVA_Interface.ipynb, the only file an analyst opens (plan 2.14).
 
-Twelve widgets and eighteen cells. The notebook holds no logic of its own: every cell calls a
+Thirteen widgets and eighteen cells. The notebook holds no logic of its own: every cell calls a
 function of the engine. Run `python tools/build_notebook.py` after changing anything here.
 """
 import json
@@ -96,6 +96,7 @@ def make_widgets():
     w.text("projects_dir", projects_dir, "07 Projects folder"); w.text("jfrog_index_url", "", "08 JFrog index URL")
     w.text("concurrency_limit", "4", "09 Concurrency limit"); w.text("token_cap", "40000", "10 Token cap")
     w.text("reviewer_id", "", "11 Reviewer id"); w.text("reviewer_role", "", "12 Reviewer role")
+    w.text("scratch_dir", "", "13 Scratch folder (leave empty unless AIVA says it cannot write on the driver)")
 
 make_widgets()
 print("AIVA folder:", AIVA_HOME)
@@ -208,7 +209,8 @@ def current_paths(new_run_allowed=True):
     run_id = "" if run_id == "New run" else run_id
     if not run_id and "PATHS" in globals() and PATHS.model_id == dbutils.widgets.get("model_id") and (not project_date or PATHS.project_date == project_date):
         return PATHS                                   # keep working on the run this session opened
-    return aiva.open_run(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), project_date, run_id)
+    return aiva.open_run(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), project_date, run_id,
+                         scratch_root=dbutils.widgets.get("scratch_dir"))
 
 project = dbutils.widgets.get("project")
 project_dir, missing = aiva.setup_project(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), "" if project.startswith("New project") else project)

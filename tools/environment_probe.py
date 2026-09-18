@@ -1,4 +1,4 @@
-"""environment_probe.py - the environment probes P-1 to P-13 of the build plan (Phase 0).
+"""environment_probe.py - the environment probes P-1 to P-14 of the build plan (Phase 0).
 
 Run from the notebook's appendix cell "Environment probe" on the Databricks cluster, with the
 Projects folder of the Workspace as `folder`. P-1 to P-5 are timed here. P-6 to P-12 need the
@@ -142,7 +142,17 @@ def run_probe(folder, docs_dir, chat=None, live=None, quick=False):
         ("P-10 Mode B: the same with cell 5 run by hand", ["Token age went back to zero after running cell 5 by hand: [ ] yes [ ] no"]),
         ("P-11 For information: widgets seen from inside a running loop", ["dbutils.widgets.get inside a foreground loop saw a changed value: [ ] yes [ ] no"]),
         ("P-12 Optional: does a trivial Spark action from the background thread keep the cluster alive?", ["Cluster stayed up past its auto-termination time during a background run: [ ] yes [ ] no [ ] not tried"]),
-        ("P-13 What chat() returns or raises with an empty token", probe_chat(chat, live) if chat else ["chat() was not given to the probe; run it from the notebook after cell 6."])]
+        ("P-13 What chat() returns or raises with an empty token", probe_chat(chat, live) if chat else ["chat() was not given to the probe; run it from the notebook after cell 6."]),
+        ("P-14 Which folder on the driver AIVA may build a run in", probe_scratch())]
+
+def probe_scratch():
+    """Where the driver lets this user write. A cluster is shared, so a scratch folder made by
+    one user can refuse another; this says which folder AIVA settled on before a run needs it."""
+    import aiva5_run_report as run
+    try:
+        return ["AIVA would build runs in: %s" % run.pick_scratch_root()]
+    except PermissionError as problem:
+        return ["No folder on the driver allowed it. %s" % problem]
     os.makedirs(docs_dir, exist_ok=True)
     report = os.path.join(docs_dir, "environment_probe_%s.md" % datetime.date.today().isoformat())
     with open(report, "w", encoding="utf-8") as handle:

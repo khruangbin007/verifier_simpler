@@ -170,6 +170,24 @@ class TokenRefresh(unittest.TestCase):
         self.assertNotIn("Say OK.", seen)
         self.assertIn("503", seen)
 
+    def test_a_scratch_folder_that_refuses_is_passed_over_for_one_that_does_not(self):
+        """On a shared cluster /tmp/aiva_scratch may already belong to another user and refuse
+        this one. Refusal is tested here with a file standing where the folder should be,
+        which refuses every user alike, including root."""
+        refuses = os.path.join(helpers.scratch(), "refuses")
+        with open(refuses, "w") as handle:
+            handle.write("not a folder")
+        chosen = run.pick_scratch_root(refuses)
+        self.assertNotEqual(chosen, refuses, "the folder that refuses is not the one used")
+        probe = os.path.join(chosen, ".still_writable")
+        with open(probe, "w") as handle:
+            handle.write("x")
+        os.remove(probe)
+
+    def test_a_scratch_folder_that_works_is_the_one_used(self):
+        wanted = os.path.join(helpers.scratch(), "wanted")
+        self.assertEqual(run.pick_scratch_root(wanted), wanted)
+
     def test_stop_mode_pauses_the_run_instead_of_waiting(self):
         store, _ = fresh_store()
         os.makedirs(store.local_dir)
