@@ -833,21 +833,27 @@ def docx_figure(picture, related, locator):
     fingerprint = fingerprint or shared.sha256_bytes(ElementTree.tostring(picture))
     return new_block("figure", description or "Picture without a description", locator, image_sha256=fingerprint)
 
+def safe_xml(data):
+    """Parse one XML part of an Office file. Any document-type declaration is removed first,
+    so no entity can be defined inside the file (no entity expansion, no outside fetch)."""
+    text = re.sub(rb"<!DOCTYPE[^>\[]*(\[.*?\])?\s*>", b"", data, flags=re.S | re.I)
+    return ElementTree.fromstring(text)
+
 def blocks_from_docx(data, file_name, state):
     """Body elements in document order, so that tables stay where they are. Heading numbers that
     Word produces automatically are not stored in the file; they are reconstructed by counting
     and marked as reconstructed."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
-        body = ElementTree.fromstring(archive.read("word/document.xml")).find("w:body", WORD_NS)
+        body = safe_xml(archive.read("word/document.xml")).find("w:body", WORD_NS)
     except (zipfile.BadZipFile, KeyError, ElementTree.ParseError):
         return [not_read_block(file_name, "the file is not a Word document that can be opened")]
     styles, related = {}, {}
     if "word/styles.xml" in archive.namelist():
-        for style in ElementTree.fromstring(archive.read("word/styles.xml")).findall("w:style", WORD_NS):
+        for style in safe_xml(archive.read("word/styles.xml")).findall("w:style", WORD_NS):
             styles[style.get("{%s}styleId" % WORD_NS["w"])] = style
     if "word/_rels/document.xml.rels" in archive.namelist():
-        for relation in ElementTree.fromstring(archive.read("word/_rels/document.xml.rels")):
+        for relation in safe_xml(archive.read("word/_rels/document.xml.rels")):
             target = "word/" + relation.get("Target", "").lstrip("/")
             if relation.get("TargetMode") != "External" and target in archive.namelist():
                 related[relation.get("Id")] = archive.read(target)

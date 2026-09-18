@@ -113,6 +113,12 @@ class ReadingFiles(unittest.TestCase):
         self.assertEqual(len(chunks), 1)
         self.assertTrue(chunks[0]["not_read_reason"])
 
+    def test_entities_defined_inside_an_office_file_are_never_expanded(self):
+        bomb = b'<?xml version="1.0"?><!DOCTYPE d [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">]><d>&b;</d>'
+        with self.assertRaises(Exception):
+            documents.safe_xml(bomb)
+        self.assertEqual(documents.safe_xml(b'<?xml version="1.0"?><!DOCTYPE d><d>fine</d>').text, "fine")
+
     def test_checkable_statements_and_cross_references(self):
         chunks, _ = helpers.chunks_of("m.xml", "<doc><section><title>1 Rates</title><p>This part gives the background of the method.</p>"
                                                "<p>The rate is at least 3% as set out in Table 2 and section 4.1.</p></section></doc>", corner="documentation")

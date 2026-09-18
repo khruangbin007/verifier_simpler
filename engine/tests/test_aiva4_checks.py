@@ -128,6 +128,14 @@ class TablesRulesAndProse(unittest.TestCase):
         result = checks.reconcile(long_form, grid, STOP, exact=True)
         self.assertEqual([(c["row"], c["column"], c["outcome"]) for c in result["cells"] if c["outcome"] == "differs"], [("South", "Heavy", "differs")])
 
+    def test_tables_that_code_cannot_lay_over_each_other_use_the_validated_ai_mapping(self):
+        ours = {"header": ["seg", "floor_value"], "rows": [["Retail", "0.15"], ["Corporate", "0.25"]], "row_key": ["seg"], "column_types": ["text", "number"]}
+        theirs = {"header": ["Segment", "LGD floor"], "rows": [["Retail", "0.15"], ["Corporate", "0.35"]], "row_key": ["Segment"]}
+        self.assertEqual(checks.reconcile(ours, theirs, STOP, exact=True)["outcome"], "could not be compared")
+        mapped = checks.reconcile(ours, theirs, STOP, exact=True, ai_map={"columns": [("seg", "Segment"), ("floor_value", "LGD floor")], "key": ("seg", "Segment")})
+        self.assertEqual([(c["row"], c["outcome"]) for c in mapped["cells"]], [("Corporate", "differs"), ("Retail", "agrees")])
+        self.assertEqual({p[2] for p in mapped["column_map"]}, {"by AI (validated)"})
+
     def test_rules_are_recognised_by_generic_phrases(self):
         chunk = {"text": "The rate is never taken below 0.03%. The discount is 1% per parcel, capped at 20%. Nothing else applies."}
         self.assertEqual([(kind, number["as_written"]) for kind, number, _ in checks.stated_rules(chunk)], [("floor", "0.03%"), ("cap", "20%")])

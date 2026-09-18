@@ -701,13 +701,29 @@ def check_values(ctx):
                 edges.append(shared.Edge(unit["ref"], shapes[0][1], "corresponds", shared.HOW_TABLE, ctx.provenance, relation="Implements",
                                          evidence={"how_text": shared.HOW_TABLE + "."}))
         for target in sorted(set(targets)):
-            other = world["by_ref"][target]
-            if target.startswith("C-"):
-                result, labels = reconcile(table, chunk_table(other), stop, exact=True), ("package", "methodology")
-            else:
-                result, labels = reconcile(table, chunk_table(other), stop, exact=True), ("package", "documentation")
+            result = reconcile(table, chunk_table(world["by_ref"][target]), stop, exact=True)
+            labels = ("package", "methodology" if target.startswith("C-") else "documentation")
             checks.append(dict(result, unit_ref=unit["ref"], target_ref=target, what="parameter table", labels=list(labels),
                                sentences=table_sentences(result, labels[0], labels[1], target)))
+    pending = {}                                         # tables that code could not lay over each other: ask which columns correspond
+    for check in checks:
+        if check["outcome"] == "could not be compared" and ctx.ask is not None:
+            unit, other = world["by_ref"][check["unit_ref"]], world["by_ref"][check["target_ref"]]
+            table = world["tables"][unit["ref"]]
+            shown = "\n".join(["; ".join(table["header"])] + ["; ".join(row) for row in table["rows"][:3]])
+            question = aiva3_mapping.narrow_question("map-table-columns", unit["ref"], [("PACKAGE TABLE (%s)" % unit["name"], shown)], ctx.options["references_dir"], settings,
+                                                     passages=[(other["ref"], aiva3_mapping.passage_label(other), aiva3_mapping.passage_text(other, settings))],
+                                                     more={"package_header": list(table["header"])})
+            question["other_headers"] = {letter: list(world["by_ref"][ref]["table"]["header"]) for letter, ref in question["letters"].items()}
+            pending[question["question_id"]] = (check, question)
+    answers = ctx.ask([q for _, q in pending.values() if not q["too_large"]]) if pending else {}
+    for question_id, (check, question) in sorted(pending.items()):
+        final = answers.get(question_id)
+        if final and final["outcome"] == "accepted" and final["answer"].get("table") != "NONE":
+            answer = final["answer"]
+            ai_map = {"columns": [(c["package"], c["other"]) for c in answer["columns"]], "key": (answer["key"]["package"], answer["key"]["other"])}
+            result = reconcile(world["tables"][check["unit_ref"]], chunk_table(world["by_ref"][check["target_ref"]]), stop, exact=True, ai_map=ai_map)
+            check.update(result, sentences=table_sentences(result, check["labels"][0], check["labels"][1], check["target_ref"]))
     for (source, target), edge in sorted(world["links"].items()):          # 2. documentation tables against methodology tables
         left, right = world["by_ref"][source], world["by_ref"][target]
         if source.startswith("D-") and target.startswith("C-") and left.get("table") and right.get("table") and edge["relation"] in shared.LINKING_RELATIONS:

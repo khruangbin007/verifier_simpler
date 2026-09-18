@@ -149,7 +149,8 @@ def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root=""
     run_id = run_id or new_run_id(project_dir, now)
     run_dir = os.path.join(project_dir, run_id)
     scratch_root = scratch_root or os.path.join(tempfile.gettempdir(), "aiva_scratch")
-    local_dir = os.path.join(scratch_root, "%s_%s_%s" % (model_id, project_date, run_id))
+    place = shared.sha256_text(os.path.abspath(run_dir))[:8]       # two Projects folders never share scratch space
+    local_dir = os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run_id, place))
     paths = RunPaths(projects_dir, model_id, project_date, project_dir,
                      os.path.join(project_dir, "Inputs"), run_id, run_dir,
                      os.path.join(run_dir, "Outputs"), os.path.join(run_dir, "_audit"), local_dir)
@@ -522,6 +523,8 @@ def run_pipeline(paths, settings, chat=None, live=None, determinations=False, st
         return {"state": "not ready", "steps_run": [], "message":
                 "Determinations can be recorded once the run has reached its flagged items."}
     for step in pipeline["steps"]:
+        if stop_after and step["id"] > stop_after:
+            break
         if step["skill"] in REPEATABLE_STEPS:
             if not determinations:
                 continue                     # these two run each time the determinations cell is run
