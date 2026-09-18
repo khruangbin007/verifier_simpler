@@ -122,7 +122,8 @@ print("Widgets are ready. After entering the model ID, run this cell again to re
 ''')
 
 code("Cell 4 - preflight", '''
-import importlib, shutil, tempfile
+# Each cell imports what it uses, because cell 2 restarts Python and clears everything before it.
+import importlib, os, shutil, sys, tempfile
 print("Python", sys.version.split()[0])
 for name in ("yaml", "openpyxl", "docx", "numpy", "scipy", "sympy", "pdfplumber", "pypdf", "rdata"):
     try:
@@ -196,6 +197,7 @@ def chat(SystemPrompt, MainPrompt, history=[]):
 ''')
 
 code("Cell 7 - chat() self-test (or switch to the stand-in)", '''
+import time
 USE_STANDIN = False           # True: a deterministic stand-in answers instead of the real model (for trying AIVA out)
 if USE_STANDIN:
     import standin_chat
@@ -264,6 +266,7 @@ print(plan["note"])
 ''')
 
 code("Cell 12 - run the AI steps and the checks", '''
+import threading
 MODE = "A"                    # "A" or "B": background thread (cell 13 shows progress). "C": foreground, stops by itself after FOREGROUND_MINUTES.
 FOREGROUND_MINUTES = 12
 STATE = aiva.AskState()
@@ -319,13 +322,14 @@ for what, verdict, detail in aiva.verify_evidence_pack(PATHS, SETTINGS, live=LIV
 ''')
 
 code("Cell 16 - appendix: environment probe (run once per environment; writes docs/environment_probe_<date>.md)", '''
+import os
 import environment_probe
 print(environment_probe.run_probe(dbutils.widgets.get("projects_dir"), os.path.join(AIVA_HOME, "docs"), chat=chat if "chat" in globals() else None, live=LIVE))
 ''')
 
 code("Cell 17 - appendix: reviewer sanity checks, one per bundle (stand-in chat, sample projects; change REVIEWER and run)", '''
 REVIEWER = 1                  # 1 documents, 2 package, 3 mapping, 4 checks, 5 run and report
-import shutil, tempfile, standin_chat
+import datetime, os, shutil, tempfile, standin_chat
 SAMPLE, STOP_AFTER = {1: ("F_capital", "02"), 2: ("F_capital", "04"), 3: ("A_minimal", "08"), 4: ("F_capital_known", ""), 5: ("A_minimal", "")}[REVIEWER]
 demo_projects = tempfile.mkdtemp(prefix="aiva_sanity_")
 shutil.copytree(os.path.join(AIVA_HOME, "engine", "tests", "sample_projects", SAMPLE, "Inputs"), os.path.join(demo_projects, "SANITY", datetime.date.today().isoformat(), "Inputs"))

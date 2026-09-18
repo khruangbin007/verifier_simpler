@@ -45,6 +45,30 @@ class NotebookCells(unittest.TestCase):
                 except SyntaxError as problem:
                     self.fail("cell %d does not parse: %s" % (number, problem))
 
+    def test_every_cell_imports_the_modules_it_uses(self):
+        """Cell 2 restarts Python, which clears every name defined before it. A cell that
+        leaned on an import made in an earlier cell then stops with a NameError the moment
+        anyone runs the cells in another order. Each cell therefore imports its own."""
+        standard = {"os", "sys", "re", "json", "time", "datetime", "shutil", "tempfile",
+                    "importlib", "threading", "subprocess", "gzip", "math", "hashlib"}
+        notebook = json.load(open(os.path.join(helpers.ROOT_DIR, "AIVA_Interface.ipynb"), encoding="utf-8"))
+        for number, cell in enumerate(notebook["cells"], start=1):
+            if cell["cell_type"] != "code":
+                continue
+            tree = ast.parse("".join(cell["source"]))
+            imported, named, used = set(), set(), set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    imported.update(alias.asname or alias.name for alias in node.names)
+                elif isinstance(node, ast.Name):
+                    (named if isinstance(node.ctx, ast.Store) else used).add(node.id)
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    named.add(node.name)
+            missing = sorted((used & standard) - imported - named)
+            self.assertEqual(missing, [], "cell %d uses %s without importing it" % (number, ", ".join(missing)))
+
     def test_no_package_is_installed_from_an_index_nobody_named(self):
         """Cell 2 runs before cell 3 makes the widgets, so on a fresh notebook the index URL
         is not there yet. It must not fall through to pip's own default index in silence."""
