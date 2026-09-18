@@ -359,7 +359,354 @@ def build_a_minimal():
     write_bytes(sample, "doc", "parcelcost_documentation.docx", docx_file(A_DOCUMENTATION))
 
 
-BUILDERS = {"A_minimal": build_a_minimal}
+
+# ------------------------------------------------------------------ sample F_capital (finance flavour, invented)
+MATHML_COND_PD = ('<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>PDc</mi><mo>=</mo><mi>N</mi><mo>&#x2061;</mo><mfenced><mfrac>'
+                  '<mrow><msup><mi>N</mi><mrow><mo>-</mo><mn>1</mn></mrow></msup><mo>&#x2061;</mo><mfenced><mi>PD</mi></mfenced><mo>+</mo>'
+                  '<msqrt><mi>&#x3C1;</mi></msqrt><mo>&#x2062;</mo><msup><mi>N</mi><mrow><mo>-</mo><mn>1</mn></mrow></msup><mo>&#x2061;</mo>'
+                  '<mfenced><mn>0.999</mn></mfenced></mrow><msqrt><mrow><mn>1</mn><mo>-</mo><mi>&#x3C1;</mi></mrow></msqrt></mfrac></mfenced></math>')
+
+F_METHODOLOGY = """<?xml version="1.0" encoding="UTF-8"?>
+<methodology>
+ <title>Capital requirement methodology</title>
+ <part><title>A. Framework</title>
+  <section><title>1. Scope</title>
+   <p>This methodology sets out how the capital requirement for unexpected losses is determined for each exposure.</p>
+   <p>It applies to all exposures of the lending book. Trading positions are outside its scope.</p>
+  </section>
+  <section><title>2. Definitions</title>
+   <p>The probability of default (PD) is the likelihood that an obligor defaults within one year.</p>
+   <p>The loss given default (LGD) is the share of the exposure that is lost when the obligor defaults.</p>
+   <p>The exposure at default (EAD) is the amount outstanding when the obligor defaults.</p>
+   <p>The requirement uses the normal distribution function N and its inverse, where &rho; denotes the asset correlation.</p>
+   <table><caption>Table 1. Symbols</caption>
+    <tr><th>Symbol</th><th>Description</th></tr>
+    <tr><td>PDc</td><td>conditional probability of default</td></tr>
+    <tr><td>K</td><td>capital requirement per unit of exposure</td></tr>
+    <tr><td>M</td><td>effective maturity in years</td></tr>
+   </table>
+  </section>
+  <section><title>3. Risk components</title>
+   <section><title>3.1 Probability of default</title>
+    <p>The probability of default is estimated from internal ratings and is reviewed every year.</p>
+    <section><title>3.1.1 Floor</title>
+     <p>The probability of default is never taken below 0.03%.</p>
+     <p>The floor applies before any other step of the calculation.</p>
+    </section>
+   </section>
+   <section><title>3.2 Conditional probability of default</title>
+    <p>The conditional probability of default is evaluated at the 99.9th percentile of the systematic factor.</p>
+    <equation>""" + MATHML_COND_PD + """</equation>
+    <p>The confidence level of 0.999 is fixed and is set out again in Annex A.</p>
+   </section>
+   <section><title>3.3 Asset correlation</title>
+    <p>The asset correlation falls with the probability of default: R = 0.12 * (1 - exp(-50 * PD)) / (1 - exp(-50)) + 0.24 * (1 - (1 - exp(-50 * PD)) / (1 - exp(-50))).</p>
+    <p>The correlation therefore lies between 0.12 and 0.24.</p>
+   </section>
+   <section><title>3.4 Loss given default</title>
+    <p>The loss given default is at least the floor of its segment, as set out in Table 3.</p>
+    <table><caption>Table 3. Floors by segment</caption>
+     <tr><th>Segment</th><th>LGD floor</th></tr>
+     <tr><td>Retail</td><td>0.15</td></tr>
+     <tr><td>Corporate</td><td>0.25</td></tr>
+     <tr><td>Bank</td><td>0.45</td></tr>
+    </table>
+   </section>
+  </section>
+ </part>
+ <part><title>B. Capital</title>
+  <section><title>4. Capital requirement</title>
+   <section><title>4.1 Requirement per unit of exposure</title>
+    <p>The unexpected loss rate is the conditional probability of default less the probability of default: UL = PDc - PD.</p>
+    <p>K is the product of LGD and UL.</p>
+   </section>
+   <section><title>4.2 Risk-weighted amount</title>
+    <equation><img src="rwa_formula.png" alt="Formula for the risk-weighted amount"/></equation>
+    <p>The requirement is scaled by 12.5 and multiplied by the exposure at default.</p>
+   </section>
+   <section><title>4.3 Effective maturity</title>
+    <p>The effective maturity is at least 1 year.</p>
+    <p>The effective maturity is capped at 5 years.</p>
+   </section>
+  </section>
+ </part>
+ <annex>
+  <heading>Annex A Parameters</heading>
+  <p>This annex restates the fixed parameters of the methodology.</p>
+  <heading>I. Confidence level</heading>
+  <p>The confidence level is 0.999 for every segment.</p>
+  <heading>II. Floors</heading>
+  <p>Floors are reviewed once a year by the model owner.</p>
+  <heading>(a) Probability of default</heading>
+  <p>The floor of the probability of default is 0.03%, as stated in section 3.1.1.</p>
+  <heading>(b) Loss given default</heading>
+  <p>The floors of the loss given default are those of Table 3.</p>
+ </annex>
+</methodology>
+"""
+
+def rd_page(name, title, arguments, source):
+    usage = "%s(%s)" % (name, ", ".join(a if d is None else "%s = %s" % (a, d) for a, d, _ in arguments))
+    items = "\n".join("\\item{%s}{%s}" % (a, text) for a, _, text in arguments)
+    return ("%% Generated by roxygen2: do not edit by hand\n%% Please edit documentation in %s\n\\name{%s}\n\\alias{%s}\n\\title{%s}\n"
+            "\\usage{\n%s\n}\n\\arguments{\n%s\n}\n" % (source, name, name, title, usage, items))
+
+F_R_PD = """#' Floor of the probability of default
+#'
+#' The probability of default is never taken below 0.03%.
+#' @param pd probability of default
+#' @param floor the floor, defaults to 0.0003
+#' @export
+floor_pd <- function(pd, floor = 0.0003) {
+  pmax(pd, floor)
+}
+
+#' Conditional probability of default
+#'
+#' Evaluated at the 99.9th percentile of the systematic factor:
+#' \\deqn{PDc = \\Phi\\left(\\frac{\\Phi^{-1}(PD) + \\sqrt{\\rho} \\cdot \\Phi^{-1}(0.999)}{\\sqrt{1 - \\rho}}\\right)}
+#' @param pd probability of default
+#' @param rho asset correlation
+#' @param q confidence level, defaults to 0.999
+#' @export
+cond_pd <- function(pd, rho, q = 0.999) {
+  a <- qnorm(pd)
+  b <- sqrt(rho) * qnorm(q)
+  pnorm((a + b) / sqrt(1 - rho))
+}
+"""
+F_R_CORRELATION = """#' Asset correlation
+#'
+#' The asset correlation falls with the probability of default and lies between 0.12 and 0.24.
+#' @param pd probability of default
+#' @export
+asset_correlation <- function(pd) {
+  w <- (1 - exp(-50 * pd)) / (1 - exp(-50))
+  0.12 * w + 0.24 * (1 - w)
+}
+"""
+F_R_CAPITAL = """#' Capital requirement per unit of exposure
+#'
+#' The product of the loss given default, floored by segment, and the unexpected loss rate.
+#' @param pd probability of default
+#' @param lgd loss given default
+#' @param segment segment of the exposure: Retail, Corporate or Bank
+#' @export
+capital_k <- function(pd, lgd, segment) {
+  check_inputs(pd, lgd)
+  lgd_f <- pmax(lgd, lgd_floors[lgd_floors$segment == segment, "lgd_floor"])
+  pdc <- cond_pd(floor_pd(pd), asset_correlation(pd))
+  ul <- pdc - pd
+  lgd_f * ul
+}
+
+#' Risk-weighted amount
+#'
+#' The requirement scaled by 12.5 and multiplied by the exposure at default.
+#' @param k capital requirement per unit of exposure
+#' @param ead exposure at default
+#' @export
+rwa <- function(k, ead) {
+  k * 12.5 * ead
+}
+
+#' Effective maturity
+#'
+#' At least 1 year and capped at 5 years.
+#' @param m maturity in years
+#' @export
+effective_maturity <- function(m) {
+  pmin(pmax(m, 1), 5)
+}
+"""
+F_R_UTILS = """# Argument checks shared by the exported functions.
+check_inputs <- function(pd, lgd) {
+  if (!is.numeric(pd)) stop("pd must be numeric")
+  if (!is.numeric(lgd)) stop("lgd must be numeric")
+  invisible(TRUE)
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+"""
+F_R_DATA = """#' Floors of the loss given default by segment
+#'
+#' @format A data frame with 3 rows and 2 columns:
+#' \\describe{
+#'   \\item{segment}{segment of the exposure}
+#'   \\item{lgd_floor}{floor of the loss given default}
+#' }
+#' @source Table 3 of the methodology
+"lgd_floors"
+"""
+F_VIGNETTE = """---
+title: "Using capreq"
+---
+
+This vignette shows how the capital requirement of one exposure is obtained.
+
+```{r}
+library(capreq)
+k <- capital_k(0.01, 0.40, "Corporate")
+rwa(k, 1000)
+```
+
+The floors by segment are stored in the object lgd_floors.
+"""
+
+def f_package(known):
+    """The files of package capreq; `known` plants the six seeded differences of the brief."""
+    import pandas
+    pd_source, capital, data = F_R_PD, F_R_CAPITAL, F_R_DATA
+    floors = pandas.DataFrame({"segment": ["Retail", "Corporate", "Bank"], "lgd_floor": [0.15, 0.25, 0.45]})
+    if known:
+        pd_source = pd_source.replace("pnorm((a + b) / sqrt(1 - rho))", "pnorm((a - b) / sqrt(1 - rho))")      # 1. a flipped sign
+        pd_source = pd_source.replace("  pmax(pd, floor)\n", "  pd\n")                                           # 3. a removed floor
+        pd_source = pd_source.replace("#' @param rho asset correlation", "#' @param rho_a asset correlation")    # 5. roxygen out of step
+        floors.loc[0, "lgd_floor"] = 0.10                                                                        # 4. a changed cell
+    correlation = F_R_CORRELATION.replace("0.12 * w", "0.13 * w") if known else F_R_CORRELATION                  # 2. a changed constant
+    confidence = pandas.DataFrame({"parameter": ["confidence_level"], "value": [0.999]})
+    files = {
+        "DESCRIPTION": "Package: capreq\nTitle: Capital Requirement\nVersion: 0.9.1\nDescription: Capital requirement for unexpected losses.\nLicense: MIT\nEncoding: UTF-8\nVignetteBuilder: knitr\n",
+        "NAMESPACE": "\n".join("export(%s)" % n for n in ("floor_pd", "cond_pd", "asset_correlation", "capital_k", "rwa", "effective_maturity")) + "\n",
+        "R/pd.R": pd_source, "R/correlation.R": correlation, "R/capital.R": capital, "R/utils.R": F_R_UTILS, "R/data.R": data,
+        "data/lgd_floors.rda": r_data({"lgd_floors": floors}), "inst/extdata/confidence.rds": r_data(confidence, single=True),
+        "man/floor_pd.Rd": rd_page("floor_pd", "Floor of the probability of default", [("pd", None, "probability of default"), ("floor", "0.0003", "the floor, defaults to 0.0003")], "R/pd.R"),
+        # the page of cond_pd is stale on purpose: it was generated before the argument q was added
+        "man/cond_pd.Rd": rd_page("cond_pd", "Conditional probability of default", [("pd", None, "probability of default"), ("rho", None, "asset correlation")], "R/pd.R"),
+        "man/asset_correlation.Rd": rd_page("asset_correlation", "Asset correlation", [("pd", None, "probability of default")], "R/correlation.R"),
+        "man/capital_k.Rd": rd_page("capital_k", "Capital requirement per unit of exposure", [("pd", None, "probability of default"), ("lgd", None, "loss given default"), ("segment", None, "segment of the exposure: Retail, Corporate or Bank")], "R/capital.R"),
+        "man/rwa.Rd": rd_page("rwa", "Risk-weighted amount", [("k", None, "capital requirement per unit of exposure"), ("ead", None, "exposure at default")], "R/capital.R"),
+        "man/effective_maturity.Rd": rd_page("effective_maturity", "Effective maturity", [("m", None, "maturity in years")], "R/capital.R"),
+        "tests/testthat.R": "library(testthat)\nlibrary(capreq)\ntest_check(\"capreq\")\n",
+        "tests/testthat/test-pd.R": "test_that(\"the floor of the probability of default holds\", {\n  expect_equal(floor_pd(0.0001), 0.0003)\n})\n\n"
+                                    "test_that(\"the conditional probability exceeds the probability\", {\n  expect_true(cond_pd(0.01, 0.2) > 0.01)\n})\n",
+        "vignettes/capreq.Rmd": F_VIGNETTE}
+    return files
+
+def f_documentation(known):
+    level = "99.5th percentile" if known else "99.9th percentile"                                              # 6. a stale value in the documentation
+    cond = omml(run("PDc=N") + "<m:d><m:e><m:f><m:num>" + "<m:sSup><m:e>" + run("N") + "</m:e><m:sup>" + run("-1") + "</m:sup></m:sSup><m:d><m:e>" + run("PD")
+                + "</m:e></m:d>" + run("+") + "<m:rad><m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/><m:e>" + run("&#x3C1;") + "</m:e></m:rad>" + run("&#xD7;")
+                + "<m:sSup><m:e>" + run("N") + "</m:e><m:sup>" + run("-1") + "</m:sup></m:sSup><m:d><m:e>" + run("0.999") + "</m:e></m:d></m:num><m:den>"
+                + "<m:rad><m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/><m:e>" + run("1-&#x3C1;") + "</m:e></m:rad></m:den></m:f></m:e></m:d>")
+    return [
+        ("h", 1, "1 Purpose"),
+        ("p", "This document describes how the package capreq implements the capital requirement methodology."),
+        ("p", "It is written for model validators and for the developers who maintain the package."),
+        ("h", 1, "2 Risk components"),
+        ("h", 2, "2.1 Probability of default"),
+        ("p", "The function floor_pd applies the floor of 0.03% to the probability of default."),
+        ("h", 2, "2.2 Conditional probability of default"),
+        ("p", "The function cond_pd evaluates the conditional probability of default at the %s of the systematic factor." % level),
+        ("eq", cond),
+        ("h", 2, "2.3 Asset correlation"),
+        ("p", "The function asset_correlation returns a correlation between 0.12 and 0.24 that falls with the probability of default."),
+        ("h", 2, "2.4 Loss given default"),
+        ("p", "The floors of the loss given default are held in the object lgd_floors and are shown in Table D1."),
+        ("table", "Table D1. Floors by segment", [["Segment", "LGD floor"], ["Retail", "0.15"], ["Corporate", "0.25"], ["Bank", "0.45"]]),
+        ("h", 1, "3 Capital"),
+        ("p", "The function capital_k multiplies the floored loss given default by the unexpected loss rate."),
+        ("p", "The function rwa scales the requirement by 12.5 and multiplies it by the exposure at default."),
+        ("p", "The function effective_maturity keeps the maturity between 1 year and 5 years."),
+        ("h", 1, "4 Change history"),
+        ("p", "The package is released after each yearly review of the methodology."),
+        ("image", "Figure D1. Release process"),
+    ]
+
+F_USER_GUIDE = [
+    ("h", 1, "1 Installing the package"),
+    ("p", "The package capreq is installed from the internal repository and needs no other package."),
+    ("h", 1, "2 Calculating a requirement"),
+    ("p", "Call capital_k with the probability of default, the loss given default and the segment of the exposure."),
+    ("p", "The risk-weighted amount is obtained with rwa, which scales the requirement by 12.5."),
+    ("table", "Floors used by the package", [["Segment", "LGD floor"], ["Retail", "0.15"], ["Corporate", "0.25"], ["Bank", "0.45"]]),
+]
+
+def build_f_capital(sample="F_capital", known=False):
+    write_bytes(sample, "canon", "capital_methodology.txt", F_METHODOLOGY)          # XML inside a .txt file, on purpose
+    write_bytes(sample, "package", "capreq_0.9.1.tar.gz", tarball("capreq", f_package(known)))
+    write_bytes(sample, "doc", "capreq_model_documentation.docx", docx_file(f_documentation(known)))
+    write_bytes(sample, "doc", "capreq_user_guide.pdf", pdf_file(F_USER_GUIDE))
+
+def build_f_capital_known():
+    build_f_capital("F_capital_known", known=True)
+
+# ------------------------------------------------------------------ sample D_dosing (another field; keeps the engine honest about rule R9)
+D_OMML = ('<m:oMath><m:r><m:t>D=W&#215;R</m:t></m:r></m:oMath>')
+D_HTML = """<html xmlns:m="http://schemas.microsoft.com/office/2004/12/omml"><head><title>Dosing method</title><style>p{margin:0}</style></head><body>
+<h1>1 Purpose</h1>
+<p>This method sets out how the daily dose of the medicine is determined for an adult patient.
+<p>It applies to oral treatment only.
+<h1>2 Dose by body weight</h1>
+<p>The body weight (W) is measured in kilograms, and the dose rate (R) is 15 milligrams per kilogram.
+<p><!--[if gte msEquation 12]>""" + D_OMML + """<![endif]--><![if !msEquation]><img src="image001.png" alt="Dose formula"><![endif]></p>
+<p>The daily dose is never above 4000 milligrams.
+<h1>3 Adjustment for kidney function</h1>
+<p>The dose is multiplied by the factor of the clearance band of the patient, as set out in Table 1.
+<table><caption>Table 1. Factors by clearance band</caption>
+<tr><th>Band</th><th>Factor</th></tr><tr><td>Normal</td><td>1.00</td></tr><tr><td>Reduced</td><td>0.75</td></tr><tr><td>Low</td><td>0.50</td></tr></table>
+<p><img src="image002.png" alt="Adjusted dose formula"></p>
+<p>The adjusted dose is rounded to 10 milligrams.
+</body></html>
+"""
+
+def mhtml_file(page, images):
+    boundary = "----=_NextPart_AIVA_SAMPLE"
+    parts = ["MIME-Version: 1.0\nContent-Type: multipart/related; boundary=\"%s\"\n" % boundary,
+             "--%s\nContent-Location: file:///C:/method.htm\nContent-Transfer-Encoding: 8bit\nContent-Type: text/html; charset=\"utf-8\"\n\n%s" % (boundary, page)]
+    import base64
+    for name in images:
+        parts.append("--%s\nContent-Location: %s\nContent-Transfer-Encoding: base64\nContent-Type: image/png\n\n%s\n"
+                     % (boundary, name, base64.b64encode(tiny_png() + name.encode("ascii")).decode("ascii")))
+    return "\n".join(parts) + "\n--%s--\n" % boundary
+
+D_R = """#' Dose by body weight
+#'
+#' The body weight times the dose rate, never above 4000 milligrams.
+#' @param weight body weight in kilograms
+#' @param rate dose rate in milligrams per kilogram, defaults to 15
+#' @export
+dose_by_weight <- function(weight, rate = 15) {
+  dose <- weight * rate
+  pmin(dose, 4000)
+}
+
+#' Dose adjusted for kidney function
+#'
+#' The dose times the factor of the clearance band, rounded to 10 milligrams.
+#' @param dose daily dose in milligrams
+#' @param band clearance band: Normal, Reduced or Low
+#' @export
+adjusted_dose <- function(dose, band) {
+  factor <- band_factors[band_factors$band == band, "factor"]
+  round(dose * factor / 10) * 10
+}
+"""
+D_GUIDE = [
+    ("h", 1, "1 Overview"),
+    ("p", "The package dosecalc implements the dosing method for adult patients."),
+    ("h", 1, "2 Functions"),
+    ("p", "The function dose_by_weight multiplies the body weight by the dose rate of 15 milligrams per kilogram and never returns more than 4000 milligrams."),
+    ("p", "The function adjusted_dose multiplies the dose by the factor of the clearance band."),
+    ("table", "Factors held in the package", [["Band", "Factor"], ["Normal", "1.00"], ["Reduced", "0.75"], ["Low", "0.50"]]),
+]
+
+def build_d_dosing():
+    import pandas
+    sample = "D_dosing"
+    write_bytes(sample, "canon", "dosing_method.mhtml", mhtml_file(D_HTML, ["image001.png", "image002.png"]))
+    factors = pandas.DataFrame({"band": ["Normal", "Reduced", "Low"], "factor": [1.0, 0.75, 0.5]})
+    files = {"DESCRIPTION": "Package: dosecalc\nTitle: Dose Calculation\nVersion: 0.2.0\nLicense: MIT\nEncoding: UTF-8\n",
+             "NAMESPACE": "export(dose_by_weight)\nexport(adjusted_dose)\n", "R/dose.R": D_R,
+             "R/data.R": "#' Factors by clearance band\n#'\n#' @format A data frame with 3 rows and 2 columns:\n#' \\describe{\n#'   \\item{band}{clearance band}\n#'   \\item{factor}{factor applied to the dose}\n#' }\n\"band_factors\"\n",
+             "inst/extdata/band_factors.rds": r_data(factors, single=True),
+             "man/dose_by_weight.Rd": rd_page("dose_by_weight", "Dose by body weight", [("weight", None, "body weight in kilograms"), ("rate", "15", "dose rate in milligrams per kilogram, defaults to 15")], "R/dose.R"),
+             "man/adjusted_dose.Rd": rd_page("adjusted_dose", "Dose adjusted for kidney function", [("dose", None, "daily dose in milligrams"), ("band", None, "clearance band: Normal, Reduced or Low")], "R/dose.R")}
+    write_bytes(sample, "package", "dosecalc_0.2.0.tar.gz", tarball("dosecalc", files))
+    write_bytes(sample, "doc", "dosecalc_guide.pdf", pdf_file(D_GUIDE))
+
+
+BUILDERS = {"A_minimal": build_a_minimal, "F_capital": build_f_capital, "F_capital_known": build_f_capital_known, "D_dosing": build_d_dosing}
 
 if __name__ == "__main__":
     for name in (sys.argv[1:] or list(BUILDERS)):

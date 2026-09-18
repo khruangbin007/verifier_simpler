@@ -406,7 +406,7 @@ def stored_values(world):
                 values["%s$%s" % (table["object_name"], column)] = [float(Decimal(cell["value"])) for cell in cells]
     return values
 
-def math_sentence(target_ref, result, pairs, substitute):
+def math_sentence(target_ref, result, pairs, substitute, ours="the code", theirs="the methodology"):
     """The words of one comparison, as shown in the Math check cell."""
     shown = ", ".join("%s = %s" % (code, stated) for code, stated, _ in pairs if code != stated)
     shown += (", " if shown and substitute else "") + ", ".join("%s = %s (its default)" % item for item in sorted(substitute.items()))
@@ -417,8 +417,8 @@ def math_sentence(target_ref, result, pairs, substitute):
     if result["outcome"] == "differs":
         example = result["counterexample"]
         inputs = ", ".join("%s = %s" % (name, number_text(value)) for name, value in sorted(example["inputs"].items()))
-        return "%s: %s. With %s: the code gives %s, the methodology gives %s%s" % (
-            target_ref, shared.HOW_NUMERIC_DIFFERS, inputs or "no inputs", number_text(example["code"]), number_text(example["methodology"]), with_text)
+        return "%s: %s. With %s: %s gives %s, %s gives %s%s" % (target_ref, shared.HOW_NUMERIC_DIFFERS, inputs or "no inputs", ours,
+                                                                number_text(example["code"]), theirs, number_text(example["methodology"]), with_text)
     return "%s: %s: %s" % (target_ref, shared.CHECK_UNDECIDED, result["undecided_reason"])
 
 def combine(results):
@@ -508,7 +508,9 @@ def check_mathematics(ctx):
                       code_formula=shared.expr_to_text(form["code"]) if form["code"] is not None else "",
                       methodology_formula=shared.expr_to_text(right_side(tree)) if tree is not None else "",
                       alignment=[list(pair) for pair in form["pairs"]], seed=int(settings["numeric_seed"]), through=form["through"])
-        record["sentence"] = math_sentence(chunk["ref"], record, form["pairs"], form["substitute"])
+        ours = "the documentation" if unit.get("heading_chain") is not None else "the code"
+        theirs = "the formula in the roxygen block" if source == "roxygen" else "the methodology"
+        record["sentence"] = math_sentence(chunk["ref"], record, form["pairs"], form["substitute"], ours, theirs)
         by_pair[(unit["ref"], chunk["ref"])] = record
         checks.append(record)
     for record in checks:                                # a statement takes the function-level result for the same passage
@@ -658,8 +660,9 @@ def prose_value_lines(text, stated_texts, stop, trivial, label):
     agrees; a number attached to the same words as a DIFFERENT stated number differs; a
     number without a counterpart is not compared and nothing is claimed about it."""
     stated = [dict(n, ref=ref) for ref, passage in stated_texts for n in numbers_with_context(passage, stop)]
-    lines, differs = [], False
-    for number in numbers_with_context(text, stop):
+    lines, differs, mine = [], False, numbers_with_context(text, stop)
+    taken = [s for s in stated if any(compare_values(s, number)[0] != "differs" for number in mine)]   # stated numbers that found their equal
+    for number in mine:
         if number["value"] in trivial:
             continue
         outcomes = [(compare_values(s, number), s) for s in stated]
@@ -668,7 +671,7 @@ def prose_value_lines(text, stated_texts, stop, trivial, label):
             (outcome, note), s = agreeing[0]
             lines.append("%s %s, methodology %s (%s): %s" % (label, number["as_written"], s["as_written"], s["ref"], (outcome + " " + note).strip()))
             continue
-        close = sorted(((len(number["context"] & s["context"]), s["ref"], s) for s in stated if len(number["context"] & s["context"]) >= 2),
+        close = sorted(((len(number["context"] & s["context"]), s["ref"], s) for s in stated if s not in taken and len(number["context"] & s["context"]) >= 2),
                        key=lambda item: (-item[0], item[1]))
         if close:
             differs = True
@@ -776,14 +779,20 @@ def stated_rules(chunk):
 
 def rule_in_trees(kind, number, members):
     """Code looks first: a maximum (for a floor), a minimum (for a cap), a piecewise expression
-    or a comparison that holds the stated number. Returns where it was seen, or ""."""
+    or a comparison that holds the stated number, written as a number or held as the default
+    of an argument. Returns where it was seen, or ""."""
     wanted = ("max",) if kind == "floor" else ("min",)
+    defaults = {shared.normalise_symbol(name): number_of(default) for member in members
+                for name, default in ((member.get("code") or {}).get("formals") or ()) if default and number_of(default)}
+    def holds_number(arg):
+        held = {"value": arg.value, "decimals": 0} if arg.op == "num" else defaults.get(arg.name) if arg.op == "sym" else None
+        return bool(held) and compare_values(number, held, exact=True)[0] != "differs"
     for member in members:
         code = member.get("code") or {}
         for form in ("expression", "composed"):
             for node in shared.expr_walk(shared.expr_from_dict(code[form])) if code.get(form) else ():
                 holds = node.op in ("cmp", "piecewise") or (node.op == "call" and node.name in wanted + ("piecewise",))
-                if holds and any(arg.op == "num" and compare_values(number, {"value": arg.value, "decimals": 0}, exact=True)[0] != "differs" for arg in node.args):
+                if holds and any(holds_number(arg) for arg in node.args):
                     name = "maximum" if node.name == "max" else "minimum" if node.name == "min" else "condition"
                     return "%s with %s (%s, line %s)" % (name, number["as_written"], member["ref"], (member.get("lines") or ["?"])[0])
     return ""
@@ -914,7 +923,7 @@ def check_package_docs(ctx):
                 add(unit["ref"], None, "page present", "differs", "Exported function %s has no help page" % unit["name"])
             elif unit["ref"] not in blocks:
                 add(unit["ref"], None, "block present", "not applicable", "Internal function, no block")
-        if unit.get("data") and unit["data"]["assessable"] and unit["ref"] not in blocks:
+        if unit.get("data") and unit["data"]["assessable"] and unit["ref"] not in blocks and unit["file"].startswith("data/"):
             add(unit["ref"], None, "data block present", "differs", "Stored object %s has no roxygen data block" % unit["name"])
     for number, check in enumerate(checks, start=1):
         check["check_id"] = "PD-%04d" % number
@@ -1019,6 +1028,8 @@ def model_unit_outcome(unit, world, facts, raised):
         return shared.ST_UNIT_TEST, "test block", "a test block"
     if kind == shared.KIND_OTHER:
         return shared.ST_SUPPORTING, "package file without code", "a package file without code (%s)" % unit["name"]
+    if unit["file"].startswith(("vignettes/", "inst/doc/")) and kind != shared.KIND_VIGNETTE:
+        return shared.ST_SUPPORTING, "example code in a vignette", "example code in a vignette; it is not part of the model"
     differs, undecided = False, False
     for record in mine.get("math", []):
         if record.get("shown_only"):
@@ -1257,10 +1268,12 @@ def account_coverage(ctx):
             duplicates[chunk["ref"]] = by_hash[chunk["content_hash"]]
         by_hash.setdefault(chunk["content_hash"], chunk["ref"])
     doc_outcomes = {c["ref"]: doc_unit_outcome(c, world, facts, raised) for c in world["doc"]}
-    for chunk in world["canon"]:                         # an equation of the methodology that could not be read is never skipped
-        if chunk["kind"] == "Equation" and not chunk["equation"]["readable"]:
+    for chunk in world["canon"]:                         # what the methodology shows only as a picture is never skipped
+        unread = chunk["kind"] == "Equation" and not chunk["equation"]["readable"]
+        if unread or chunk["kind"] == "Figure" or chunk.get("not_read_reason"):
+            reason = chunk["equation"]["not_readable_reason"] if unread else chunk.get("not_read_reason") or "the content of a figure cannot be read"
             raised[(chunk["ref"], shared.CAT_NOT_READ)] = {"checks": [], "lines": [
-                "This equation of the methodology could not be read (%s), so no code can be checked against it by AIVA." % chunk["equation"]["not_readable_reason"]]}
+                "This %s of the methodology could not be read (%s), so nothing can be checked against it by AIVA." % (chunk["kind"].lower(), reason)]}
     items = build_items(raised, world, ctx.options["run"]["run_id"].replace("Run_", ""))
     ids_by_unit = {}
     for item in items:

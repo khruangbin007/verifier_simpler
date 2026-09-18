@@ -705,7 +705,8 @@ def function_units(name, function_node, lines, path, source_lines, context, insi
         detail["composed"] = shared.to_plain(shared.Expr("eq", args=(shared.Expr("sym", name=shared.normalise_symbol(name)), tree)))
     except CannotConvert as problem:
         detail["not_composed_reason"] = str(problem)
-    if not has_arithmetic(function_node.args[-1], function_map, context["trivial"]):
+    computes = any(has_arithmetic(part, function_map, context["trivial"]) for part in function_node.args if part.kind != "missing")
+    if not computes:                                     # the body AND the defaults: a non-trivial default is never "supporting"
         detail.update(plumbing=True, plumbing_reason="no arithmetic and no number other than the trivial ones: it only "
                                                      "checks, converts or passes values on")
     unit = draft(shared.KIND_FUNCTION, path, lines, name, "\n".join(source_lines[lines[0] - 1:lines[1]]),

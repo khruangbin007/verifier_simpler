@@ -488,6 +488,8 @@ def repair_markup(text, file_name, repairs):
     return text
 
 VOID_TAGS = ("img", "br", "hr", "meta", "link", "input", "col", "area", "base", "wbr")
+BLOCK_STARTS = ("p", "h1", "h2", "h3", "h4", "h5", "h6", "table", "ul", "ol", "div", "li", "tr")
+IMPLIED_END = dict({tag: ("p",) for tag in BLOCK_STARTS}, li=("li", "p"), tr=("tr", "td", "th", "p"), td=("td", "th", "p"), th=("td", "th", "p"))
 
 class TolerantReader(html.parser.HTMLParser):
     """Builds the same kind of element tree as the strict XML parser, from start, end and text
@@ -501,6 +503,8 @@ class TolerantReader(html.parser.HTMLParser):
         self.builder.start("aiva-root", {})
 
     def handle_starttag(self, tag, attrs):
+        while self.open_tags and self.open_tags[-1] in IMPLIED_END.get(tag, ()):       # <p> ends an open <p>, as browsers read it
+            self.builder.end(self.open_tags.pop())
         self.builder.start(tag, {name: value or "" for name, value in attrs})
         if tag in VOID_TAGS:
             self.builder.end(tag)
