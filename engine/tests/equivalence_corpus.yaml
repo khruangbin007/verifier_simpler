@@ -101,3 +101,8 @@ pairs:
   - {name: "a square that moved", expect: different, code: "y = a*b^2", stated: "y = (a*b)^2"}
   - {name: "a surcharge rate", expect: different, code: "y = a*1.125", stated: "y = a*1.25"}
   - {name: "a branch that lost its sign", expect: different, code: "y = piecewise(x > 0, x, -x)", stated: "y = piecewise(x > 0, x, x)"}
+  - {name: "a changed cap on a scaled quantity", expect: different, code: "y = min(0.22, 0.01*n)", stated: "y = min(0.2, 0.01*n)"}
+  - {name: "a changed floor on a scaled quantity", expect: different, code: "y = max(0.5*x, 45)", stated: "y = max(0.5*x, 40)"}
+  - {name: "a moved threshold on a scaled quantity", expect: different, code: "y = piecewise(3*x > 120, a, b)", stated: "y = piecewise(3*x > 100, a, b)"}
+  - {name: "a threshold far outside the generic ranges", expect: different, code: "y = piecewise(x > 25000, 0.5*x, x)", stated: "y = piecewise(x > 30000, 0.5*x, x)"}
+  - {name: "a cap on a scaled quantity written the other way round", expect: equivalent, code: "y = min(0.01*n, 0.2)", stated: "y = min(0.2, 0.01*n)"}

@@ -40,8 +40,8 @@ class FormulaComparison(unittest.TestCase):
     def test_the_corpus_no_differing_pair_ever_agrees(self):
         with open(helpers.os.path.join(helpers.TESTS_DIR, "equivalence_corpus.yaml"), encoding="utf-8") as handle:
             pairs = yaml.safe_load(handle)["pairs"]
-        self.assertEqual(sum(p["expect"] == "equivalent" for p in pairs), 50)
-        self.assertEqual(sum(p["expect"] == "different" for p in pairs), 50)
+        self.assertGreaterEqual(sum(p["expect"] == "equivalent" for p in pairs), 50)
+        self.assertGreaterEqual(sum(p["expect"] == "different" for p in pairs), 50)
         not_agreeing = []
         for pair in pairs:
             result, _ = compared(pair["code"], pair["stated"])

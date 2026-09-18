@@ -567,7 +567,7 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | R8 | `aiva5_run_report.make_settings`, `aiva5_run_report.LiveValues` |
 | R9 | `aiva3_mapping.load_word_lists` |
 | R10 | `aiva0_shared.plain_number`, `aiva5_run_report.plain_cell`, `aiva5_run_report.build_report_file` |
-| R11 | layout tests |
+| R11 | `aiva5_run_report.load_pipeline` |
 | R12 | `aiva5_run_report.copy_whole`, `aiva5_run_report.rebuild_outputs`, `aiva5_run_report.record_determinations` |
 
 ## 22. Settings
@@ -663,9 +663,10 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_aiva0_shared.py` | 19 | Tests of aiva0_shared.py: contracts, canonical JSON, hashes, numbers, symbols, the expression tree. |
 | `test_aiva1_documents.py` | 17 | Tests of aiva1_documents: reading methodology and documentation files of every supported form. |
 | `test_aiva2_package.py` | 12 | Tests of aiva2_package: safe unpacking, the R reader, documentation units and stored data. |
-| `test_aiva3_mapping.py` | 19 | Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators. |
+| `test_aiva3_mapping.py` | 20 | Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators. |
 | `test_aiva4_checks.py` | 27 | Tests of aiva4_checks: the value rule, formula comparison, tables, rules, statuses and the identity. |
 | `test_aiva5_run_report.py` | 16 | Tests of aiva5_run_report.py: the wrapper around chat(), the store, paths, the runner, Output.xlsx. |
+| `test_docs.py` | 4 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
 | `test_end_to_end.py` | 14 | End-to-end tests on the sample projects: sameness of two runs, the human round trip, the report, the wording of everything an analyst reads, replay, and verification of a run folder. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
 | `test_notebook.py` | 1 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
@@ -696,7 +697,7 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | aiva1_documents.py | 1181 | 1500 | 15% |
 | aiva2_package.py | 1285 | 1500 | 13% |
 | aiva3_mapping.py | 1123 | 1500 | 18% |
-| aiva4_checks.py | 1342 | 1500 | 14% |
+| aiva4_checks.py | 1380 | 1500 | 14% |
 | aiva5_run_report.py | 1347 | 1500 | 14% |
 
 **Dependencies.**
@@ -1118,50 +1119,51 @@ Generated from the source: every function and class of the engine with its line 
 | `evaluate` | 145 | function | The value of a tree at one point. |
 | `unit_interval_symbols` | 189 | function | Symbols that sit under a square root, a logarithm or the inverse normal function are drawn from (0, 1), which keeps most sample points inside the domain. |
 | `sample_points` | 198 | function | The sample points: a fixed, recorded seed; ranges (0, 1), (1, 10) and (-10, 10) in turn; symbols with a narrow domain always from (0, 1); symbols supplied by a stored table take its values row by row; and, on purpose, points at, just below and just above every constant that appears in a comparison, a maximum or a minimum. |
-| `numeric_step` | 229 | function | Evaluate both trees at every sample point. |
-| `align` | 248 | function | Align code symbols with the symbols of the stated formula, by code only: identical normalised names; the same name apart from capital letters when that is unambiguous; then the bridge vocabulary (both described by the same words). |
-| `rename` | 280 | function | The code tree written in the stated formula's symbols; defaults put in as numbers. |
-| `right_side` | 288 | function | The right-hand side of an equation; an expression that is no equation is returned whole. |
-| `prepare_alignment` | 292 | function | Everything about one comparison that is settled before any number is computed: the aligned pairs, the defaults put in (only where the stated formula shows that very number), and what is still left for the align-symbols question. |
-| `compare_formulas` | 308 | function | Symbolic step, then numeric step, on an alignment that is already fixed. |
-| `load_world` | 337 | function | Units, chunks, the graph and the latest link of every linked pair, read once per step. |
-| `linked` | 354 | function | References in one corner ("C-", "D-", "M-") that `ref` is linked to, either way round. |
-| `check_edge` | 360 | function | A check never rewrites a link: it appends a new edge on the same pair, which then has the last word in the workbook and in the status rules. |
-| `number_text` | 368 | function | A computed number for a cell: at most six significant digits, never in Python's own notation. |
-| `stated_formula` | 373 | function | The formula a passage states, as (tree, source, reason it cannot be used). |
-| `code_forms` | 388 | function | The formulas a unit offers for comparison, as (tree, defaults, reference it came from). |
-| `stored_values` | 403 | function | Numeric columns of stored tables, as {"object$column": [values]}, for the numeric step. |
-| `math_sentence` | 413 | function | The words of one comparison, as shown in the Math check cell. |
-| `combine` | 428 | function | Several forms of one unit against one formula: any form that agrees settles it; else any form that differs (with its counterexample); else it could not be decided. |
-| `check_mathematics` | 437 | function | Step 11, skill check-mathematics. |
-| `quote` | 540 | function | Input text is always shown visibly quoted, with its citation (same form as in aiva5). |
-| `plain_key` | 545 | function | A row key or header as compared: lower case, single spaces, underscores as spaces. |
-| `header_words` | 549 | function | The index words of a column header, without its unit in brackets. |
-| `map_columns` | 553 | function | Columns matched by header: equal words after normalisation. |
-| `as_grid` | 564 | function | The one layout rule that is supported: a table in long form (two key columns and one value column) is turned into a grid, so that it can be laid over a printed grid. |
-| `reconcile` | 577 | function | Compare two tables cell by cell under the value rule. |
-| `columns_by_values` | 623 | function | Match columns whose values agree with exactly one column on the other side for most keys. |
-| `table_sentences` | 639 | function | The words of one table comparison, as shown in the workbook. |
-| `numbers_with_context` | 653 | function | Every number of a text with the words around it (four before, three after). |
-| `prose_value_lines` | 663 | function | Numbers in a documentation passage or a roxygen block against the numbers of the passages it is linked to. |
-| `check_values` | 689 | function | Step 12, skill check-values: parameter tables against the tables they are linked to (a table that the judge did not link is still matched by its shape); documentation tables against methodology tables; numbers written in linked code; numbers in documentation passages and roxygen text. |
-| `stated_rules` | 788 | function | Floors and caps a passage states: (kind, number, sentence), recognised by generic phrases. |
-| `rule_in_trees` | 802 | function | Code looks first: a maximum (for a floor), a minimum (for a cap), a piecewise expression or a comparison that holds the stated number, written as a number or held as the default of an argument. |
-| `check_rules` | 822 | function | Step 13, skill check-rules. |
-| `check_package_docs` | 862 | function | Step 14, skill check-package-docs. |
-| `concerns_of` | 994 | function | Which of the four Concerns a unit falls under, from its kind. |
-| `citation` | 1002 | function | How a unit or a passage is cited next to a quotation. |
-| `render_path` | 1010 | function | The supporting path of an item, hop by hop, each hop with its citation (plan 2.5). |
-| `gather` | 1034 | function | All check records and AI notes, grouped by the unit they belong to. |
-| `ai_judged_difference` | 1055 | function | Passages the AI judge itself called deviating or inconsistent (not a check's edge). |
-| `model_unit_outcome` | 1060 | function | The status rules for one model unit, top to bottom (plan 2.9). |
-| `doc_unit_outcome` | 1145 | function | The status rules for one documentation unit, top to bottom (plan 2.9). |
-| `lines_or` | 1200 | function | Several lines for one cell without repeats, or the fallback sentence when there is none. |
-| `model_cells` | 1204 | function | The assessment cells of one row of Mapping_Model_to_Canon_and_Doc. |
-| `doc_cells` | 1229 | function | The assessment cells of one row of Mapping_Doc_to_Canon_and_Model. |
-| `build_items` | 1246 | function | One flagged item per unit and category; several observations of one category are listed inside one item. |
-| `check_identity` | 1271 | function | The four-part identity of plan 2.9 (part 4 is completed by the workbook builder). |
-| `account_coverage` | 1289 | function | Step 15, skill account-coverage: one status per unit by the ordered rules, the cells of the assessment columns, one flagged item per unit and category, the identity, and the totals that the workbook builder must reproduce by counting its rows. |
+| `crossing_points` | 229 | function | Where a threshold sits on a scaled quantity, as in min(0.2, 0.01 * n), the two sides meet far outside the generic ranges (here at n = 20). |
+| `numeric_step` | 267 | function | Evaluate both trees at every sample point. |
+| `align` | 286 | function | Align code symbols with the symbols of the stated formula, by code only: identical normalised names; the same name apart from capital letters when that is unambiguous; then the bridge vocabulary (both described by the same words). |
+| `rename` | 318 | function | The code tree written in the stated formula's symbols; defaults put in as numbers. |
+| `right_side` | 326 | function | The right-hand side of an equation; an expression that is no equation is returned whole. |
+| `prepare_alignment` | 330 | function | Everything about one comparison that is settled before any number is computed: the aligned pairs, the defaults put in (only where the stated formula shows that very number), and what is still left for the align-symbols question. |
+| `compare_formulas` | 346 | function | Symbolic step, then numeric step, on an alignment that is already fixed. |
+| `load_world` | 375 | function | Units, chunks, the graph and the latest link of every linked pair, read once per step. |
+| `linked` | 392 | function | References in one corner ("C-", "D-", "M-") that `ref` is linked to, either way round. |
+| `check_edge` | 398 | function | A check never rewrites a link: it appends a new edge on the same pair, which then has the last word in the workbook and in the status rules. |
+| `number_text` | 406 | function | A computed number for a cell: at most six significant digits, never in Python's own notation. |
+| `stated_formula` | 411 | function | The formula a passage states, as (tree, source, reason it cannot be used). |
+| `code_forms` | 426 | function | The formulas a unit offers for comparison, as (tree, defaults, reference it came from). |
+| `stored_values` | 441 | function | Numeric columns of stored tables, as {"object$column": [values]}, for the numeric step. |
+| `math_sentence` | 451 | function | The words of one comparison, as shown in the Math check cell. |
+| `combine` | 466 | function | Several forms of one unit against one formula: any form that agrees settles it; else any form that differs (with its counterexample); else it could not be decided. |
+| `check_mathematics` | 475 | function | Step 11, skill check-mathematics. |
+| `quote` | 578 | function | Input text is always shown visibly quoted, with its citation (same form as in aiva5). |
+| `plain_key` | 583 | function | A row key or header as compared: lower case, single spaces, underscores as spaces. |
+| `header_words` | 587 | function | The index words of a column header, without its unit in brackets. |
+| `map_columns` | 591 | function | Columns matched by header: equal words after normalisation. |
+| `as_grid` | 602 | function | The one layout rule that is supported: a table in long form (two key columns and one value column) is turned into a grid, so that it can be laid over a printed grid. |
+| `reconcile` | 615 | function | Compare two tables cell by cell under the value rule. |
+| `columns_by_values` | 661 | function | Match columns whose values agree with exactly one column on the other side for most keys. |
+| `table_sentences` | 677 | function | The words of one table comparison, as shown in the workbook. |
+| `numbers_with_context` | 691 | function | Every number of a text with the words around it (four before, three after). |
+| `prose_value_lines` | 701 | function | Numbers in a documentation passage or a roxygen block against the numbers of the passages it is linked to. |
+| `check_values` | 727 | function | Step 12, skill check-values: parameter tables against the tables they are linked to (a table that the judge did not link is still matched by its shape); documentation tables against methodology tables; numbers written in linked code; numbers in documentation passages and roxygen text. |
+| `stated_rules` | 826 | function | Floors and caps a passage states: (kind, number, sentence), recognised by generic phrases. |
+| `rule_in_trees` | 840 | function | Code looks first: a maximum (for a floor), a minimum (for a cap), a piecewise expression or a comparison that holds the stated number, written as a number or held as the default of an argument. |
+| `check_rules` | 860 | function | Step 13, skill check-rules. |
+| `check_package_docs` | 900 | function | Step 14, skill check-package-docs. |
+| `concerns_of` | 1032 | function | Which of the four Concerns a unit falls under, from its kind. |
+| `citation` | 1040 | function | How a unit or a passage is cited next to a quotation. |
+| `render_path` | 1048 | function | The supporting path of an item, hop by hop, each hop with its citation (plan 2.5). |
+| `gather` | 1072 | function | All check records and AI notes, grouped by the unit they belong to. |
+| `ai_judged_difference` | 1093 | function | Passages the AI judge itself called deviating or inconsistent (not a check's edge). |
+| `model_unit_outcome` | 1098 | function | The status rules for one model unit, top to bottom (plan 2.9). |
+| `doc_unit_outcome` | 1183 | function | The status rules for one documentation unit, top to bottom (plan 2.9). |
+| `lines_or` | 1238 | function | Several lines for one cell without repeats, or the fallback sentence when there is none. |
+| `model_cells` | 1242 | function | The assessment cells of one row of Mapping_Model_to_Canon_and_Doc. |
+| `doc_cells` | 1267 | function | The assessment cells of one row of Mapping_Doc_to_Canon_and_Model. |
+| `build_items` | 1284 | function | One flagged item per unit and category; several observations of one category are listed inside one item. |
+| `check_identity` | 1309 | function | The four-part identity of plan 2.9 (part 4 is completed by the workbook builder). |
+| `account_coverage` | 1327 | function | Step 15, skill account-coverage: one status per unit by the ordered rules, the cells of the assessment columns, one flagged item per unit and category, the identity, and the totals that the workbook builder must reproduce by counting its rows. |
 
 **aiva5_run_report.py**
 

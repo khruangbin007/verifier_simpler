@@ -224,7 +224,45 @@ def sample_points(trees, symbols, settings, data_values):
                 point = dict(points[len(points) % max(1, int(settings["numeric_points"]))])
                 point[symbol] = value
                 points.append(point)
-    return points
+    return points + crossing_points(trees, symbols, points[:3], narrow)
+
+def crossing_points(trees, symbols, bases, narrow):
+    """Where a threshold sits on a scaled quantity, as in min(0.2, 0.01 * n), the two sides meet
+    far outside the generic ranges (here at n = 20). For every maximum, minimum and comparison,
+    and for every symbol in it, a wide grid is scanned for a change of sign of the difference
+    of the two sides; the crossing is then narrowed by bisection, and points at it and just
+    below and above it are added. Without them a changed cap could pass as agreeing."""
+    wide = [-1e6, -1e4, -1e3, -100.0, -10.0, -1.0, -0.1, -0.01, 0.0, 0.01, 0.1, 1.0, 10.0, 100.0, 1e3, 1e4, 1e6]
+    unit = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
+    pairs = []
+    for tree in trees:
+        for node in shared.expr_walk(tree):
+            if node.op == "cmp" or (node.op == "call" and node.name in ("max", "min")):
+                pairs += [(node.args[i], node.args[j]) for i in range(len(node.args)) for j in range(i + 1, len(node.args))]
+    found = []
+    for left, right in pairs:
+        for symbol in sorted((set(shared.expr_symbols(left)) | set(shared.expr_symbols(right))) & set(symbols)):
+            for base in bases:
+                def gap(value):
+                    try:
+                        a, b = evaluate(left, dict(base, **{symbol: value})), evaluate(right, dict(base, **{symbol: value}))
+                    except NotEvaluable:
+                        return None
+                    return None if a is None or b is None or isinstance(a, bool) or isinstance(b, bool) else a - b
+                grid = unit if symbol in narrow else wide
+                for low, high in zip(grid, grid[1:]):
+                    at_low, at_high = gap(low), gap(high)
+                    if at_low is None or at_high is None or at_low == 0 or (at_low > 0) == (at_high > 0):
+                        continue
+                    for _ in range(60):                  # bisection: deterministic, and bounded
+                        middle = (low + high) / 2.0
+                        at_middle = gap(middle)
+                        if at_middle is None:
+                            break
+                        low, high, at_low = (middle, high, at_middle) if (at_middle > 0) == (at_low > 0) else (low, middle, at_low)
+                    crossing = (low + high) / 2.0
+                    found += [dict(base, **{symbol: value}) for value in (crossing, crossing - max(1e-6, abs(crossing) * 1e-3), crossing + max(1e-6, abs(crossing) * 1e-3))]
+    return found
 
 def numeric_step(code_tree, stated_tree, symbols, settings, data_values):
     """Evaluate both trees at every sample point. Returns (result text, valid points,
