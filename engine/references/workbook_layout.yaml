@@ -22,7 +22,7 @@ sheets:
       - {header: "Section (heading chain)", group: identity, field: section, width: 44}
       - {header: "Para no.", group: identity, field: para_no, width: 9}
       - {header: "Type", group: identity, field: kind, width: 11}
-      - {header: "Text", group: methodology, field: text, width: 90}
+      - {header: "Text", group: methodology, field: text, width: 90, input_text: true}
       - {header: "Source file", group: identity, field: source_file, width: 28}
       - {header: "Cross-references", group: methodology, field: refs_out, width: 24}
       - {header: "Reading note", group: assessments, field: reading_note, width: 40}
@@ -33,7 +33,7 @@ sheets:
       - {header: "Section (heading chain)", group: identity, field: section, width: 44}
       - {header: "Para no.", group: identity, field: para_no, width: 9}
       - {header: "Type", group: identity, field: kind, width: 11}
-      - {header: "Text", group: documentation, field: text, width: 90}
+      - {header: "Text", group: documentation, field: text, width: 90, input_text: true}
       - {header: "Source file", group: identity, field: source_file, width: 28}
       - {header: "Cross-references", group: documentation, field: refs_out, width: 24}
       - {header: "States something checkable", group: assessments, field: checkable, width: 16}
@@ -44,10 +44,10 @@ sheets:
       - {header: "Kind", group: identity, field: kind, width: 20}
       - {header: "File", group: identity, field: file, width: 30}
       - {header: "Lines", group: identity, field: lines, width: 10}
-      - {header: "Name", group: identity, field: name, width: 24}
+      - {header: "Name", group: identity, field: name, width: 24, input_text: true}
       - {header: "Inside", group: identity, field: inside, width: 20}
-      - {header: "Text", group: code_text, field: text, width: 80}
-      - {header: "Expression / arguments", group: code_text, field: expression, width: 50}
+      - {header: "Text", group: code_text, field: text, width: 80, input_text: true}
+      - {header: "Expression / arguments", group: code_text, field: expression, width: 50, input_text: true}
       - {header: "Numbers used", group: code_text, field: numbers, width: 20}
       - {header: "Exported", group: identity, field: exported, width: 10}
       - {header: "Reading note", group: assessments, field: reading_note, width: 40}
@@ -55,21 +55,21 @@ sheets:
     columns:
       - {header: "Model ref", group: identity, field: ref, width: 10}
       - {header: "Kind", group: identity, field: kind, width: 18}
-      - {header: "Name", group: identity, field: name, width: 22}
+      - {header: "Name", group: identity, field: name, width: 22, input_text: true}
       - {header: "File and lines", group: identity, field: where, width: 26}
-      - {header: "Code text", group: code_text, field: text, width: 60}
+      - {header: "Code text", group: code_text, field: text, width: 60, input_text: true}
       - {header: "Canon ref(s)", group: methodology, field: canon_refs, width: 14}
       - {header: "Relation (canon)", group: methodology, field: canon_relation, width: 22}
       - {header: "How established (canon)", group: methodology, field: canon_how, width: 50}
       - {header: "What was searched (canon)", group: methodology, field: canon_searched, width: 50}
       - {header: "Why not mapped (canon)", group: methodology, field: canon_why_not, width: 40}
-      - {header: "Canon text", group: methodology, field: canon_text, width: 60}
+      - {header: "Canon text", group: methodology, field: canon_text, width: 60, input_text: true}
       - {header: "Doc ref(s)", group: documentation, field: doc_refs, width: 14}
       - {header: "Relation (doc)", group: documentation, field: doc_relation, width: 22}
       - {header: "How established (doc)", group: documentation, field: doc_how, width: 50}
       - {header: "What was searched (doc)", group: documentation, field: doc_searched, width: 50}
       - {header: "Why not mapped (doc)", group: documentation, field: doc_why_not, width: 40}
-      - {header: "Doc text", group: documentation, field: doc_text, width: 60}
+      - {header: "Doc text", group: documentation, field: doc_text, width: 60, input_text: true}
       - {header: "Math check", group: assessments, field: math_check, width: 50}
       - {header: "Parameter completeness", group: assessments, field: parameter_completeness, width: 50}
       - {header: "Logic consistency", group: assessments, field: logic_consistency, width: 50}
@@ -84,17 +84,17 @@ sheets:
       - {header: "Doc ref", group: identity, field: ref, width: 10}
       - {header: "Type", group: identity, field: kind, width: 11}
       - {header: "Section (heading chain)", group: identity, field: section, width: 40}
-      - {header: "Doc text", group: documentation, field: text, width: 60}
+      - {header: "Doc text", group: documentation, field: text, width: 60, input_text: true}
       - {header: "Canon ref(s)", group: methodology, field: canon_refs, width: 14}
       - {header: "Relation (canon)", group: methodology, field: canon_relation, width: 22}
       - {header: "How established (canon)", group: methodology, field: canon_how, width: 50}
       - {header: "What was searched (canon)", group: methodology, field: canon_searched, width: 50}
       - {header: "Why not mapped (canon)", group: methodology, field: canon_why_not, width: 40}
-      - {header: "Canon text", group: methodology, field: canon_text, width: 60}
+      - {header: "Canon text", group: methodology, field: canon_text, width: 60, input_text: true}
       - {header: "Model ref(s)", group: code_text, field: model_refs, width: 14}
       - {header: "Relation (model)", group: code_text, field: model_relation, width: 22}
       - {header: "How established (model)", group: code_text, field: model_how, width: 50}
-      - {header: "Model text", group: code_text, field: model_text, width: 60}
+      - {header: "Model text", group: code_text, field: model_text, width: 60, input_text: true}
       - {header: "Value check", group: assessments, field: value_check, width: 50}
       - {header: "Math check", group: assessments, field: math_check, width: 50}
       - {header: "Logic consistency", group: assessments, field: logic_consistency, width: 50}

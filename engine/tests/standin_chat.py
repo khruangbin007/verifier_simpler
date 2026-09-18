@@ -56,18 +56,31 @@ def snippet(text, shared_words, length=6):
     return text[:60]
 
 
+def formula_score(unit, text):
+    """How alike a formula-like passage and a unit are: shared short symbols (whatever their
+    capital letters) and shared whole numbers of three digits or more."""
+    if "=" not in text or not re.search(r"[-+*/^(]", text):
+        return 0
+    symbols = lambda t: {s.lower() for s in re.findall(r"(?<![\w.])[A-Za-z_]{1,4}(?![\w(])", t)} - {"a", "i", "in", "is", "of", "to", "if", "the"}
+    integers = lambda t: set(re.findall(r"(?<![\w.])\d{3,}(?![\w.])", t))
+    return len(symbols(unit) & symbols(text)) + 2 * len(integers(unit) & integers(text))
+
+
 def judge(question_type, prompt, agree_with_all=False):
     unit = block_after(prompt, "UNIT") + "\n" + block_after(prompt, "WHAT THE PACKAGE SAYS ABOUT IT")
     unit_words, unit_numbers = words_of(unit), numbers_of(unit)
-    scored = []
+    scored, formulas = [], []
     for letter, _label, text in passages_of(prompt):
         shared_words = unit_words & words_of(text)
         score = len(shared_words) + 2 * len(unit_numbers & numbers_of(text))
         if agree_with_all or score >= 4:
             scored.append((score, letter, text, shared_words))
+        elif formula_score(unit, text) >= 3:
+            formulas.append((formula_score(unit, text), letter, text, shared_words))
     scored.sort(key=lambda entry: (-entry[0], entry[1]))
+    formulas.sort(key=lambda entry: (-entry[0], entry[1]))
     matches = []
-    for score, letter, text, shared_words in (scored if agree_with_all else scored[:2]):
+    for score, letter, text, shared_words in (scored if agree_with_all else scored[:2] + formulas[:1]):
         matches.append({"letter": letter, "relation": DEFAULT_RELATION[question_type],
                         "confidence": min(95, 50 + 5 * score),
                         "quote_from_passage": snippet(text, shared_words or words_of(text)),

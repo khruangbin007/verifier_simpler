@@ -1121,6 +1121,9 @@ def is_data_file(path):
         return True
     return lowered.endswith((".csv", ".tsv")) and lowered.split("/")[0] in ("data", "inst")
 
+def is_parsed_r_file(path):
+    return path.lower().endswith(".r") and path.lower().split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo")
+
 def file_units(path, data, context, facts):
     """The units of one file of the package, by where it lies and what it is."""
     lowered = path.lower()
@@ -1136,7 +1139,7 @@ def file_units(path, data, context, facts):
     if text is None:
         return [draft(shared.KIND_NOT_READ, path, None, os.path.basename(path), "",
                       read_problem="A binary file of a kind AIVA does not know; it needs a manual review.")]
-    if lowered.endswith(".r") and lowered.split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo"):
+    if is_parsed_r_file(path):
         return units_from_r_source(path, text, context)
     if lowered.endswith(".rd") and lowered.startswith("man/"):
         return [help_page_unit(path, text)]
@@ -1248,6 +1251,10 @@ def read_package(ctx):
             tables.append(dict(values, unit_ref=unit.ref))
     inventory = [{"file": path, "bytes": len(files[path]), "sha256": hashes[path], "swhid": shared.swhid_content(files[path])}
                  for path in sorted(files)]
+    for entry in inventory:                              # for identity part 3: the lines that must lie inside a unit
+        if is_parsed_r_file(entry["file"]):
+            lines = aiva1_documents.decode_text(files[entry["file"]]).split("\n")
+            entry["nonblank_lines"] = [number for number, line in enumerate(lines, start=1) if line.strip()]
     info = {"name": description.get("Package", ""), "version": description.get("Version", ""), "parser": PARSER_NAME,
             "tarball": os.path.basename(tarballs[0]), "files": inventory,
             "rows": package_rows(description, namespace, units, facts, refused)}

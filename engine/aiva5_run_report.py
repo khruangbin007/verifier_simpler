@@ -796,6 +796,7 @@ def rows_mapping(store, corner):
     for record in store.read("graph_ledger"):
         if record.get("record_type") == "edge" and record["kind"] == "corresponds":
             links.setdefault(record["source"], []).append(record)
+            links.setdefault(record["target"], []).append(dict(record, target=record["source"]))   # the same link, seen from the other side
     corner_names = {"canon": "canon", "doc": "doc", "model": "model"}
     for record in store.read("search_records"):
         key = (record["unit_ref"], corner_names[record["target_corner"]])
@@ -811,7 +812,7 @@ def rows_mapping(store, corner):
         row.update(link_columns(row["ref"], other[0], other[1], links, searches, texts))
         status = statuses.get(row["ref"])
         row["status"] = status["status"] if status else shared.NOT_RUN_YET
-        row["item_ids"] = "\n".join(status["item_ids"]) if status else ""
+        row["item_ids"] = ("\n".join(status["item_ids"]) or "No item") if status else ""
         row["cells"] = status["cells"] if status else {}
         rows.append(row)
     return rows
@@ -901,7 +902,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     for row_number, row in enumerate(rows, start=2):
         for number, column in enumerate(columns, start=1):
             value = row.get(column["field"])
-            if value in (None, "") and column["group"] == "assessments" and sheet_layout["name"].startswith("Mapping_M"):
+            if value in (None, "") and column["group"] == "assessments" and sheet_layout["name"].startswith(("Mapping_Model", "Mapping_Doc")):
                 value = shared.NOT_RUN_YET
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap
