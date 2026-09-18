@@ -5,6 +5,7 @@ import unittest
 import yaml
 
 import helpers
+import aiva0r_reading as reading
 import aiva0_shared as shared
 import aiva3_mapping as mapping
 import aiva5_run_report as run
@@ -130,7 +131,7 @@ class Search(unittest.TestCase):
 
 class QuestionsAndValidators(unittest.TestCase):
     def question(self):
-        prompt = mapping.load_prompt(run.REFERENCES_DIR, "judge-unit-to-canon")
+        prompt = reading.load_prompt(run.REFERENCES_DIR, "judge-unit-to-canon")
         passages = [("C-0009", "3.1.1 Floor, paragraph 1", "The probability of default is never taken below 0.03%."),
                     ("C-0008", "3.1, paragraph 1", "The probability of default is estimated from internal ratings and is reviewed every year."),
                     ("C-0099", "9 Other, paragraph 1", "All parcels are weighed at the counter before they are priced.")]

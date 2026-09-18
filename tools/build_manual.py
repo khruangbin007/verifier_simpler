@@ -26,8 +26,8 @@ import aiva4_checks                    # noqa: E402
 import aiva5_run_report as run         # noqa: E402
 import count_lines                     # noqa: E402
 
-BUNDLES = ("aiva0_shared", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
-RULES = ["R%d" % n for n in range(1, 13)]
+BUNDLES = ("aiva0_shared", "aiva0r_reading", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
+RULES = ["R%d" % n for n in range(1, 14)]
 SETTING_NOTES = {
     "k_candidates": "How many passages are shown to the judge for one unit and corner.", "concurrency_limit": "How many questions are asked at the same time.",
     "token_cap": "The gateway's limit for one call, in tokens.", "answer_reserve": "Tokens kept free for the answer.",

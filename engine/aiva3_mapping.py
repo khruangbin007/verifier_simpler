@@ -49,6 +49,7 @@ import re
 import yaml
 
 import aiva0_shared as shared
+import aiva0r_reading as reading
 import aiva1_documents
 
 SKILL_VERSIONS = {"build-graph": "0.0.1", "find-candidates": "0.0.1", "judge-links": "0.0.1", "interpret-code": "0.0.1"}
@@ -741,37 +742,6 @@ def find_candidates(ctx):
                               "searches without any proposal": sum(1 for r in records if not r["shortlist"])}, [])
 
 # ---------------------------------------------------------------- questions for the AI
-def load_prompt(references_dir, question_type):
-    """A prompt template: its version line, its SYSTEM part and its MAIN part with slots."""
-    with open(os.path.join(references_dir, "prompts", question_type + ".txt"), encoding="utf-8") as handle:
-        text = handle.read()
-    version, rest = text.split("\n", 1)
-    system, main = rest.split("=== MAIN ===\n", 1)
-    return {"version": version.strip(), "system": system.replace("=== SYSTEM ===\n", "").strip(), "main": main.strip()}
-
-def estimate_tokens(prose, code=""):
-    """No tokenizer can be installed, so tokens are estimated from characters, on the safe
-    side: one token per 3.2 characters of prose and per 2.5 characters of code and numbers."""
-    return int(len(prose) / 3.2 + len(code) / 2.5) + 1
-
-def prompt_budget(settings, system_prompt):
-    """Tokens available for the main prompt: the smaller of the target size (long prompts are
-    answered badly) and what the cap leaves after all reserves."""
-    room = settings["token_cap"] - settings["answer_reserve"] - settings["thinking_reserve"] - estimate_tokens(system_prompt)
-    return min(int(settings["prompt_target_tokens"]), int(room * (1 - settings["safety_margin"])))
-
-def cut_text(text, limit, keep_words=()):
-    """Cut a long text to `limit` characters around the first of `keep_words` it contains (the
-    matched region), marking the cuts; lines stay whole where possible."""
-    if len(text) <= limit:
-        return text
-    lowered = text.lower()
-    hits = [lowered.find(word.lower()) for word in keep_words if word and lowered.find(word.lower()) >= 0]
-    centre = min(hits) if hits else 0
-    start = max(0, min(centre - limit // 3, len(text) - limit))
-    piece = text[start:start + limit]
-    return ("[... cut ...] " if start else "") + piece + (" [... cut ...]" if start + limit < len(text) else "")
-
 def cut_code(text, limit):
     """Cut a long function around its formula lines: the header, then every line that
     computes something with two lines of context, until the limit is reached."""
@@ -803,7 +773,7 @@ def passage_text(node, settings, keep_words=()):
             len(rows), len(table["header"]), "; caption: " + node["caption"] if node.get("caption") else "")
     if node.get("code") is not None or node.get("file"):
         return cut_code(node["text"], int(settings["max_passage_chars"]))
-    return cut_text(node["text"], int(settings["max_passage_chars"]), keep_words)
+    return reading.cut_text(node["text"], int(settings["max_passage_chars"]), keep_words)
 
 def passage_label(node):
     """The heading line of a lettered passage: where it stands, never its reference."""
@@ -843,16 +813,16 @@ def assemble_question(question_type, unit_ref, blocks, passages, prompt, setting
                 "planted": [letter for letter, (ref, _, _) in letters.items() if ref in planted],
                 "passage_texts": {letter: text for letter, (_, _, text) in letters.items()},
                 "unit_text": "\n".join(text for _, text in blocks), "strip_patterns": list(settings["strip_patterns"]),
-                "estimated_tokens": estimate_tokens(main, blocks[0][1] if blocks else ""),
+                "estimated_tokens": reading.estimate_tokens(main, blocks[0][1] if blocks else ""),
                 "question_id": shared.sha256_text(prompt["version"] + "\n" + prompt["system"] + "\n" + main)}
     question.update(more or {})
-    question["too_large"] = question["estimated_tokens"] > prompt_budget(settings, prompt["system"])
+    question["too_large"] = question["estimated_tokens"] > reading.prompt_budget(settings, prompt["system"])
     return question
 
 def narrow_question(question_type, unit_ref, blocks, references_dir, settings, passages=(), more=None):
     """The narrow questions of the checks (map-table-columns, align-symbols, read-formula-
     from-prose, check-rule): same assembly, same budget, same validators."""
-    return assemble_question(question_type, unit_ref, blocks, list(passages), load_prompt(references_dir, question_type), settings, more=more)
+    return assemble_question(question_type, unit_ref, blocks, list(passages), reading.load_prompt(references_dir, question_type), settings, more=more)
 
 def judge_question(source, corner, candidates, world, references_dir, settings):
     """The judge question of one unit (or documentation passage) and one target corner."""
@@ -866,43 +836,18 @@ def judge_question(source, corner, candidates, world, references_dir, settings):
                            1 if len(shortlist) < 6 else 2)
     words = [word for words in world["representations"][source["ref"]]["fields"].values() for word in words]
     passages = [(ref, passage_label(pool[ref]), passage_text(pool[ref], settings, words)) for ref in shortlist + decoys]
-    unit_text = cut_text(source["text"], int(settings["max_unit_chars"])) if is_chunk else cut_code(source["text"], int(settings["max_unit_chars"]))
+    unit_text = reading.cut_text(source["text"], int(settings["max_unit_chars"])) if is_chunk else cut_code(source["text"], int(settings["max_unit_chars"]))
     blocks = [("UNIT (%s)" % passage_label(source), unit_text)]
     about = world["documented_by"].get(source["ref"]) or world["documented_by"].get(source.get("parent_ref") or "")
     if about and not is_chunk:
-        blocks.append(("WHAT THE PACKAGE SAYS ABOUT IT", cut_text(re.sub(r"(?m)^\s*#' ?", "", about["text"]), 1200)))
-    return assemble_question(question_type, source["ref"], blocks, passages, load_prompt(references_dir, question_type),
+        blocks.append(("WHAT THE PACKAGE SAYS ABOUT IT", reading.cut_text(re.sub(r"(?m)^\s*#' ?", "", about["text"]), 1200)))
+    return assemble_question(question_type, source["ref"], blocks, passages, reading.load_prompt(references_dir, question_type),
                              settings, planted=decoys, more={"target_corner": corner})
 
 # ---------------------------------------------------------------- validators: code decides what is usable
 class Rejected(Exception):
     """An answer that cannot be used. The message is one reason from the fixed plain list."""
 
-def last_json_object(text):
-    """The last balanced {...} object in a text, or None. Braces inside strings are skipped."""
-    end = text.rfind("}")
-    while end >= 0:
-        depth, in_string, position = 0, False, end
-        while position >= 0:
-            char = text[position]
-            if char == '"' and (position == 0 or text[position - 1] != "\\"):
-                in_string = not in_string
-            elif not in_string:
-                depth += 1 if char == "}" else -1 if char == "{" else 0
-                if depth == 0:
-                    return text[position:end + 1]
-            position -= 1
-        end = text.rfind("}", 0, end)
-    return None
-
-def strict_json(text):
-    """Strict parsing: no repair of malformed JSON, and a repeated key is refused."""
-    def no_repeats(pairs):
-        keys = [key for key, _ in pairs]
-        if len(keys) != len(set(keys)):
-            raise ValueError("repeated key")
-        return dict(pairs)
-    return json.loads(text, object_pairs_hook=no_repeats)
 
 def check_quote(quote, text, required=True):
     """A quotation must be verbatim after white-space normalisation, contiguous, without an
@@ -1008,9 +953,9 @@ def validate_answer(question, text):
         for pattern in question.get("strip_patterns", ()):
             text = re.sub(pattern, "", text)
         text = re.sub(r"```[a-zA-Z]*", "", text)
-        found = last_json_object(text)
+        found = reading.last_json_object(text)
         try:
-            answer = strict_json(found) if found else None
+            answer = reading.strict_json(found) if found else None
         except ValueError:
             answer = None
         if not isinstance(answer, dict):
@@ -1072,13 +1017,13 @@ def interpret_question(unit, functions, outline, described, references_dir, sett
     if inside is not None:
         about.append("This piece is one statement inside the function %s. The whole function:\n%s" % (inside["name"], cut_code(inside["text"], settings["max_unit_chars"])))
     if owner["ref"] in described:
-        about.append("What the package's own documentation says:\n%s" % cut_text(described[owner["ref"]]["text"], settings["max_passage_chars"]))
+        about.append("What the package's own documentation says:\n%s" % reading.cut_text(described[owner["ref"]]["text"], settings["max_passage_chars"]))
     code = owner.get("code") or {}
     callers = sorted(name for name, other in functions.items() if owner["name"] and owner["name"] in (other.get("code") or {}).get("calls", []))
     facts = [("It is called by", callers), ("Within this package it calls", sorted(c for c in code.get("calls", []) if c in functions)),
              ("It reads the stored data", sorted({r["object"] for r in code.get("reads_data", [])}))]
     about.extend("%s: %s." % (says, ", ".join(names)) for says, names in facts if names)
-    about.append("The whole package:\n%s" % cut_text(outline, 4000, keep_words=(owner["name"],)))
+    about.append("The whole package:\n%s" % reading.cut_text(outline, 4000, keep_words=(owner["name"],)))
     where = "%s%s, %s%s" % (unit["kind"], " " + unit["name"] if unit["name"] else "", unit["file"],
                            " lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "")
     blocks = [("THE PIECE OF CODE (%s)" % where, cut_code(unit["text"], settings["max_unit_chars"])),
@@ -1189,10 +1134,10 @@ def second_opinions(ctx, follow_ups, sources, world):
     questions = {}
     for (unit_ref, corner), targets in sorted(follow_ups.items()):
         source, pool = sources[unit_ref], world["targets"][corner]
-        text = cut_text(source["text"], int(ctx.settings["max_unit_chars"]))
+        text = reading.cut_text(source["text"], int(ctx.settings["max_unit_chars"]))
         passages = [(ref, passage_label(pool[ref]), passage_text(pool[ref], ctx.settings)) for ref in sorted(set(targets))]
         question = assemble_question("second-opinion", unit_ref, [("UNIT (%s)" % passage_label(source), text)], passages,
-                                     load_prompt(ctx.options["references_dir"], "second-opinion"), ctx.settings, more={"target_corner": corner})
+                                     reading.load_prompt(ctx.options["references_dir"], "second-opinion"), ctx.settings, more={"target_corner": corner})
         if not question["too_large"]:
             questions[question["question_id"]] = question
     answers, opinions = ctx.ask(list(questions.values())), []

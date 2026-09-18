@@ -1,4 +1,4 @@
-"""count_lines.py - line counts and docstring share of the six engine files against their budgets.
+"""count_lines.py - line counts and docstring share of the seven engine files against their budgets.
 
 Usage: python tools/count_lines.py      (exit code 1 when a file is over budget)
 Budget (plan 2.13): 1,500 lines per bundle, 450 for the shared file, counting everything;
@@ -10,7 +10,7 @@ import sys
 import tokenize
 
 ENGINE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
-BUDGETS = {"aiva0_shared.py": 450, "aiva1_documents.py": 1500, "aiva2_package.py": 1500,
+BUDGETS = {"aiva0_shared.py": 450, "aiva0r_reading.py": 1100, "aiva1_documents.py": 1500, "aiva2_package.py": 1500,
            "aiva3_mapping.py": 1500, "aiva4_checks.py": 1500, "aiva5_run_report.py": 1500}
 MINIMUM_EXPLANATION_SHARE = 0.30
 

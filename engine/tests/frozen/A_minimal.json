@@ -1,0 +1,3882 @@
+{
+ "chunks_canon": [
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "621e23c10e5bf219afe2cbce5134fc7b4c8c358fa525383c9a12e4deb62464bf",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "1. Purpose and scope"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[2]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "1.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0001",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "This method sets out how the price of a parcel is determined from its size, its weight and its destination zone."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "6ddfa88a07e6e01affea9efd7ae701ff8a7502275077a2b84d511854ce3adae6",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "1. Purpose and scope"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[2]/section[3]/p",
+   "not_read_reason": "",
+   "numbering": "1.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0002",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "It applies to every parcel handed in at a counter. Pallets and letters are outside its scope."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "b1fde67f34230ccff138cc5caf578610f330f8443955e38e0d21284da69dc83b",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "1. Purpose and scope"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[2]/section[4]/p",
+   "not_read_reason": "",
+   "numbering": "1.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 3,
+   "ref": "C-0003",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The method is reviewed once a year by the pricing committee."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "3db07d59997e62e8c23e9519606433ceef1fbaee57b48ded7db98b017227fb7e",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "2. Definitions"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[3]/section[2]/list[1]/item",
+   "not_read_reason": "",
+   "numbering": "2.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0004",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Actual weight (AW) is the weight of the parcel in kilograms as shown by the scale."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "2406f42f7195159276b7975a227e0ff11f0a7e1142b8e79b3ae1433984ea01e9",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "2. Definitions"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[3]/section[2]/list[2]/item",
+   "not_read_reason": "",
+   "numbering": "2.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0005",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Dimensional weight (DW) is a weight derived from the volume of the parcel."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "a55125001c89585f0b9d0a7394bcbdac0dc9c9f75bdcf4f0cb9b1c513269c0fb",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "2. Definitions"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[3]/section[2]/list[3]/item",
+   "not_read_reason": "",
+   "numbering": "2.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 3,
+   "ref": "C-0006",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Chargeable weight (CW) is the weight on which the price is based."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "7e0d040978700e648ecd54eff2b6cf795f015b8e433e3a39546f277c6f3857c9",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "2. Definitions"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[3]/section[2]/list[4]/item",
+   "not_read_reason": "",
+   "numbering": "2.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 4,
+   "ref": "C-0007",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The zone is the destination area of the parcel: Local, National or Abroad."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "7431b01b96a3fad7de50672564ead0daafc9e45cb5838ad3247ce2d4aba89243",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "3. Weights",
+    "3.1 Dimensional weight"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[4]/section[2]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "3.1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0008",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The dimensional weight is obtained from the length L, the width W and the height H of the parcel, measured in centimetres."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "a0df8f6cb66fcfdad9f8fef4a3eee152c77a0e530236c48362b50bd5faa12d0e",
+   "corner": "canon",
+   "equation": {
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "dw",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [
+            {
+             "args": [],
+             "name": "L",
+             "op": "sym",
+             "span": null,
+             "value": null
+            },
+            {
+             "args": [],
+             "name": "W",
+             "op": "sym",
+             "span": null,
+             "value": null
+            }
+           ],
+           "name": null,
+           "op": "mul",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "H",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "5000"
+        }
+       ],
+       "name": null,
+       "op": "div",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "image_sha256": "",
+    "linear": "dw = L * W * H / 5000",
+    "not_readable_reason": "",
+    "readable": true,
+    "source_form": "mathml"
+   },
+   "heading_chain": [
+    "Parcel pricing method",
+    "3. Weights",
+    "3.1 Dimensional weight"
+   ],
+   "kind": "Equation",
+   "level": 3,
+   "locator": "/document[4]/section[2]/section[3]/equation",
+   "not_read_reason": "",
+   "numbering": "3.1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": null,
+   "ref": "C-0009",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "dw = L * W * H / 5000"
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "9bd2600c0d3611253ace7cb2f85c5972b6fea591c77225a02c0c13f574f3b317",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "3. Weights",
+    "3.1 Dimensional weight"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[4]/section[2]/section[4]/p",
+   "not_read_reason": "",
+   "numbering": "3.1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0010",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The divisor of 5000 is fixed and is not varied by zone."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "ad3f7a7c1dc16f8e422485cb52bc3af90150f17ca3e588e18d4d393ad2906c4d",
+   "corner": "canon",
+   "equation": {
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "cw",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "aw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": "dw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": "max",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "image_sha256": "",
+    "linear": "cw = max(aw, dw)",
+    "not_readable_reason": "",
+    "readable": true,
+    "source_form": "inline"
+   },
+   "heading_chain": [
+    "Parcel pricing method",
+    "3. Weights",
+    "3.2 Chargeable weight"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[4]/section[3]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "3.2",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0011",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The chargeable weight is the larger of the actual weight and the dimensional weight: CW = max(AW, DW)."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "be351eb308f61d0745dde7716e8066b2849c72b3cb8c5d70ee775467e53d4291",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "3. Weights",
+    "3.2 Chargeable weight"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[4]/section[3]/section[3]/p",
+   "not_read_reason": "",
+   "numbering": "3.2",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0012",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The chargeable weight is never taken below 0.5 kilograms."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "9adbbe016804ec1e13f82be6f875cfef2abc795d467c462115dc91c88af9f7b2",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "3. Weights",
+    "3.2 Chargeable weight"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[4]/section[3]/section[4]/p",
+   "not_read_reason": "",
+   "numbering": "3.2",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 3,
+   "ref": "C-0013",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Weights are not rounded before the price is calculated."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "32ee907d98ef3141948c57aaf38ef6b64f51eb89feb3834d13f856561b68783e",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.1 Zone rates"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[2]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "4.1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0014",
+   "refs_out": [
+    "Table 1"
+   ],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Each zone has a base rate and a rate per kilogram, as set out in Table 1."
+  },
+  {
+   "caption": "Table 1. Rates by zone",
+   "checkable": null,
+   "content_hash": "4eb43001d204830603fcc7270f171fe452607c7add6ec831564c3ed107a9a0c1",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.1 Zone rates"
+   ],
+   "kind": "Table",
+   "level": 3,
+   "locator": "/document[5]/section[2]/section[3]/table",
+   "not_read_reason": "",
+   "numbering": "4.1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": null,
+   "ref": "C-0015",
+   "refs_out": [
+    "Table 1"
+   ],
+   "source_file": "parcel_pricing_method.xml",
+   "table": {
+    "column_types": [
+     "text",
+     "number",
+     "number"
+    ],
+    "header": [
+     "Zone",
+     "Base rate",
+     "Rate per kg"
+    ],
+    "row_key": "Zone",
+    "rows": [
+     [
+      "Local",
+      "3.20",
+      "0.85"
+     ],
+     [
+      "National",
+      "4.90",
+      "1.10"
+     ],
+     [
+      "Abroad",
+      "9.50",
+      "2.75"
+     ]
+    ]
+   },
+   "text": "Zone; Base rate; Rate per kg\nLocal; 3.20; 0.85\nNational; 4.90; 1.10\nAbroad; 9.50; 2.75"
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "ef59c04ee2fc246c098862d949c4a5e63a0b2718ddf9943a1e7a936ed8cfcbf2",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.1 Zone rates"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[2]/section[4]/p",
+   "not_read_reason": "",
+   "numbering": "4.1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0016",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Rates are stated in the currency of the counter and exclude tax."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "f80aba47b9b952659f73387abfd8aa07ea37aa2655191cdecce7c8e20ba23c50",
+   "corner": "canon",
+   "equation": {
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "P",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "B",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "R",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "cw",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "add",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "image_sha256": "",
+    "linear": "P = B + R * cw",
+    "not_readable_reason": "",
+    "readable": true,
+    "source_form": "inline"
+   },
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.2 Price before surcharge"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[3]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "4.2",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0017",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The price before surcharge is the base rate plus the rate per kilogram times the chargeable weight: P = B + R * CW."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "70dc839306d75c656eb64b3a56d969788cfa57ab0caacb84c4a1ff79def19aa9",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.2 Price before surcharge"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[3]/section[3]/p",
+   "not_read_reason": "",
+   "numbering": "4.2",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0018",
+   "refs_out": [
+    "Table 1"
+   ],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "B and R are taken from Table 1 for the zone of the parcel."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "6aaedef9a5637d5f3f7e49b09724c81d602a0f8d6869cf92d1574e46b4e143b0",
+   "corner": "canon",
+   "equation": {
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "S",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "P",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "1"
+          },
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "0.125"
+          }
+         ],
+         "name": null,
+         "op": "add",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "mul",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "image_sha256": "",
+    "linear": "S = P * (1 + 0.125)",
+    "not_readable_reason": "",
+    "readable": true,
+    "source_form": "inline"
+   },
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.3 Fuel surcharge"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[4]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "4.3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0019",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "A fuel surcharge of 12.5% is added to the price before surcharge: S = P * (1 + 0.125)."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "548edc03726a00ded7bc4795382cbb5dfe6bec8b63b060ba60cc515fb92c09fe",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.3 Fuel surcharge"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[4]/section[3]/p",
+   "not_read_reason": "",
+   "numbering": "4.3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0020",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The surcharge rate is set by the pricing committee and is the same for all zones."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "d8464d09d8ff6aaaee3a848aa2c16b390d933d5cf173bf2adeead0da6abde49b",
+   "corner": "canon",
+   "equation": {
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "D",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "0.2"
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "0.01"
+          },
+          {
+           "args": [],
+           "name": "n",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": "min",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "image_sha256": "",
+    "linear": "D = min(0.2, 0.01 * n)",
+    "not_readable_reason": "",
+    "readable": true,
+    "source_form": "inline"
+   },
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.4 Volume discount"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[5]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "4.4",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0021",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "A customer who hands in n parcels at once receives a discount rate of 1% per parcel, capped at 20%: D = min(0.2, 0.01 * n)."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "b761d60eb635b6d8a283854d6ed1278f58f6223f7b1fbde8d0737f8e032bf878",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.4 Volume discount"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[5]/section[3]/p",
+   "not_read_reason": "",
+   "numbering": "4.4",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0022",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The discount is applied to the price after surcharge."
+  },
+  {
+   "caption": "Figure 1. Discount rate by number of parcels",
+   "checkable": null,
+   "content_hash": "9e5bbb4396ec26191745c5098e0280ce63211bdf366b18906f94d3daaa1c9bab",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.4 Volume discount"
+   ],
+   "kind": "Figure",
+   "level": 3,
+   "locator": "/document[5]/section[5]/section[4]/figure",
+   "not_read_reason": "",
+   "numbering": "4.4",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": null,
+   "ref": "C-0023",
+   "refs_out": [
+    "Figure 1"
+   ],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Discount rate against number of parcels"
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "fc95b8af543afd7233d83884e6d1f0aca85357f6166aa8f234841743851d80d1",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.5 Minimum price"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[6]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "4.5",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0024",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "The final price is never below 4.50, whatever the zone and the discount."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "aaeb647db3c7340241ce85a939e15a5ad8436bd8da3618322e68000511eef77f",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "4. Price",
+    "4.5 Minimum price"
+   ],
+   "kind": "Paragraph",
+   "level": 3,
+   "locator": "/document[5]/section[6]/section[3]/p",
+   "not_read_reason": "",
+   "numbering": "4.5",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0025",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Final prices are rounded to 2 decimals."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "cfc147f7846eacc9b55a6880af4f3beb0aa6c429b82136f8b1747925c255e89f",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "5. Governance"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[6]/section[2]/p",
+   "not_read_reason": "",
+   "numbering": "5.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "C-0026",
+   "refs_out": [
+    "Table 1"
+   ],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Changes to Table 1 are approved by the pricing committee and recorded in the change log."
+  },
+  {
+   "caption": "",
+   "checkable": null,
+   "content_hash": "b6bbe65ead6f8cae9123033b0a339d4cf30df0754c51cc76fdfca95627a2e82f",
+   "corner": "canon",
+   "equation": null,
+   "heading_chain": [
+    "Parcel pricing method",
+    "5. Governance"
+   ],
+   "kind": "Paragraph",
+   "level": 2,
+   "locator": "/document[6]/section[3]/p",
+   "not_read_reason": "",
+   "numbering": "5.",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "C-0027",
+   "refs_out": [],
+   "source_file": "parcel_pricing_method.xml",
+   "table": null,
+   "text": "Questions about this method are answered by the pricing office."
+  }
+ ],
+ "chunks_doc": [
+  {
+   "caption": "",
+   "checkable": false,
+   "content_hash": "1bba2ccd03ad4b9f984a53c363be56ace9ec7ffba7eda21e39911daf3f97827a",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "1 Overview"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 2",
+   "not_read_reason": "",
+   "numbering": "1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "D-0001",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "This document describes how the parcelcost package implements the parcel pricing method."
+  },
+  {
+   "caption": "",
+   "checkable": false,
+   "content_hash": "377ed539ca430f742d6289b55adad4190e835a813a4fbb0ab2d62eb70c0102f0",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "1 Overview"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 3",
+   "not_read_reason": "",
+   "numbering": "1",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "D-0002",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The package is maintained by the pricing office and released once a year."
+  },
+  {
+   "caption": "",
+   "checkable": true,
+   "content_hash": "7ae571f65cafd280ddea86923be021dcd7e177168ea21227118cdaf1e1558e50",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "2 Weights"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 5",
+   "not_read_reason": "",
+   "numbering": "2",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "D-0003",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The function dim_weight derives the dimensional weight from length, width and height with the fixed divisor of 5000."
+  },
+  {
+   "caption": "",
+   "checkable": true,
+   "content_hash": "3ece90e40ece6e74bd01e1aedf1aa911862c9878107ba6ca63138afde6256ffd",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "2 Weights"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 6",
+   "not_read_reason": "",
+   "numbering": "2",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "D-0004",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The function chargeable_weight returns the larger of actual weight and dimensional weight and never returns less than 0.5 kilograms."
+  },
+  {
+   "caption": "",
+   "checkable": false,
+   "content_hash": "763a1aed6e20bf95cfbfc807932f341957606c8da4275d56ab53b38e928076cd",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "3 Price"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 8",
+   "not_read_reason": "",
+   "numbering": "3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "D-0005",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The function parcel_price looks up the base rate and the rate per kilogram of the zone in the table zone_rates."
+  },
+  {
+   "caption": "Table A. Rates held in the package",
+   "checkable": true,
+   "content_hash": "4eb43001d204830603fcc7270f171fe452607c7add6ec831564c3ed107a9a0c1",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "3 Price"
+   ],
+   "kind": "Table",
+   "level": 1,
+   "locator": "body element 10",
+   "not_read_reason": "",
+   "numbering": "3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": null,
+   "ref": "D-0006",
+   "refs_out": [
+    "Table A"
+   ],
+   "source_file": "parcelcost_documentation.docx",
+   "table": {
+    "column_types": [
+     "text",
+     "number",
+     "number"
+    ],
+    "header": [
+     "Zone",
+     "Base rate",
+     "Rate per kg"
+    ],
+    "row_key": "Zone",
+    "rows": [
+     [
+      "Local",
+      "3.20",
+      "0.85"
+     ],
+     [
+      "National",
+      "4.90",
+      "1.10"
+     ],
+     [
+      "Abroad",
+      "9.50",
+      "2.75"
+     ]
+    ]
+   },
+   "text": "Zone; Base rate; Rate per kg\nLocal; 3.20; 0.85\nNational; 4.90; 1.10\nAbroad; 9.50; 2.75"
+  },
+  {
+   "caption": "",
+   "checkable": true,
+   "content_hash": "f0f9dc77edd0fb2196e2ee38fdf04a618a4c7a358f9fc320782f67f1910f913c",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "3 Price"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 11",
+   "not_read_reason": "",
+   "numbering": "3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "D-0007",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The price before surcharge equals the base rate plus the rate per kilogram times the chargeable weight."
+  },
+  {
+   "caption": "",
+   "checkable": true,
+   "content_hash": "2ee3925edded72adcf3d17f8ba9e1bc19364680e00f7dc18b638a294a9cce30e",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "3 Price"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 12",
+   "not_read_reason": "",
+   "numbering": "3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 3,
+   "ref": "D-0008",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "A fuel surcharge of 12.5% is added to the price before surcharge."
+  },
+  {
+   "caption": "",
+   "checkable": true,
+   "content_hash": "2d4834bed04e9a538d25447a7351b8674b66932e49285519f0e02728b4c53e71",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "3 Price"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 13",
+   "not_read_reason": "",
+   "numbering": "3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 4,
+   "ref": "D-0009",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The volume discount is 1% per parcel and is capped at 20%."
+  },
+  {
+   "caption": "",
+   "checkable": true,
+   "content_hash": "d70ffd5fe8af7656d006d6893163cf07e58d8d19ce19a69ada2b43b30d4f5b9a",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "3 Price"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 14",
+   "not_read_reason": "",
+   "numbering": "3",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 5,
+   "ref": "D-0010",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The final price is never below 4.50 and is rounded to 2 decimals."
+  },
+  {
+   "caption": "",
+   "checkable": true,
+   "content_hash": "3651539a00276e4759019ba140a032a4b275e7c5100845db3cf1cc48218a4b28",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "4 Testing"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 16",
+   "not_read_reason": "",
+   "numbering": "4",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "D-0011",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "Unit tests cover the dimensional weight and the minimum price."
+  },
+  {
+   "caption": "",
+   "checkable": false,
+   "content_hash": "9b6302dd3b675bfb6b4145478270e49f60837578323aeef3dcac3225888117bb",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "4 Testing"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 17",
+   "not_read_reason": "",
+   "numbering": "4",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 2,
+   "ref": "D-0012",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "The tests are run before every release."
+  },
+  {
+   "caption": "",
+   "checkable": false,
+   "content_hash": "998fcc62a249a757afb4fc9d72217916f6497b9f4d297c4149e719a5fad85509",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "5 Contacts"
+   ],
+   "kind": "Paragraph",
+   "level": 1,
+   "locator": "body element 19",
+   "not_read_reason": "",
+   "numbering": "5",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": 1,
+   "ref": "D-0013",
+   "refs_out": [],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "Questions are answered by the pricing office."
+  },
+  {
+   "caption": "Figure A. Release calendar",
+   "checkable": null,
+   "content_hash": "f24b4cd9ef31ae7a6d0ca643a8a5c5b4b80447fb5bc5951f39b8e56d75d28d55",
+   "corner": "doc",
+   "equation": null,
+   "heading_chain": [
+    "5 Contacts"
+   ],
+   "kind": "Figure",
+   "level": 1,
+   "locator": "body element 20",
+   "not_read_reason": "",
+   "numbering": "5",
+   "numbering_reconstructed": false,
+   "para_label": "",
+   "para_no": null,
+   "ref": "D-0014",
+   "refs_out": [
+    "Figure A"
+   ],
+   "source_file": "parcelcost_documentation.docx",
+   "table": null,
+   "text": "Picture 1"
+  }
+ ],
+ "model_units": [
+  {
+   "code": null,
+   "content_hash": "7c52c0936efdcb53b0a741518ba5da3b896955e8b82c1299d11dbd8a2c387845",
+   "data": null,
+   "file": "DESCRIPTION",
+   "file_sha256": "04cef9d325273cc47e743dc0a3fb58a0b598ebe5743a1955ab51bf9d294c5755",
+   "helppage": null,
+   "inside": "",
+   "kind": "Other file",
+   "lines": [
+    1,
+    8
+   ],
+   "name": "DESCRIPTION",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0001",
+   "roxygen": null,
+   "text": "Package: parcelcost\nTitle: Parcel Pricing\nVersion: 1.2.0\nDescription: Prices parcels by zone\n    and chargeable weight.\nLicense: MIT\nEncoding: UTF-8\n"
+  },
+  {
+   "code": null,
+   "content_hash": "f914dbbfb0ee6a545ef424a06cd5344b488fd3edc026f48e5db828b703aef054",
+   "data": null,
+   "file": "NAMESPACE",
+   "file_sha256": "55bbcf77d1f38f9a2439dafa44de04584ddce80b2d192462b973b1951e65ac1f",
+   "helppage": null,
+   "inside": "",
+   "kind": "Other file",
+   "lines": [
+    1,
+    5
+   ],
+   "name": "NAMESPACE",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0002",
+   "roxygen": null,
+   "text": "export(dim_weight)\nexport(chargeable_weight)\nexport(parcel_price)\nexport(volume_discount)\n"
+  },
+  {
+   "code": null,
+   "content_hash": "f638f3629436d6ebf24a9f3631672d57105d36bcfa054c0c0f5f6cfd891b2e39",
+   "data": null,
+   "file": "R/data.R",
+   "file_sha256": "7f1d7f3377e8267fc0bfa5cd84362a8733707b987a086792b2968927c30f741c",
+   "helppage": null,
+   "inside": "",
+   "kind": "Roxygen block",
+   "lines": [
+    1,
+    9
+   ],
+   "name": "zone_rates",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0003",
+   "roxygen": {
+    "documents_name": "zone_rates",
+    "documents_ref": "M-0022",
+    "formulas": [],
+    "tags": [
+     {
+      "line": 1,
+      "name": "",
+      "tag": "description",
+      "text": "Rates by zone\nBase rate and rate per kilogram for each destination zone."
+     },
+     {
+      "line": 4,
+      "name": "",
+      "tag": "format",
+      "text": "A data frame with 3 rows and 3 columns:\n\\describe{\n  \\item{zone}{destination zone}\n  \\item{base_rate}{base rate per parcel}\n  \\item{rate_per_kg}{rate per kilogram of chargeable weight}\n}"
+     }
+    ]
+   },
+   "text": "#' Rates by zone\n#'\n#' Base rate and rate per kilogram for each destination zone.\n#' @format A data frame with 3 rows and 3 columns:\n#' \\describe{\n#'   \\item{zone}{destination zone}\n#'   \\item{base_rate}{base rate per parcel}\n#'   \\item{rate_per_kg}{rate per kilogram of chargeable weight}\n#' }"
+  },
+  {
+   "code": {
+    "calls": [],
+    "composed": null,
+    "exported": null,
+    "expression": null,
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [],
+    "plumbing": true,
+    "plumbing_reason": "a statement without arithmetic (it loads, declares or sets something up)",
+    "reads_data": [],
+    "strings": [
+     "zone_rates"
+    ],
+    "symbols_read": [],
+    "symbols_written": []
+   },
+   "content_hash": "39e6e8eae8e854c719a73e29d88422dea56d2d1b47f9718156bd97c9e710d1c8",
+   "data": null,
+   "file": "R/data.R",
+   "file_sha256": "7f1d7f3377e8267fc0bfa5cd84362a8733707b987a086792b2968927c30f741c",
+   "helppage": null,
+   "inside": "",
+   "kind": "Top-level statement",
+   "lines": [
+    10,
+    10
+   ],
+   "name": "",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0004",
+   "roxygen": null,
+   "text": "\"zone_rates\""
+  },
+  {
+   "code": null,
+   "content_hash": "739a40f6903fc156bcf0dabcd7fcbc45025c69b41eec57d0f78dada152a239ec",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "",
+   "kind": "Roxygen block",
+   "lines": [
+    1,
+    8
+   ],
+   "name": "parcel_price",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0005",
+   "roxygen": {
+    "documents_name": "parcel_price",
+    "documents_ref": "M-0006",
+    "formulas": [],
+    "tags": [
+     {
+      "line": 1,
+      "name": "",
+      "tag": "description",
+      "text": "Price of a parcel\nBase rate plus rate per kilogram times chargeable weight, with the fuel surcharge of 12.5%,\nthe volume discount and the minimum price of 4.50."
+     },
+     {
+      "line": 5,
+      "name": "zone",
+      "tag": "param",
+      "text": "destination zone: Local, National or Abroad"
+     },
+     {
+      "line": 6,
+      "name": "cw",
+      "tag": "param",
+      "text": "chargeable weight in kilograms"
+     },
+     {
+      "line": 7,
+      "name": "n",
+      "tag": "param",
+      "text": "number of parcels handed in at once"
+     },
+     {
+      "line": 8,
+      "name": "",
+      "tag": "export",
+      "text": ""
+     }
+    ]
+   },
+   "text": "#' Price of a parcel\n#'\n#' Base rate plus rate per kilogram times chargeable weight, with the fuel surcharge of 12.5%,\n#' the volume discount and the minimum price of 4.50.\n#' @param zone destination zone: Local, National or Abroad\n#' @param cw chargeable weight in kilograms\n#' @param n number of parcels handed in at once\n#' @export"
+  },
+  {
+   "code": {
+    "calls": [
+     "stop",
+     "volume_discount",
+     "round",
+     "pmax"
+    ],
+    "composed": null,
+    "exported": true,
+    "expression": null,
+    "formals": [
+     [
+      "zone",
+      ""
+     ],
+     [
+      "cw",
+      ""
+     ],
+     [
+      "n",
+      "1"
+     ]
+    ],
+    "not_composed_reason": "it calls volume_discount(), which AIVA cannot evaluate",
+    "numbers": [
+     {
+      "as_written": "1",
+      "decimals": 0,
+      "line": 9,
+      "unit": "",
+      "value": "1"
+     },
+     {
+      "as_written": "1",
+      "decimals": 0,
+      "line": 14,
+      "unit": "",
+      "value": "1"
+     },
+     {
+      "as_written": "0.125",
+      "decimals": 3,
+      "line": 14,
+      "unit": "",
+      "value": "0.125"
+     },
+     {
+      "as_written": "1",
+      "decimals": 0,
+      "line": 15,
+      "unit": "",
+      "value": "1"
+     },
+     {
+      "as_written": "4.50",
+      "decimals": 2,
+      "line": 16,
+      "unit": "",
+      "value": "4.5"
+     },
+     {
+      "as_written": "2",
+      "decimals": 0,
+      "line": 16,
+      "unit": "",
+      "value": "2"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [
+     {
+      "column": "base_rate",
+      "how": "bare symbol",
+      "object": "zone_rates",
+      "row_key": ""
+     }
+    ],
+    "strings": [
+     "unknown zone",
+     "base_rate",
+     "rate_per_kg"
+    ],
+    "symbols_read": [
+     "zone",
+     "zone_rates",
+     "base",
+     "rate",
+     "cw",
+     "price",
+     "with_fuel",
+     "n",
+     "discounted"
+    ],
+    "symbols_written": [
+     "base",
+     "rate",
+     "price",
+     "with_fuel",
+     "discounted"
+    ]
+   },
+   "content_hash": "7d7d7d89f1fffd9e37ee2cd088c590455afca35436310f551ad9847551cbacf8",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "",
+   "kind": "Function",
+   "lines": [
+    9,
+    17
+   ],
+   "name": "parcel_price",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0006",
+   "roxygen": null,
+   "text": "parcel_price <- function(zone, cw, n = 1) {\n  if (!zone %in% zone_rates$zone) stop(\"unknown zone\")\n  base <- zone_rates[zone_rates$zone == zone, \"base_rate\"]\n  rate <- zone_rates[zone_rates$zone == zone, \"rate_per_kg\"]\n  price <- base + rate * cw\n  with_fuel <- price * (1 + 0.125)\n  discounted <- with_fuel * (1 - volume_discount(n))\n  round(pmax(discounted, 4.50), 2)\n}"
+  },
+  {
+   "code": {
+    "calls": [],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "price",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "zone_rates$base_rate",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "zone_rates$rate_per_kg",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "cw",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "add",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": null,
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "price",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "base",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "rate",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "cw",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "add",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "base",
+     "rate",
+     "cw"
+    ],
+    "symbols_written": [
+     "price"
+    ]
+   },
+   "content_hash": "24c5d08c5c2ccda1fd9c3e44a937b46991ea7719a476aedba9f2ffc214684ffa",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "parcel_price",
+   "kind": "Formula statement",
+   "lines": [
+    13,
+    13
+   ],
+   "name": "price",
+   "parent_ref": "M-0006",
+   "read_problem": null,
+   "ref": "M-0007",
+   "roxygen": null,
+   "text": "  price <- base + rate * cw"
+  },
+  {
+   "code": {
+    "calls": [],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "with_fuel",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "zone_rates$base_rate",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [
+            {
+             "args": [],
+             "name": "zone_rates$rate_per_kg",
+             "op": "sym",
+             "span": null,
+             "value": null
+            },
+            {
+             "args": [],
+             "name": "cw",
+             "op": "sym",
+             "span": null,
+             "value": null
+            }
+           ],
+           "name": null,
+           "op": "mul",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "add",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "1"
+          },
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "0.125"
+          }
+         ],
+         "name": null,
+         "op": "add",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "mul",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": null,
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "with_fuel",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "price",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "1"
+          },
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "0.125"
+          }
+         ],
+         "name": null,
+         "op": "add",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "mul",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "1",
+      "decimals": 0,
+      "line": 14,
+      "unit": "",
+      "value": "1"
+     },
+     {
+      "as_written": "0.125",
+      "decimals": 3,
+      "line": 14,
+      "unit": "",
+      "value": "0.125"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "price"
+    ],
+    "symbols_written": [
+     "with_fuel"
+    ]
+   },
+   "content_hash": "e94b476afbb7f492ab0f8bf05f7c7a3dd53a0f20d88b8878d02940c9ffc23bdd",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "parcel_price",
+   "kind": "Formula statement",
+   "lines": [
+    14,
+    14
+   ],
+   "name": "with_fuel",
+   "parent_ref": "M-0006",
+   "read_problem": null,
+   "ref": "M-0008",
+   "roxygen": null,
+   "text": "  with_fuel <- price * (1 + 0.125)"
+  },
+  {
+   "code": {
+    "calls": [
+     "volume_discount"
+    ],
+    "composed": null,
+    "exported": null,
+    "expression": null,
+    "formals": [],
+    "not_composed_reason": "it calls volume_discount(), which AIVA cannot evaluate",
+    "numbers": [
+     {
+      "as_written": "1",
+      "decimals": 0,
+      "line": 15,
+      "unit": "",
+      "value": "1"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "with_fuel",
+     "n"
+    ],
+    "symbols_written": [
+     "discounted"
+    ]
+   },
+   "content_hash": "02770f3106d952d3282ef76c7523dcc76c6353577df9e4e0a7d82bf6e9e2143c",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "parcel_price",
+   "kind": "Formula statement",
+   "lines": [
+    15,
+    15
+   ],
+   "name": "discounted",
+   "parent_ref": "M-0006",
+   "read_problem": null,
+   "ref": "M-0009",
+   "roxygen": null,
+   "text": "  discounted <- with_fuel * (1 - volume_discount(n))"
+  },
+  {
+   "code": {
+    "calls": [
+     "round",
+     "pmax"
+    ],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "parcel_price",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "discounted",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "4.5"
+          }
+         ],
+         "name": "max",
+         "op": "call",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "2"
+        }
+       ],
+       "name": "round",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": null,
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "parcel_price",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "discounted",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "4.5"
+          }
+         ],
+         "name": "max",
+         "op": "call",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "2"
+        }
+       ],
+       "name": "round",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "4.50",
+      "decimals": 2,
+      "line": 16,
+      "unit": "",
+      "value": "4.5"
+     },
+     {
+      "as_written": "2",
+      "decimals": 0,
+      "line": 16,
+      "unit": "",
+      "value": "2"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "discounted"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "84c9c99c288df5698937b0738e69361d5f575f1c6ad834c3df253c191eece8b6",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "parcel_price",
+   "kind": "Formula statement",
+   "lines": [
+    16,
+    16
+   ],
+   "name": "parcel_price",
+   "parent_ref": "M-0006",
+   "read_problem": null,
+   "ref": "M-0010",
+   "roxygen": null,
+   "text": "  round(pmax(discounted, 4.50), 2)"
+  },
+  {
+   "code": null,
+   "content_hash": "f3873da9155b5bf6d35787aee522f8dfb5d9ba75a88c1c1b97b4244d1b5c337d",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "",
+   "kind": "Roxygen block",
+   "lines": [
+    19,
+    23
+   ],
+   "name": "volume_discount",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0011",
+   "roxygen": {
+    "documents_name": "volume_discount",
+    "documents_ref": "M-0012",
+    "formulas": [],
+    "tags": [
+     {
+      "line": 19,
+      "name": "",
+      "tag": "description",
+      "text": "Volume discount\nDiscount rate of 1% per parcel, capped at 20%."
+     },
+     {
+      "line": 22,
+      "name": "n",
+      "tag": "param",
+      "text": "number of parcels handed in at once"
+     },
+     {
+      "line": 23,
+      "name": "",
+      "tag": "export",
+      "text": ""
+     }
+    ]
+   },
+   "text": "#' Volume discount\n#'\n#' Discount rate of 1% per parcel, capped at 20%.\n#' @param n number of parcels handed in at once\n#' @export"
+  },
+  {
+   "code": {
+    "calls": [
+     "pmin"
+    ],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "volume_discount",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "0.2"
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "0.01"
+          },
+          {
+           "args": [],
+           "name": "n",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": "min",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": true,
+    "expression": null,
+    "formals": [
+     [
+      "n",
+      ""
+     ]
+    ],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "0.2",
+      "decimals": 1,
+      "line": 25,
+      "unit": "",
+      "value": "0.2"
+     },
+     {
+      "as_written": "0.01",
+      "decimals": 2,
+      "line": 25,
+      "unit": "",
+      "value": "0.01"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "n"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "144071b809cfbc84dbfa57bcd7678745dfcca6edc95cd24c35627930d8b8ac73",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "",
+   "kind": "Function",
+   "lines": [
+    24,
+    26
+   ],
+   "name": "volume_discount",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0012",
+   "roxygen": null,
+   "text": "volume_discount <- function(n) {\n  pmin(0.2, 0.01 * n)\n}"
+  },
+  {
+   "code": {
+    "calls": [
+     "pmin"
+    ],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "volume_discount",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "0.2"
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "0.01"
+          },
+          {
+           "args": [],
+           "name": "n",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": "min",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": null,
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "volume_discount",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "0.2"
+        },
+        {
+         "args": [
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "0.01"
+          },
+          {
+           "args": [],
+           "name": "n",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": "min",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "0.2",
+      "decimals": 1,
+      "line": 25,
+      "unit": "",
+      "value": "0.2"
+     },
+     {
+      "as_written": "0.01",
+      "decimals": 2,
+      "line": 25,
+      "unit": "",
+      "value": "0.01"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "n"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "eee58947e62d65fdb05dd4c85ccac3bc28ecb49c5e235664430736a302e1d169",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "volume_discount",
+   "kind": "Formula statement",
+   "lines": [
+    25,
+    25
+   ],
+   "name": "volume_discount",
+   "parent_ref": "M-0012",
+   "read_problem": null,
+   "ref": "M-0013",
+   "roxygen": null,
+   "text": "  pmin(0.2, 0.01 * n)"
+  },
+  {
+   "code": {
+    "calls": [
+     "paste0",
+     "format"
+    ],
+    "composed": null,
+    "exported": false,
+    "expression": null,
+    "formals": [
+     [
+      "x",
+      ""
+     ]
+    ],
+    "not_composed_reason": "it calls paste0(), which AIVA cannot evaluate",
+    "numbers": [
+     {
+      "as_written": "2",
+      "decimals": 0,
+      "line": 30,
+      "unit": "",
+      "value": "2"
+     }
+    ],
+    "plumbing": true,
+    "plumbing_reason": "no arithmetic and no number other than the trivial ones: it only checks, converts or passes values on",
+    "reads_data": [],
+    "strings": [
+     " per parcel"
+    ],
+    "symbols_read": [
+     "x"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "f02f8f6e4ddc340f64f52f593ff858be881b782707bc367bd1304af6e6926bd4",
+   "data": null,
+   "file": "R/price.R",
+   "file_sha256": "6bb9e69f68d96f0da9fc1c7f99e07dc9392ab6c8469473028a325407660238d7",
+   "helppage": null,
+   "inside": "",
+   "kind": "Function",
+   "lines": [
+    28,
+    31
+   ],
+   "name": "format_price",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0014",
+   "roxygen": null,
+   "text": "# Helper used when printing a price list.\nformat_price <- function(x) {\n  paste0(format(x, nsmall = 2), \" per parcel\")\n}"
+  },
+  {
+   "code": null,
+   "content_hash": "b394db6d02c5892fb9290d68ef2a075b9e04cce5ce14519b9afa745789dba7f4",
+   "data": null,
+   "file": "R/weights.R",
+   "file_sha256": "ae2771928e95eb22a77b88c3e7396d4f280025957f2d624e3772cb482aec8243",
+   "helppage": null,
+   "inside": "",
+   "kind": "Roxygen block",
+   "lines": [
+    1,
+    8
+   ],
+   "name": "dim_weight",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0015",
+   "roxygen": {
+    "documents_name": "dim_weight",
+    "documents_ref": "M-0016",
+    "formulas": [
+     {
+      "expression": {
+       "args": [
+        {
+         "args": [],
+         "name": "dw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [
+          {
+           "args": [
+            {
+             "args": [
+              {
+               "args": [],
+               "name": "L",
+               "op": "sym",
+               "span": null,
+               "value": null
+              },
+              {
+               "args": [],
+               "name": "W",
+               "op": "sym",
+               "span": null,
+               "value": null
+              }
+             ],
+             "name": null,
+             "op": "mul",
+             "span": null,
+             "value": null
+            },
+            {
+             "args": [],
+             "name": "H",
+             "op": "sym",
+             "span": null,
+             "value": null
+            }
+           ],
+           "name": null,
+           "op": "mul",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": null,
+           "op": "num",
+           "span": null,
+           "value": "5000"
+          }
+         ],
+         "name": null,
+         "op": "div",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "eq",
+       "span": null,
+       "value": null
+      },
+      "image_sha256": "",
+      "line": 3,
+      "linear": "dw = L * W * H / 5000",
+      "not_readable_reason": "",
+      "readable": true,
+      "source_form": "latex"
+     }
+    ],
+    "tags": [
+     {
+      "line": 1,
+      "name": "",
+      "tag": "description",
+      "text": "Dimensional weight\nWeight derived from the volume of a parcel: \\deqn{DW = \\frac{L \\cdot W \\cdot H}{5000}}"
+     },
+     {
+      "line": 4,
+      "name": "l",
+      "tag": "param",
+      "text": "length in centimetres"
+     },
+     {
+      "line": 5,
+      "name": "w",
+      "tag": "param",
+      "text": "width in centimetres"
+     },
+     {
+      "line": 6,
+      "name": "h",
+      "tag": "param",
+      "text": "height in centimetres"
+     },
+     {
+      "line": 7,
+      "name": "divisor",
+      "tag": "param",
+      "text": "the fixed divisor, 5000"
+     },
+     {
+      "line": 8,
+      "name": "",
+      "tag": "export",
+      "text": ""
+     }
+    ]
+   },
+   "text": "#' Dimensional weight\n#'\n#' Weight derived from the volume of a parcel: \\deqn{DW = \\frac{L \\cdot W \\cdot H}{5000}}\n#' @param l length in centimetres\n#' @param w width in centimetres\n#' @param h height in centimetres\n#' @param divisor the fixed divisor, 5000\n#' @export"
+  },
+  {
+   "code": {
+    "calls": [
+     "stopifnot",
+     "is.numeric"
+    ],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "dim_weight",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [
+            {
+             "args": [],
+             "name": "l",
+             "op": "sym",
+             "span": null,
+             "value": null
+            },
+            {
+             "args": [],
+             "name": "w",
+             "op": "sym",
+             "span": null,
+             "value": null
+            }
+           ],
+           "name": null,
+           "op": "mul",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "h",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": "divisor",
+         "op": "sym",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "div",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": true,
+    "expression": null,
+    "formals": [
+     [
+      "l",
+      ""
+     ],
+     [
+      "w",
+      ""
+     ],
+     [
+      "h",
+      ""
+     ],
+     [
+      "divisor",
+      "5000"
+     ]
+    ],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "5000",
+      "decimals": 0,
+      "line": 9,
+      "unit": "",
+      "value": "5000"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "l",
+     "w",
+     "h",
+     "divisor"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "8e31ca2571364e4b9e6721e4b697b158875ad92c9dc9fd7e4085f5fc45033d55",
+   "data": null,
+   "file": "R/weights.R",
+   "file_sha256": "ae2771928e95eb22a77b88c3e7396d4f280025957f2d624e3772cb482aec8243",
+   "helppage": null,
+   "inside": "",
+   "kind": "Function",
+   "lines": [
+    9,
+    12
+   ],
+   "name": "dim_weight",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0016",
+   "roxygen": null,
+   "text": "dim_weight <- function(l, w, h, divisor = 5000) {\n  stopifnot(is.numeric(l), is.numeric(w), is.numeric(h))\n  l * w * h / divisor\n}"
+  },
+  {
+   "code": {
+    "calls": [],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "dim_weight",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [
+            {
+             "args": [],
+             "name": "l",
+             "op": "sym",
+             "span": null,
+             "value": null
+            },
+            {
+             "args": [],
+             "name": "w",
+             "op": "sym",
+             "span": null,
+             "value": null
+            }
+           ],
+           "name": null,
+           "op": "mul",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "h",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": "divisor",
+         "op": "sym",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "div",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": null,
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "dim_weight",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [
+            {
+             "args": [],
+             "name": "l",
+             "op": "sym",
+             "span": null,
+             "value": null
+            },
+            {
+             "args": [],
+             "name": "w",
+             "op": "sym",
+             "span": null,
+             "value": null
+            }
+           ],
+           "name": null,
+           "op": "mul",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "h",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": null,
+         "op": "mul",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": "divisor",
+         "op": "sym",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": null,
+       "op": "div",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "l",
+     "w",
+     "h",
+     "divisor"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "b4292cac24d43724587de2a03781f913b5475197c5dc0e255c431d517d6218ac",
+   "data": null,
+   "file": "R/weights.R",
+   "file_sha256": "ae2771928e95eb22a77b88c3e7396d4f280025957f2d624e3772cb482aec8243",
+   "helppage": null,
+   "inside": "dim_weight",
+   "kind": "Formula statement",
+   "lines": [
+    11,
+    11
+   ],
+   "name": "dim_weight",
+   "parent_ref": "M-0016",
+   "read_problem": null,
+   "ref": "M-0017",
+   "roxygen": null,
+   "text": "  l * w * h / divisor"
+  },
+  {
+   "code": null,
+   "content_hash": "0249acd5b8c4d5c7b717ce7ffa9f2042465e777c6bef09da134e4bfa967b42d4",
+   "data": null,
+   "file": "R/weights.R",
+   "file_sha256": "ae2771928e95eb22a77b88c3e7396d4f280025957f2d624e3772cb482aec8243",
+   "helppage": null,
+   "inside": "",
+   "kind": "Roxygen block",
+   "lines": [
+    14,
+    19
+   ],
+   "name": "chargeable_weight",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0018",
+   "roxygen": {
+    "documents_name": "chargeable_weight",
+    "documents_ref": "M-0019",
+    "formulas": [],
+    "tags": [
+     {
+      "line": 14,
+      "name": "",
+      "tag": "description",
+      "text": "Chargeable weight\nThe larger of actual weight and dimensional weight, never below 0.5 kilograms."
+     },
+     {
+      "line": 17,
+      "name": "aw",
+      "tag": "param",
+      "text": "actual weight in kilograms"
+     },
+     {
+      "line": 18,
+      "name": "dw",
+      "tag": "param",
+      "text": "dimensional weight in kilograms"
+     },
+     {
+      "line": 19,
+      "name": "",
+      "tag": "export",
+      "text": ""
+     }
+    ]
+   },
+   "text": "#' Chargeable weight\n#'\n#' The larger of actual weight and dimensional weight, never below 0.5 kilograms.\n#' @param aw actual weight in kilograms\n#' @param dw dimensional weight in kilograms\n#' @export"
+  },
+  {
+   "code": {
+    "calls": [
+     "pmax"
+    ],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "chargeable_weight",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "aw",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "dw",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": "max",
+         "op": "call",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "0.5"
+        }
+       ],
+       "name": "max",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": true,
+    "expression": null,
+    "formals": [
+     [
+      "aw",
+      ""
+     ],
+     [
+      "dw",
+      ""
+     ]
+    ],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "0.5",
+      "decimals": 1,
+      "line": 22,
+      "unit": "",
+      "value": "0.5"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "aw",
+     "dw",
+     "cw"
+    ],
+    "symbols_written": [
+     "cw"
+    ]
+   },
+   "content_hash": "1c025fa49c699a419fc55212f73d94932246db2e793d51620b2d574e078516f8",
+   "data": null,
+   "file": "R/weights.R",
+   "file_sha256": "ae2771928e95eb22a77b88c3e7396d4f280025957f2d624e3772cb482aec8243",
+   "helppage": null,
+   "inside": "",
+   "kind": "Function",
+   "lines": [
+    20,
+    23
+   ],
+   "name": "chargeable_weight",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0019",
+   "roxygen": null,
+   "text": "chargeable_weight <- function(aw, dw) {\n  cw <- pmax(aw, dw)\n  pmax(cw, 0.5)\n}"
+  },
+  {
+   "code": {
+    "calls": [
+     "pmax"
+    ],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "cw",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "aw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": "dw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": "max",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": null,
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "cw",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "aw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": "dw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        }
+       ],
+       "name": "max",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "aw",
+     "dw"
+    ],
+    "symbols_written": [
+     "cw"
+    ]
+   },
+   "content_hash": "8e0e454f17499413ea4732a6dd4fa2f793a5b7228112a71dafcb9cb32c534c74",
+   "data": null,
+   "file": "R/weights.R",
+   "file_sha256": "ae2771928e95eb22a77b88c3e7396d4f280025957f2d624e3772cb482aec8243",
+   "helppage": null,
+   "inside": "chargeable_weight",
+   "kind": "Formula statement",
+   "lines": [
+    21,
+    21
+   ],
+   "name": "cw",
+   "parent_ref": "M-0019",
+   "read_problem": null,
+   "ref": "M-0020",
+   "roxygen": null,
+   "text": "  cw <- pmax(aw, dw)"
+  },
+  {
+   "code": {
+    "calls": [
+     "pmax"
+    ],
+    "composed": {
+     "args": [
+      {
+       "args": [],
+       "name": "chargeable_weight",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [
+          {
+           "args": [],
+           "name": "aw",
+           "op": "sym",
+           "span": null,
+           "value": null
+          },
+          {
+           "args": [],
+           "name": "dw",
+           "op": "sym",
+           "span": null,
+           "value": null
+          }
+         ],
+         "name": "max",
+         "op": "call",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "0.5"
+        }
+       ],
+       "name": "max",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "exported": null,
+    "expression": {
+     "args": [
+      {
+       "args": [],
+       "name": "chargeable_weight",
+       "op": "sym",
+       "span": null,
+       "value": null
+      },
+      {
+       "args": [
+        {
+         "args": [],
+         "name": "cw",
+         "op": "sym",
+         "span": null,
+         "value": null
+        },
+        {
+         "args": [],
+         "name": null,
+         "op": "num",
+         "span": null,
+         "value": "0.5"
+        }
+       ],
+       "name": "max",
+       "op": "call",
+       "span": null,
+       "value": null
+      }
+     ],
+     "name": null,
+     "op": "eq",
+     "span": null,
+     "value": null
+    },
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "0.5",
+      "decimals": 1,
+      "line": 22,
+      "unit": "",
+      "value": "0.5"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "cw"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "5b624dd6f64550d4b1aa81bddd482fd05aaf8c5c77b433503fc8c0fdb51c7626",
+   "data": null,
+   "file": "R/weights.R",
+   "file_sha256": "ae2771928e95eb22a77b88c3e7396d4f280025957f2d624e3772cb482aec8243",
+   "helppage": null,
+   "inside": "chargeable_weight",
+   "kind": "Formula statement",
+   "lines": [
+    22,
+    22
+   ],
+   "name": "chargeable_weight",
+   "parent_ref": "M-0019",
+   "read_problem": null,
+   "ref": "M-0021",
+   "roxygen": null,
+   "text": "  pmax(cw, 0.5)"
+  },
+  {
+   "code": null,
+   "content_hash": "1e99cfa3ee94b22ff351c4a14c0e14338281a955ffaa9b735e0bf589784478de",
+   "data": {
+    "assessable": true,
+    "attributes": {},
+    "canonical_value_hash": "685db9fc521e3f3fb12d4b5382c634a7628ceb797b8d9a18cea888f468e71baf",
+    "columns": [
+     [
+      "zone",
+      "text"
+     ],
+     [
+      "base_rate",
+      "decimal"
+     ],
+     [
+      "rate_per_kg",
+      "decimal"
+     ]
+    ],
+    "container_file": "data/zone_rates.rda",
+    "decoded_by": "rdata 1.1.0",
+    "dims": [
+     3,
+     3
+    ],
+    "n_cells": 9,
+    "not_assessable_reason": null,
+    "object_name": "zone_rates",
+    "r_class": [
+     "data frame"
+    ],
+    "r_type": "data frame",
+    "row_keys": [
+     "zone"
+    ]
+   },
+   "file": "data/zone_rates.rda",
+   "file_sha256": "b36cb5fda01a0379f42b8b1a5c08f270cb7e301299b52ce3215a7087dff393b7",
+   "helppage": null,
+   "inside": "",
+   "kind": "Parameter table",
+   "lines": null,
+   "name": "zone_rates",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0022",
+   "roxygen": null,
+   "text": "zone; base_rate; rate_per_kg\nLocal; 3.2; 0.85\nNational; 4.9; 1.1\nAbroad; 9.5; 2.75"
+  },
+  {
+   "code": null,
+   "content_hash": "9b2bdb0c1917bd12751ffb37127afacb3f759ef162195af3e755f66260d527ac",
+   "data": null,
+   "file": "man/chargeable_weight.Rd",
+   "file_sha256": "736cd5f7ebf659dfeaacc22f6036bdec442ededb60525559c4d3c2f78ef65641",
+   "helppage": {
+    "aliases": [
+     "chargeable_weight"
+    ],
+    "arguments": [
+     [
+      "aw",
+      "actual weight in kilograms"
+     ],
+     [
+      "dw",
+      "dimensional weight in kilograms"
+     ]
+    ],
+    "generated_from_ref": "M-0018",
+    "in_step_with_source": true,
+    "rd_name": "chargeable_weight",
+    "title": "Chargeable weight",
+    "usage": "chargeable_weight(aw, dw)"
+   },
+   "inside": "",
+   "kind": "Help page",
+   "lines": [
+    1,
+    13
+   ],
+   "name": "chargeable_weight",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0023",
+   "roxygen": null,
+   "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/weights.R\n\\name{chargeable_weight}\n\\alias{chargeable_weight}\n\\title{Chargeable weight}\n\\usage{\nchargeable_weight(aw, dw)\n}\n\\arguments{\n\\item{aw}{actual weight in kilograms}\n\\item{dw}{dimensional weight in kilograms}\n}\n"
+  },
+  {
+   "code": null,
+   "content_hash": "9e2cc60d6e85eb1695d270bc50f71117fffedf67938489fe52970837d44518dd",
+   "data": null,
+   "file": "man/dim_weight.Rd",
+   "file_sha256": "1e46da59bd3e5b3ae2f87ad426dbdb5d291d89cfa3c0597397175ef86f90554b",
+   "helppage": {
+    "aliases": [
+     "dim_weight"
+    ],
+    "arguments": [
+     [
+      "l",
+      "length in centimetres"
+     ],
+     [
+      "w",
+      "width in centimetres"
+     ],
+     [
+      "h",
+      "height in centimetres"
+     ],
+     [
+      "divisor",
+      "the fixed divisor, 5000"
+     ]
+    ],
+    "generated_from_ref": "M-0015",
+    "in_step_with_source": true,
+    "rd_name": "dim_weight",
+    "title": "Dimensional weight",
+    "usage": "dim_weight(l, w, h, divisor = 5000)"
+   },
+   "inside": "",
+   "kind": "Help page",
+   "lines": [
+    1,
+    18
+   ],
+   "name": "dim_weight",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0024",
+   "roxygen": null,
+   "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/weights.R\n\\name{dim_weight}\n\\alias{dim_weight}\n\\title{Dimensional weight}\n\\usage{\ndim_weight(l, w, h, divisor = 5000)\n}\n\\arguments{\n\\item{l}{length in centimetres}\n\\item{w}{width in centimetres}\n\\item{h}{height in centimetres}\n\\item{divisor}{the fixed divisor, 5000}\n}\n\\description{\nWeight derived from the volume of a parcel.\n}\n"
+  },
+  {
+   "code": null,
+   "content_hash": "d7c9aae342042c2a6ec6e0165da05dd0b9eae57a611b46af5a906ed932214091",
+   "data": null,
+   "file": "man/parcel_price.Rd",
+   "file_sha256": "f2dcd62343ae96cd186cc2db37b8f04284e4819a9c19e752b093d8613978886b",
+   "helppage": {
+    "aliases": [
+     "parcel_price"
+    ],
+    "arguments": [
+     [
+      "zone",
+      "destination zone: Local, National or Abroad"
+     ],
+     [
+      "cw",
+      "chargeable weight in kilograms"
+     ],
+     [
+      "n",
+      "number of parcels handed in at once"
+     ]
+    ],
+    "generated_from_ref": "M-0005",
+    "in_step_with_source": true,
+    "rd_name": "parcel_price",
+    "title": "Price of a parcel",
+    "usage": "parcel_price(zone, cw, n = 1)"
+   },
+   "inside": "",
+   "kind": "Help page",
+   "lines": [
+    1,
+    14
+   ],
+   "name": "parcel_price",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0025",
+   "roxygen": null,
+   "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/price.R\n\\name{parcel_price}\n\\alias{parcel_price}\n\\title{Price of a parcel}\n\\usage{\nparcel_price(zone, cw, n = 1)\n}\n\\arguments{\n\\item{zone}{destination zone: Local, National or Abroad}\n\\item{cw}{chargeable weight in kilograms}\n\\item{n}{number of parcels handed in at once}\n}\n"
+  },
+  {
+   "code": null,
+   "content_hash": "9df4cc16da28940bce1ad04df35ee23f04772ec95b96505a2615eda7060431a4",
+   "data": null,
+   "file": "man/volume_discount.Rd",
+   "file_sha256": "29a1b34065508fb7ce04f1fb9e081c7b8f3684ba65241fc34e750715b2550936",
+   "helppage": {
+    "aliases": [
+     "volume_discount"
+    ],
+    "arguments": [
+     [
+      "n",
+      "number of parcels handed in at once"
+     ]
+    ],
+    "generated_from_ref": "M-0011",
+    "in_step_with_source": true,
+    "rd_name": "volume_discount",
+    "title": "Volume discount",
+    "usage": "volume_discount(n)"
+   },
+   "inside": "",
+   "kind": "Help page",
+   "lines": [
+    1,
+    12
+   ],
+   "name": "volume_discount",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0026",
+   "roxygen": null,
+   "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/price.R\n\\name{volume_discount}\n\\alias{volume_discount}\n\\title{Volume discount}\n\\usage{\nvolume_discount(n)\n}\n\\arguments{\n\\item{n}{number of parcels handed in at once}\n}\n"
+  },
+  {
+   "code": {
+    "calls": [
+     "library"
+    ],
+    "composed": null,
+    "exported": null,
+    "expression": null,
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [],
+    "plumbing": true,
+    "plumbing_reason": "a statement without arithmetic (it loads, declares or sets something up)",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "testthat"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "a3657e654579ca46e1ed79f4109fa0973d5f468cac041dcb62f5933b7750dca1",
+   "data": null,
+   "file": "tests/testthat.R",
+   "file_sha256": "cec6f2f0306d25a4accf29f3f5fcfe1df826a821382b56b9f4f0478cacce3bf0",
+   "helppage": null,
+   "inside": "",
+   "kind": "Top-level statement",
+   "lines": [
+    1,
+    1
+   ],
+   "name": "library",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0027",
+   "roxygen": null,
+   "text": "library(testthat)"
+  },
+  {
+   "code": {
+    "calls": [
+     "library"
+    ],
+    "composed": null,
+    "exported": null,
+    "expression": null,
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [],
+    "plumbing": true,
+    "plumbing_reason": "a statement without arithmetic (it loads, declares or sets something up)",
+    "reads_data": [],
+    "strings": [],
+    "symbols_read": [
+     "parcelcost"
+    ],
+    "symbols_written": []
+   },
+   "content_hash": "4ae36b57dd39b1d724c515c734f185ec2bbf16074c434420611a720eacdaf437",
+   "data": null,
+   "file": "tests/testthat.R",
+   "file_sha256": "cec6f2f0306d25a4accf29f3f5fcfe1df826a821382b56b9f4f0478cacce3bf0",
+   "helppage": null,
+   "inside": "",
+   "kind": "Top-level statement",
+   "lines": [
+    2,
+    2
+   ],
+   "name": "library",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0028",
+   "roxygen": null,
+   "text": "library(parcelcost)"
+  },
+  {
+   "code": {
+    "calls": [
+     "test_check"
+    ],
+    "composed": null,
+    "exported": null,
+    "expression": null,
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [],
+    "plumbing": true,
+    "plumbing_reason": "a statement without arithmetic (it loads, declares or sets something up)",
+    "reads_data": [],
+    "strings": [
+     "parcelcost"
+    ],
+    "symbols_read": [],
+    "symbols_written": []
+   },
+   "content_hash": "13e69855cd40231758e5828dd9e87c41aea3f750ad7f94371f0063471b6f11d3",
+   "data": null,
+   "file": "tests/testthat.R",
+   "file_sha256": "cec6f2f0306d25a4accf29f3f5fcfe1df826a821382b56b9f4f0478cacce3bf0",
+   "helppage": null,
+   "inside": "",
+   "kind": "Top-level statement",
+   "lines": [
+    3,
+    3
+   ],
+   "name": "test_check",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0029",
+   "roxygen": null,
+   "text": "test_check(\"parcelcost\")"
+  },
+  {
+   "code": {
+    "calls": [
+     "test_that",
+     "expect_equal",
+     "dim_weight"
+    ],
+    "composed": null,
+    "exported": null,
+    "expression": null,
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "50",
+      "decimals": 0,
+      "line": 2,
+      "unit": "",
+      "value": "50"
+     },
+     {
+      "as_written": "40",
+      "decimals": 0,
+      "line": 2,
+      "unit": "",
+      "value": "40"
+     },
+     {
+      "as_written": "30",
+      "decimals": 0,
+      "line": 2,
+      "unit": "",
+      "value": "30"
+     },
+     {
+      "as_written": "12",
+      "decimals": 0,
+      "line": 2,
+      "unit": "",
+      "value": "12"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [
+     "dimensional weight follows the divisor"
+    ],
+    "symbols_read": [],
+    "symbols_written": []
+   },
+   "content_hash": "a1e223a53bfe6eec69cbf439a42f30683e93a59daa5cfdadb36f76568d5f61fa",
+   "data": null,
+   "file": "tests/testthat/test-price.R",
+   "file_sha256": "4466c1d37b5b60758a09357180190ef79a4aecdcace5d549a515155ab75f80ad",
+   "helppage": null,
+   "inside": "",
+   "kind": "Test block",
+   "lines": [
+    1,
+    3
+   ],
+   "name": "dimensional weight follows the divisor",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0030",
+   "roxygen": null,
+   "text": "test_that(\"dimensional weight follows the divisor\", {\n  expect_equal(dim_weight(50, 40, 30), 12)\n})"
+  },
+  {
+   "code": {
+    "calls": [
+     "test_that",
+     "expect_equal",
+     "parcel_price"
+    ],
+    "composed": null,
+    "exported": null,
+    "expression": null,
+    "formals": [],
+    "not_composed_reason": "",
+    "numbers": [
+     {
+      "as_written": "0.5",
+      "decimals": 1,
+      "line": 6,
+      "unit": "",
+      "value": "0.5"
+     },
+     {
+      "as_written": "4.50",
+      "decimals": 2,
+      "line": 6,
+      "unit": "",
+      "value": "4.5"
+     }
+    ],
+    "plumbing": false,
+    "plumbing_reason": "",
+    "reads_data": [],
+    "strings": [
+     "the minimum price holds",
+     "Local"
+    ],
+    "symbols_read": [],
+    "symbols_written": []
+   },
+   "content_hash": "0f05a9b602515cd641bd5d3940fef52228b83d0ed896503a9c4e7fe1b55cf8c7",
+   "data": null,
+   "file": "tests/testthat/test-price.R",
+   "file_sha256": "4466c1d37b5b60758a09357180190ef79a4aecdcace5d549a515155ab75f80ad",
+   "helppage": null,
+   "inside": "",
+   "kind": "Test block",
+   "lines": [
+    5,
+    7
+   ],
+   "name": "the minimum price holds",
+   "parent_ref": null,
+   "read_problem": null,
+   "ref": "M-0031",
+   "roxygen": null,
+   "text": "test_that(\"the minimum price holds\", {\n  expect_equal(parcel_price(\"Local\", 0.5), 4.50)\n})"
+  }
+ ],
+ "parameter_tables": [
+  {
+   "column_types": [
+    "text",
+    "decimal",
+    "decimal"
+   ],
+   "header": [
+    "zone",
+    "base_rate",
+    "rate_per_kg"
+   ],
+   "object_name": "zone_rates",
+   "row_key": [
+    "zone"
+   ],
+   "rows": [
+    [
+     "Local",
+     "3.2",
+     "0.85"
+    ],
+    [
+     "National",
+     "4.9",
+     "1.1"
+    ],
+    [
+     "Abroad",
+     "9.5",
+     "2.75"
+    ]
+   ],
+   "unit_ref": "M-0022"
+  }
+ ]
+}

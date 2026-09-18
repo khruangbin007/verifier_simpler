@@ -10,7 +10,7 @@ import helpers
 import aiva0_shared as shared
 import count_lines
 
-BUNDLES = ["aiva0_shared", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report"]
+BUNDLES = ("aiva0_shared", "aiva0r_reading", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
 FORBIDDEN_NAMES = ("eval", "exec", "compile", "__import__")           # called as a bare name
 FORBIDDEN_ATTRIBUTES = ("sympify", "parse_expr", "system", "popen", "lambdify")   # called on any owner
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Error|Exception)\b|<class |object at 0x|\bnan\b|\baiva\d_\w+|"

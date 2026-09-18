@@ -50,6 +50,7 @@ from decimal import Decimal
 import yaml
 
 import aiva0_shared as shared
+import aiva0r_reading as reading
 
 SKILL_VERSIONS = {"read-methodology": "0.0.1", "read-documentation": "0.0.1"}
 
@@ -262,26 +263,6 @@ def inline_formula(text, notation):
     return None
 
 # ---------------------------------------------------------------- equation markup -> linear notation
-def local_name(tag):
-    """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
-    if not isinstance(tag, str):
-        return ""
-    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
-
-def attribute(element, name):
-    """The value of an attribute, whatever namespace prefix it carries."""
-    for key, value in element.attrib.items():
-        if local_name(key) == name:
-            return value
-    return ""
-
-def child_named(element, name):
-    """The first child with this local tag name, or None."""
-    for child in element:
-        if local_name(child.tag) == name:
-            return child
-    return None
-
 def bracketed(text):
     """Put brackets around a part unless it is one number, one symbol or one call."""
     text = text.strip()
@@ -298,9 +279,9 @@ def math_to_linear(element):
     """Office Math (OMML) and MathML to linear notation, by the local names of the elements:
     fractions, powers, subscripts, roots, brackets and function application. A sum is marked
     as sum_over(...) and never expanded. Unknown elements contribute their text."""
-    name = local_name(element.tag)
+    name = reading.local_name(element.tag)
     def part(child_name):
-        child = child_named(element, child_name)
+        child = reading.child_named(element, child_name)
         return math_children(child) if child is not None else ""
     if name in ("t", "mi", "mn", "mtext"):
         return (element.text or "").strip()
@@ -318,13 +299,13 @@ def math_to_linear(element):
         degree = part("deg").strip()
         return "sqrt(%s)" % part("e") if degree in ("", "2") else "%s^(1/%s)" % (bracketed(part("e")), bracketed(degree))
     if name == "d":                                               # OMML brackets
-        return "(%s)" % ", ".join(math_children(child) for child in element if local_name(child.tag) == "e")
+        return "(%s)" % ", ".join(math_children(child) for child in element if reading.local_name(child.tag) == "e")
     if name == "func":
         return "%s(%s)" % (part("fname").strip(), strip_outer_brackets(part("e")))
     if name == "nary":
-        properties = child_named(element, "narypr")
-        sign = child_named(properties, "chr") if properties is not None else None
-        kind = NARY_NAMES.get(attribute(sign, "val"), "sum_over") if sign is not None else "integral_over"
+        properties = reading.child_named(element, "narypr")
+        sign = reading.child_named(properties, "chr") if properties is not None else None
+        kind = NARY_NAMES.get(reading.attribute(sign, "val"), "sum_over") if sign is not None else "integral_over"
         return "%s(%s, %s, %s)" % (kind, part("sub").strip() or "0", part("sup").strip() or "0", part("e"))
     children = list(element)
     if name == "mfrac" and len(children) == 2:
@@ -617,138 +598,11 @@ def load_tag_rules(references_dir, override_path=None):
     return rules
 
 # ---------------------------------------------------------------- discovering an unfamiliar schema
-def attribute_text(element, names, digits_too=False):
-    """The first of the named attributes that holds text worth reading, with its name. A bare
-    number is no heading, so it is passed over unless digits_too."""
-    for name in names:
-        value = (element.get(name) or "").strip()
-        if value and (digits_too or not value.isdigit()):
-            return value, name
-    return "", ""
-
-BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_item", "table")
-
-def written_numbering(element, rules):
-    """The numbering an element carries in an attribute, exactly as the document wrote it
-    (num="36." gives "36."): more faithful than any count AIVA could make, skipped numbers included."""
-    return attribute_text(element, rules["numbering_attributes"], digits_too=True)[0]
-
-def table_rows(element, rules):
-    """The rows of a table: the children that hold cells, looked for directly below the table
-    and below the wrappers the rules know (thead, tbody, tgroup)."""
-    known = rules["family_of"]
-    holders = [element] + [part for part in element if known.get(local_name(part.tag)) == "table_part"]
-    return [row for holder in holders for row in holder
-            if local_name(row.tag) and len(row) and known.get(local_name(row.tag)) in (None, "row")]
-
-def discover_table_shape(element, rules, is_table):
-    """Give a family to every tag used inside a table, whatever the tags are called. Everything
-    in a row is a cell. Two kinds are told apart by name, since only the name says what they are
-    for: a tag holding the table's number or title (<tablenumber>, <tabletitle>) is the caption,
-    one holding a column heading (<tablecolhead>) a header cell. A tag nobody anticipated
-    (<tablesub>, <tabletext>) is simply a cell and keeps its text.
-    An element the rules already name as a table (is_table) needs no more than that: real tables
-    have rows of differing width (a note below, a heading that spans). An element NOT known to be
-    a table has to make the case by its shape, and two guards keep the skeleton of a document,
-    which repeats twice over as a table does, from being read as one: a cell holds words and
-    never a block, and most rows are the same width. Returns (row tags, {tag: family}) or None."""
-    known, rows = rules["family_of"], table_rows(element, rules)
-    cells = [cell for row in rows for cell in row if local_name(cell.tag)]
-    if not cells:
-        return None
-    if not is_table:
-        widths = [sum(1 for cell in row if local_name(cell.tag)) for row in rows]
-        usual = max(set(widths), key=widths.count)
-        if (len(rows) < 2 or len({local_name(row.tag) for row in rows}) > 1 or usual < 2 or widths.count(usual) * 2 <= len(rows)
-                or any(known.get(local_name(cell.tag)) for cell in cells)
-                or any(known.get(local_name(below.tag)) in BLOCK_FAMILIES for cell in cells for below in cell)):
-            return None
-    families = {}
-    for name in {local_name(cell.tag) for cell in cells}:
-        if any(word in name for word in rules["caption_tag_words"]):
-            families[name] = "caption"
-        else:
-            families[name] = "header_cell" if any(word in name for word in rules["header_tag_words"]) else "cell"
-    return {local_name(row.tag) for row in rows}, families
-
-def discover_families(root, rules, report):
-    """Work out a family for each tag this document uses that the rules do not name, from the
-    way the tag behaves here. The rules always win, so a schema AIVA already knows is read
-    exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
-    table; an element carrying its own heading in an attribute; one holding other blocks (a
-    container); one holding text (a paragraph). Every decision is recorded with its reason in
-    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml.
-    Enforces: R9"""
-    known, found = rules["family_of"], {}
-
-    def note(tag, family, reason):
-        if tag not in known and tag not in found:
-            found[tag] = family
-            report[tag] = {"family": family, "reason": reason, "count": 1 if tag == name else 0}
-
-    # A tag that sits in running text, never holding a block of its own, is read inline: its
-    # words belong to the sentence around it, not to a paragraph of their own.
-    def readable_elements(element):
-        """Every element the walker will actually read. Discovery stops where the walker
-        stops: the inside of an equation or a figure is read by its own reader, and what the
-        rules ignore is never read at all, so neither is catalogued here."""
-        yield element
-        if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
-            return
-        for child in element:
-            if local_name(child.tag):
-                yield from readable_elements(child)
-
-    elements = list(readable_elements(root))
-    inline_looking = set()
-    for element in elements:
-        for child in element:
-            if (child.tail or "").strip() or (element.text or "").strip():
-                inline_looking.add(local_name(child.tag))
-
-    for element in elements:
-        name = local_name(element.tag)
-        if not name:
-            continue
-        if name in report:
-            report[name]["count"] += 1
-        # Table shape is looked for under a known table too: the element may be named in the
-        # rules while the row and cell tags inside it are not.
-        if known.get(name) == "table" or name not in known:
-            shape = discover_table_shape(element, rules, known.get(name) == "table")
-            if shape:
-                row_tags, families = shape
-                note(name, "table", "holds rows of cells")
-                for row_tag in sorted(row_tags):
-                    note(row_tag, "row", "holds the cells of <%s>" % name)
-                reasons = {"caption": "holds the number or the title of <%s>" % name,
-                           "header_cell": "holds a column heading of <%s>" % name,
-                           "cell": "sits in a row of <%s>" % name}
-                for tag in sorted(families):
-                    note(tag, families[tag], reasons[families[tag]])
-                continue
-        if name in known or name in found:
-            continue
-        blocks_below = any(local_name(child.tag) and known.get(local_name(child.tag)) not in ("inline", "ignore")
-                           for child in element)
-        heading, attribute = attribute_text(element, rules["heading_attributes"])
-        if heading and blocks_below:
-            note(name, "container", "carries its own heading in the %s attribute" % attribute)
-        elif blocks_below:
-            note(name, "container", "holds other blocks")
-        elif name in inline_looking and not len(element):
-            note(name, "inline", "appears inside running text")
-        elif (element.text or "").strip() or len(element):
-            note(name, "paragraph", "holds text")
-        else:
-            note(name, "paragraph", "empty")
-    return found
-
 def element_text(element, rules, skip=("figure", "equation", "ignore", "caption")):
     """The running text of an element without the text of figures, equations and captions in it."""
     pieces = [element.text or ""]
     for child in element:
-        if rules["family_of"].get(local_name(child.tag)) not in skip:
+        if rules["family_of"].get(reading.local_name(child.tag)) not in skip:
             pieces.append(element_text(child, rules, skip))
         pieces.append(child.tail or "")
     return "".join(pieces)
@@ -762,7 +616,8 @@ def new_block(kind, text="", locator="", **more):
     return block
 
 def not_read_block(file_name, reason):
-    """A whole file, or a part, that could not be read still becomes one block. Enforces: R2"""
+    """A whole file, or a part, that could not be read still becomes one block: the "not read"
+    class of the content account, never a silent gap. Enforces: R2, R13"""
     return new_block("paragraph", "", file_name, not_read_reason=reason)
 
 @dataclass
@@ -786,7 +641,7 @@ class WalkState:
 
 def walk_element(element, path, depth, state):
     """Turn one element and everything below it into blocks, in reading order."""
-    name = local_name(element.tag)
+    name = reading.local_name(element.tag)
     family = state.family(name)
     here = "%s/%s" % (path, name)
     if name == "aiva-preserved-equation":
@@ -797,7 +652,7 @@ def walk_element(element, path, depth, state):
         return
     if family is None:                                   # discovery names every tag it reaches; this is the net under it
         family = "container" if len(element) else "paragraph"
-    numbering = written_numbering(element, state.rules)
+    numbering = reading.written_numbering(element, state.rules)
     if family == "heading":
         text = element_text(element, state.rules)
         digit = re.fullmatch(r"h([1-6])", name)
@@ -806,7 +661,7 @@ def walk_element(element, path, depth, state):
     elif family in ("container", "list_container", "inline"):
         # A container that carries its own heading in an attribute (<section name="4. Market">)
         # gives that heading a block of its own, so the chain below it is not lost.
-        heading, _ = attribute_text(element, state.rules["heading_attributes"]) if family == "container" else ("", "")
+        heading, _ = reading.attribute_text(element, state.rules["heading_attributes"]) if family == "container" else ("", "")
         if heading:
             state.blocks.append(new_block("heading", heading, here, numbering=numbering, level_hint=depth))
         if family == "list_container":                   # <ol>, or <list type="numbered">: its items are counted
@@ -840,21 +695,21 @@ def walk_mixed(element, here, depth, state, own_kind=None, numbering="", marker=
     paragraph; a formula that fills the paragraph alone becomes an Equation block instead."""
     block_families = ("heading", "container", "list_container", "paragraph", "list_item", "table",
                       "figure", "equation", "caption", None)
-    children = [c for c in element if local_name(c.tag) and
-                (state.family(local_name(c.tag)) in block_families or local_name(c.tag) == "aiva-preserved-equation")]
-    inline_only = [c for c in children if state.family(local_name(c.tag)) is None and not len(c)
+    children = [c for c in element if reading.local_name(c.tag) and
+                (state.family(reading.local_name(c.tag)) in block_families or reading.local_name(c.tag) == "aiva-preserved-equation")]
+    inline_only = [c for c in children if state.family(reading.local_name(c.tag)) is None and not len(c)
                    and own_kind]
     children = [c for c in children if c not in inline_only]
     text = shared.normalise_text(element_text(element, state.rules, skip=("figure", "equation", "ignore", "caption",
                                  "table", "list_container")) if own_kind or not children else (element.text or ""))
-    equations = [c for c in children if state.family(local_name(c.tag)) == "equation"]
+    equations = [c for c in children if state.family(reading.local_name(c.tag)) == "equation"]
     if own_kind and text and equations:                  # text around a formula: show the formula in place
         text = shared.normalise_text(text + " " + " ".join(math_to_linear(c) for c in equations))
         children = [c for c in children if c not in equations]
     if text and (own_kind or not children):
         state.blocks.append(new_block(own_kind or "paragraph", text, here, numbering=numbering, marker=marker))
     for position, child in enumerate(children, start=1):
-        if own_kind and state.family(local_name(child.tag)) in ("paragraph", "inline"):
+        if own_kind and state.family(reading.local_name(child.tag)) in ("paragraph", "inline"):
             continue                                     # already part of the paragraph's own text
         walk_element(child, "%s[%d]" % (here, position), depth, state)
         if not own_kind and child.tail and child.tail.strip():
@@ -868,8 +723,8 @@ def table_block(element, here, state):
     they leave empty are dropped, so the first row with content is the header. A table whose
     rows cannot be found keeps its words as running text and says so: a table that is present
     and empty misleads more than none."""
-    family = lambda node: state.family(local_name(node.tag))
-    found = [node for node in element.iter() if family(node) == "row"] or table_rows(element, state.rules)
+    family = lambda node: state.family(reading.local_name(node.tag))
+    found = [node for node in element.iter() if family(node) == "row"] or reading.table_rows(element, state.rules)
     rows, captions = [], []
     for node in element.iter():
         part = shared.normalise_text(element_text(node, state.rules, skip=())) if family(node) == "caption" else ""
@@ -877,7 +732,7 @@ def table_block(element, here, state):
             captions.append(part)
     for row in found:
         cells = [shared.normalise_text(element_text(cell, state.rules, skip=())) for cell in row
-                 if local_name(cell.tag) and family(cell) not in ("caption", "ignore")]
+                 if reading.local_name(cell.tag) and family(cell) not in ("caption", "ignore")]
         if any(cells):
             rows.append(cells)
     block = table_from_rows(rows, here, ". ".join(captions))
@@ -963,7 +818,7 @@ def figure_block(element, here, state):
         source = inner.get("src") or inner.get("fileref") or ""
     label = element.get("alt") or element.get("title") or (inner.get("alt") if inner is not None else "") or ""
     caption = next((shared.normalise_text(element_text(n, state.rules, skip=())) for n in element.iter()
-                    if state.rules["family_of"].get(local_name(n.tag)) == "caption"), "")
+                    if state.rules["family_of"].get(reading.local_name(n.tag)) == "caption"), "")
     fingerprint = state.images.get(source) or state.images.get(source.replace("cid:", "")) or ""
     return new_block("figure", label or caption or source, here, caption=caption, image_sha256=fingerprint,
                      source=source)
@@ -971,10 +826,10 @@ def figure_block(element, here, state):
 def equation_block(element, here, state):
     """An equation element: MathML or Office Math is converted; LaTeX or linear text is read as
     written; an equation that is only a picture stays an Equation chunk that could not be read."""
-    markup = next((n for n in element.iter() if local_name(n.tag) in ("math", "omath")), None)
-    picture = next((n for n in element.iter() if local_name(n.tag) in ("img", "image", "graphic", "imagedata")), None)
+    markup = next((n for n in element.iter() if reading.local_name(n.tag) in ("math", "omath")), None)
+    picture = next((n for n in element.iter() if reading.local_name(n.tag) in ("img", "image", "graphic", "imagedata")), None)
     if markup is not None:
-        form = "mathml" if local_name(markup.tag) == "math" else "omml"
+        form = "mathml" if reading.local_name(markup.tag) == "math" else "omml"
         equation = read_equation(form, math_to_linear(markup), state.notation)
     elif picture is not None and not shared.normalise_text(element_text(element, state.rules)):
         source = picture.get("src") or picture.get("fileref") or ""
@@ -993,7 +848,7 @@ def equation_block(element, here, state):
 def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
     """XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules."""
     root = parse_markup(text, file_name, repairs, tolerant_only)
-    state.rules["family_of"].update(discover_families(root, state.rules, state.unknown_tags))
+    state.rules["family_of"].update(reading.discover_families(root, state.rules, state.unknown_tags))
     walk_element(root, "", 0, state)
     return state.blocks
 
@@ -1069,7 +924,7 @@ def docx_paragraph_parts(paragraph):
     """The text of a paragraph with its formulas in place, its formulas, and its pictures."""
     pieces, formulas, pictures = [], [], []
     for node in paragraph.iter():
-        name = local_name(node.tag)
+        name = reading.local_name(node.tag)
         if name == "t" and node.tag.startswith("{%s}" % WORD_NS["w"]):
             pieces.append(node.text or "")
         elif name in ("tab", "br") and node.tag.startswith("{%s}" % WORD_NS["w"]):
@@ -1085,7 +940,7 @@ def docx_figure(picture, related, locator, state):
     """A picture in a Word file as a figure block with the fingerprint of the embedded image,
     and the words in it where OCR is installed."""
     description = next((n.get("descr") or n.get("title") or n.get("name") or "" for n in picture.iter()
-                        if local_name(n.tag) == "docpr"), "")
+                        if reading.local_name(n.tag) == "docpr"), "")
     fingerprint, words = "", ""
     for node in picture.iter():
         for key, value in node.attrib.items():
@@ -1123,7 +978,7 @@ def blocks_from_docx(data, file_name, state):
     formats, counts, page, on_page = docx_number_formats(archive), {}, 1, {}
     paged = b"lastRenderedPageBreak" in archive.read("word/document.xml")     # Word noted where its pages ended
     for position, element in enumerate(body, start=1):
-        locator, name = "body element %d" % position, local_name(element.tag)
+        locator, name = "body element %d" % position, reading.local_name(element.tag)
         if name == "tbl":
             rows = []
             for row in element.findall("w:tr", WORD_NS):
@@ -1146,7 +1001,7 @@ def blocks_from_docx(data, file_name, state):
             blocks.append(docx_figure(picture, related, locator, state))
         if level is not None and text:
             block = new_block("heading", text, locator, level_hint=level)
-            if numbered and not first_numbering(text, state.rules)[0]:
+            if numbered and not reading.first_numbering(text, state.rules)[0]:
                 counters[level - 1] += 1
                 counters[level:] = [0] * (9 - level)
                 block["numbering"] = ".".join(str(c) for c in counters[:level] if c)
@@ -1156,7 +1011,7 @@ def blocks_from_docx(data, file_name, state):
             equation = read_equation("omml", math_to_linear(formulas[0]), state.notation)
             blocks.append(new_block("equation", equation.linear or text, locator, equation=equation))
         elif text:
-            page += sum(1 for node in element.iter() if local_name(node.tag) == "lastrenderedpagebreak")
+            page += sum(1 for node in element.iter() if reading.local_name(node.tag) == "lastrenderedpagebreak")
             shape = formats.get(numbered[0], {}).get(numbered[1], "") if numbered else ""
             if numbered and shape != "bullet" and "bullet" not in style_name.lower():
                 counts[numbered] = counts.get(numbered, 0) + 1            # Word counts the items; the file does not hold the numbers
@@ -1200,23 +1055,6 @@ def pdf_lines(document, file_name):
                           "size": sizes[len(sizes) // 2], "bold": bold, "edge": edge(line["top"], line["bottom"])})
     return sorted(lines, key=lambda entry: (entry["page"], entry["top"]))
 
-def without_page_furniture(lines, pages, state, file_name):
-    """Leave out what a page carries only because it is a page: the running title, the footer
-    with its date and page number, the logo. Such a line sits in the top or bottom margin and
-    comes back on most pages, the same but for its digits. It is not part of what the document
-    says, and left in it cuts a list or a sentence in two wherever a page ends. What was left
-    out is reported, so nothing goes missing unseen. Enforces: R2"""
-    same = lambda entry: (entry["edge"], re.sub(r"\d+", "#", entry["text"]))
-    on_pages = {}
-    for entry in lines:
-        if entry["edge"] and "text" in entry:
-            on_pages.setdefault(same(entry), set()).add(entry["page"])
-    furniture = {key for key, found in on_pages.items() if pages >= 3 and len(found) >= max(3, pages // 2)}
-    for edge, text in sorted(furniture):
-        state.notes.append("%s: left out as a page header or footer, because it repeats in the %s margin of %d of %d pages: '%s'"
-                           % (file_name, edge, len(on_pages[(edge, text)]), pages, text))
-    return [entry for entry in lines if not (entry["edge"] and "text" in entry and same(entry) in furniture)]
-
 def blocks_from_pdf(data, file_name, state):
     """PDF keeps no structure, so this reader is the weakest (the manual recommends .docx where
     both exist). With pdfplumber it works from where each line sits and how it is set: page
@@ -1232,10 +1070,10 @@ def blocks_from_pdf(data, file_name, state):
         return blocks_from_pdf_text_only(data, file_name, state)
     blocks, open_block, on_page = [], None, {}
     with pdfplumber.open(io.BytesIO(data)) as document:
-        lines = without_page_furniture(pdf_lines(document, file_name), len(document.pages), state, file_name)
+        lines = reading.without_page_furniture(pdf_lines(document, file_name), len(document.pages), state, file_name)
         sizes = sorted(entry["size"] for entry in lines if "size" in entry)
         body_size = sizes[len(sizes) // 2] if sizes else 10.0
-        numbered = any("size" in entry and first_numbering(entry["text"], state.rules)[0] for entry in lines)
+        numbered = any("size" in entry and reading.first_numbering(entry["text"], state.rules)[0] for entry in lines)
         for entry in lines:
             locator = "page %d" % entry["page"]
             if "table" in entry:
@@ -1251,7 +1089,7 @@ def blocks_from_pdf(data, file_name, state):
             dense = sum(1 for char in text if char in MATH_CHARACTERS) / max(1, len(text.replace(" ", "")))
             stands_out = entry["size"] > body_size * 1.08 or (entry["bold"] and entry["size"] >= body_size * 0.97)
             title = stands_out and not bullet and len(text) < 160 and (
-                first_numbering(text, state.rules)[0] or (len(text.split()) <= 14 and text[-1] not in ".,;:"))
+                reading.first_numbering(text, state.rules)[0] or (len(text.split()) <= 14 and text[-1] not in ".,;:"))
             near = open_block and entry["page"] == open_block["page"] and entry["top"] - open_block["bottom"] < 0.7 * entry["size"]
             over_the_page = open_block and entry["page"] == open_block["page"] + 1 and not title and not bullet \
                 and open_block["block"]["type"] != "heading" and open_block["block"]["text"][-1:] not in ".:;?!" and text[:1].islower()
@@ -1288,50 +1126,11 @@ def blocks_from_pdf_text_only(data, file_name, state):
         for paragraph in re.split(r"\n\s*\n", page.extract_text() or ""):
             text = shared.normalise_text(paragraph)
             if text:
-                kind = "heading" if first_numbering(text, state.rules)[0] and len(text) < 100 else "paragraph"
+                kind = "heading" if reading.first_numbering(text, state.rules)[0] and len(text) < 100 else "paragraph"
                 blocks.append(new_block(kind, text, "page %d" % page_number))
     return blocks
 
 # ---------------------------------------------------------------- levels, references, chunks
-def first_numbering(text, rules):
-    """The numbering at the start of a heading as written, and the name of its scheme."""
-    for scheme in rules["numbering_schemes"]:
-        match = re.match(scheme["pattern"], text)
-        if match:
-            return match.group(0).strip(), scheme["name"]
-    return "", ""
-
-def infer_levels(blocks, rules):
-    """Give every heading its level. When the file nests its sections, the nesting decides.
-    When nesting is flat, numbering decides: a dotted number gives its depth directly
-    (relative to the level of plain numbers); any other scheme seen for the first time is one
-    level deeper than the heading before it, and a scheme seen before returns to its level."""
-    headings = [b for b in blocks if b["type"] == "heading"]
-    hints = sorted({b["level_hint"] for b in headings if b["level_hint"] is not None})
-    nested = len(hints) > 1
-    scheme_level, current, run_hint, run_schemes = {}, 0, None, {}
-    for block in headings:
-        written, scheme = first_numbering(block["text"], rules)
-        if block["numbering"] and not scheme:
-            written, scheme = first_numbering(block["numbering"] + " ", rules)
-        block["numbering"] = block["numbering"] or written
-        if nested:                                       # a flat-numbered stretch inside a nested file (an annex)
-            if block["level_hint"] != run_hint:
-                run_hint, run_schemes = block["level_hint"], {}
-            if scheme and scheme != "dotted":
-                run_schemes.setdefault(scheme, len(run_schemes))
-            block["level"] = hints.index(block["level_hint"]) + 1 + run_schemes.get(scheme, 0)
-        elif scheme == "dotted":
-            depth = block["numbering"].strip(".").count(".") + 1
-            block["level"] = scheme_level.get("number", 1) + depth - 1
-        elif scheme:
-            if scheme not in scheme_level:
-                scheme_level[scheme] = current + 1
-            block["level"] = scheme_level[scheme]
-        else:
-            block["level"] = max(1, current) if current else 1
-        current = block["level"]
-    return blocks
 
 def cross_references(text, rules):
     """Cross-references as written: "Table 3", "section 4.2", "Annex A"."""
@@ -1376,7 +1175,7 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
     chain of everything below it. Paragraph numbers restart under every heading. Enforces: R2, R4"""
     prefix = "C" if corner == "canon" else "D"
     chunks, chain, levels, paragraph_number, section_numbering = [], [], [], 0, ""
-    for block in fold_lists(infer_levels(blocks, state.rules)):
+    for block in fold_lists(reading.infer_levels(blocks, state.rules)):
         if block["type"] == "heading":
             while levels and levels[-1] >= block["level"]:
                 levels.pop()
