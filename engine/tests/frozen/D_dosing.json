@@ -7,10 +7,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "1 Purpose"
    ],
    "kind": "Paragraph",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[2]/p",
    "not_read_reason": "",
    "numbering": "1",
@@ -30,10 +31,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "1 Purpose"
    ],
    "kind": "Paragraph",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[3]/p",
    "not_read_reason": "",
    "numbering": "1",
@@ -53,10 +55,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "2 Dose by body weight"
    ],
    "kind": "Paragraph",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[5]/p",
    "not_read_reason": "",
    "numbering": "2",
@@ -119,10 +122,11 @@
     "source_form": "omml"
    },
    "heading_chain": [
+    "Dosing method",
     "2 Dose by body weight"
    ],
    "kind": "Equation",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[6]/p[1]/aiva-preserved-equation",
    "not_read_reason": "",
    "numbering": "2",
@@ -142,10 +146,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "2 Dose by body weight"
    ],
    "kind": "Paragraph",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[7]/p",
    "not_read_reason": "",
    "numbering": "2",
@@ -165,10 +170,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "3 Adjustment for kidney function"
    ],
    "kind": "Paragraph",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[9]/p",
    "not_read_reason": "",
    "numbering": "3",
@@ -190,10 +196,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "3 Adjustment for kidney function"
    ],
    "kind": "Table",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[10]/table",
    "not_read_reason": "",
    "numbering": "3",
@@ -239,10 +246,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "3 Adjustment for kidney function"
    ],
    "kind": "Figure",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[11]/p[1]/img",
    "not_read_reason": "",
    "numbering": "3",
@@ -262,10 +270,11 @@
    "corner": "canon",
    "equation": null,
    "heading_chain": [
+    "Dosing method",
     "3 Adjustment for kidney function"
    ],
    "kind": "Paragraph",
-   "level": 1,
+   "level": 2,
    "locator": "/aiva-root[1]/html[1]/body[12]/p",
    "not_read_reason": "",
    "numbering": "3",

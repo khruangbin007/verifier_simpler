@@ -3,8 +3,8 @@
  "files": {
   "AIVA_Interface.ipynb": "2909d4009fa013b4b715b44a51324c9b5c569a50bb94cfdfc140f012bcb79bd1",
   "engine/aiva0_shared.py": "f7505038dce430157854b37e647ddc8088b3e6d368a6f852161f11be1870e635",
-  "engine/aiva0r_reading.py": "64245984d65f8006ba2f6936780170e272c76758a3055f403f9f4dd69b683b60",
-  "engine/aiva1_documents.py": "3e86f4aee2062e074cb761158f5146899d406ba976e45745e7d88f0665457e7b",
+  "engine/aiva0r_reading.py": "5f0dd34c85411aa2dfbeb942b0749c76274990ca61600dfc2b41234693a16bcd",
+  "engine/aiva1_documents.py": "87df594160efa231ccb060cd9da22dda6c561af784f2b0434ae8edf123bea100",
   "engine/aiva2_package.py": "7ec2820c2662938656a96a0cc4a0d29b471209ea421fbe5bbe9da35e04dacda4",
   "engine/aiva3_mapping.py": "97aa88d6ee87e113da6a8ccc6d964465913549f9c90b370871a126e73f368e7b",
   "engine/aiva4_checks.py": "301afa216add5a1698dd66451c534da2c474fdf775016d0c48620b1d42125b83",

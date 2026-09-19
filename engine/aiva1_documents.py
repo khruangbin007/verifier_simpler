@@ -638,6 +638,7 @@ class WalkState:
     notes: list = field(default_factory=list)      # what was left out or read in a fallback way, in plain words
     atoms: list = field(default_factory=list)      # the smallest pieces of text the file holds, counted from the file itself
     dropped: list = field(default_factory=list)    # text left out under a named rule, kept so the account can show it
+    lent_numbering: str = ""                       # a number a container carries for the heading inside it
     lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
 
     def __post_init__(self):
@@ -667,8 +668,9 @@ def walk_element(element, path, depth, state):
     if family == "heading":
         text = element_text(element, state.rules)
         digit = re.fullmatch(r"h([1-6])", name)
-        state.blocks.append(new_block("heading", text, here, numbering=numbering,
+        state.blocks.append(new_block("heading", text, here, numbering=numbering or state.lent_numbering,
                                       level_hint=int(digit.group(1)) if digit else depth))
+        state.lent_numbering = ""
     elif family in ("container", "list_container", "inline"):
         # A container that carries its own heading in an attribute (<section name="4. Market">)
         # gives that heading a block of its own, so the chain below it is not lost.
@@ -678,7 +680,13 @@ def walk_element(element, path, depth, state):
         if family == "list_container":                   # <ol>, or <list type="numbered">: its items are counted
             kind = " ".join([name] + [element.get(a) or "" for a in ("type", "style", "numeration", "class")]).lower()
             state.lists.append([bool(re.search(r"\bol\b|order|num|decimal|arabic|alpha|roman", kind)), 0])
+        # A container often carries the number of the section (<section num="2.">) while the
+        # heading it labels is a child of it (<title>). The number is lent to the first heading
+        # the container produces, so that "2." belongs to "2. Volume per bed" and not to
+        # nothing at all. Enforces: R13
+        lent, state.lent_numbering = state.lent_numbering, numbering if family == "container" and numbering and not heading else ""
         walk_mixed(element, here, depth + (1 if family == "container" else 0), state)
+        state.lent_numbering = lent
         if family == "list_container":
             state.lists.pop()
     elif family in ("paragraph", "list_item"):
@@ -737,8 +745,14 @@ def table_block(element, here, state):
     family = lambda node: state.family(reading.local_name(node.tag))
     found = [node for node in element.iter() if family(node) == "row"] or reading.table_rows(element, state.rules)
     rows, captions = [], []
+    in_a_row = {id(node) for row in found for node in row.iter()}
     for node in element.iter():
-        part = shared.normalise_text(element_text(node, state.rules, skip=())) if family(node) == "caption" else ""
+        # A caption may be named as one, or may simply sit beside the rows rather than in them
+        # (<gridcaption> under <gridholder>). Either way its words belong to the table and are
+        # kept: a table whose title is lost cannot be cited by its number. Enforces: R13
+        beside = (node is not element and id(node) not in in_a_row and family(node) not in ("row", "table_part", "ignore")
+                  and not any(child is not None and family(child) == "row" for child in node))
+        part = shared.normalise_text(element_text(node, state.rules, skip=())) if family(node) == "caption" or beside else ""
         if part and part not in captions:
             captions.append(part)
     for row in found:
@@ -884,7 +898,17 @@ def blocks_from_mhtml(data, file_name, state, repairs):
                     state.images[key.rsplit("/", 1)[-1]] = fingerprint
     if page is None:
         return [not_read_block(file_name, "the file holds no web page part")]
-    return blocks_from_markup(page, file_name, state, repairs, tolerant_only=True)
+    blocks = blocks_from_markup(page, file_name, state, repairs, tolerant_only=True)
+    return [block for block in title_block(page, file_name) + blocks]
+
+def title_block(page, file_name):
+    """The <title> of a web page, as a heading above everything in it. In a Word file exported
+    to the web it is often the only place the document's own name survives, because the visible
+    heading may be a styled paragraph carrying no heading level. Without this the title reaches
+    no unit and can be cited by nothing. Enforces: R13"""
+    found = re.search(r"<title[^>]*>(.*?)</title>", page, re.IGNORECASE | re.DOTALL)
+    text = shared.normalise_text(re.sub(r"<[^>]+>", " ", found.group(1))) if found else ""
+    return [new_block("heading", text, "%s title" % file_name, level_hint=1)] if text else []
 
 # ---------------------------------------------------------------- .docx
 WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -967,6 +991,30 @@ def safe_xml(data):
     text = re.sub(rb"<!DOCTYPE[^>\[]*(\[.*?\])?\s*>", b"", data, flags=re.S | re.I)
     return ElementTree.fromstring(text)
 
+def note_blocks(archive, file_name):
+    """The footnotes and endnotes of a Word file, which are parts of their own and are not in
+    the run of paragraphs a plain reader walks. Real documentation puts definitions, caveats and
+    parameter values in a footnote routinely, and a reader that takes the body and not the notes
+    reports a statement as undocumented when its documentation is two lines below the text.
+    They are read after the body, each saying which note it is. Enforces: R13"""
+    found = []
+    for part, kind in (("word/footnotes.xml", "footnote"), ("word/endnotes.xml", "endnote")):
+        if part not in archive.namelist():
+            continue
+        try:
+            root = safe_xml(archive.read(part))
+        except ElementTree.ParseError:
+            continue
+        for note in root:
+            if (note.get("{%s}type" % WORD_NS["w"]) or "") in ("separator", "continuationSeparator", "continuationNotice"):
+                continue                                 # the rule Word draws above a footnote, not a note
+            number = note.get("{%s}id" % WORD_NS["w"]) or "?"
+            for position, paragraph in enumerate(note.findall("w:p", WORD_NS), start=1):
+                text = shared.normalise_text("".join(run.text or "" for run in paragraph.iter("{%s}t" % WORD_NS["w"])))
+                if text:
+                    found.append(new_block("paragraph", text, "%s %s %s paragraph %d" % (file_name, kind, number, position)))
+    return found
+
 def blocks_from_docx(data, file_name, state):
     """Body elements in document order, so that tables stay where they are. Heading numbers that
     Word produces automatically are not stored in the file; they are reconstructed by counting
@@ -986,6 +1034,7 @@ def blocks_from_docx(data, file_name, state):
             if relation.get("TargetMode") != "External" and target in archive.namelist():
                 related[relation.get("Id")] = archive.read(target)
     blocks, counters, pending_caption = [], [0] * 9, ""
+    notes = note_blocks(archive, file_name)
     formats, counts, page, on_page = docx_number_formats(archive), {}, 1, {}
     paged = b"lastRenderedPageBreak" in archive.read("word/document.xml")     # Word noted where its pages ended
     for position, element in enumerate(body, start=1):
@@ -1035,6 +1084,9 @@ def blocks_from_docx(data, file_name, state):
             on_page[page] = on_page.get(page, 0) + 1
             label = written + "." if numbered else "p.%d \u00b6%d" % (page, on_page[page]) if paged else ""
             blocks.append(new_block("paragraph", text, locator, numbering=label, reconstructed=bool(numbered)))
+    if notes:
+        blocks.append(new_block("heading", NOTES_HEADING, "%s notes" % file_name, level_hint=1))
+        blocks.extend(notes)
     return blocks
 
 # ---------------------------------------------------------------- .pdf
@@ -1162,6 +1214,7 @@ def states_something_checkable(block, rules):
 
 KIND_OF_BLOCK = {"paragraph": "Paragraph", "list_item": "Paragraph", "table": "Table", "figure": "Figure",
                  "equation": "Equation"}
+NOTES_HEADING = "Notes"                 # the heading AIVA puts above a Word file's footnotes and endnotes
 LIST_MARKER = "- "                      # how an item of a bulleted list is shown; a numbered one shows its number
 
 def fold_lists(blocks):
@@ -1195,7 +1248,10 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             chain.append(block["text"])
             paragraph_number, section_numbering = 0, block["numbering"]
             reconstructed = block["reconstructed"]
-            if reconstructed:
+            # The number belongs to the heading whether the document wrote it (num="1.") or Word
+            # left it to be counted back. Without it a citation to "section 2" can be resolved
+            # against nothing, and the number itself reaches no unit at all. Enforces: R13
+            if block["numbering"] and not block["text"].startswith(block["numbering"]):
                 chain[-1] = "%s %s" % (block["numbering"], block["text"])
             continue
         kind = KIND_OF_BLOCK[block["type"]]
@@ -1305,7 +1361,7 @@ def read_corner(ctx, corner, input_key, label):
         chunks.extend(new_chunks)
         plain = [shared.to_plain(chunk) for chunk in new_chunks]
         found_account = reading.account(file_name, state.atoms, plain, state.dropped,
-                                       reading.marks_of_rendering(plain) + [LIST_MARKER])
+                                       reading.marks_of_rendering(plain) + [LIST_MARKER, NOTES_HEADING])
         accounts.append(found_account)
         info_rows.extend({"group": label, "item": "%s: content account" % file_name, "value": line}
                          for line in reading.account_lines(found_account))

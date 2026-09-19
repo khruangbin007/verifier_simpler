@@ -157,14 +157,29 @@ class WhatACorrectReadingWouldDo(unittest.TestCase):
         heading = holding(units, "base rate of nine units")
         self.assertEqual(str(heading.get("level")), "1", "a bold-only heading should be placed at depth 1")
 
-    def test_the_section_number_of_an_xml_document_reaches_no_unit(self):
-        """H and I number their sections in an attribute the rules read. The number reaches the
-        block, and then no unit: the chain says 'Watering windows', never '1. Watering windows'.
-        The account reports it as lost, which is what it is."""
-        _, accounts = reading_of("H_twocolumn")
+    def test_the_section_number_of_an_xml_document_now_reaches_every_unit_below_it(self):
+        """H and I number their sections in an attribute on the container, while the heading it
+        labels is a child of it. R2 lends the container's number to that heading, so the chain
+        says "1. Watering windows" and a citation to section 1 can be resolved. Before R2 the
+        number reached the block and then nothing, and the account reported it as lost."""
+        units, accounts = reading_of("H_twocolumn")
+        chains = [" ".join(unit.get("heading_chain") or ()) for unit in units]
+        self.assertTrue(any(chain.startswith("1.") for chain in chains),
+                        "the number the document wrote should belong to the heading it labels")
         methodology = [one for one in accounts if one["file"].endswith(".xml")][0]
-        self.assertIn("1.", methodology["what unaccounted"],
-                      "if the section number now reaches a unit, this expectation is out of date")
+        self.assertTrue(methodology["closed"], methodology["what unaccounted"])
+
+    def test_every_hard_sample_closes_its_content_account(self):
+        """After R2 nothing in G, H or I is lost or added: every atom of every file is in a unit,
+        in a unit's other fields, read into another form, left out under a named rule, or
+        reported as not read."""
+        for sample in HARD:
+            for account in self.scores[sample]["accounts"]:
+                self.assertTrue(account["closed"],
+                                "%s %s: %d unplaced (%s), %d added (%s)"
+                                % (sample, account["file"], account["unaccounted"],
+                                   account["what unaccounted"][:6], account["injected"],
+                                   account["what injected"][:6]))
 
 
 if __name__ == "__main__":

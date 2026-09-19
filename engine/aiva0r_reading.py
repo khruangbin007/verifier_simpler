@@ -333,6 +333,10 @@ EXPLAINED_BY_PLACE = {
     "attribute": ("declared drop", "an attribute the rules do not read: an identifier, a style, a namespace or a file name"),
     "style or script": ("declared drop", "the content of a style or script element, which is not what the document says"),
     "page without a text layer": ("not read", "a page that carries no text layer, which AIVA cannot count without reading the picture"),
+    "tracked change": ("declared drop", "an unaccepted deletion, which is not what the document says: it is what somebody proposed the document should stop saying"),
+    "header": ("declared drop", "the running header of a page, which the page carries because it is a page"),
+    "footer": ("declared drop", "the running footer of a page, which the page carries because it is a page"),
+    "comment": ("declared drop", "a comment somebody left on the document, which is not what the document says"),
 }
 
 def tokens(text):
@@ -453,6 +457,7 @@ DECLARED_MARKS = (
     ("reconstructed numbering", "a heading number Word produces automatically and does not store, counted back by AIVA and marked as reconstructed"),
     ("linear form of an equation", "an equation written out in AIVA's linear notation; the markup it was read from is kept in the equation's source form"),
     ("words read from a picture", "what OCR made of a picture, shown to help a person and never evidence"),
+    ("the heading above a Word file's notes", "footnotes and endnotes are parts of their own and are read after the body, under a heading AIVA gives them"),
 )
 DECLARED_RELOCATIONS = (
     ("heading chain", "a heading is not a unit of its own: its text is carried by every unit below it"),
@@ -569,7 +574,7 @@ def account_of_package(files, units, refused, is_text_file):
     picture, stored data in a binary form) is counted as one atom of its own, because its lines
     cannot be counted without reading it. Extends the line coverage that read-package already
     kept for parsed R files to every member of the tarball. Enforces: R13"""
-    inside, not_read, atoms, unaccounted = 0, 0, 0, []
+    inside, not_read, atoms, unaccounted, fenced = 0, 0, 0, [], 0
     covered = {}
     for unit in units:
         lines = unit.get("lines")
@@ -590,7 +595,13 @@ def account_of_package(files, units, refused, is_text_file):
             not_read += 1
             continue
         numbers = [number for number, line in enumerate(lines, start=1) if line.strip()]
-        atoms += len(numbers)
+        # A fence that opens or closes a block of code in a vignette separates content from
+        # content and says nothing itself. It is a declared drop, named here, rather than a
+        # line that lies in no unit for no stated reason. Enforces: R13
+        fences = {number for number in numbers if lines[number - 1].strip().startswith("```")}
+        numbers = [number for number in numbers if number not in fences]
+        atoms += len(numbers) + len(fences)
+        fenced += len(fences)
         held = covered.get(path, set())
         whole_file = any(unit.get("file") == path and not unit.get("lines") for unit in units)
         for number in numbers:
@@ -601,7 +612,7 @@ def account_of_package(files, units, refused, is_text_file):
             else:
                 unaccounted.append("%s line %d" % (path, number))
     found = {"file": "the package", "atoms": atoms + len(refused), "in unit text": inside, "relocated": 0,
-             "rewritten": 0, "declared drop": len(refused), "not read": not_read,
+             "rewritten": 0, "declared drop": len(refused) + fenced, "not read": not_read,
              "unaccounted": len(unaccounted), "injected": 0, "where unaccounted": sorted(unaccounted)[:12],
              "what unaccounted": [], "what injected": []}
     found["closed"] = found["unaccounted"] == 0
