@@ -962,6 +962,8 @@ def validate_answer(question, text):
             raise Rejected(shared.REJECTION_REASONS[0])
         if question["question_type"] == "slice-rules":
             reading.validate_slice_rules(question, answer, Rejected)
+        elif question["question_type"] == "package-plan":
+            reading.validate_package_plan(question, answer, Rejected)
         elif question["question_type"] in JUDGE_RELATIONS:
             validate_judge(question, answer)
         else:

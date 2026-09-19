@@ -3,12 +3,12 @@
  "files": {
   "AIVA_Interface.ipynb": "2909d4009fa013b4b715b44a51324c9b5c569a50bb94cfdfc140f012bcb79bd1",
   "engine/aiva0_shared.py": "f7505038dce430157854b37e647ddc8088b3e6d368a6f852161f11be1870e635",
-  "engine/aiva0r_reading.py": "4dd666af3c1a1d1e55c465fdc09f3fe8ae22e5089a248f7e3b9151de34a9a53a",
+  "engine/aiva0r_reading.py": "80095d13f36c289c6fd81f1fb417978c63ebc28f3e6cc9de85ddbfdac52fff8f",
   "engine/aiva1_documents.py": "9fb6aceacc61e5fce8fef2b469167df94c41e20d260f21d3305a79fd3dc96a18",
-  "engine/aiva2_package.py": "7ec2820c2662938656a96a0cc4a0d29b471209ea421fbe5bbe9da35e04dacda4",
-  "engine/aiva3_mapping.py": "2d814e8863dc4e0d9db2906304d1e5803eedbb3761681753327381c30d49ef93",
+  "engine/aiva2_package.py": "13d0cdef3a7fb39eea8cbc8122089c54d75a1bbb178503049af625cdbf15e6ba",
+  "engine/aiva3_mapping.py": "47483e54f3eea2d5022b21a8c23430a2bcddb9350d2c3176dca235aa4c06ba9e",
   "engine/aiva4_checks.py": "301afa216add5a1698dd66451c534da2c474fdf775016d0c48620b1d42125b83",
-  "engine/aiva5_run_report.py": "aa97b364fda2db4427d00351950cedfd697244e9abd515439f36a4d4c56bb4c5",
+  "engine/aiva5_run_report.py": "98ed8918e457a06772f4a6825f60c4c1f60d51b529f8014458833aff2831e0e7",
   "engine/pipeline.yaml": "130847cb2aeef39d9dea9d42f9cae661930bc2f97f858099f3439a0959eb569f",
   "engine/references/bridge_patterns.yaml": "97a1475c2359a1b5e38bcc321e8690de198e14975254b051dba28c2507e649cc",
   "engine/references/prompts/align-symbols.txt": "73069dd59ae8dae812bce69bc0ddc61ec3d9e5c6f7ecd085c08d810fed9755bb",
@@ -19,6 +19,7 @@
   "engine/references/prompts/judge-unit-to-canon.txt": "e36b68a1b6c0cec153f5c6a255d8c1e795b06c32410bf6db2bd1166813ae8dbc",
   "engine/references/prompts/judge-unit-to-doc.txt": "34052949a1202190379ecd8593aabbe518e1ab735b090c940d9c4d24f122f6bb",
   "engine/references/prompts/map-table-columns.txt": "3a7dc0f48d7ee2d6d3224f889915779533b2cb1c15551d273e12b1589ce095da",
+  "engine/references/prompts/package-plan.txt": "08ea8fe77dd394d9b68da784ca435ad1880f7f9eb3560eb14384131151ba4631",
   "engine/references/prompts/read-formula-from-prose.txt": "7ad1361e6c291135ba455575e9c7575820dcc5a59494fbd58d91c439b5da404e",
   "engine/references/prompts/second-opinion.txt": "aecaa16e083d8ee30cd9bf94ef7bbb75b2424a573affff19628e654c0da761ed",
   "engine/references/prompts/slice-rules.txt": "bdc764f4dcbf64f43c6723a1f8540fc5c77a3bad4df8a87569b64594a0895816",
@@ -42,7 +43,7 @@
   "engine/skills/prepare-run/SKILL.md": "7ac92d760960fbc3845ea1bed4cdc9f7774f3631f80b30b28bfdd0afef0e6b1f",
   "engine/skills/read-documentation/SKILL.md": "78e7276bef385f5903c43ec6634ba0e3dc9a1e1cc95028d2e7268b2303ff68d6",
   "engine/skills/read-methodology/SKILL.md": "5c4419778330c20f8e475f5d7dd56c26f006ea0e6fe6d04c303ff78038b003f5",
-  "engine/skills/read-package/SKILL.md": "8977e6077cd05880a743fae5a0e69cc6e7bda8508bbde690652f995db6646a6e",
+  "engine/skills/read-package/SKILL.md": "007baefbede8552ba171a9d350b5ccfe406524433bbbccd7029ee08c0514d1fc",
   "engine/skills/record-determinations/SKILL.md": "ee3ce5e06e9d3b421594961dff7c2c1174df2254a74cc18dac86ab772939e769",
   "tools/build_manual.py": "8f468311c169e3ba5840df2719d0b3dc718d3fbfbedf1183605ebaeaca4c6989",
   "tools/build_notebook.py": "5ee46a5a2d99b4a30fa4d9aeb38fe63a2682daf7ba19507d71e57de52f7af5ee",
@@ -83,7 +84,7 @@
   "prepare-run": "0.0.1",
   "read-documentation": "0.0.3",
   "read-methodology": "0.0.3",
-  "read-package": "0.0.2",
+  "read-package": "0.0.3",
   "record-determinations": "0.0.1"
  }
 }

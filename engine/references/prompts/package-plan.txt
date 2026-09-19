@@ -1,0 +1,26 @@
+VERSION 1
+=== SYSTEM ===
+You are given the list of files inside one R package, with how large each is and which reader the built-in tests already give it. For the files those tests leave unplaced you are shown the first few lines. Your task is to say WHICH EXISTING READER should take each unplaced file.
+You choose from a fixed list only. You never write text of your own into an answer: every path you name must be one shown to you as not placed, and every reader you give must be one of the readers listed. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: package-plan
+TASK: Give every file marked NOT PLACED one of the readers below.
+THE FILES IN THE PACKAGE
+[[UNIT]]
+READERS YOU MAY USE
+r-source: R code, to be parsed into functions and objects. Use for a file of R code wherever it lies, including a folder the tests do not expect.
+r-data: stored data to be decoded into a table of values.
+help-page: a written help page for an object (an .Rd page).
+vignette: a longer written piece mixing prose and code.
+table-file: a table of values stored as text, such as comma- or tab-separated rows.
+prose: plain writing with no code and no table in it. Use this when none of the others fits.
+WHAT TO LOOK FOR
+R code usually shows assignments with <- and calls with round brackets. A help page shows braces after a backslash. A vignette opens with a block between two lines of three dashes, or holds fenced code. A table file shows the same separator repeated on every line, with a first line of column names.
+ANSWER FORMAT
+{"readers":{"inst/extra/helpers.R":"r-source","inst/extdata/floors.csv":"table-file"},"why":{"inst/extra/helpers.R":"a short reason in plain words"}}
+Rules on your answer:
+- every key of readers must be a path shown to you above as NOT PLACED;
+- every file marked NOT PLACED must appear in readers: leave none out;
+- every value of readers must be one of the six readers listed above;
+- there is no reader that means skip, ignore or leave unread. A file you cannot make sense of is given "prose", and the reader will say plainly that it could not read it;
+- every key of why, if you give any, must also be a path marked NOT PLACED.

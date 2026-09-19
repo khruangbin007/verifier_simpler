@@ -224,6 +224,43 @@ def slice_rules(main_prompt, misbehave=False):
     return {"families": families, "levels": levels, "why": why}
 
 
+def package_plan(main_prompt, misbehave=False):
+    """Read the manifest back out of the prompt and give each unplaced member a reader, the way
+    the prompt describes: by what its first lines look like. Only a line of the manifest itself
+    counts - "path (N bytes) | ..." - so that the prompt's own wording about NOT PLACED is not
+    mistaken for a file. A misbehaving answer leaves one member out, which the validator has to
+    refuse."""
+    readers, path, lines = {}, None, []
+    row = re.compile(r"^(\S.*?) \((\d+) bytes\) \| (.*)$")
+    for line in main_prompt.split("\n"):
+        stripped = line.strip()
+        found = row.match(stripped)
+        if found:
+            if path:
+                readers[path] = reader_for(path, lines)
+            path, lines = (found.group(1), []) if found.group(3).startswith("NOT PLACED") else (None, [])
+        elif stripped.startswith("line: ") and path:
+            lines.append(stripped[6:])
+    if path:
+        readers[path] = reader_for(path, lines)
+    if misbehave and len(readers) > 1:
+        readers.pop(sorted(readers)[0])              # one member left out
+    return {"readers": readers, "why": {path: "by what its first lines look like" for path in readers}}
+
+
+def reader_for(path, lines):
+    body = "\n".join(lines)
+    if re.search(r"<-|function\s*\(", body):
+        return "r-source"
+    if "\\name{" in body or "\\alias{" in body:
+        return "help-page"
+    if body.startswith("---") or "```" in body:
+        return "vignette"
+    if lines and all(line.count(",") >= 1 for line in lines[:3]):
+        return "table-file"
+    return "prose"
+
+
 def answer_for(system_prompt, main_prompt, misbehave):
     match = re.search(r"QUESTION TYPE: ([a-z-]+)", main_prompt)
     question_type = match.group(1) if match else "self-test"
@@ -247,6 +284,8 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(align_symbols(main_prompt))
     if question_type == "read-formula-from-prose":
         return json.dumps(read_formula_from_prose(main_prompt))
+    if question_type == "package-plan":
+        return json.dumps(package_plan(main_prompt, misbehave and bucket == 5))
     if question_type == "slice-rules":
         return json.dumps(slice_rules(main_prompt, misbehave and bucket in (1, 2)))
     if question_type == "check-rule":

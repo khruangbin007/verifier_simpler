@@ -597,7 +597,7 @@ def replay_chat(call_records):
 # read-methodology and read-documentation ask only where the built-in rules are themselves in
 # doubt, and only when agentic_reading is not "off". On a file the rules read confidently they
 # spend no call and produce exactly what they produced before.
-CHAT_STEPS = ("read-methodology", "read-documentation", "interpret-code", "judge-links",
+CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-links",
               "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {

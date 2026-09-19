@@ -49,7 +49,7 @@ import aiva0_shared as shared
 import aiva0r_reading
 import aiva1_documents
 
-SKILL_VERSIONS = {"read-package": "0.0.2"}
+SKILL_VERSIONS = {"read-package": "0.0.3"}
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
 PARSER_NAME = "AIVA R reader 0.0.1"
 
@@ -1146,9 +1146,43 @@ def is_parsed_r_file(path):
     """Is this an R source file in a folder whose code AIVA parses?"""
     return path.lower().endswith(".r") and path.lower().split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo")
 
-def file_units(path, data, context, facts):
-    """The units of one file of the package, by where it lies and what it is."""
+def built_in_reader(path, data):
+    """Which reader the built-in tests give a member, or "" where they give none. A member with
+    no reader is read as two thousand characters of running text and the rest of it reaches
+    nothing, which is what the plan exists to ask about. Enforces: R13"""
     lowered = path.lower()
+    if is_data_file(path):
+        return "r-data"
+    if lowered.startswith("src/") or b"\x00" in data[:4096]:
+        return "not read"                            # compiled or binary: named as such, never guessed at
+    if is_parsed_r_file(path):
+        return "r-source"
+    if lowered.endswith(".rd") and lowered.startswith("man/"):
+        return "help-page"
+    if lowered.endswith((".rmd", ".rnw", ".qmd")):
+        return "vignette"
+    if path in ("DESCRIPTION", "NAMESPACE") or lowered.endswith((".md", ".txt")) and "/" not in path:
+        return "prose"
+    return ""
+
+def file_units(path, data, context, facts, reader=""):
+    """The units of one file of the package, by where it lies and what it is. A reader chosen
+    for this member overrides only where the built-in tests give none."""
+    lowered = path.lower()
+    if reader and not is_data_file(path) and not lowered.startswith("src/"):
+        text = aiva1_documents.decode_text(data) if b"\x00" not in data[:4096] else None
+        if text is not None:
+            if reader == "r-source":
+                return units_from_r_source(path, text, context)
+            if reader == "help-page":
+                return [help_page_unit(path, text)]
+            if reader == "vignette":
+                return vignette_units(path, text, context)
+            if reader in ("r-data", "table-file"):
+                units, tables, fact = decode_data_file(path, data, context["settings"])
+                context["tables"].extend(tables)
+                facts["data"].append(fact)
+                return units
     if is_data_file(path):
         units, tables, fact = decode_data_file(path, data, context["settings"])
         context["tables"].extend(tables)
@@ -1232,6 +1266,37 @@ def package_rows(description, namespace, units, facts, refused):
     rows.extend(("Package", "Member of the tarball refused", "%s: %s" % entry) for entry in refused)
     return [{"group": group, "item": item, "value": value} for group, item, value in rows if value != ""]
 
+def package_plan(ctx, files, placed, package_name):
+    """Ask which existing reader should take each member the built-in tests leave unplaced.
+
+    The answer chooses among readers AIVA already has. It never reaches the R tokenizer, the
+    parser, the expression trees or the decoder of stored data: a model's reading of code is an
+    assertion about the code, not a parse of it. A file sent to a reader that cannot make sense
+    of it becomes a unit saying so, exactly as today, and there is no answer that leaves a
+    member unread. Enforces: R3, R7, R13"""
+    unplaced = [path for path in sorted(files) if not placed.get(path)]
+    if not unplaced or ctx.ask is None or ctx.settings.get("agentic_reading") == "off":
+        return {}, [], []
+    digest = aiva0r_reading.manifest_digest(files, placed, safe_text, package_name)
+    prompt = aiva0r_reading.load_prompt(ctx.options["references_dir"], "package-plan")
+    body = aiva0r_reading.skill_body(ctx.options["references_dir"], "read-package")
+    question = aiva0r_reading.package_plan_question(digest, prompt, ctx.settings, body)
+    if question["too_large"]:
+        return {}, [digest], ["The list of files in the package is too large to ask about, so the built-in tests read it."]
+    found = ctx.ask([question]).get(question["question_id"])
+    answer = (found or {}).get("answer")
+    if not answer:
+        return {}, [digest], ["The package was read by the built-in tests; a guided reading was not available."]
+    readers, why = answer["readers"], answer.get("why") or {}
+    notes = ["%s was read as %s on the model's proposal%s"
+             % (path, readers[path], " (%s)" % why[path] if path in why else "")
+             for path in sorted(readers)]
+    return readers, [digest], notes
+
+def safe_text(data):
+    """A member as text, or None where it holds bytes AIVA cannot decode."""
+    return aiva1_documents.decode_text(data) if b"\x00" not in data[:4096] else None
+
 def read_package(ctx):
     """Step 04, skill read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
     data, man/, tests/, vignettes/, the rest; by name inside each), so references are stable
@@ -1251,9 +1316,11 @@ def read_package(ctx):
     def rank(path):
         top = path.split("/")[0].lower()
         return (order.index(top) if top in order else len(order), path)
+    placed = {path: built_in_reader(path, files[path]) for path in files}
+    chosen, digests, plan_notes = package_plan(ctx, files, placed, description.get("Package", ""))
     drafts, facts = [], {"data": []}
     for path in sorted(files, key=rank):
-        drafts.extend(file_units(path, files[path], context, facts))
+        drafts.extend(file_units(path, files[path], context, facts, chosen.get(path, "")))
     data_names = {unit["name"] for unit in drafts if unit["data"]}
     data_files = {}
     for unit in drafts:
@@ -1289,6 +1356,7 @@ def read_package(ctx):
                         for line in aiva0r_reading.account_lines(account))
     if not account["closed"]:
         messages.append("The content account of the package is open; Model_Package_Info says what could not be placed.")
+    info["rows"].extend({"group": "The package", "item": "how it was read", "value": note} for note in plan_notes)
     return shared.StepResult({"model_units": units, "parameter_tables": tables, "package_info": [info],
-                              "content_accounts": [account]},
+                              "content_accounts": [account], "shape_digests": digests},
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)

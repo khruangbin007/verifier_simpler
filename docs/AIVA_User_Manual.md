@@ -427,6 +427,14 @@ The order of precedence, and it is the whole safeguard: what the analyst wrote i
 
 Because the answer names only tags and families, there is no field through which a word can enter or leave a document. `test_guided_reading.py` holds that as a property over random valid answers: the content account closes whatever the answer says.
 
+**Reading a package laid out in a way AIVA does not expect.** The built-in tests place a member by where it lies and what it is: R code under `R/`, `tests/`, `data/`, `inst/`, `data-raw/` or `demo/`; stored data by its extension; a help page under `man/`. A member they place nowhere becomes one unit of running text cut at two thousand characters, and the rest of it reaches nothing. The line account still says every line lies inside a unit, because it does: conservation is not the same as usefulness, and this is the one gap the account cannot see.
+
+Where such members exist and `agentic_reading` is not `off`, `read-package` asks one question (`aiva2_package.package_plan`). It shows the manifest: every member with its path, its size, and which reader the tests already give it, plus the first five lines of each member they place nowhere. A member they do place is shown by name only; its content is never shown.
+
+What comes back names, for each unplaced member, one of six readers AIVA already has: `r-source`, `r-data`, `help-page`, `vignette`, `table-file`, `prose`. **There is no reader that means skip**, and an answer that leaves a member out is refused. A member sent to a reader that cannot make sense of it becomes a unit saying so, exactly as before. The answer never reaches the R tokenizer, the parser, the expression trees or the decoder of stored data: reading code is a parse, not an opinion.
+
+`Model_Package_Info` names every member the plan placed and with which reader.
+
 **Hard samples.** Three sample projects exist to be read badly and to make the badness measurable: `G_schema` (an XML schema whose tags are named nothing the rules know, with lists inside table cells), `H_twocolumn` (a PDF in two columns with a running header, a footnote and an unnumbered annex) and `I_wordtraps` (a Word file whose headings are bold paragraphs, with a text box and tracked changes). Each carries a `gold_reading.csv` naming a phrase a correct reading puts in some unit and the depth of the heading it belongs under. `engine/tests/test_hard_reading_samples.py` holds what the reader manages today as a floor that may not fall, and records what a correct reading would do as an expectation that is allowed to be short. Measured in `evaluation/hard_reading_samples_2026-09-18.md`.
 
 **Known limitations.** PDF layout is guessed from positions: a heading is a short line set larger or bolder than the body, and a header or footer is a line that repeats in a page margin, so an unusual layout can be misread and `Model_Package_Info` says what was left out. Juxtaposition is read as a product only inside structured markup, never in running text. The words OCR reads from a picture are shown to help a person and are never evidence; the bundled OCR model can drop the spaces between words.
@@ -564,7 +572,7 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | 01 | prepare-run | 0.0.1 | aiva5_run_report.prepare_run | Fingerprints the inputs and opens the run record. Use as the first step of every review run. |
 | 02 | read-methodology | 0.0.3 | aiva1_documents.read_methodology | Reads the canonical methodology into citable chunks with their full heading chain. Use as the first reading step of a review run. |
 | 03 | read-documentation | 0.0.3 | aiva1_documents.read_documentation | Reads the model documentation into citable chunks and marks which ones state something checkable. Use after read-methodology. |
-| 04 | read-package | 0.0.2 | aiva2_package.read_package | Reads the R package statically into model units: code, roxygen blocks, help pages, tests and stored parameter data. Use after the documents are read. |
+| 04 | read-package | 0.0.3 | aiva2_package.read_package | Reads the R package statically into model units: code, roxygen blocks, help pages, tests and stored parameter data. Use after the documents are read. |
 | 05 | build-graph | 0.0.1 | aiva3_mapping.build_graph | Builds the append-only graph of chunks, model units and anchors, and harvests the bridge vocabulary. Use after all three corners are read. |
 | 06 | find-candidates | 0.0.1 | aiva3_mapping.find_candidates | Proposes, for every unit and target corner, a short list of passages with a plain reason. Use before each judge-links pass. |
 | 07 | confirm-outline | 0.0.2 | a person | A person confirms that Level and Section on Chunks_Canon match the methodology's own outline. Use before the reading is trusted: where a file's shape was proposed by the model, the reviewer confirms the difference against the built-in reading. |
@@ -587,17 +595,17 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 |---|---|
 | R1 | `aiva0_shared.has_banned_wording`, `aiva4_checks.build_items`, `aiva4_checks.account_coverage`, `aiva5_run_report.quoted`, `aiva5_run_report.plain_cell`, `aiva5_run_report.build_report_file` |
 | R2 | `aiva0r_reading.without_page_furniture`, `aiva1_documents.not_read_block`, `aiva1_documents.read_picture`, `aiva1_documents.blocks_to_chunks`, `aiva2_package.parse_r_source`, `aiva2_package.units_from_r_source`, `aiva2_package.read_package`, `aiva3_mapping.find_candidates`, `aiva4_checks.check_identity`, `aiva4_checks.account_coverage`, `aiva5_run_report.rows_coverage` |
-| R3 | `aiva0r_reading.slice_rules_question`, `aiva0r_reading.validate_slice_rules`, `aiva0r_reading.skill_body`, `aiva0r_reading.guided_rules`, `aiva3_mapping.validate_answer`, `aiva3_mapping.interpret_code`, `aiva3_mapping.judge_links`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva4_checks.check_values`, `aiva5_run_report.ask_one`, `aiva5_run_report.make_asker` |
+| R3 | `aiva0r_reading.slice_rules_question`, `aiva0r_reading.validate_slice_rules`, `aiva0r_reading.skill_body`, `aiva0r_reading.guided_rules`, `aiva0r_reading.validate_package_plan`, `aiva2_package.package_plan`, `aiva3_mapping.validate_answer`, `aiva3_mapping.interpret_code`, `aiva3_mapping.judge_links`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva4_checks.check_values`, `aiva5_run_report.ask_one`, `aiva5_run_report.make_asker` |
 | R4 | `aiva0_shared.content_hash`, `aiva0_shared.chain_records`, `aiva1_documents.blocks_to_chunks`, `aiva3_mapping.ledger_records`, `aiva3_mapping.judge_links`, `aiva4_checks.numeric_step`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva5_run_report.record_determinations` |
 | R5 | `aiva0_shared.canonical_json`, `aiva0_shared.chain_records`, `aiva0r_reading.slice_rules_question`, `aiva2_package.read_package`, `aiva3_mapping.ledger_records`, `aiva3_mapping.ranked`, `aiva3_mapping.fuse`, `aiva3_mapping.assemble_question`, `aiva4_checks.sample_points`, `aiva5_run_report.call_chat`, `aiva5_run_report.run_batch`, `aiva5_run_report.make_asker`, `aiva5_run_report.replay_chat` |
 | R6 | `aiva1_documents.read_file_blocks`, `aiva2_package.unpack_package`, `aiva5_run_report.open_run`, `aiva5_run_report.rebuild_outputs` |
-| R7 | `aiva0r_reading.markup_digest`, `aiva0r_reading.validate_slice_rules`, `aiva1_documents.parse_formula`, `aiva2_package.parse_r_source`, `aiva2_package.to_expr`, `aiva2_package.decode_data_file`, `aiva4_checks.to_sympy`, `aiva4_checks.evaluate` |
+| R7 | `aiva0r_reading.markup_digest`, `aiva0r_reading.validate_slice_rules`, `aiva1_documents.parse_formula`, `aiva2_package.parse_r_source`, `aiva2_package.to_expr`, `aiva2_package.decode_data_file`, `aiva2_package.package_plan`, `aiva4_checks.to_sympy`, `aiva4_checks.evaluate` |
 | R8 | `aiva5_run_report.make_settings`, `aiva5_run_report.LiveValues` |
 | R9 | `aiva0r_reading.discover_families`, `aiva3_mapping.load_word_lists` |
 | R10 | `aiva0_shared.plain_number`, `aiva0r_reading.account_lines`, `aiva5_run_report.plain_cell`, `aiva5_run_report.rows_model_units`, `aiva5_run_report.build_report_file` |
 | R11 | `aiva5_run_report.load_pipeline` |
 | R12 | `aiva5_run_report.copy_whole`, `aiva5_run_report.rebuild_outputs`, `aiva5_run_report.record_determinations` |
-| R13 | `aiva0r_reading.without_page_furniture`, `aiva0r_reading.marks_of_rendering`, `aiva0r_reading.account`, `aiva0r_reading.account_lines`, `aiva0r_reading.account_of_package`, `aiva0r_reading.validate_slice_rules`, `aiva0r_reading.guided_rules`, `aiva1_documents.element_text`, `aiva1_documents.not_read_block`, `aiva1_documents.title_block`, `aiva1_documents.note_blocks`, `aiva1_documents.atoms_of_file` |
+| R13 | `aiva0r_reading.without_page_furniture`, `aiva0r_reading.marks_of_rendering`, `aiva0r_reading.account`, `aiva0r_reading.account_lines`, `aiva0r_reading.account_of_package`, `aiva0r_reading.validate_slice_rules`, `aiva0r_reading.guided_rules`, `aiva0r_reading.validate_package_plan`, `aiva1_documents.element_text`, `aiva1_documents.not_read_block`, `aiva1_documents.title_block`, `aiva1_documents.note_blocks`, `aiva1_documents.atoms_of_file`, `aiva2_package.built_in_reader`, `aiva2_package.package_plan` |
 
 ## 22. Settings
 
@@ -684,6 +692,7 @@ One template per question type under `engine/references/prompts/`; each has a ve
 | judge-unit-to-canon | VERSION 1 | Which passages of the methodology, if any, does this unit of the package correspond to, and how? |
 | judge-unit-to-doc | VERSION 1 | Which passages of the documentation, if any, describe this unit of the package, and how? |
 | map-table-columns | VERSION 1 | Which lettered table, if any, states the same values as the package table, which column is which, and which column identifies a row? |
+| package-plan | VERSION 1 | Give every file marked NOT PLACED one of the readers below. |
 | read-formula-from-prose | VERSION 1 | Write the formula that this paragraph states, as one line of the form name = expression. |
 | second-opinion | VERSION 1 | Identify any difference between what the unit does or states and what the passages state. |
 | slice-rules | VERSION 1 | Give each tag a family, and say which tags are headings of the blocks around them. |
@@ -708,6 +717,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_hard_reading_samples.py` | 12 | test_hard_reading_samples.py - G, H and I exist to be read badly, and to make the badness measurable. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
 | `test_notebook.py` | 5 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
+| `test_package_plan.py` | 16 | test_package_plan.py - R5. |
 
 Sample projects under `engine/tests/sample_projects/`, all invented and rebuilt byte for byte by `tools/build_samples.py`: `A_minimal` (a neutral parcel-pricing method; XML, a Word file, four help pages), `F_capital` (XML inside a `.txt` file with four levels and a flat-numbered annex; equations as MathML, inline notation, a sentence and an image; stored tables as `.rda` and `.rds`; a help page that is out of step on purpose; a Word file and a PDF), `F_capital_known` (the same with six seeded differences, listed in its `expected_items.csv`) and `D_dosing` (another field, to keep the engine honest about rule R9; Word's web export with preserved equation markup; PDF-only documentation). Each sample has hand-made gold files: `gold_links.csv`, `gold_not_checkable.csv`, `gold_clean_units.csv`.
 
@@ -732,10 +742,10 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | File | Lines | Budget | Docstrings and comments |
 |---|---|---|---|
 | aiva0_shared.py | 450 | 450 | 23% |
-| aiva0r_reading.py | 876 | 1100 | 29% |
+| aiva0r_reading.py | 950 | 1100 | 29% |
 | aiva1_documents.py | 1447 | 1500 | 19% |
-| aiva2_package.py | 1294 | 1500 | 13% |
-| aiva3_mapping.py | 1153 | 1500 | 18% |
+| aiva2_package.py | 1362 | 1500 | 13% |
+| aiva3_mapping.py | 1155 | 1500 | 18% |
 | aiva4_checks.py | 1382 | 1500 | 14% |
 | aiva5_run_report.py | 1497 | 1500 | 16% |
 
@@ -976,6 +986,10 @@ Generated from the source: every function and class of the engine with its line 
 | `skill_body` | 812 | function | The Procedure, Quality rules and Never sections of a skill, as the instructions the model works under. |
 | `reading_doubts` | 835 | function | Where the built-in rules themselves say they are unsure. |
 | `guided_rules` | 846 | function | Ask the model what the tags of an unfamiliar file are for, and apply what it says. |
+| `manifest_digest` | 890 | function | Every member of the tarball: where it lies, how large it is, and which reader the built-in tests give it. |
+| `manifest_text` | 906 | function | The manifest as the lines a prompt shows. |
+| `package_plan_question` | 920 | function | One question about one tarball, asked only where members were left unplaced. |
+| `validate_package_plan` | 932 | function | A reader for every member left unplaced, each named from the fixed list, and for no other member. |
 
 **aiva1_documents.py**
 
@@ -1123,11 +1137,14 @@ Generated from the source: every function and class of the engine with its line 
 | `data_reads` | 1103 | function | Where a function reads stored data, and how the code shows it: a bare symbol that is neither an argument nor assigned in the function; data("x"); readRDS(...) or load(...) with a literal file name; pkg::x; get("x"). |
 | `is_data_file` | 1138 | function | Does this path name a stored-data file that AIVA decodes? |
 | `is_parsed_r_file` | 1145 | function | Is this an R source file in a folder whose code AIVA parses? |
-| `file_units` | 1149 | function | The units of one file of the package, by where it lies and what it is. |
-| `link_documentation_units` | 1172 | function | Tie each roxygen block to the object it documents and each help page to the block that generated it (by name and aliases), and say whether the page is still in step with it. |
-| `finalise_units` | 1195 | function | Give every draft its reference, in reading order, and turn keys into references. |
-| `package_rows` | 1216 | function | The package lines of Model_Package_Info. |
-| `read_package` | 1235 | function | Step 04, skill read-package. |
+| `built_in_reader` | 1149 | function | Which reader the built-in tests give a member, or "" where they give none. |
+| `file_units` | 1168 | function | The units of one file of the package, by where it lies and what it is. |
+| `link_documentation_units` | 1206 | function | Tie each roxygen block to the object it documents and each help page to the block that generated it (by name and aliases), and say whether the page is still in step with it. |
+| `finalise_units` | 1229 | function | Give every draft its reference, in reading order, and turn keys into references. |
+| `package_rows` | 1250 | function | The package lines of Model_Package_Info. |
+| `package_plan` | 1269 | function | Ask which existing reader should take each member the built-in tests leave unplaced. |
+| `safe_text` | 1296 | function | A member as text, or None where it holds bytes AIVA cannot decode. |
+| `read_package` | 1300 | function | Step 04, skill read-package. |
 
 **aiva3_mapping.py**
 
@@ -1185,13 +1202,13 @@ Generated from the source: every function and class of the engine with its line 
 | `validate_judge` | 867 | function | The answer to a judge question: its shape, the letters it names, its quotations, planted passages, self-contradiction. |
 | `validate_narrow` | 888 | function | The narrow question types. |
 | `validate_answer` | 945 | function | The validators, in a fixed order: remove any thought block and code fence; take the last balanced JSON object; parse it strictly; check its shape, its letters, its quotations, the planted passages and self-contradiction. |
-| `shown_ai_text` | 976 | function | Text written by the model passes the same plain-language filter as AIVA's own wording: if it rates seriousness or uses a policy term, a fixed sentence is shown instead and the full text stays in the audit records. |
-| `needs_second_opinion` | 984 | function | `unchecked_only`: a second, oppositely framed question is asked for accepted links that no deterministic check will back, that is, passages without a formula or a table. |
-| `package_outline` | 994 | function | The whole package in a few lines, as every interpretation question sees it: its name and title, then for each file the functions defined there with their arguments and the first line of their documentation, and the stored data. |
-| `interpret_question` | 1012 | function | The question about one piece of code. |
-| `interpret_code` | 1035 | function | Step 07a, skill interpret-code. |
-| `judge_links` | 1069 | function | Steps 07 and 09, skill judge-links. |
-| `second_opinions` | 1132 | function | The oppositely framed question ("identify any difference ...") for links no check can back. |
+| `shown_ai_text` | 978 | function | Text written by the model passes the same plain-language filter as AIVA's own wording: if it rates seriousness or uses a policy term, a fixed sentence is shown instead and the full text stays in the audit records. |
+| `needs_second_opinion` | 986 | function | `unchecked_only`: a second, oppositely framed question is asked for accepted links that no deterministic check will back, that is, passages without a formula or a table. |
+| `package_outline` | 996 | function | The whole package in a few lines, as every interpretation question sees it: its name and title, then for each file the functions defined there with their arguments and the first line of their documentation, and the stored data. |
+| `interpret_question` | 1014 | function | The question about one piece of code. |
+| `interpret_code` | 1037 | function | Step 07a, skill interpret-code. |
+| `judge_links` | 1071 | function | Steps 07 and 09, skill judge-links. |
+| `second_opinions` | 1134 | function | The oppositely framed question ("identify any difference ...") for links no check can back. |
 
 **aiva4_checks.py**
 

@@ -874,3 +874,77 @@ def guided_rules(root, file_name, state, discovered):
         state.notes.append("%s: <%s> read as %s on the model's proposal, where the built-in rules read it as %s%s"
                            % (file_name, tag, changed[tag], discovered.get(tag) or "nothing in particular",
                               " (%s)" % why[tag] if tag in why else ""))
+
+
+# ---------------------------------------------------------------- asking how to read a package
+# A tarball laid out in an unusual way loses content in a quieter way than a document does: a
+# file of R code under inst/ rather than R/ is not parsed, and its two thousand first characters
+# become one unit of running text while the rest of it reaches nothing. The question here picks
+# WHICH EXISTING READER takes a member. It never touches the R tokenizer, the parser, the
+# expression trees or the decoder of stored data: a model's reading of code is an assertion
+# ABOUT the code, not a parse OF it. Enforces: R7, R13
+
+PACKAGE_READERS = ("r-source", "r-data", "help-page", "vignette", "table-file", "prose")
+MANIFEST_SAMPLE_LINES = 5
+
+def manifest_digest(files, placed, decode, package_name=""):
+    """Every member of the tarball: where it lies, how large it is, and which reader the
+    built-in tests give it. A member they give none is shown with its first few lines, because
+    that is what tells a reader of R code from a licence. Nothing else of the file is shown."""
+    rows = []
+    for path in sorted(files):
+        data = files[path]
+        row = {"path": path, "bytes": len(data), "extension": os.path.splitext(path)[1].lower(),
+               "folder": path.split("/")[0] if "/" in path else "", "placed_as": placed.get(path) or "", "first_lines": []}
+        if not row["placed_as"]:
+            text = decode(data)
+            if text is not None:
+                row["first_lines"] = [line[:120] for line in text.split("\n")[:MANIFEST_SAMPLE_LINES] if line.strip()]
+        rows.append(row)
+    return {"file": package_name or "the package", "kind": "package", "members": rows}
+
+def manifest_text(digest):
+    """The manifest as the lines a prompt shows."""
+    lines = []
+    for row in digest["members"]:
+        parts = ["%s (%d bytes)" % (row["path"], row["bytes"])]
+        if row["placed_as"]:
+            parts.append("ALREADY READ AS: %s" % row["placed_as"])
+        else:
+            parts.append("NOT PLACED: the built-in tests give it no reader")
+        lines.append(" | ".join(parts))
+        for sample in row["first_lines"]:
+            lines.append("    line: %s" % sample)
+    return "\n".join(lines)
+
+def package_plan_question(digest, prompt, settings, skill_body=""):
+    """One question about one tarball, asked only where members were left unplaced."""
+    system = ((skill_body + "\n\n" if skill_body else "") + prompt["system"]).strip()
+    main = prompt["main"].replace("[[UNIT]]", manifest_text(digest))
+    unplaced = [row["path"] for row in digest["members"] if not row["placed_as"]]
+    return {"question_type": "package-plan", "unit_ref": digest["file"], "system_prompt": system,
+            "main_prompt": main, "letters": {}, "planted": [], "passage_texts": {}, "unit_text": "",
+            "strip_patterns": list(settings["strip_patterns"]), "unplaced": unplaced,
+            "estimated_tokens": estimate_tokens(main),
+            "too_large": estimate_tokens(main) > prompt_budget(settings, system),
+            "question_id": shared.sha256_text(prompt["version"] + "\n" + system + "\n" + main)}
+
+def validate_package_plan(question, answer, rejected):
+    """A reader for every member left unplaced, each named from the fixed list, and for no other
+    member. There is no reader that means "skip": a member AIVA cannot make sense of becomes a
+    unit that says so, never a gap. Enforces: R3, R13"""
+    unplaced = set(question["unplaced"])
+    readers = answer.get("readers")
+    if not isinstance(readers, dict) or not readers:
+        raise rejected(shared.REJECTION_REASONS[0])
+    for path, reader in readers.items():
+        if path not in unplaced:
+            raise rejected(shared.REJECTION_REASONS[1])
+        if reader not in PACKAGE_READERS:
+            raise rejected(shared.REJECTION_REASONS[0])
+    missing = unplaced - set(readers)
+    if missing:
+        raise rejected(shared.REJECTION_REASONS[4])
+    why = answer.get("why") or {}
+    if not isinstance(why, dict) or any(path not in unplaced for path in why):
+        raise rejected(shared.REJECTION_REASONS[1])

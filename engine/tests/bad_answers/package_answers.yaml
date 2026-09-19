@@ -1,0 +1,44 @@
+# Answers a model may give to a package-plan question, and what the validators must do with each.
+# The question marks two members as NOT PLACED: tools/calculations.R and tools/build.notes.
+# expected: accepted, or the index of the reason in REJECTION_REASONS
+#   0 could not be read | 1 named a passage not shown | 2 quoted words not in the text
+#   3 accepted a planted control passage | 4 contradicted itself
+#
+# As with slice-rules, no answer here can put a word into a unit or take one out. It chooses
+# which reader AIVA already has takes a file. The one thing it must not be able to do is leave
+# a member unread, and there is no reader that means skip.
+answers:
+  - {name: "a clean answer", expected: accepted,
+     text: '{"readers": {"tools/calculations.R": "r-source", "tools/build.notes": "prose"}, "why": {"tools/calculations.R": "it assigns functions"}}'}
+  - {name: "a thought block and a code fence around a clean answer", expected: accepted,
+     text: "<think>calculations.R looks like R.</think>\n```json\n{\"readers\": {\"tools/calculations.R\": \"r-source\", \"tools/build.notes\": \"prose\"}}\n```"}
+  - {name: "no reasons, which are optional", expected: accepted,
+     text: '{"readers": {"tools/calculations.R": "r-source", "tools/build.notes": "prose"}}'}
+  - {name: "a file sent to a reader that will not make sense of it, which is allowed and becomes a read problem",
+     expected: accepted,
+     text: '{"readers": {"tools/calculations.R": "help-page", "tools/build.notes": "r-source"}}'}
+  - {name: "empty", expected: 0, text: ""}
+  - {name: "prose instead of an answer", expected: 0,
+     text: "calculations.R is clearly R source and build.notes is just a note."}
+  - {name: "malformed JSON, which is never repaired", expected: 0,
+     text: '{"readers": {"tools/calculations.R": "r-source",}'}
+  - {name: "a repeated key", expected: 0,
+     text: '{"readers": {"tools/calculations.R": "r-source"}, "readers": {"tools/build.notes": "prose"}}'}
+  - {name: "no readers at all", expected: 0, text: '{"why": {}}'}
+  - {name: "readers that is not an object", expected: 0, text: '{"readers": ["r-source", "prose"]}'}
+  - {name: "an empty readers object", expected: 0, text: '{"readers": {}}'}
+  - {name: "a path nobody showed it", expected: 1,
+     text: '{"readers": {"tools/calculations.R": "r-source", "tools/build.notes": "prose", "R/invented.R": "r-source"}}'}
+  - {name: "a member the built-in tests already placed, which is not its business", expected: 1,
+     text: '{"readers": {"tools/calculations.R": "r-source", "tools/build.notes": "prose", "R/main.R": "prose"}}'}
+  - {name: "a reader that is not on the list", expected: 0,
+     text: '{"readers": {"tools/calculations.R": "notebook", "tools/build.notes": "prose"}}'}
+  - {name: "the reader it is not allowed to ask for, because it would leave a member unread",
+     expected: 0,
+     text: '{"readers": {"tools/calculations.R": "skip", "tools/build.notes": "prose"}}'}
+  - {name: "one member left out, so a file would reach no reader at all", expected: 4,
+     text: '{"readers": {"tools/calculations.R": "r-source"}}'}
+  - {name: "a reason about a path nobody showed it", expected: 1,
+     text: '{"readers": {"tools/calculations.R": "r-source", "tools/build.notes": "prose"}, "why": {"R/main.R": "because"}}'}
+  - {name: "a reader given as a list rather than a name", expected: 0,
+     text: '{"readers": {"tools/calculations.R": ["r-source"], "tools/build.notes": "prose"}}'}
