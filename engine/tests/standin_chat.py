@@ -180,6 +180,50 @@ def interpret_code(main_prompt):
             "quote_from_unit": first[:200]}
 
 
+def slice_rules(main_prompt, misbehave=False):
+    """Read the shape back out of the digest and answer it the way the prompt describes: a tag
+    that occurs about as often as what it sits inside, holds short text of its own and is the
+    first child of it, is the heading of it. Everything else that holds text is a paragraph,
+    and everything else that holds other tags is a container. A misbehaving answer names a tag
+    nobody showed it, which the validator has to refuse."""
+    rows = {}
+    for line in main_prompt.split("\n"):
+        found = re.match(r"<([\w.:-]+)> x(\d+) depth ([\d-]+) \|(.*)$", line.strip())
+        if not found:
+            continue
+        tag, count, rest = found.group(1), int(found.group(2)), found.group(4)
+        holds = re.search(r"holds: ([^|]*)", rest)
+        text_times = re.search(r"has own text (\d+) of \d+ times, averaging (\d+) characters", rest)
+        first = re.search(r"is the first child (\d+) times", rest)
+        rows[tag] = {"count": count, "holds": [p.strip() for p in holds.group(1).split(",") if p.strip()] if holds else [],
+                     "with_text": int(text_times.group(1)) if text_times else 0,
+                     "mean": int(text_times.group(2)) if text_times else 0,
+                     "first_child": int(first.group(1)) if first else 0,
+                     "known": "ALREADY READ AS" in rest}
+    families, levels, why = {}, {}, {}
+    for tag, row in rows.items():
+        if row["known"]:
+            continue                                 # a tag the reader already knows is left alone
+        if row["holds"]:                             # a tag holding other tags is never a paragraph
+            families[tag] = "container" if not (row["first_child"] and row["with_text"]) else "heading"
+            if families[tag] == "heading":
+                levels[tag] = 1
+            continue
+        if row["first_child"] and row["first_child"] >= row["count"] * 0.8 and row["with_text"] >= row["count"] * 0.8 and row["mean"] <= 60:
+            families[tag] = "heading"
+            levels[tag] = 1
+            why[tag] = "it opens the block around it and holds a short name for it"
+        elif row["holds"] and row["with_text"] * 2 < row["count"]:
+            families[tag] = "container"
+        elif row["with_text"]:
+            families[tag] = "paragraph"
+        else:
+            families[tag] = "container"
+    if misbehave:
+        families["a-tag-nobody-showed"] = "heading"
+    return {"families": families, "levels": levels, "why": why}
+
+
 def answer_for(system_prompt, main_prompt, misbehave):
     match = re.search(r"QUESTION TYPE: ([a-z-]+)", main_prompt)
     question_type = match.group(1) if match else "self-test"
@@ -203,6 +247,8 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(align_symbols(main_prompt))
     if question_type == "read-formula-from-prose":
         return json.dumps(read_formula_from_prose(main_prompt))
+    if question_type == "slice-rules":
+        return json.dumps(slice_rules(main_prompt, misbehave and bucket in (1, 2)))
     if question_type == "check-rule":
         return json.dumps(check_rule(main_prompt))
     if question_type == "interpret-code":

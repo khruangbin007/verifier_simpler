@@ -1,0 +1,57 @@
+# Answers a model may give to a slice-rules question, and what the validators must do with each.
+# The question shows the shape of a file using the tags: ruleblock, blockcaption, statementbody.
+# expected: accepted, or the index of the reason in REJECTION_REASONS
+#   0 could not be read | 1 named a passage not shown | 2 quoted words not in the text
+#   3 accepted a planted control passage | 4 contradicted itself
+#
+# The point of this corpus is narrow and worth saying plainly: there is NO answer here, well
+# behaved or not, that can put a word into a unit or take one out. Every field is a choice
+# among things code already decided to show. The worst a bad answer achieves is a wrong label
+# on a tag, which the content account still balances and which step 07 still shows a person.
+answers:
+  - {name: "a clean answer", expected: accepted,
+     text: '{"families": {"ruleblock": "container", "blockcaption": "heading", "statementbody": "paragraph"}, "levels": {"blockcaption": 1}, "why": {"blockcaption": "it opens the block and names it"}}'}
+  - {name: "a thought block and a code fence around a clean answer", expected: accepted,
+     text: "<think>blockcaption looks like a title.</think>\n```json\n{\"families\": {\"ruleblock\": \"container\", \"blockcaption\": \"heading\", \"statementbody\": \"paragraph\"}, \"levels\": {\"blockcaption\": 1}, \"why\": {}}\n```"}
+  - {name: "no levels and no reasons, which are both optional", expected: accepted,
+     text: '{"families": {"ruleblock": "container", "blockcaption": "paragraph", "statementbody": "paragraph"}}'}
+  - {name: "empty", expected: 0, text: ""}
+  - {name: "prose instead of an answer", expected: 0,
+     text: "The blockcaption tag is clearly the heading of each ruleblock."}
+  - {name: "malformed JSON, which is never repaired", expected: 0,
+     text: '{"families": {"ruleblock": "container", "blockcaption": "heading",}'}
+  - {name: "a repeated key", expected: 0,
+     text: '{"families": {"ruleblock": "container"}, "families": {"blockcaption": "heading"}}'}
+  - {name: "no families at all", expected: 0, text: '{"levels": {"blockcaption": 1}, "why": {}}'}
+  - {name: "families that is not an object", expected: 0, text: '{"families": ["ruleblock", "blockcaption"]}'}
+  - {name: "an empty families object", expected: 0, text: '{"families": {}}'}
+  - {name: "a tag nobody showed it", expected: 1,
+     text: '{"families": {"ruleblock": "container", "inventedtag": "heading"}}'}
+  - {name: "a family that is not on the list", expected: 0,
+     text: '{"families": {"ruleblock": "container", "blockcaption": "titlebar"}}'}
+  - {name: "the one family that would lose content", expected: 0,
+     text: '{"families": {"ruleblock": "container", "statementbody": "ignore"}}'}
+  - {name: "a level on a tag it did not call a heading", expected: 1,
+     text: '{"families": {"ruleblock": "container", "blockcaption": "paragraph"}, "levels": {"blockcaption": 1}}'}
+  - {name: "a level on a tag nobody showed it", expected: 1,
+     text: '{"families": {"blockcaption": "heading"}, "levels": {"inventedtag": 1}}'}
+  - {name: "a level below the range", expected: 0,
+     text: '{"families": {"blockcaption": "heading"}, "levels": {"blockcaption": 0}}'}
+  - {name: "a level above the range", expected: 0,
+     text: '{"families": {"blockcaption": "heading"}, "levels": {"blockcaption": 12}}'}
+  - {name: "a level that is not a whole number", expected: 0,
+     text: '{"families": {"blockcaption": "heading"}, "levels": {"blockcaption": "1"}}'}
+  - {name: "a level given as true, which Python would otherwise take for one", expected: 0,
+     text: '{"families": {"blockcaption": "heading"}, "levels": {"blockcaption": true}}'}
+  - {name: "levels that is not an object", expected: 0,
+     text: '{"families": {"blockcaption": "heading"}, "levels": [1]}'}
+  - {name: "a reason about a tag nobody showed it", expected: 1,
+     text: '{"families": {"blockcaption": "heading"}, "why": {"inventedtag": "because"}}'}
+  - {name: "text smuggled into a field, which is refused because the field is not one it may write",
+     expected: 1,
+     text: '{"families": {"blockcaption": "heading", "A standard loan runs for fourteen days": "paragraph"}}'}
+  - {name: "a paragraph on a tag that holds other tags, which would say its contents twice",
+     expected: 4,
+     text: '{"families": {"ruleblock": "paragraph", "blockcaption": "heading"}}'}
+  - {name: "an inline mark, which is not a family a proposal may give", expected: 0,
+     text: '{"families": {"blockcaption": "inline"}}'}

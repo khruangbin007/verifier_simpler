@@ -960,7 +960,9 @@ def validate_answer(question, text):
             answer = None
         if not isinstance(answer, dict):
             raise Rejected(shared.REJECTION_REASONS[0])
-        if question["question_type"] in JUDGE_RELATIONS:
+        if question["question_type"] == "slice-rules":
+            reading.validate_slice_rules(question, answer, Rejected)
+        elif question["question_type"] in JUDGE_RELATIONS:
             validate_judge(question, answer)
         else:
             validate_narrow(question, answer)

@@ -1,8 +1,8 @@
 ---
 name: confirm-outline
-description: "A person confirms that Level and Section on Chunks_Canon match the methodology's own outline. Use before any chat() call is spent."
+description: "A person confirms that Level and Section on Chunks_Canon match the methodology's own outline. Use before the reading is trusted: where a file's shape was proposed by the model, the reviewer confirms the difference against the built-in reading."
 metadata:
-  version: "0.0.1"
+  version: "0.0.2"
   carried-out-by: "a person, in notebook cell 10"
 ---
 ## Purpose

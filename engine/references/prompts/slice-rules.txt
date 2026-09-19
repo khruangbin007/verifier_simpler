@@ -1,0 +1,27 @@
+VERSION 1
+=== SYSTEM ===
+You are given the SHAPE of one document: a list of the tags it uses and how each behaves, with a few short samples. You never see the document. Your task is to say what each tag is FOR, so that a reader can slice the document into citable units.
+You choose from fixed lists only. You never write text of your own into an answer: every tag you name must be one shown to you, and every family you give must be one of the families listed. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: slice-rules
+TASK: Give each tag a family, and say which tags are headings of the blocks around them.
+THE SHAPE OF THE FILE
+[[UNIT]]
+FAMILIES YOU MAY USE
+heading: names the section around it, and everything below it belongs under it
+container: holds other blocks and little or no text of its own
+paragraph: a statement, a sentence or a run of prose
+list_container: holds items; list_item: one item of such a list
+These five are the whole list. Tables, rows, cells, captions, figures, equations and inline marks are worked out by the reader itself and are not yours to give; where a tag is one of those it is marked ALREADY READ AS and you should leave it alone.
+WHAT TO LOOK FOR
+A heading usually occurs about as often as the container it names, holds short text of its own, and is the FIRST CHILD of that container. A paragraph holds longer text and is not the first child. A container holds other tags and little or no text of its own.
+A tag marked ALREADY READ AS is one the reader already knows for certain; leave it exactly as it is. A tag marked GUESSED AS is one the reader worked out on the spot and is unsure of: that is where your answer is wanted. A tag marked neither is one the reader has nothing at all to say about.
+ANSWER FORMAT
+{"families":{"tagname":"heading","othertag":"paragraph"},"levels":{"tagname":1},"why":{"tagname":"a short reason in plain words"}}
+Rules on your answer:
+- every key of families, levels and why must be a tag shown to you above;
+- every value of families must be one of the five families listed above;
+- a tag shown as holding other tags may only be heading, container or list_container: reading it as a paragraph would say its contents twice;
+- every value of levels must be a whole number from 1 to 9, and levels may name only tags you called heading;
+- "ignore" is not a family you may use, and there is no way to tell the reader to skip a tag;
+- give a family for every tag you are shown, including ones already read.

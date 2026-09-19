@@ -52,8 +52,9 @@ def context_for(inputs, settings=None, read=None, ask=None):
     return shared.StepContext(settings or run.make_settings(), options, read or (lambda kind: []), ask, scratch(), lambda text: None, provenance)
 
 
-def chunks_of(file_name, data, corner="methodology"):
-    """Read one document given as bytes or text; returns (chunks as plain dictionaries, the whole step result)."""
+def chunks_of(file_name, data, corner="methodology", chat=None, settings=None):
+    """Read one document given as bytes or text; returns (chunks as plain dictionaries, the whole
+    step result). With a chat, the reading step may ask about the file's shape."""
     import aiva0_shared as shared
     import aiva1_documents
     folder = scratch()
@@ -61,7 +62,7 @@ def chunks_of(file_name, data, corner="methodology"):
     with open(path, "wb") as handle:
         handle.write(data.encode("utf-8") if isinstance(data, str) else data)
     step = aiva1_documents.read_methodology if corner == "methodology" else aiva1_documents.read_documentation
-    result = step(context_for({corner: [path]}))
+    result = step(context_for({corner: [path]}, settings=made_settings(settings), ask=asker(chat) if chat else None))
     kind = "chunks_canon" if corner == "methodology" else "chunks_doc"
     return [shared.to_plain(chunk) for chunk in result.records[kind]], result
 
@@ -107,3 +108,29 @@ def accounts_of_sample(sample, stop_after="04"):
     paths = run.open_run(projects, "LEDGER", "2026-09-18", scratch_root=scratch())
     run.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after=stop_after)
     return run.open_store(paths, settings).read("content_accounts")
+
+
+def made_settings(more):
+    import aiva5_run_report as run
+    return run.make_settings(dict(more or {}))
+
+
+def asker(chat):
+    """A one-shot ask() for calling a reading step outside the runner: it asks, validates and
+    hands back the record, without a store behind it."""
+    import aiva3_mapping as mapping
+
+    def ask(questions):
+        found = {}
+        for question in questions:
+            text = chat(question["system_prompt"], question["main_prompt"])["answer"]
+            outcome, answer = mapping.validate_answer(question, text)
+            found[question["question_id"]] = {"question_id": question["question_id"], "final": True,
+                                              "outcome": outcome, "answer": answer}
+        return found
+    return ask
+
+
+def standin():
+    import standin_chat
+    return lambda system, main: standin_chat.chat_well_behaved(system, main)

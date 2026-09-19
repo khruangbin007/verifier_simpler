@@ -29,6 +29,7 @@ import count_lines                     # noqa: E402
 BUNDLES = ("aiva0_shared", "aiva0r_reading", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
 RULES = ["R%d" % n for n in range(1, 14)]
 SETTING_NOTES = {
+    "agentic_reading": "Whether a reading step may ask the model what the tags of a file whose shape AIVA does not know are for. \"off\" asks nothing and reads as the built-in rules read; \"rules\" asks one question per file the rules are unsure about and applies the answer under everything the rules already know.",
     "k_candidates": "How many passages are shown to the judge for one unit and corner.", "concurrency_limit": "How many questions are asked at the same time.",
     "token_cap": "The gateway's limit for one call, in tokens.", "answer_reserve": "Tokens kept free for the answer.",
     "thinking_reserve": "Tokens kept free for a model that writes out its reasoning first.", "safety_margin": "Share of the remaining room left unused, because tokens are estimated.",

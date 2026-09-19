@@ -617,3 +617,260 @@ def account_of_package(files, units, refused, is_text_file):
              "what unaccounted": [], "what injected": []}
     found["closed"] = found["unaccounted"] == 0
     return found
+
+
+# ---------------------------------------------------------------- the shape digest and the rules it asks for
+# What a model is shown about a file it must help slice: its STRUCTURE and a few short samples,
+# never the file. The digest is built by code from plain facts, is bounded, and is recorded, so
+# a reviewer can see exactly what was put in front of the model. Enforces: R3, R7
+
+DIGEST_SAMPLE_CHARS = 120
+DIGEST_SAMPLES = 3
+# The families a PROPOSAL may use, and why it is only these five. Each keeps the words of the
+# element it is given to wherever that element sits: a heading's text goes into the chain of
+# everything below it and, where nothing sits below it, into a unit of its own; a paragraph's
+# and a list item's into a unit; a container's children are walked.
+#
+# The families left out fall into two groups. Table, row, cell, header_cell, caption, figure
+# and equation rest on counting the shape of the file rather than on anybody's opinion, and
+# their readers may put text somewhere other than a unit or drop it where a shape does not hold
+# up. "inline" is left out for a different reason, and the property test found it rather than
+# anyone reasoning it out: an inline mark keeps its words only when it sits inside something
+# that has running text, so the same answer is safe in one place and loses words in another.
+# A family whose safety depends on where a tag sits is not a family a proposal may give.
+# This is what makes "no answer can lose a word" true by construction rather than by hope.
+# Enforces: R13
+SLICE_FAMILIES = ("heading", "container", "paragraph", "list_container", "list_item")
+
+def walk_with_depth(element, depth):
+    """Every element under one element, with how deep it sits."""
+    yield depth, element
+    for child in element:
+        for found in walk_with_depth(child, depth + 1):
+            yield found
+
+def digest_row(row):
+    """One tag's behaviour, cut to what a prompt can carry."""
+    lengths = row["text_lengths"]
+    return {"tag": row["tag"], "count": row["count"],
+            "depth": "%d-%d" % (min(row["depths"]), max(row["depths"])),
+            "inside": sorted(row["inside"])[:6], "holds": sorted(row["holds"])[:8],
+            "with_text": row["with_text"], "mean_text": int(sum(lengths) / len(lengths)) if lengths else 0,
+            "attributes": sorted(row["attributes"])[:6], "first_child": row["first_child"],
+            "known_as": row["known_as"] or "", "guessed_as": row["guessed_as"], "samples": row["samples"]}
+
+def markup_digest(root, rules, file_name):
+    """One row per tag the file uses, with how it behaves here: how often it occurs, how deep it
+    sits, what it sits inside and what sits inside it, how often it carries text of its own, how
+    long that text runs, what attributes it has, how often it is the first child, and three
+    short samples. A tag the rules already name is marked as known, so that a proposal can be
+    told from a repetition of what AIVA already does. Enforces: R7"""
+    # What AIVA ships or the analyst wrote is KNOWN and is not the model's business. What
+    # discovery worked out on the spot is a GUESS, and saying which is which is the whole point:
+    # a proposal is wanted exactly where code guessed, and nowhere else.
+    settled = set(rules.get("shipped_tags") or ()) | set(rules.get("analyst_tags") or ())
+    families, rows, order = rules.get("family_of", {}), {}, []
+    parents = {id(child): element for element in root.iter() for child in element}
+    for depth, element in walk_with_depth(root, 0):
+        name = local_name(element.tag)
+        if not name:
+            continue
+        row = rows.get(name)
+        if row is None:
+            row = rows[name] = {"tag": name, "count": 0, "depths": set(), "inside": set(), "holds": set(),
+                                "with_text": 0, "text_lengths": [], "attributes": set(), "first_child": 0,
+                                "samples": [], "known_as": "", "guessed_as": ""}
+            family = families.get(name) or ""
+            # Settled: what AIVA ships, what the analyst wrote, and what discovery PROVED by
+            # counting the rows. A guess is only what discovery's fallback net produced, and a
+            # guess is the only thing a proposal is wanted about.
+            if name in settled or family in PROVEN_BY_SHAPE:
+                row["known_as"] = family
+            else:
+                row["guessed_as"] = family
+            order.append(name)
+        row["count"] += 1
+        row["depths"].add(depth)
+        parent = parents.get(id(element))
+        if parent is not None:
+            row["inside"].add(local_name(parent.tag))
+            if len(parent) and parent[0] is element:
+                row["first_child"] += 1
+        row["holds"].update(local_name(child.tag) for child in element if local_name(child.tag))
+        row["attributes"].update(local_name(key) for key in element.attrib)
+        own = shared.normalise_text(element.text or "")
+        if own:
+            row["with_text"] += 1
+            row["text_lengths"].append(len(own))
+            if len(row["samples"]) < DIGEST_SAMPLES:
+                row["samples"].append(own[:DIGEST_SAMPLE_CHARS])
+    return {"file": file_name, "kind": "markup", "tags": [digest_row(rows[name]) for name in order]}
+
+def digest_text(digest):
+    """The digest as the lines a prompt shows. Structure only: counts, places and short samples."""
+    lines = []
+    for row in digest["tags"]:
+        parts = ["<%s> x%d depth %s" % (row["tag"], row["count"], row["depth"])]
+        if row["known_as"]:
+            parts.append("ALREADY READ AS: %s" % row["known_as"])
+        elif row["guessed_as"]:
+            parts.append("GUESSED AS: %s" % row["guessed_as"])
+        if row["inside"]:
+            parts.append("inside: %s" % ", ".join(row["inside"]))
+        if row["holds"]:
+            parts.append("holds: %s" % ", ".join(row["holds"]))
+        parts.append("has own text %d of %d times, averaging %d characters" % (row["with_text"], row["count"], row["mean_text"]))
+        if row["first_child"]:
+            parts.append("is the first child %d times" % row["first_child"])
+        if row["attributes"]:
+            parts.append("attributes: %s" % ", ".join(row["attributes"]))
+        lines.append(" | ".join(parts))
+        for sample in row["samples"]:
+            lines.append("    sample: %s" % sample)
+    return "\n".join(lines)
+
+def slice_rules_question(digest, rules, prompt, settings, skill_body=""):
+    """One question about the shape of one file. The skill's own procedure and prohibitions are
+    prepended to the system half, so what the reader is contracted to do is what the model is
+    told to do, and a changed contract asks a new question. Enforces: R3, R5"""
+    system = ((skill_body + "\n\n" if skill_body else "") + prompt["system"]).strip()
+    main = prompt["main"].replace("[[UNIT]]", digest_text(digest))
+    return {"question_type": "slice-rules", "unit_ref": digest["file"], "system_prompt": system,
+            "main_prompt": main, "letters": {}, "planted": [], "passage_texts": {}, "unit_text": "",
+            "strip_patterns": list(settings["strip_patterns"]),
+            "tags_shown": [row["tag"] for row in digest["tags"]],
+            "holds_other_tags": {row["tag"]: bool(row["holds"]) for row in digest["tags"]},
+            "estimated_tokens": estimate_tokens(main),
+            "too_large": estimate_tokens(main) > prompt_budget(settings, system),
+            "question_id": shared.sha256_text(prompt["version"] + "\n" + system + "\n" + main)}
+
+def validate_slice_rules(question, answer, rejected):
+    """The answer is a choice among things code has already put in front of the model: a tag it
+    was shown, a family from the fixed list, a depth from 1 to 9. There is no field through
+    which prose can reach a unit, so a wrong answer can mislabel a tag and can never add a word
+    to a document or take one out of it. "ignore" is refused outright, because it is the one
+    family that would let an answer lose content. Enforces: R3, R7, R13"""
+    shown = set(question["tags_shown"])
+    families = answer.get("families")
+    if not isinstance(families, dict) or not families:
+        raise rejected(shared.REJECTION_REASONS[0])
+    holds = question.get("holds_other_tags") or {}
+    for tag, family in families.items():
+        if tag not in shown:
+            raise rejected(shared.REJECTION_REASONS[1])
+        if family == "ignore" or family not in SLICE_FAMILIES:
+            raise rejected(shared.REJECTION_REASONS[0])
+        # A tag that holds other tags is not a paragraph, an item or an inline mark. Reading it
+        # as one would take the words of everything inside it into a unit AND read those things
+        # again below, so the document would say twice what it says once. Code counted what each
+        # tag holds; a proposal does not get to contradict the count. Enforces: R13
+        if holds.get(tag) and family in ("paragraph", "list_item"):
+            raise rejected(shared.REJECTION_REASONS[4])
+    levels = answer.get("levels") or {}
+    if not isinstance(levels, dict):
+        raise rejected(shared.REJECTION_REASONS[0])
+    for tag, level in levels.items():
+        if tag not in shown or families.get(tag) != "heading":
+            raise rejected(shared.REJECTION_REASONS[1])
+        if not isinstance(level, int) or isinstance(level, bool) or not 1 <= level <= 9:
+            raise rejected(shared.REJECTION_REASONS[0])
+    why = answer.get("why") or {}
+    if not isinstance(why, dict) or any(tag not in shown for tag in why):
+        raise rejected(shared.REJECTION_REASONS[1])
+
+# Families discovery does not guess at: it counts the widths of the rows and refuses to call
+# something a table unless the counting holds up. A proposal may not overturn them.
+PROVEN_BY_SHAPE = ("table", "table_part", "row", "header_cell", "cell")
+
+def overlay_from_answer(answer, rules, analyst_tags, discovered=None):
+    """The answer as an overlay on the tag rules, in the one order that matters:
+
+        what the ANALYST wrote in Inputs/tag_rules.yaml   wins over
+        what AIVA SHIPS                                   wins over
+        what discovery PROVED by counting the shape       wins over
+        what the MODEL proposes                           wins over
+        what discovery GUESSED with its fallback net
+
+    So the model never overrides a person, never overrides a schema AIVA already knows, and
+    never overrides a table whose rows were counted. It speaks where code only guessed, which
+    is exactly where the reading was weak. Returns (families to apply, levels, why)."""
+    shipped, discovered = set(rules.get("shipped_tags") or ()), discovered or {}
+    families, levels, why = {}, {}, {}
+    for tag, family in (answer.get("families") or {}).items():
+        if tag in analyst_tags or tag in shipped or discovered.get(tag) in PROVEN_BY_SHAPE:
+            continue
+        families[tag] = family
+        if family == "heading" and tag in (answer.get("levels") or {}):
+            levels[tag] = answer["levels"][tag]
+        if tag in (answer.get("why") or {}):
+            why[tag] = answer["why"][tag]
+    return families, levels, why
+
+# ---------------------------------------------------------------- asking about the shape of a file
+SKILL_BODIES = {}
+
+def skill_body(references_dir, skill):
+    """The Procedure, Quality rules and Never sections of a skill, as the instructions the model
+    works under. Until 0.0.2 this text was read by people only; a reading step now puts its own
+    contract in front of the model that helps carry it out, and the skill's version is part of
+    the question id, so a changed contract asks a new question. Enforces: R3"""
+    if skill in SKILL_BODIES:
+        return SKILL_BODIES[skill]
+    path = os.path.join(os.path.dirname(references_dir), "skills", skill, "SKILL.md")
+    wanted, keep, found = ("## Procedure", "## Quality rules", "## Never"), False, []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle.read().split("\n"):
+                if line.startswith("## "):
+                    keep = line.strip() in wanted
+                if keep:
+                    found.append(line)
+    except OSError:
+        found = []
+    SKILL_BODIES[skill] = "\n".join(found).strip()
+    return SKILL_BODIES[skill]
+
+
+
+def reading_doubts(root, state, discovered):
+    """Where the built-in rules themselves say they are unsure. Only these ask a question; a
+    file the rules read confidently costs no call at all and comes out exactly as before."""
+    doubts = []
+    if state.unknown_tags:
+        doubts.append("%d tag(s) are not named by the rules" % len(state.unknown_tags))
+    headings = [tag for tag, family in state.rules["family_of"].items() if family == "heading"]
+    if discovered and not headings:
+        doubts.append("the file has a shape the rules do not know and no tag in it is read as a heading")
+    return doubts
+
+def guided_rules(root, file_name, state, discovered):
+    """Ask the model what the tags of an unfamiliar file are for, and apply what it says.
+
+    Nothing here can add a word to a document or take one out of it: the answer is a choice
+    among tags code has already shown and families from a fixed list, and it is refused if it
+    names anything else. A refused, failed or absent answer leaves the built-in reading exactly
+    as it was, so the worst case is the reader without guidance. Enforces: R3, R13"""
+    if state.ask is None or state.settings.get("agentic_reading") == "off":
+        return
+    if not reading_doubts(root, state, discovered):
+        return
+    digest = markup_digest(root, state.rules, file_name)
+    state.digests.append(digest)
+    prompt = load_prompt(state.references_dir, "slice-rules")
+    question = slice_rules_question(digest, state.rules, prompt, state.settings, state.skill_body)
+    if question["too_large"]:
+        state.notes.append("%s: its shape is too large to ask about, so the built-in rules read it." % file_name)
+        return
+    found = state.ask([question]).get(question["question_id"])
+    answer = (found or {}).get("answer")
+    if not answer:
+        state.notes.append("%s: read by the built-in rules; a guided reading was not available." % file_name)
+        return
+    families, levels, why = overlay_from_answer(answer, state.rules, set(state.rules.get("analyst_tags") or ()), discovered)
+    changed = {tag: family for tag, family in families.items() if discovered.get(tag) != family}
+    state.rules["family_of"].update(families)
+    state.guided.update(families)
+    for tag in sorted(changed):
+        state.notes.append("%s: <%s> read as %s on the model's proposal, where the built-in rules read it as %s%s"
+                           % (file_name, tag, changed[tag], discovered.get(tag) or "nothing in particular",
+                              " (%s)" % why[tag] if tag in why else ""))

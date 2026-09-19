@@ -52,7 +52,7 @@ import yaml
 import aiva0_shared as shared
 import aiva0r_reading as reading
 
-SKILL_VERSIONS = {"read-methodology": "0.0.2", "read-documentation": "0.0.2"}
+SKILL_VERSIONS = {"read-methodology": "0.0.3", "read-documentation": "0.0.3"}
 
 class NotReadable(Exception):
     """A formula or a file that AIVA cannot read. The message is a plain reason for the analyst."""
@@ -580,14 +580,18 @@ def load_tag_rules(references_dir, override_path=None):
     """The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml."""
     with open(os.path.join(references_dir, "tag_rules.yaml"), encoding="utf-8") as handle:
         rules = yaml.safe_load(handle)
+    rules["shipped_tags"] = sorted(str(tag).lower() for tags in rules["families"].values() for tag in tags)
+    analyst_families = {}
     if override_path:
         with open(override_path, encoding="utf-8") as handle:
             override = yaml.safe_load(handle) or {}
+        analyst_families = override.get("families") or {}
         for key, value in override.items():
             if key == "families":
                 rules["families"].update(value or {})
             else:
                 rules[key] = value
+    rules["analyst_tags"] = sorted(str(tag).lower() for tags in analyst_families.values() for tag in tags)
     rules["family_of"] = {}
     for family, tags in rules["families"].items():
         for tag in tags:
@@ -639,6 +643,12 @@ class WalkState:
     atoms: list = field(default_factory=list)      # the smallest pieces of text the file holds, counted from the file itself
     dropped: list = field(default_factory=list)    # text left out under a named rule, kept so the account can show it
     lent_numbering: str = ""                       # a number a container carries for the heading inside it
+    ask: object = None                             # the asker, where a guided reading is turned on
+    settings: dict = field(default_factory=dict)
+    references_dir: str = ""
+    skill_body: str = ""                           # the skill's own procedure and prohibitions, shown to the model
+    digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
+    guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
 
     def __post_init__(self):
@@ -873,7 +883,9 @@ def equation_block(element, here, state):
 def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
     """XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules."""
     root = parse_markup(text, file_name, repairs, tolerant_only)
-    state.rules["family_of"].update(reading.discover_families(root, state.rules, state.unknown_tags))
+    discovered = reading.discover_families(root, state.rules, state.unknown_tags)
+    state.rules["family_of"].update(discovered)
+    reading.guided_rules(root, file_name, state, discovered)
     walk_element(root, "", 0, state)
     return state.blocks
 
@@ -1239,13 +1251,22 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
     chain of everything below it. Paragraph numbers restart under every heading. Enforces: R2, R4"""
     prefix = "C" if corner == "canon" else "D"
     chunks, chain, levels, paragraph_number, section_numbering = [], [], [], 0, ""
+    carried, empty = [], []                          # (heading block, anything under it yet), and those with nothing
     for block in fold_lists(reading.infer_levels(blocks, state.rules)):
         if block["type"] == "heading":
             while levels and levels[-1] >= block["level"]:
                 levels.pop()
                 chain.pop()
+                # A heading carries its words to the units below it. Where one is popped off the
+                # chain with no unit ever placed under it, those words reach nothing at all, and
+                # a file read as headings alone would say nothing. Such a heading becomes a unit
+                # of its own, so that what it says is still there to be cited. Enforces: R13
+                was, under = carried.pop()
+                if not under:
+                    empty.append(was)
             levels.append(block["level"])
             chain.append(block["text"])
+            carried.append((block, False))
             paragraph_number, section_numbering = 0, block["numbering"]
             reconstructed = block["reconstructed"]
             # The number belongs to the heading whether the document wrote it (num="1.") or Word
@@ -1254,6 +1275,7 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             if block["numbering"] and not block["text"].startswith(block["numbering"]):
                 chain[-1] = "%s %s" % (block["numbering"], block["text"])
             continue
+        carried = [(was, True) for was, _ in carried]
         kind = KIND_OF_BLOCK[block["type"]]
         text = block.get("display") or block["text"]
         if kind == "Paragraph" and not block["not_read_reason"]:
@@ -1271,6 +1293,20 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             numbering_reconstructed=bool(chain) and block_is_under_reconstructed(blocks, block),
             caption=block["caption"], not_read_reason=block["not_read_reason"],
             para_label=block["numbering"] if kind == "Paragraph" else ""))
+    while carried:                                   # whatever is still on the chain when the file ends
+        was, under = carried.pop()
+        if not under:
+            empty.append(was)
+    for block in empty:
+        chunks.append(shared.Chunk(
+            ref=shared.make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
+            kind="Paragraph", level=block["level"], heading_chain=(), numbering=block["numbering"],
+            para_no=None, text=block["text"], locator=block["locator"],
+            content_hash=shared.content_hash(block["text"]), table=None, equation=None,
+            refs_out=cross_references(block["text"], state.rules),
+            checkable=states_something_checkable(block, state.rules) if corner == "doc" else None,
+            numbering_reconstructed=False, caption="", not_read_reason="",
+            para_label=block["numbering"]))
     return chunks
 
 def block_is_under_reconstructed(blocks, block):
@@ -1352,16 +1388,24 @@ def read_corner(ctx, corner, input_key, label):
     options = ctx.options
     rules = load_tag_rules(options["references_dir"], options["inputs"].get("tag_rules"))
     notation = load_notation(options["references_dir"])
-    chunks, repairs, info_rows, outline, accounts = [], [], [], [], []
+    chunks, repairs, info_rows, outline, accounts, digests = [], [], [], [], [], []
     for path in options["inputs"][input_key]:
         file_name = os.path.basename(path)
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
+        state.ask, state.settings, state.references_dir = ctx.ask, ctx.settings, options["references_dir"]
+        state.skill_body = reading.skill_body(options["references_dir"],
+                                              "read-methodology" if corner == "canon" else "read-documentation")
         found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
         new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
         chunks.extend(new_chunks)
         plain = [shared.to_plain(chunk) for chunk in new_chunks]
+        for tag in sorted(state.guided):
+            info_rows.append({"group": label, "item": "%s: how it was read" % file_name,
+                              "value": "<%s> was read as %s on the model's proposal." % (tag, state.guided[tag])})
+        digests.extend(state.digests)
         found_account = reading.account(file_name, state.atoms, plain, state.dropped,
-                                       reading.marks_of_rendering(plain) + [LIST_MARKER, NOTES_HEADING])
+                                        reading.marks_of_rendering(plain)
+                                        + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING])
         accounts.append(found_account)
         info_rows.extend({"group": label, "item": "%s: content account" % file_name, "value": line}
                          for line in reading.account_lines(found_account))
@@ -1390,7 +1434,7 @@ def read_corner(ctx, corner, input_key, label):
         messages.append("The content account is open on %d file(s); Model_Package_Info says what could not be placed."
                         % len(open_accounts))
     return shared.StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows, "outline": outline,
-                              "content_accounts": accounts},
+                              "content_accounts": accounts, "shape_digests": digests},
                              {"units": len(chunks), "repairs": len(repairs),
                               "content account open on": len(open_accounts)}, messages)
 

@@ -54,7 +54,7 @@ import aiva2_package
 import aiva3_mapping
 import aiva4_checks
 
-SKILL_VERSIONS = {"prepare-run": "0.0.1", "confirm-outline": "0.0.1", "await-determinations": "0.0.1",
+SKILL_VERSIONS = {"prepare-run": "0.0.1", "confirm-outline": "0.0.2", "await-determinations": "0.0.1",
                   "record-determinations": "0.0.1", "build-report": "0.0.1"}
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 REFERENCES_DIR = os.path.join(ENGINE_DIR, "references")
@@ -77,7 +77,7 @@ DEFAULT_SETTINGS = {
     "relative_tolerance": 1e-9, "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "", "read_pictures": True, "interpret_code": True,
+    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
     "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
 
 def make_settings(overrides=None):
@@ -594,7 +594,11 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("interpret-code", "judge-links", "check-mathematics", "check-values", "check-rules")
+# read-methodology and read-documentation ask only where the built-in rules are themselves in
+# doubt, and only when agentic_reading is not "off". On a file the rules read confidently they
+# spend no call and produce exactly what they produced before.
+CHAT_STEPS = ("read-methodology", "read-documentation", "interpret-code", "judge-links",
+              "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
     "confirm-outline": "Waiting for a person: check Level and Section (heading chain) on Chunks_Canon "
