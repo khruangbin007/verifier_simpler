@@ -323,6 +323,22 @@ If the methodology uses XML tags AIVA has not seen, it still reads them by their
 
 `glossary.xlsx` is optional: two columns, a term or abbreviation and its meaning. Its entries join the bridge vocabulary that AIVA harvests from the inputs themselves, which helps the search connect a code name such as `rho_a` with "asset correlation".
 
+## 7a. How AIVA reads a file it has not seen before
+
+Most methodology files use tags AIVA already knows, or a shape it can work out by counting: a tag that holds rows of equal width is a table, a tag that holds text is a paragraph. Where that counting runs out, AIVA can ask.
+
+**The setting.** `agentic_reading` has two values. `off`, the default, asks nothing: the file is read by the built-in rules exactly as earlier versions read it. `rules` lets a reading step ask ONE question about a file whose shape the rules are unsure of. A file the rules read confidently costs no question at all, so on a familiar project nothing changes and nothing is spent.
+
+**What the model is shown.** Not the file. A *shape digest*: one line per tag, with how often it occurs, how deep it sits, what it sits inside and what sits inside it, how often it carries text of its own and how long that runs, what attributes it has, how often it opens the block around it, and up to three samples of 120 characters. Every digest is recorded in the run folder, so you can see exactly what was put in front of the model.
+
+**What it may say back.** A choice, never text. For each tag: one of five families - heading, container, paragraph, list_container, list_item. It cannot name a tag it was not shown, cannot invent a family, and has no way to ask for a tag to be skipped. Tables, rows, cells, captions, figures and equations are worked out by counting and are not its to give. **There is no field in the answer through which a word can enter or leave your document.**
+
+**What wins over what.** In this order: a `tag_rules.yaml` you wrote beats the rules AIVA ships, which beat what AIVA proved by counting rows, which beats what the model proposes, which beats AIVA's own fallback guess. The model speaks only where AIVA was guessing, and never overrules you.
+
+**For a package.** The same, for a tarball laid out in a way AIVA does not expect. `Model_Package_Info` will say, for example, that a file of R code in a folder AIVA does not expect was read as R source on the model's proposal. Without that it would have been one unit of running text and nothing in it could have been linked or checked.
+
+**What you must check, at cell 10.** Where a proposal changed the reading, `Model_Package_Info` names the tag, what it was read as, and what the built-in rules would have read it as. Read those rows before you confirm the outline. A wrong proposal cannot lose a word of your document, but it can put a rule under the wrong heading, and the outline is where that shows.
+
 ## 8. Working through Flagged_Items
 
 1. Download `Output.xlsx` from `Outputs/`.
@@ -366,6 +382,8 @@ The first page names the model ID, the date initiated, the run, the package and 
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
 - A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
 - Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
+- A reading guided by the model (`agentic_reading: rules`) can put a statement under the wrong heading. It cannot lose a word or add one: every answer is a choice among tags AIVA showed it and families from a fixed list, and the content account on `Model_Package_Info` balances whatever the answer says. Check the changed rows at cell 10 before confirming the outline.
+- A run with `agentic_reading` on is reproducible from its recorded answers, and two fresh runs on the same inputs may cut a file it is unsure of differently. The reading notes say which files were read that way.
 - PDF input is read by position on the page; multi-column layouts and tables without ruling lines may be cut wrongly. Check the outline.
 - R code is parsed by AIVA's own reader, not by R. Unusual syntax becomes a *File not read* unit for that expression only. Functions with loops or branches are compared statement by statement; R semantics that AIVA's evaluator does not cover (recycling of vectors, matrix products) end as "uses operations AIVA cannot evaluate".
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described and not compared; missing values of different kinds are not told apart.
@@ -718,6 +736,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
 | `test_notebook.py` | 5 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
 | `test_package_plan.py` | 16 | test_package_plan.py - R5. |
+| `test_reading_report.py` | 12 | test_reading_report.py - the sign-off bar has to be able to FAIL, or it is decoration. |
 
 Sample projects under `engine/tests/sample_projects/`, all invented and rebuilt byte for byte by `tools/build_samples.py`: `A_minimal` (a neutral parcel-pricing method; XML, a Word file, four help pages), `F_capital` (XML inside a `.txt` file with four levels and a flat-numbered annex; equations as MathML, inline notation, a sentence and an image; stored tables as `.rda` and `.rds`; a help page that is out of step on purpose; a Word file and a PDF), `F_capital_known` (the same with six seeded differences, listed in its `expected_items.csv`) and `D_dosing` (another field, to keep the engine honest about rule R9; Word's web export with preserved equation markup; PDF-only documentation). Each sample has hand-made gold files: `gold_links.csv`, `gold_not_checkable.csv`, `gold_clean_units.csv`.
 

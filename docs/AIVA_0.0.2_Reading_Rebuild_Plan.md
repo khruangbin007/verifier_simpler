@@ -338,3 +338,50 @@ On a familiar input: **zero calls**, identical units. On an unfamiliar one: one 
 3. **Calls before step 07.** Accept that the first calls of a run are now at step 02, and that `confirm-outline` becomes a control the reviewer must actually read.
 4. **What to do with R1's findings.** If the ledger shows the present reader loses real content in a common case, is that fixed in the deterministic reader first (recommended: a fault is a fault), or left for the guided reading to cover?
 5. **Default setting after R6.** `off` until the sign-off bar is met; then `rules`. `rules_and_spans` stays opt-in for a release.
+
+---
+
+# 7. What actually happened
+
+Written after the phases were built. The plan is left as it was, so that what it predicted can
+be told from what turned out.
+
+## The sequence changed, once, on evidence
+
+R1's report argued against its own plan: every sample then in the repository closed its content
+account on structure, so the case for guided reading was asserted rather than measured and the
+samples that could measure it did not exist. **G, H and I were built before R2** on that
+argument. It was the right call — building them found an injection in the reader that no
+existing sample could have exposed.
+
+## What each phase found that the plan did not predict
+
+| Phase | Predicted | Found |
+|---|---|---|
+| R0 | 2 sessions of relocation | As predicted. One test line had to move; recorded rather than hidden behind a re-export. |
+| R1 | Losses in the PDF path and in `.docx` | `.docx` yes (footnotes, endnotes). PDF **no**. A fifth class was needed: an equation is neither lost nor carried but **rewritten**, because `EquationData.source_form` holds the label `"mathml"` and not the markup. |
+| G, H, I | PDF layout would be the main casualty | H did not break. The reader was **inventing words**: two list items in one table cell arrived fused, giving tokens in no file anywhere. The first injection the account ever caught. |
+| R2 | The MHTML title, Word footnotes | Both, plus two faults in section numbering nobody had named, plus a table caption. Every account on every sample now closes. |
+| R3 | Guidance would need care | The property test proved "no answer can lose a word" **false three times**. Each failure narrowed the design: a container called a paragraph duplicates its subtree; `inline` is unsafe by position rather than by kind; a heading with nothing below it loses its words. The last is the "should a heading be a unit?" question, arriving as a correctness requirement rather than a preference. |
+| R4 | Contested spans, 3 sessions | **Not built.** Nothing in G, H or I needs a decision block by block that a rule could not settle. Building the machinery because the plan listed it would have been the wrong reason. |
+| R5 | Extend the line account to every member | Did, and found what the account **cannot** see: a package member with no reader is fully accounted for and still unusable. Conservation is not the same as usefulness. |
+| R6 | Sign-off | The bar is runnable (`tools/reading_report.py`) and every one of its four tests is proved able to fail. It is **not met**, because it requires a real model and only the stand-in was available. |
+
+## Where the default stands
+
+`agentic_reading` defaults to **`off`** and should stay there until `tools/reading_report.py` is
+run with a real `chat()` on Databricks and all four tests hold. Everything measured so far shows
+the machinery is safe and the vocabularies sound. None of it is evidence about how a model reads
+an unfamiliar schema, and the report says so on its own front page.
+
+## What is left
+
+- **R6 against a live model.** The one remaining step before the default can change.
+- **R4, if an input ever justifies it.** Not before.
+- **A second measure of reading.** The content account asks whether words reach a unit. Nothing
+  yet asks whether the unit is any use — how many members reach a reader more specific than
+  "Other file", how many units are linkable. R5 is the case for building it.
+- **Headings as units, in general.** R3 made a heading with nothing below it a unit of its own,
+  because otherwise its words were lost. The wider question — whether a rule stated only in a
+  heading should always be citable — is still open and still moves every reference and every
+  gold file.

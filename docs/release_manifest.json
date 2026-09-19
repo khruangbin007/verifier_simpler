@@ -53,6 +53,7 @@
   "tools/environment_probe.py": "83bf4df67c7d1154c52cc58c4e0489da791aa89c2de21aa8a4fbea017f7816cc",
   "tools/live_trial.py": "c19e72b439b29e946fe0c5bb9f824efc6e612d28f3e9b3322d0ef0ec0396e454",
   "tools/make_release_manifest.py": "13b22d0cea9aafd3c1285a7cff2afa6686792b825a19c671417c13a21fbd3f62",
+  "tools/reading_report.py": "29ea7f67d0d8c8da3bfff9bff560aaf6e9fe5a785df0bebc713b7b2270b10357",
   "tools/recall_at_k.py": "66a6aa03e327aaea94a8175eb75b76dd223ad3f55f61efc8385a56678456dd95",
   "tools/run_harness.py": "ef2368a1716e8a9a12e7e46aeff7702c04b3c5b98cbd0653dff9aa84d73eb7ff",
   "tools/seed_differences.py": "f3e7c6205e260535055e621aa1068f1a3d3465f533c3f8c13ba167068c5cbae3"
