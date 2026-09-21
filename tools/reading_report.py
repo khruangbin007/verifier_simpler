@@ -19,7 +19,9 @@ THE BAR, and it is the owner's to sign off, not this file's. Changing the defaul
   2. on G, H and I, phrases and levels with guidance are >= those without;
   3. on the four settled samples, every field of every unit is identical to the frozen
      snapshot in both modes (test_frozen_interface holds this; it is restated here);
-  4. no answer is refused and retried, which would mean the prompt and the validator disagree.
+  4. every question about a file's shape is answered and accepted the first time, counted from
+     the call records. A refused answer means the prompt and the validator disagree with that
+     model, and a question whose last answer was refused means guidance silently did not happen.
 
 This file reports each of the four and says whether all four held. It does not change the
 default and cannot: that is a decision a person makes, on evidence from a real model, and the
@@ -78,6 +80,8 @@ def one_run(sample, mode, chat, live):
             "wanted": len(wanted),
             "chained": sum(1 for unit in units if unit.get("heading_chain")), "units": len(units),
             "calls": len(calls), "tokens": sum(call.get("estimated_tokens") or 0 for call in calls if call.get("final")),
+            "refused": sum(1 for call in calls if str(call.get("outcome") or "").startswith("rejected")),
+            "fell_back": sum(1 for call in calls if call.get("final") and str(call.get("outcome") or "").startswith("rejected")),
             "closed": all(account["closed"] for account in accounts),
             "open_files": [account["file"] for account in accounts if not account["closed"]],
             "added": sum(account["injected"] for account in accounts),
@@ -109,11 +113,12 @@ def bar(found, samples):
     measured = ("phrases", "levels", "chained", "units")
     moved = [sample for sample in settled
              if any(found[(sample, "rules")][key] != found[(sample, "off")][key] for key in measured)]
-    # A call may only be spent on a file whose shape the rules are unsure of, and at most one
-    # each. More than one call per unit of reading means the answer was refused and retried,
-    # which is a cost the bar should see rather than hide.
-    files_read = {sample: max(1, found[(sample, "off")]["units"] // 40 + 1) for sample in samples}
-    chatty = [sample for sample in samples if found[(sample, "rules")]["calls"] > files_read[sample] + 1]
+    # Counted from the call records, not inferred. An earlier draft guessed an allowance of calls
+    # from the size of a sample, and a dress rehearsal against a misbehaving model passed it: every
+    # answer about F_capital's shape was refused, the guided reading silently never happened, and
+    # this test said HELD. A refused answer means the prompt and the validator disagree with that
+    # model; a question whose last answer was refused means guidance did not happen at all.
+    refused = [sample for sample in samples if found[(sample, "rules")]["refused"]]
     return [
         (not nothing_lost, "Nothing is lost and nothing is added, on every file of every sample, in both modes"
                            + ("" if not nothing_lost else ": open on %s" % ", ".join("%s (%s)" % pair for pair in nothing_lost))),
@@ -121,8 +126,12 @@ def bar(found, samples):
                     + ("" if not worse else ": worse on %s" % ", ".join(worse))),
         (not moved, "On the settled samples, every measure is the same in both modes"
                     + ("" if not moved else ": moved on %s" % ", ".join(moved))),
-        (not chatty, "No sample spends a call that was refused and retried"
-                     + ("" if not chatty else ": %s" % ", ".join("%s %d calls" % (sample, found[(sample, "rules")]["calls"]) for sample in chatty))),
+        (not refused, "Every question about a file's shape was answered and accepted the first time"
+                      + ("" if not refused else ": %s" % ", ".join(
+                          "%s %d refused%s" % (sample, found[(sample, "rules")]["refused"],
+                                               ", and guidance did not happen on %d file(s)" % found[(sample, "rules")]["fell_back"]
+                                               if found[(sample, "rules")]["fell_back"] else "")
+                          for sample in refused))),
     ]
 
 def report_lines(found, samples, label):
@@ -137,16 +146,16 @@ def report_lines(found, samples, label):
                   "> bar below is therefore reported but **not met**. Re-run this file with a real chat() on",
                   "> Databricks to meet it.", ""]
     lines += ["## Per sample, off against rules", "",
-              "| Sample | Mode | Phrases | Levels | Chained | Calls | Tokens | Account |",
-              "|---|---|---|---|---|---|---|---|"]
+              "| Sample | Mode | Phrases | Levels | Chained | Calls | Refused | Tokens | Account |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for sample in samples:
         for mode in MODES:
             one = found[(sample, mode)]
-            lines.append("| %s | %s | %s | %s | %d/%d | %d | %d | %s |"
+            lines.append("| %s | %s | %s | %s | %d/%d | %d | %d | %d | %s |"
                          % (sample, mode,
                             "%d/%d" % (one["phrases"], one["gold"]) if one["gold"] else "-",
                             "%d/%d" % (one["levels"], one["wanted"]) if one["wanted"] else "-",
-                            one["chained"], one["units"], one["calls"], one["tokens"],
+                            one["chained"], one["units"], one["calls"], one["refused"], one["tokens"],
                             "closed" if one["closed"] else "OPEN: " + ", ".join(one["open_files"])))
     lines += ["", "## The sign-off bar", "",
               "Changing the default for `agentic_reading` from `off` to `rules` requires all four, on a real model.", ""]

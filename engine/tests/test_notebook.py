@@ -97,10 +97,21 @@ class NotebookCells(unittest.TestCase):
         self.assertIn("ALLOW_DEFAULT_INDEX", source, "pip's own default index is a decision, never a fallback")
         self.assertIn("returncode", source, "a failed install must not look like a finished one")
 
+    def test_the_sign_off_cell_asks_the_real_model_and_changes_nothing(self):
+        """Cell 19 is the one place the reading sign-off bar can be met, so it must use the chat()
+        the analyst pasted in cell 6 and never the stand-in, and it must not turn guided reading
+        on: the owner does that, after reading the report. It is never executed offline."""
+        with open(os.path.join(helpers.ROOT_DIR, "AIVA_Interface.ipynb"), encoding="utf-8") as handle:
+            source = "".join(json.load(handle)["cells"][18]["source"])
+        self.assertIn("reading_report.run(chat, LIVE", source)
+        self.assertNotIn("standin", source.replace("stand-in", ""), "the sign-off is not evidence if it uses the stand-in")
+        self.assertNotIn("agentic_reading\"] =", source)
+        self.assertNotIn("make_settings", source, "the cell reports; it does not change a setting")
+
     def test_the_cells_run_from_setup_to_verification_with_the_stand_in(self):
         with open(os.path.join(helpers.ROOT_DIR, "AIVA_Interface.ipynb"), encoding="utf-8") as handle:
             cells = ["".join(c["source"]) for c in json.load(handle)["cells"]]
-        self.assertEqual(len(cells), 18)
+        self.assertEqual(len(cells), 19)
         projects = helpers.scratch()
         space = {"dbutils": FakeDbutils({"model_id": "NBTEST", "projects_dir": projects, "llm_token": "tok-SECRET-123", "llm_endpoint": "https://x", "llm_user_id": "u1",
                                          "reviewer_id": "analyst.one", "reviewer_role": "Validator"})}

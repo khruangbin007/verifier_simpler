@@ -53,4 +53,16 @@ There is no doubt in either reader for a digest to resolve, so none was built. T
 - A spreadsheet's formulas are never worked out: the value it saved is read. A workbook saved before it calculated shows stale values.
 - LaTeX mathematics is kept as words and symbols, not read as an equation.
 - Only R is read as code. A Python, SAS or MATLAB model is now *named* as one, which is honest, and is still not checkable.
-- A step-level catch in `run_step` would make R2 hold for every step, not only the reading steps. `aiva5` has no room for it and it is outside the scope of ingestion.
+
+## The three items left open, and what became of them (21 September 2026)
+
+**The samples were not reproducible.** Wider than first reported: *every* sample's tarball and Word file changed on every rebuild, including A, D and F, which predate this branch. Two causes, both timestamps: the writer of stored R data stamps each `.rda` with the time and a file name in its gzip header, and Word stamps every member of its archive with the moment of saving. Both are now fixed at the source in `tools/build_samples.py`. `test_samples_are_reproducible.py` holds that two builds give identical bytes and that the samples in the repository are exactly what the builder gives. The frozen snapshot moved once, on one field (`file_sha256` of the six `.rda` units), recorded in `engine/tests/frozen/REFRESHED.md` as the last refresh of its kind.
+
+**A fault outside reading could still stop a run.** Fixed. `run_step` now catches a step that cannot finish, writes it down in plain words, keeps the details in the run's work folder for a maintainer (not in the evidence pack), and goes on. Broken on purpose at step 05, the run still reached step 16 with every reading unit in `Output.xlsx`, and the steps after it did not cascade into failures. A pause is still a pause: it is how a run waits for a person or a token, and is never recorded as a step that did not finish. Room was made by moving the Inputs folder knowledge into the front door, where it belongs; `aiva5` ends at 1,497 lines, where it started.
+
+**The sign-off bar is not met, and cannot be met here.** It needs the production model behind the Databricks gateway. What was done instead:
+
+- **Cell 19** of the notebook runs the whole bar against the real `chat()` of cell 6. It changes no setting.
+- **A dress rehearsal found a hole in the bar itself.** Against the stand-in in its misbehaving mode, every answer about F_capital's shape was refused, guided reading silently never happened, and test 4 said HELD. It had been inferring retries from call counts against a guessed allowance. It now counts refused answers from the call records, and says when guidance did not happen at all.
+- **Against a misbehaving model, the first three tests still held.** No word lost or added, never worse than without guidance, the settled samples untouched. A bad model makes guidance useless; it cannot make it harmful. That is the difference between *safe* and *ready*, and only the fourth test, on the real model, can show ready.
+

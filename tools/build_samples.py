@@ -10,6 +10,7 @@ import csv
 import os
 import sys
 import tarfile
+import zipfile
 import warnings
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,6 +42,34 @@ def tarball(package_name, files):
     return packed.getvalue()
 
 
+def fixed_gzip(data):
+    """A gzip stream with no build time and no file name in its header, so the same content gives
+    the same bytes. The writer of stored R data stamps both, and every sample's tarball changed on
+    every rebuild because of it."""
+    import gzip
+    if not data.startswith(b"\x1f\x8b"):
+        return data
+    packed = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=packed, mtime=0) as handle:
+        handle.write(gzip.decompress(data))
+    return packed.getvalue()
+
+
+def fixed_zip(data):
+    """A ZIP archive - a Word file is one - with every member stamped with the same time, in the
+    same order and compressed the same way, so the same content gives the same bytes. Word files
+    carry the moment they were saved on every member, which made every sample's documentation
+    change on every rebuild though not one word of it had."""
+    source = zipfile.ZipFile(io.BytesIO(data))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as target:
+        for member in source.infolist():
+            fixed = zipfile.ZipInfo(member.filename, date_time=(1980, 1, 1, 0, 0, 0))
+            fixed.compress_type, fixed.external_attr, fixed.create_system = member.compress_type, member.external_attr, 0
+            target.writestr(fixed, source.read(member))
+    return out.getvalue()
+
+
 def r_data(objects, single=False):
     """Stored R data written without R, by the writer of the `rdata` package (fixture route c)."""
     import rdata
@@ -54,7 +83,7 @@ def r_data(objects, single=False):
     with open(path, "rb") as handle:
         data = handle.read()
     os.remove(path)
-    return data
+    return fixed_gzip(data)
 
 
 def docx_file(parts):
@@ -85,7 +114,7 @@ def docx_file(parts):
             document.add_paragraph(part[1], style="Caption")
     raw = io.BytesIO()
     document.save(raw)
-    return raw.getvalue()
+    return fixed_zip(raw.getvalue())
 
 
 def pdf_file(parts):
@@ -1040,7 +1069,7 @@ def word_traps_docx():
     footnote_like.add_run("The premium is worked out on base pay only and never on distance pay.").italic = True
     raw = io.BytesIO()
     document.save(raw)
-    return raw.getvalue()
+    return fixed_zip(raw.getvalue())
 
 
 I_R = '''#\' Base pay for a shift

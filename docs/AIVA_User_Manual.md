@@ -337,6 +337,8 @@ Most methodology files use tags AIVA already knows, or a shape it can work out b
 
 **For a package.** The same, for a tarball laid out in a way AIVA does not expect. `Model_Package_Info` will say, for example, that a file of R code in a folder AIVA does not expect was read as R source on the model's proposal. Without that it would have been one unit of running text and nothing in it could have been linked or checked.
 
+**Turning it on, and who decides.** `agentic_reading` stays `off` until its owner has run **cell 19** once against the real model: run cells 5 and 6 as for any run, then cell 19. It reads every sample project twice, off and on, asks about ten questions in all, and writes `evaluation/reading_report_<date>.md` with four tests - nothing lost or added, never worse than without guidance, the settled samples unchanged, and every question answered and accepted first time. If all four hold, the owner may change the setting. Cell 19 changes nothing itself. A run against the stand-in is not evidence about a model: rehearsed against a stand-in that misbehaves, the first three tests still held and the fourth did not, which is the difference between guidance that is safe and guidance that is ready.
+
 **What you must check, at cell 10.** Where a proposal changed the reading, `Model_Package_Info` names the tag, what it was read as, and what the built-in rules would have read it as. Read those rows before you confirm the outline. A wrong proposal cannot lose a word of your document, but it can put a rule under the wrong heading, and the outline is where that shows.
 
 ## 8. Working through Flagged_Items
@@ -625,7 +627,7 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | Rule | Enforced in |
 |---|---|
 | R1 | `aiva0_shared.has_banned_wording`, `aiva4_checks.build_items`, `aiva4_checks.account_coverage`, `aiva5_run_report.quoted`, `aiva5_run_report.plain_cell`, `aiva5_run_report.build_report_file` |
-| R2 | `aiva0r_reading.without_page_furniture`, `aiva1f_formats.input_files`, `aiva1f_formats.reason_for`, `aiva1_documents.not_read_block`, `aiva1_documents.read_picture`, `aiva1_documents.blocks_to_chunks`, `aiva2_package.parse_r_source`, `aiva2_package.units_from_r_source`, `aiva2_package.read_package`, `aiva3_mapping.find_candidates`, `aiva4_checks.check_identity`, `aiva4_checks.account_coverage`, `aiva5_run_report.rows_coverage` |
+| R2 | `aiva0r_reading.without_page_furniture`, `aiva1f_formats.input_files`, `aiva1f_formats.reason_for`, `aiva1f_formats.list_input_files`, `aiva1_documents.not_read_block`, `aiva1_documents.read_picture`, `aiva1_documents.blocks_to_chunks`, `aiva2_package.parse_r_source`, `aiva2_package.units_from_r_source`, `aiva2_package.read_package`, `aiva3_mapping.find_candidates`, `aiva4_checks.check_identity`, `aiva4_checks.account_coverage`, `aiva5_run_report.step_failure`, `aiva5_run_report.rows_coverage` |
 | R3 | `aiva0r_reading.slice_rules_question`, `aiva0r_reading.validate_slice_rules`, `aiva0r_reading.skill_body`, `aiva0r_reading.guided_rules`, `aiva0r_reading.validate_package_plan`, `aiva2_package.package_plan`, `aiva3_mapping.validate_answer`, `aiva3_mapping.interpret_code`, `aiva3_mapping.judge_links`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva4_checks.check_values`, `aiva5_run_report.ask_one`, `aiva5_run_report.make_asker` |
 | R4 | `aiva0_shared.content_hash`, `aiva0_shared.chain_records`, `aiva1_documents.blocks_to_chunks`, `aiva3_mapping.ledger_records`, `aiva3_mapping.judge_links`, `aiva4_checks.numeric_step`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva5_run_report.record_determinations` |
 | R5 | `aiva0_shared.canonical_json`, `aiva0_shared.chain_records`, `aiva0r_reading.slice_rules_question`, `aiva2_package.read_package`, `aiva3_mapping.ledger_records`, `aiva3_mapping.ranked`, `aiva3_mapping.fuse`, `aiva3_mapping.assemble_question`, `aiva4_checks.sample_points`, `aiva5_run_report.call_chat`, `aiva5_run_report.run_batch`, `aiva5_run_report.make_asker`, `aiva5_run_report.replay_chat` |
@@ -748,9 +750,11 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_guided_reading.py` | 14 | test_guided_reading.py - the first phase in which a reading step asks a question. |
 | `test_hard_reading_samples.py` | 12 | test_hard_reading_samples.py - G, H and I exist to be read badly, and to make the badness measurable. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
-| `test_notebook.py` | 5 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
+| `test_notebook.py` | 6 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
 | `test_package_plan.py` | 16 | test_package_plan.py - R5. |
-| `test_reading_report.py` | 12 | test_reading_report.py - the sign-off bar has to be able to FAIL, or it is decoration. |
+| `test_reading_report.py` | 14 | test_reading_report.py - the sign-off bar has to be able to FAIL, or it is decoration. |
+| `test_run_goes_on.py` | 6 | test_run_goes_on.py - R2 says nothing stops a run. |
+| `test_samples_are_reproducible.py` | 3 | test_samples_are_reproducible.py - the sample projects are built from source by tools/build_samples.py, and the same source must give the same bytes. |
 
 Sample projects under `engine/tests/sample_projects/`, all invented and rebuilt byte for byte by `tools/build_samples.py`: `A_minimal` (a neutral parcel-pricing method; XML, a Word file, four help pages), `F_capital` (XML inside a `.txt` file with four levels and a flat-numbered annex; equations as MathML, inline notation, a sentence and an image; stored tables as `.rda` and `.rds`; a help page that is out of step on purpose; a Word file and a PDF), `F_capital_known` (the same with six seeded differences, listed in its `expected_items.csv`) and `D_dosing` (another field, to keep the engine honest about rule R9; Word's web export with preserved equation markup; PDF-only documentation). Each sample has hand-made gold files: `gold_links.csv`, `gold_not_checkable.csv`, `gold_clean_units.csv`.
 
@@ -776,7 +780,7 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 |---|---|---|---|
 | aiva0_shared.py | 450 | 450 | 23% |
 | aiva0r_reading.py | 972 | 1100 | 29% |
-| aiva1f_formats.py | 417 | 600 | 25% |
+| aiva1f_formats.py | 438 | 600 | 24% |
 | aiva1_documents.py | 1453 | 1500 | 19% |
 | aiva2_package.py | 1426 | 1500 | 14% |
 | aiva3_mapping.py | 1155 | 1500 | 18% |
@@ -1049,6 +1053,7 @@ Generated from the source: every function and class of the engine with its line 
 | `latex_to_markup` | 366 | function | LaTeX as markup: its sectioning commands as headings, its items as a list, and everything between as paragraphs of its words. |
 | `converted` | 387 | function | A file in a format read by converting it: (markup, words, what was done, in plain words). |
 | `reason_for` | 406 | function | Why a reader failed on a file, in words an analyst can act on. |
+| `list_input_files` | 427 | function | The input files of a project, by corner, walking into folders; the folder each corner is read from, so that a file can be named by its path inside it; and every file each corner left out, with why. |
 
 **aiva1_documents.py**
 
@@ -1333,52 +1338,52 @@ Generated from the source: every function and class of the engine with its line 
 
 | Name | Line | Kind | What it does |
 |---|---|---|---|
-| `RunPaused` | 63 | class | The run stopped on purpose and can be resumed. |
-| `make_settings` | 84 | function | The settings of a run. |
-| `RunPaths` | 107 | class | Where one run lives. |
-| `check_model_id` | 113 | function | Return "" when the model ID is usable, otherwise a plain sentence saying why not. |
-| `setup_project` | 120 | function | Create the project skeleton and say what is still missing. |
-| `new_run_id` | 139 | function | Run_<date>_<HHMM>, with a letter added when that folder already exists. |
-| `pick_scratch_root` | 148 | function | The first folder on the driver AIVA can actually write in, tried in order. |
-| `open_run` | 176 | function | Create or re-open a run folder and its local scratch folder. |
-| `list_input_files` | 198 | function | The input files of a project, by corner, in file-name order. |
-| `LiveValues` | 211 | class | The three values chat() reads when it is CALLED: endpoint, token, user id. |
-| `LiveValues.update` | 219 | function | Take the latest widget values; a different token starts a new generation. |
-| `LiveValues.get` | 228 | function | One live value, read at the moment chat() is called. |
-| `LiveValues.token_age_minutes` | 233 | function | Minutes since the current token was pasted. |
-| `LiveValues.redact` | 237 | function | Remove the current and recent token strings from any text before it is kept. |
-| `copy_whole` | 247 | function | Copy one whole file: to a temporary name, then replace; a plain copy if the file system does not support replace (probe P-5). |
-| `AuditStore` | 260 | class | All audit files are read and written on local disk; sync() copies changed files whole into _audit/ in the Workspace. |
-| `AuditStore.path` | 266 | function | The local path of one kind of audit file. |
-| `AuditStore.read` | 271 | function | Every record of one kind, in the order written. |
-| `AuditStore.append` | 282 | function | Append records of one kind; the three single-object kinds are rewritten whole. |
-| `AuditStore.call_files` | 292 | function | The gzip files of call records, in order. |
-| `AuditStore.append_calls` | 297 | function | Call records go to gzip files that roll over at the size limit. |
-| `AuditStore.read_calls` | 309 | function | Every call record of the run, in the order written. |
-| `AuditStore.sync` | 317 | function | Copy every file that changed since the last sync, whole. |
-| `AuditStore.restore` | 332 | function | On resume: copy the run folder's audit files back to local disk first. |
-| `open_store` | 337 | function | The audit store of a run, restored from the run folder when local scratch is empty. |
-| `classify_failure` | 347 | function | Sort a failure into a class by the words it contains (probe P-13 matches these lists to what the real gateway returns). |
-| `ChatOutcome` | 357 | class | What one call to chat() came to. |
-| `ChatOutcome.__new__` | 363 | function |  |
-| `first_choice` | 379 | function | The first choice of an OpenAI-shaped reply, or an empty dictionary. |
-| `chat_metadata` | 385 | function | What the gateway said about the call itself: which conversation it belonged to, which model answered, how many tokens it took and why it stopped. |
-| `answer_text_of` | 399 | function | The generated text. |
-| `summarise_response` | 409 | function | A failed reply, shortened for the audit record: the fields that say what went wrong, without the echoed prompts. |
-| `accepts_history` | 422 | function | Whether the analyst's chat() takes the third `history` argument. |
-| `call_chat` | 436 | function | Call chat() once and bring every way a failure can surface (an exception; a dictionary that carries a status or code; a dictionary with no answer in either place; an answer the model was cut off in the middle of) into one shape. |
-| `AskState` | 465 | class | What the workers of one run share: the pause and stop switches, the consecutive- failure count of the circuit breaker, and the generation of the token that failed. |
-| `wait_until_allowed` | 473 | function | Called before every call. |
-| `ask_one` | 491 | function | Ask one question until it has a final outcome. |
-| `run_batch` | 533 | function | Ask one batch of questions with a thread pool. |
-| `make_asker` | 550 | function | Build ask(), the only place chat() is ever called. |
-| `replay_chat` | 575 | function | A chat() that answers from the recorded answers of an earlier run. |
-| `load_pipeline` | 609 | function | Read pipeline.yaml and refuse anything that is not a known skill and function. |
-| `update_manifest` | 629 | function | Change fields of the run manifest and write it back. |
-| `confirm_outline` | 636 | function | Record that a person has checked the outline of the methodology (notebook cell 10). |
-| `human_step_open` | 644 | function | Is this human step still waiting for its person? |
-| `run_pipeline` | 651 | function | Run, or resume, the pipeline. |
-| `run_step` | 692 | function | Build the context, call the step function, write what it returns, record the step, rebuild the outputs and sync. |
+| `RunPaused` | 64 | class | The run stopped on purpose and can be resumed. |
+| `make_settings` | 85 | function | The settings of a run. |
+| `RunPaths` | 102 | class | Where one run lives. |
+| `check_model_id` | 108 | function | Return "" when the model ID is usable, otherwise a plain sentence saying why not. |
+| `setup_project` | 115 | function | Create the project skeleton and say what is still missing. |
+| `new_run_id` | 134 | function | Run_<date>_<HHMM>, with a letter added when that folder already exists. |
+| `pick_scratch_root` | 143 | function | The first folder on the driver AIVA can actually write in, tried in order. |
+| `open_run` | 171 | function | Create or re-open a run folder and its local scratch folder. |
+| `LiveValues` | 195 | class | The three values chat() reads when it is CALLED: endpoint, token, user id. |
+| `LiveValues.update` | 203 | function | Take the latest widget values; a different token starts a new generation. |
+| `LiveValues.get` | 212 | function | One live value, read at the moment chat() is called. |
+| `LiveValues.token_age_minutes` | 217 | function | Minutes since the current token was pasted. |
+| `LiveValues.redact` | 221 | function | Remove the current and recent token strings from any text before it is kept. |
+| `copy_whole` | 231 | function | Copy one whole file: to a temporary name, then replace; a plain copy if the file system does not support replace (probe P-5). |
+| `AuditStore` | 244 | class | All audit files are read and written on local disk; sync() copies changed files whole into _audit/ in the Workspace. |
+| `AuditStore.path` | 250 | function | The local path of one kind of audit file. |
+| `AuditStore.read` | 255 | function | Every record of one kind, in the order written. |
+| `AuditStore.append` | 266 | function | Append records of one kind; the three single-object kinds are rewritten whole. |
+| `AuditStore.call_files` | 276 | function | The gzip files of call records, in order. |
+| `AuditStore.append_calls` | 281 | function | Call records go to gzip files that roll over at the size limit. |
+| `AuditStore.read_calls` | 293 | function | Every call record of the run, in the order written. |
+| `AuditStore.sync` | 301 | function | Copy every file that changed since the last sync, whole. |
+| `AuditStore.restore` | 316 | function | On resume: copy the run folder's audit files back to local disk first. |
+| `open_store` | 321 | function | The audit store of a run, restored from the run folder when local scratch is empty. |
+| `classify_failure` | 331 | function | Sort a failure into a class by the words it contains (probe P-13 matches these lists to what the real gateway returns). |
+| `ChatOutcome` | 341 | class | What one call to chat() came to. |
+| `ChatOutcome.__new__` | 347 | function |  |
+| `first_choice` | 363 | function | The first choice of an OpenAI-shaped reply, or an empty dictionary. |
+| `chat_metadata` | 369 | function | What the gateway said about the call itself: which conversation it belonged to, which model answered, how many tokens it took and why it stopped. |
+| `answer_text_of` | 383 | function | The generated text. |
+| `summarise_response` | 393 | function | A failed reply, shortened for the audit record: the fields that say what went wrong, without the echoed prompts. |
+| `accepts_history` | 406 | function | Whether the analyst's chat() takes the third `history` argument. |
+| `call_chat` | 420 | function | Call chat() once and bring every way a failure can surface (an exception; a dictionary that carries a status or code; a dictionary with no answer in either place; an answer the model was cut off in the middle of) into one shape. |
+| `AskState` | 449 | class | What the workers of one run share: the pause and stop switches, the consecutive- failure count of the circuit breaker, and the generation of the token that failed. |
+| `wait_until_allowed` | 457 | function | Called before every call. |
+| `ask_one` | 475 | function | Ask one question until it has a final outcome. |
+| `run_batch` | 517 | function | Ask one batch of questions with a thread pool. |
+| `make_asker` | 534 | function | Build ask(), the only place chat() is ever called. |
+| `replay_chat` | 559 | function | A chat() that answers from the recorded answers of an earlier run. |
+| `load_pipeline` | 593 | function | Read pipeline.yaml and refuse anything that is not a known skill and function. |
+| `update_manifest` | 613 | function | Change fields of the run manifest and write it back. |
+| `confirm_outline` | 620 | function | Record that a person has checked the outline of the methodology (notebook cell 10). |
+| `human_step_open` | 628 | function | Is this human step still waiting for its person? |
+| `run_pipeline` | 635 | function | Run, or resume, the pipeline. |
+| `run_step` | 676 | function | Build the context, call the step function, write what it returns, record the step, rebuild the outputs and sync. |
+| `step_failure` | 706 | function | What the analyst is told when a step could not finish, and where the details are kept for whoever maintains AIVA. |
 | `record_step` | 717 | function | Leave the step record that makes a finished step visible and resume possible. |
 | `log_line` | 726 | function | Technical text (exception messages, Python names) belongs in run_log.txt only. |
 | `fingerprint_file` | 735 | function | Name, corner, size, SHA-256 and content identifier of one input file. |

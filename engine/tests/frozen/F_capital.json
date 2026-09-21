@@ -5429,7 +5429,7 @@
     ]
    },
    "file": "data/lgd_floors.rda",
-   "file_sha256": "538df21b1f889d9524655b61185bbf9af821261a45a1f9aa7d57d6fc459334e9",
+   "file_sha256": "60cf8c30984928f87ef31bbd22dca26e5c4ab23b98b316223d67711944aa66e7",
    "helppage": null,
    "inside": "",
    "kind": "Parameter table",
@@ -5476,7 +5476,7 @@
     ]
    },
    "file": "inst/extdata/confidence.rds",
-   "file_sha256": "3106741267c1053992e883c483621c2af3f1efb81650013f54fa5c34dbe8326d",
+   "file_sha256": "96c36a911c26643741da3d35bbc2c219efaae182c500483223c358f5fe8c17ff",
    "helppage": null,
    "inside": "",
    "kind": "Parameter table",

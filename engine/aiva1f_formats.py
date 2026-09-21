@@ -415,3 +415,24 @@ def reason_for(problem):
     if isinstance(problem, zipfile.BadZipFile) or name in ("ReadError", "CompressionError", "HeaderError", "EOFError"):
         return "it is damaged, or is not the archive its name says; save it again and put the new copy in its place"
     return "a reader failed on it (%s); the rest of the run went on without it" % name
+
+# ---------------------------------------------------------------- the three Inputs folders of a project
+INPUT_FOLDERS = (
+    ("methodology", "1_Methodology", "Put the canonical methodology here: XML (also inside a .txt), .mhtml, .docx, "
+     ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything AIVA cannot read is named."),
+    ("package", "2_Model_Package", "Put the R package here: its tarball (.tar.gz), a .zip of it, or its source folder."),
+    ("documentation", "3_Model_Documentation", "Put the model documentation here (.docx is preferred; .pdf, .mhtml, "
+     "XML, Markdown, .csv, .xlsx, .rtf and .tex are read too). Folders are read too, in name order."))
+
+def list_input_files(inputs_dir):
+    """The input files of a project, by corner, walking into folders; the folder each corner is
+    read from, so that a file can be named by its path inside it; and every file each corner left
+    out, with why. The optional glossary and tag rules sit beside the three folders. Enforces: R2"""
+    inputs = {"glossary": None, "tag_rules": None, "roots": {}, "skipped": {}}
+    for corner, folder, _ in INPUT_FOLDERS:
+        inputs["roots"][corner] = os.path.join(inputs_dir, folder)
+        inputs[corner], inputs["skipped"][corner] = input_files(inputs["roots"][corner])
+    for key, name in (("glossary", "glossary.xlsx"), ("tag_rules", "tag_rules.yaml")):
+        if os.path.exists(os.path.join(inputs_dir, name)):
+            inputs[key] = os.path.join(inputs_dir, name)
+    return inputs

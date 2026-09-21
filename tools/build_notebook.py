@@ -334,6 +334,15 @@ import run_harness
 run_harness.main(["F_capital", "--limit", "10"])        # remove the limit for the full set of seeded differences
 ''')
 
+code("Cell 19 - appendix: sign-off of guided reading against the REAL model (run cells 5 and 6 first; writes evaluation/reading_report_<date>.md)", '''
+# Reads every sample project twice - agentic_reading off, then rules - with the real chat() of cell 6,
+# and reports the four tests of the sign-off bar. About ten questions in all, only on files whose shape
+# the built-in rules are unsure of. It changes nothing: agentic_reading stays "off" until the owner reads
+# the report and decides. A stand-in run is not evidence about a model; this is the run that is.
+import reading_report
+print(reading_report.run(chat, LIVE, label="the real model"))
+''')
+
 
 def build(target):
     notebook = {"cells": CELLS, "metadata": {"language_info": {"name": "python"}, "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},

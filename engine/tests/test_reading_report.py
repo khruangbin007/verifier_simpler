@@ -17,7 +17,8 @@ import reading_report
 def a_result(**changes):
     """A sample's measurement, clean unless a test spoils it on purpose."""
     base = {"phrases": 8, "gold": 8, "levels": 4, "wanted": 4, "chained": 14, "units": 14,
-            "calls": 1, "tokens": 1400, "closed": True, "open_files": [], "added": 0, "lost": 0}
+            "calls": 1, "refused": 0, "fell_back": 0, "tokens": 1400, "closed": True, "open_files": [],
+            "added": 0, "lost": 0}
     base.update(changes)
     return base
 
@@ -67,8 +68,20 @@ class TheBarCatchesEachThingItClaimsTo(unittest.TestCase):
         self.assertEqual(held(found)[2], False, "a settled sample must not move when guidance is on")
 
     def test_it_catches_answers_being_refused_and_retried(self):
-        found = a_table({("D_dosing", "rules"): a_result(calls=9)})
-        self.assertEqual(held(found)[3], False, "repeated calls mean the prompt and the validator disagree")
+        found = a_table({("D_dosing", "rules"): a_result(calls=2, refused=1)})
+        self.assertEqual(held(found)[3], False, "a refused answer means the prompt and the validator disagree")
+
+    def test_it_catches_guidance_that_silently_never_happened(self):
+        """The case a dress rehearsal found the first draft passing: every answer refused, the
+        reading fell back to the built-in rules, and every other measure looked perfect."""
+        found = a_table({("F_capital", "rules"): a_result(calls=3, refused=3, fell_back=1)})
+        tests = reading_report.bar(found, reading_report.HARD + reading_report.SETTLED)
+        self.assertEqual(tests[3][0], False)
+        self.assertIn("guidance did not happen", tests[3][1])
+
+    def test_many_calls_that_were_all_accepted_are_not_a_failure(self):
+        found = a_table({("G_schema", "rules"): a_result(calls=5, refused=0)})
+        self.assertEqual(held(found)[3], True, "the bar counts refusals, not calls")
 
 
 class WhatTheReportSaysOutLoud(unittest.TestCase):

@@ -1392,7 +1392,7 @@
     ]
    },
    "file": "inst/extdata/band_factors.rds",
-   "file_sha256": "279552c2ab809a285594743d22d0c41e1720ea3174dbbe692e31caa429d608df",
+   "file_sha256": "ac6fa28807d87fc547256d7c76cadd561fda729cecce94c1982071472a5e02a0",
    "helppage": null,
    "inside": "",
    "kind": "Parameter table",

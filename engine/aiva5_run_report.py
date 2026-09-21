@@ -44,6 +44,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field, replace
 
 import yaml
@@ -94,12 +95,6 @@ def make_settings(overrides=None):
 
 # ---------------------------------------------------------------- paths and project setup
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
-INPUT_FOLDERS = (
-    ("methodology", "1_Methodology", "Put the canonical methodology here: XML (also inside a .txt), .mhtml, .docx, "
-     ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything AIVA cannot read is named."),
-    ("package", "2_Model_Package", "Put the R package here: its tarball (.tar.gz), a .zip of it, or its source folder."),
-    ("documentation", "3_Model_Documentation", "Put the model documentation here (.docx is preferred; .pdf, .mhtml, "
-     "XML, Markdown, .csv, .xlsx, .rtf and .tex are read too). Folders are read too, in name order."))
 LONGEST_AUDIT_NAME = "package_doc_checks.jsonl"
 PATH_BUDGET = 100
 
@@ -125,7 +120,7 @@ def setup_project(projects_dir, model_id, project_date=""):
     project_date = project_date or datetime.date.today().isoformat()
     project_dir = os.path.join(projects_dir, model_id, project_date)
     missing = []
-    for _, folder, readme in INPUT_FOLDERS:
+    for _, folder, readme in aiva1f_formats.INPUT_FOLDERS:
         path = os.path.join(project_dir, "Inputs", folder)
         os.makedirs(path, exist_ok=True)
         readme_path = os.path.join(path, "README.txt")
@@ -194,17 +189,6 @@ def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root=""
     for folder in (paths.outputs_dir, paths.audit_dir, paths.local_dir):
         os.makedirs(folder, exist_ok=True)
     return paths
-
-def list_input_files(paths):
-    """The input files of a project, by corner, in file-name order."""
-    inputs = {"glossary": None, "tag_rules": None, "roots": {}, "skipped": {}}
-    for corner, folder, _ in INPUT_FOLDERS:            # into folders; OS and editor leavings named, not read
-        inputs["roots"][corner] = os.path.join(paths.inputs_dir, folder)
-        inputs[corner], inputs["skipped"][corner] = aiva1f_formats.input_files(inputs["roots"][corner])
-    for key, name in (("glossary", "glossary.xlsx"), ("tag_rules", "tag_rules.yaml")):
-        if os.path.exists(os.path.join(paths.inputs_dir, name)):
-            inputs[key] = os.path.join(paths.inputs_dir, name)
-    return inputs
 
 # ---------------------------------------------------------------- live values (the token)
 @dataclass
@@ -699,20 +683,36 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     provenance = shared.Provenance(paths.run_id, step["id"], step["skill"], step["skill_version"],
                                    created_at=datetime.datetime.now().isoformat(timespec="seconds"))
     options = dict(step.get("with") or {})
-    options.update({"inputs": list_input_files(paths), "references_dir": REFERENCES_DIR, "paths": paths,
+    options.update({"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
     context = shared.StepContext(settings, options, store.read, ask, work_dir, notes.append, provenance)
     function = STEP_FUNCTIONS[step["function"]]
     started = time.time()
-    result = function(context)
+    try:
+        result = function(context)
+    except RunPaused:
+        raise                                        # a pause is how a run waits for a person; it is not a failure
+    except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
+        result = shared.StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
     for kind in sorted(result.records):
         store.append(kind, result.records[kind])
     result.messages = list(result.messages) + notes
     record_step(store, step, result, time.time() - started)
     rebuild_outputs(store, paths, settings, "")
     store.sync()
+
+def step_failure(step, problem, work_dir):
+    """What the analyst is told when a step could not finish, and where the details are kept for
+    whoever maintains AIVA. The run goes on: the steps after this one work with what there is, and
+    each says what it could not do. The details go to the run's work folder, not to the evidence
+    pack, because they are about AIVA and not about the model under review. Enforces: R2"""
+    with open(os.path.join(work_dir, "step_%s_did_not_finish.txt" % step["id"]), "w", encoding="utf-8") as handle:
+        handle.write("".join(traceback.format_exception(type(problem), problem, problem.__traceback__)))
+    return ("Step %s (%s) could not finish, because of a fault inside AIVA (%s). The steps after it ran on what there "
+            "was, and say what they could not do. The details are in the run's work folder, for whoever maintains AIVA."
+            % (step["id"], step["skill"], type(problem).__name__))
 
 def record_step(store, step, result, seconds):
     """Leave the step record that makes a finished step visible and resume possible."""
@@ -757,7 +757,7 @@ def prepare_run(ctx):
     import importlib.metadata
     paths, inputs = ctx.options["paths"], ctx.options["inputs"]
     fingerprints = []
-    for corner, _, _ in INPUT_FOLDERS:
+    for corner, _, _ in aiva1f_formats.INPUT_FOLDERS:
         fingerprints.extend(fingerprint_file(path, corner, paths.inputs_dir) for path in inputs[corner])
     for key in ("glossary", "tag_rules"):
         if inputs[key]:
@@ -1223,7 +1223,7 @@ def call_plan(paths, settings, step_id, seconds_per_call=0.0):
         collected.extend(questions)
         return {}
     options = dict(step.get("with") or {})
-    options.update({"inputs": list_input_files(paths), "references_dir": REFERENCES_DIR, "paths": paths,
+    options.update({"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
     provenance = shared.Provenance(paths.run_id, step["id"], step["skill"], step["skill_version"])
     STEP_FUNCTIONS[step["function"]](shared.StepContext(settings, options, store.read, collect, paths.local_dir, lambda text: None, provenance))
@@ -1443,7 +1443,7 @@ def verify_evidence_pack(paths, settings, live=None):
     installed, recorded = engine_file_hashes(), manifest.get("engine_files", {})
     other = sorted(name for name in set(installed) | set(recorded) if installed.get(name) != recorded.get(name))
     line("The engine files that produced this run are the ones installed here", not other, ", ".join(other[:5]))
-    options = {"inputs": list_input_files(paths), "references_dir": REFERENCES_DIR}
+    options = {"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR}
     context = shared.StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
     for kind, function in (("chunks_canon", aiva1_documents.read_methodology), ("chunks_doc", aiva1_documents.read_documentation),
                            ("model_units", aiva2_package.read_package)):

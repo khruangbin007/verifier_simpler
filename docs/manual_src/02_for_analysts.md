@@ -99,6 +99,8 @@ Most methodology files use tags AIVA already knows, or a shape it can work out b
 
 **For a package.** The same, for a tarball laid out in a way AIVA does not expect. `Model_Package_Info` will say, for example, that a file of R code in a folder AIVA does not expect was read as R source on the model's proposal. Without that it would have been one unit of running text and nothing in it could have been linked or checked.
 
+**Turning it on, and who decides.** `agentic_reading` stays `off` until its owner has run **cell 19** once against the real model: run cells 5 and 6 as for any run, then cell 19. It reads every sample project twice, off and on, asks about ten questions in all, and writes `evaluation/reading_report_<date>.md` with four tests - nothing lost or added, never worse than without guidance, the settled samples unchanged, and every question answered and accepted first time. If all four hold, the owner may change the setting. Cell 19 changes nothing itself. A run against the stand-in is not evidence about a model: rehearsed against a stand-in that misbehaves, the first three tests still held and the fourth did not, which is the difference between guidance that is safe and guidance that is ready.
+
 **What you must check, at cell 10.** Where a proposal changed the reading, `Model_Package_Info` names the tag, what it was read as, and what the built-in rules would have read it as. Read those rows before you confirm the outline. A wrong proposal cannot lose a word of your document, but it can put a rule under the wrong heading, and the outline is where that shows.
 
 ## 8. Working through Flagged_Items
