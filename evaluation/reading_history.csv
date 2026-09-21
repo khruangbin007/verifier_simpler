@@ -13,3 +13,17 @@ date,sample,chat,mode,phrases,gold,levels,wanted,chained,units,calls,tokens,lost
 2026-09-19,F_capital,stand-in,rules,0,0,0,0,46,46,1,1906,0,0
 2026-09-19,F_capital_known,stand-in,off,0,0,0,0,46,46,0,0,0,0
 2026-09-19,F_capital_known,stand-in,rules,0,0,0,0,46,46,1,1906,0,0
+2026-09-21,G_schema,stand-in,off,8,8,0,4,5,17,0,0,0,0
+2026-09-21,G_schema,stand-in,rules,8,8,4,4,14,14,1,1399,0,0
+2026-09-21,H_twocolumn,stand-in,off,7,7,3,3,20,21,0,0,0,0
+2026-09-21,H_twocolumn,stand-in,rules,7,7,3,3,20,21,0,0,0,0
+2026-09-21,I_wordtraps,stand-in,off,7,8,3,3,20,20,0,0,0,0
+2026-09-21,I_wordtraps,stand-in,rules,7,8,3,3,20,20,0,0,0,0
+2026-09-21,A_minimal,stand-in,off,0,0,0,0,41,41,0,0,0,0
+2026-09-21,A_minimal,stand-in,rules,0,0,0,0,41,41,0,0,0,0
+2026-09-21,D_dosing,stand-in,off,0,0,0,0,14,14,0,0,0,0
+2026-09-21,D_dosing,stand-in,rules,0,0,0,0,14,14,1,1603,0,0
+2026-09-21,F_capital,stand-in,off,0,0,0,0,46,46,0,0,0,0
+2026-09-21,F_capital,stand-in,rules,0,0,0,0,46,46,1,1906,0,0
+2026-09-21,F_capital_known,stand-in,off,0,0,0,0,46,46,0,0,0,0
+2026-09-21,F_capital_known,stand-in,rules,0,0,0,0,46,46,1,1906,0,0

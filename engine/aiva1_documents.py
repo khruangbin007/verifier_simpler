@@ -51,8 +51,9 @@ import yaml
 
 import aiva0_shared as shared
 import aiva0r_reading as reading
+import aiva1f_formats as formats
 
-SKILL_VERSIONS = {"read-methodology": "0.0.3", "read-documentation": "0.0.3"}
+SKILL_VERSIONS = {"read-methodology": "0.0.4", "read-documentation": "0.0.4"}
 
 class NotReadable(Exception):
     """A formula or a file that AIVA cannot read. The message is a plain reason for the analyst."""
@@ -412,30 +413,6 @@ def latex_to_linear(source):
     return re.sub(r"\s+", " ", "".join(output)).strip()
 
 # ---------------------------------------------------------------- format from content, and repairs
-def detect_format(data):
-    """The format of a file from its first bytes, whatever its extension says."""
-    head = data[:4096].lstrip(b"\xef\xbb\xbf \t\r\n")
-    if head.startswith(b"%PDF"):
-        return "pdf"
-    if head.startswith(b"PK\x03\x04"):
-        return "docx"
-    lowered = head.lower()
-    if lowered.startswith((b"mime-version:", b"from:", b"content-type:")) or b"multipart/related" in lowered[:1024]:
-        return "mhtml"
-    if lowered.startswith(b"<"):
-        return "html" if re.match(rb"<(!doctype\s+html|html)\b", lowered) else "xml"
-    return "text"
-
-def decode_text(data):
-    """Bytes to text: a byte-order mark or a declared encoding decides, then UTF-8, then Latin-1."""
-    declared = re.search(rb'(?:encoding|charset)=["\']?([\w-]+)', data[:2048])
-    for encoding in ([declared.group(1).decode("ascii")] if declared else []) + ["utf-8-sig", "utf-8"]:
-        try:
-            return data.decode(encoding)
-        except (UnicodeDecodeError, LookupError):
-            continue
-    return data.decode("latin-1")
-
 XML_ENTITIES = ("amp", "lt", "gt", "quot", "apos")
 
 def repair_markup(text, file_name, repairs):
@@ -1356,9 +1333,9 @@ def atoms_of_file(data, found, file_name, state, repairs):
                     return reading.atoms_of_markup(parse_markup(repair_markup(text, file_name, []), file_name, [], tolerant_only=True), file_name, state.rules)
             return []
         if found in ("xml", "html"):
-            text = repair_markup(decode_text(data), file_name, [])
+            text = repair_markup(formats.decode_text(data), file_name, [])
             return reading.atoms_of_markup(parse_markup(text, file_name, [], tolerant_only=found == "html"), file_name, state.rules)
-        return reading.atoms_of_plain_text(decode_text(data), file_name)
+        return reading.atoms_of_plain_text(formats.decode_text(data), file_name)
     except Exception:                          # an account that cannot be drawn is written down, never a stopped run
         state.notes.append("%s: the content account could not be drawn for this file." % file_name)
         return []
@@ -1369,7 +1346,15 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
         return "too large", [not_read_block(file_name, "the file is larger than the size limit for one input file")]
     with open(path, "rb") as handle:
         data = handle.read()
-    found = detect_format(data)
+    found = formats.detect_format(data, file_name)
+    if found in formats.NOT_READ:                    # said in plain words, with a next step; never decoded as text
+        state.atoms = [reading.atom("whole file not read", file_name, "")]
+        return found, [not_read_block(file_name, "the file is " + formats.NOT_READ[found])]
+    if found in formats.CONVERTED:                   # read through markup the walker already reads
+        markup, words, how = formats.converted(found, data, file_name)
+        state.atoms = reading.atoms_of_plain_text(words, file_name)
+        state.notes.append("%s: %s." % (file_name, how))
+        return found, blocks_from_markup(markup, file_name, state, repairs)
     state.atoms = atoms_of_file(data, found, file_name, state, repairs)
     if found == "pdf":
         return found, blocks_from_pdf(data, file_name, state)
@@ -1378,9 +1363,9 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
     if found == "mhtml":
         return found, blocks_from_mhtml(data, file_name, state, repairs)
     if found in ("xml", "html"):
-        return found, blocks_from_markup(decode_text(data), file_name, state, repairs, tolerant_only=found == "html")
+        return found, blocks_from_markup(formats.decode_text(data), file_name, state, repairs, tolerant_only=found == "html")
     blocks = [new_block("paragraph", part, "paragraph %d" % number)
-              for number, part in enumerate(re.split(r"\n\s*\n", decode_text(data)), start=1) if part.strip()]
+              for number, part in enumerate(re.split(r"\n\s*\n", formats.decode_text(data)), start=1) if part.strip()]
     return "plain text", blocks
 
 def read_corner(ctx, corner, input_key, label):
@@ -1388,14 +1373,22 @@ def read_corner(ctx, corner, input_key, label):
     options = ctx.options
     rules = load_tag_rules(options["references_dir"], options["inputs"].get("tag_rules"))
     notation = load_notation(options["references_dir"])
-    chunks, repairs, info_rows, outline, accounts, digests = [], [], [], [], [], []
+    chunks, repairs, info_rows, outline, accounts, digests, read_as_what = [], [], [], [], [], [], []
+    root = (options["inputs"].get("roots") or {}).get(input_key)
+    for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
+        info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
     for path in options["inputs"][input_key]:
-        file_name = os.path.basename(path)
+        file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
         state.ask, state.settings, state.references_dir = ctx.ask, ctx.settings, options["references_dir"]
         state.skill_body = reading.skill_body(options["references_dir"],
                                               "read-methodology" if corner == "canon" else "read-documentation")
-        found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
+        try:
+            found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
+        except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
+            found, blocks = "unreadable", [not_read_block(file_name, formats.reason_for(problem))]
+            state.atoms, state.blocks = [reading.atom("whole file not read", file_name, "")], []
+        read_as_what.append((file_name, found, blocks[0].get("not_read_reason", "") if len(blocks) == 1 else ""))
         new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
         chunks.extend(new_chunks)
         plain = [shared.to_plain(chunk) for chunk in new_chunks]
@@ -1405,7 +1398,8 @@ def read_corner(ctx, corner, input_key, label):
         digests.extend(state.digests)
         found_account = reading.account(file_name, state.atoms, plain, state.dropped,
                                         reading.marks_of_rendering(plain)
-                                        + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING])
+                                        + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING],
+                                        os.path.getsize(path) if os.path.isfile(path) else 0)
         accounts.append(found_account)
         info_rows.extend({"group": label, "item": "%s: content account" % file_name, "value": line}
                          for line in reading.account_lines(found_account))
@@ -1414,7 +1408,8 @@ def read_corner(ctx, corner, input_key, label):
             counts[chunk.kind] = counts.get(chunk.kind, 0) + 1
         summary = ", ".join("%d %s" % (counts[kind], kind.lower() + ("s" if counts[kind] != 1 else ""))
                             for kind in shared.CHUNK_KINDS if kind in counts) or "nothing could be read"
-        info_rows.append({"group": label, "item": file_name, "value": "Read as %s: %d units (%s)" % (found, len(new_chunks), summary)})
+        info_rows.append({"group": label, "item": file_name, "value": "Read as %s: %d units (%s)"
+                          % (formats.FORMAT_NAMES.get(found, found), len(new_chunks), summary)})
         info_rows.extend({"group": label, "item": "%s: reading note" % file_name, "value": note} for note in state.notes)
         for tag in sorted(state.unknown_tags):
             seen = state.unknown_tags[tag]
@@ -1427,6 +1422,17 @@ def read_corner(ctx, corner, input_key, label):
     kind = "chunks_canon" if corner == "canon" else "chunks_doc"
     unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)
     messages = ["%d units read from %d file(s)." % (len(chunks), len(options["inputs"][input_key]))]
+    read_as = {}
+    for _, found, _ in read_as_what:
+        if found in formats.FORMAT_NAMES:
+            read_as[formats.FORMAT_NAMES[found]] = read_as.get(formats.FORMAT_NAMES[found], 0) + 1
+    if read_as:                                      # what each file was read as, and what was not read and why
+        messages.append("Read as: %s." % ", ".join("%d %s" % (count, name) for name, count in sorted(read_as.items())))
+    messages.extend("Not read: %s - %s." % (name, why) for name, found, why in read_as_what
+                    if why and (found in formats.NOT_READ or found == "unreadable"))
+    skipped = (options["inputs"].get("skipped") or {}).get(input_key, [])
+    if skipped:
+        messages.append("%d file(s) in the folder were left out; Model_Package_Info lists them." % len(skipped))
     if unreadable:
         messages.append("%d equation(s) could not be read and will be raised for a person." % unreadable)
     open_accounts = [one for one in accounts if not one["closed"]]

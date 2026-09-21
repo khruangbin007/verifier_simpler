@@ -36,7 +36,7 @@ AIVA reads all three, cuts them into units, links what corresponds, checks formu
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
 | R9 | No domain concept in the engine, its vocabulary, its categories or its prompts. Domain flavour lives in sample data and in the optional glossary. |
 | R10 | Plain language outward. No internal names, no technical traces, whole numbers shown as whole numbers, in anything an analyst reads. |
-| R11 | Seven flat bundles, one-way imports, plain code, line budgets. The reading floor sits directly above the contracts: it imports the shared file and nothing else in the engine, and every step stands on it. |
+| R11 | Eight flat bundles, one-way imports, plain code, line budgets. The reading floor sits directly above the contracts: it imports the shared file and nothing else in the engine, and every step stands on it. The front door of reading sits directly above the floor and below every reader: it decides what a file is before any reader runs. |
 | R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
 
@@ -384,6 +384,9 @@ The first page names the model ID, the date initiated, the run, the package and 
 - Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
 - A reading guided by the model (`agentic_reading: rules`) can put a statement under the wrong heading. It cannot lose a word or add one: every answer is a choice among tags AIVA showed it and families from a fixed list, and the content account on `Model_Package_Info` balances whatever the answer says. Check the changed rows at cell 10 before confirming the outline.
 - A run with `agentic_reading` on is reproducible from its recorded answers, and two fresh runs on the same inputs may cut a file it is unsure of differently. The reading notes say which files were read that way.
+- AIVA reads XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv` and `.tsv`, `.xlsx`, `.rtf` and `.tex`. It does not read slide decks, OpenDocument files, e-books, old Office files (`.doc`, `.xls`, `.ppt`) or pictures on their own; each of those becomes one row on the sheet saying so, with what to save it as instead. Folders inside an Inputs corner are read, in name order; a Word lock file, Thumbs.db and a saved web page's support folder are left out and listed on `Model_Package_Info`.
+- A spreadsheet is read sheet by sheet, each sheet a heading over one table. A formula is never worked out: the value the spreadsheet saved with it is what is read, so save the workbook after it has calculated.
+- The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 - PDF input is read by position on the page; multi-column layouts and tables without ruling lines may be cut wrongly. Check the outline.
 - R code is parsed by AIVA's own reader, not by R. Unusual syntax becomes a *File not read* unit for that expression only. Functions with loops or branches are compared statement by statement; R semantics that AIVA's evaluator does not cover (recycling of vectors, matrix products) end as "uses operations AIVA cannot evaluate".
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described and not compared; missing values of different kinds are not told apart.
@@ -429,11 +432,21 @@ Two things hold for every bundle. Nothing taken from an input or from the model 
 
 **Known limitations.** The token estimate is made from characters and is deliberately on the safe side, so a prompt is sometimes called too large when it would have fit. Discovery only speaks where the tag rules are silent: a schema the rules already name is read exactly as the rules say, and an analyst's `Inputs/tag_rules.yaml` always wins.
 
+## 14b. The front door: aiva1f_formats.py
+
+**Purpose.** Decide what a file is before any reader runs, and be honest when AIVA cannot read it. `aiva1f_formats.detect_format` works from the content: a ZIP archive is looked inside (`aiva1f_formats.sniff_zip`), because a Word file, a spreadsheet, a slide deck, an OpenDocument file and an e-book all begin with the same four bytes. A format AIVA does not read - a slide deck, an old Office file, a picture, binary data - becomes one unit that says so in plain words with a next step (`aiva1f_formats.NOT_READ`), and is never decoded as text. `aiva1f_formats.input_files` lists the documents of an Inputs corner, walking into folders and naming every file it leaves out: a Word lock file, Thumbs.db, the support folder a browser writes beside a saved web page.
+
+**Converted formats.** Markdown, delimited rows, spreadsheets, RTF and LaTeX are turned into plain markup (`aiva1f_formats.converted`) that the walker of Reviewer 1 already reads, so their headings, lists and tables are read by the same rules and the same content account as everything else. A spreadsheet's formulas are never worked out: only the value it saved is read. Each converter returns two things made by different code: the markup, made by reading the structure, and the words, made by taking the syntax away by rule. The content account counts the words, so it still sees the walker lose or add one; it does trust the syntax rule, and that is its limit.
+
+**Why it exists.** A review of 18 September 2026 found that almost every problem in ingestion was a failure to be honest about failure. A spreadsheet was read as a Word file, failed, and closed its content account over nothing. A legacy `.doc` was decoded into pages of text that were then searched and judged. A folder in an Inputs corner stopped the run. Each is pinned by number in `engine/tests/test_formats.py`.
+
+**Known limitations.** Slide decks, OpenDocument files, e-books and old Office files are refused, not read. LaTeX mathematics is kept as its words and symbols and is not read as an equation. A Markdown table must have its rule line (`|---|`) to be a table.
+
 ## 15. Reviewer 1: aiva1_documents.py
 
 **Purpose.** Turn methodology and documentation files of any supported form into chunks in reading order: paragraphs, tables, figures and equations, each with its level, heading chain, numbering as written, locator and content hash.
 
-**Walk through.** The formula reader (`aiva1_documents.parse_formula`) and the converters from Office Math, MathML and LaTeX to AIVA's linear notation (`aiva1_documents.math_to_linear`, `aiva1_documents.latex_to_linear`); format detection from content (`aiva1_documents.detect_format`); recorded repairs of malformed markup (`aiva1_documents.repair_markup`) and the tolerant reader; the walker driven by `engine/references/tag_rules.yaml` (`aiva1_documents.walk_element`); Word's web export (`aiva1_documents.blocks_from_mhtml`), Word files (`aiva1_documents.blocks_from_docx`) and PDF (`aiva1_documents.blocks_from_pdf`); level inference (`aiva0r_reading.infer_levels`, the baseline); chunks (`aiva1_documents.blocks_to_chunks`); the two steps (`aiva1_documents.read_methodology`, `aiva1_documents.read_documentation`).
+**Walk through.** The formula reader (`aiva1_documents.parse_formula`) and the converters from Office Math, MathML and LaTeX to AIVA's linear notation (`aiva1_documents.math_to_linear`, `aiva1_documents.latex_to_linear`); format detection from content (`aiva1f_formats.detect_format`); recorded repairs of malformed markup (`aiva1_documents.repair_markup`) and the tolerant reader; the walker driven by `engine/references/tag_rules.yaml` (`aiva1_documents.walk_element`); Word's web export (`aiva1_documents.blocks_from_mhtml`), Word files (`aiva1_documents.blocks_from_docx`) and PDF (`aiva1_documents.blocks_from_pdf`); level inference (`aiva0r_reading.infer_levels`, the baseline); chunks (`aiva1_documents.blocks_to_chunks`); the two steps (`aiva1_documents.read_methodology`, `aiva1_documents.read_documentation`).
 
 **Contracts.** In: the input files. Out: chunks_canon, chunks_doc, read_repairs, info_rows, outline. Shown on `Chunks_Canon`, `Chunks_Doc` and `Model_Package_Info`.
 
@@ -587,10 +600,10 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 
 | Step | Skill | Version | Carried out by | What it does |
 |---|---|---|---|---|
-| 01 | prepare-run | 0.0.1 | aiva5_run_report.prepare_run | Fingerprints the inputs and opens the run record. Use as the first step of every review run. |
-| 02 | read-methodology | 0.0.3 | aiva1_documents.read_methodology | Reads the canonical methodology into citable chunks with their full heading chain. Use as the first reading step of a review run. |
-| 03 | read-documentation | 0.0.3 | aiva1_documents.read_documentation | Reads the model documentation into citable chunks and marks which ones state something checkable. Use after read-methodology. |
-| 04 | read-package | 0.0.3 | aiva2_package.read_package | Reads the R package statically into model units: code, roxygen blocks, help pages, tests and stored parameter data. Use after the documents are read. |
+| 01 | prepare-run | 0.0.2 | aiva5_run_report.prepare_run | Fingerprints the inputs and opens the run record. Use as the first step of every review run. |
+| 02 | read-methodology | 0.0.4 | aiva1_documents.read_methodology | Reads the canonical methodology into citable chunks with their full heading chain. Use as the first reading step of a review run. |
+| 03 | read-documentation | 0.0.4 | aiva1_documents.read_documentation | Reads the model documentation into citable chunks and marks which ones state something checkable. Use after read-methodology. |
+| 04 | read-package | 0.0.4 | aiva2_package.read_package | Reads the R package statically into model units: code, roxygen blocks, help pages, tests and stored parameter data. Use after the documents are read. |
 | 05 | build-graph | 0.0.1 | aiva3_mapping.build_graph | Builds the append-only graph of chunks, model units and anchors, and harvests the bridge vocabulary. Use after all three corners are read. |
 | 06 | find-candidates | 0.0.1 | aiva3_mapping.find_candidates | Proposes, for every unit and target corner, a short list of passages with a plain reason. Use before each judge-links pass. |
 | 07 | confirm-outline | 0.0.2 | a person | A person confirms that Level and Section on Chunks_Canon match the methodology's own outline. Use before the reading is trusted: where a file's shape was proposed by the model, the reviewer confirms the difference against the built-in reading. |
@@ -612,12 +625,12 @@ A skill is the written contract of one step (`engine/skills/<name>/SKILL.md`: pu
 | Rule | Enforced in |
 |---|---|
 | R1 | `aiva0_shared.has_banned_wording`, `aiva4_checks.build_items`, `aiva4_checks.account_coverage`, `aiva5_run_report.quoted`, `aiva5_run_report.plain_cell`, `aiva5_run_report.build_report_file` |
-| R2 | `aiva0r_reading.without_page_furniture`, `aiva1_documents.not_read_block`, `aiva1_documents.read_picture`, `aiva1_documents.blocks_to_chunks`, `aiva2_package.parse_r_source`, `aiva2_package.units_from_r_source`, `aiva2_package.read_package`, `aiva3_mapping.find_candidates`, `aiva4_checks.check_identity`, `aiva4_checks.account_coverage`, `aiva5_run_report.rows_coverage` |
+| R2 | `aiva0r_reading.without_page_furniture`, `aiva1f_formats.input_files`, `aiva1f_formats.reason_for`, `aiva1_documents.not_read_block`, `aiva1_documents.read_picture`, `aiva1_documents.blocks_to_chunks`, `aiva2_package.parse_r_source`, `aiva2_package.units_from_r_source`, `aiva2_package.read_package`, `aiva3_mapping.find_candidates`, `aiva4_checks.check_identity`, `aiva4_checks.account_coverage`, `aiva5_run_report.rows_coverage` |
 | R3 | `aiva0r_reading.slice_rules_question`, `aiva0r_reading.validate_slice_rules`, `aiva0r_reading.skill_body`, `aiva0r_reading.guided_rules`, `aiva0r_reading.validate_package_plan`, `aiva2_package.package_plan`, `aiva3_mapping.validate_answer`, `aiva3_mapping.interpret_code`, `aiva3_mapping.judge_links`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva4_checks.check_values`, `aiva5_run_report.ask_one`, `aiva5_run_report.make_asker` |
 | R4 | `aiva0_shared.content_hash`, `aiva0_shared.chain_records`, `aiva1_documents.blocks_to_chunks`, `aiva3_mapping.ledger_records`, `aiva3_mapping.judge_links`, `aiva4_checks.numeric_step`, `aiva4_checks.compare_formulas`, `aiva4_checks.check_mathematics`, `aiva5_run_report.record_determinations` |
 | R5 | `aiva0_shared.canonical_json`, `aiva0_shared.chain_records`, `aiva0r_reading.slice_rules_question`, `aiva2_package.read_package`, `aiva3_mapping.ledger_records`, `aiva3_mapping.ranked`, `aiva3_mapping.fuse`, `aiva3_mapping.assemble_question`, `aiva4_checks.sample_points`, `aiva5_run_report.call_chat`, `aiva5_run_report.run_batch`, `aiva5_run_report.make_asker`, `aiva5_run_report.replay_chat` |
-| R6 | `aiva1_documents.read_file_blocks`, `aiva2_package.unpack_package`, `aiva5_run_report.open_run`, `aiva5_run_report.rebuild_outputs` |
-| R7 | `aiva0r_reading.markup_digest`, `aiva0r_reading.validate_slice_rules`, `aiva1_documents.parse_formula`, `aiva2_package.parse_r_source`, `aiva2_package.to_expr`, `aiva2_package.decode_data_file`, `aiva2_package.package_plan`, `aiva4_checks.to_sympy`, `aiva4_checks.evaluate` |
+| R6 | `aiva1f_formats.sniff_zip`, `aiva1f_formats.detect_format`, `aiva1_documents.read_file_blocks`, `aiva2_package.unpack_zip`, `aiva2_package.unpack_package`, `aiva5_run_report.open_run`, `aiva5_run_report.rebuild_outputs` |
+| R7 | `aiva0r_reading.markup_digest`, `aiva0r_reading.validate_slice_rules`, `aiva1f_formats.spreadsheet_to_markup`, `aiva1_documents.parse_formula`, `aiva2_package.parse_r_source`, `aiva2_package.to_expr`, `aiva2_package.decode_data_file`, `aiva2_package.package_plan`, `aiva4_checks.to_sympy`, `aiva4_checks.evaluate` |
 | R8 | `aiva5_run_report.make_settings`, `aiva5_run_report.LiveValues` |
 | R9 | `aiva0r_reading.discover_families`, `aiva3_mapping.load_word_lists` |
 | R10 | `aiva0_shared.plain_number`, `aiva0r_reading.account_lines`, `aiva5_run_report.plain_cell`, `aiva5_run_report.rows_model_units`, `aiva5_run_report.build_report_file` |
@@ -730,6 +743,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_aiva5_run_report.py` | 23 | Tests of aiva5_run_report.py: the wrapper around chat(), the store, paths, the runner, Output.xlsx. |
 | `test_docs.py` | 5 | The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12). |
 | `test_end_to_end.py` | 15 | End-to-end tests on the sample projects: sameness of two runs, the human round trip, the report, the wording of everything an analyst reads, replay, and verification of a run folder. |
+| `test_formats.py` | 29 | test_formats.py - the front door of reading, held to the review of 18 September 2026. |
 | `test_frozen_interface.py` | 4 | test_frozen_interface.py - the 0.0.2 reading rebuild is allowed to change HOW a file is sliced. |
 | `test_guided_reading.py` | 14 | test_guided_reading.py - the first phase in which a reading step asks a question. |
 | `test_hard_reading_samples.py` | 12 | test_hard_reading_samples.py - G, H and I exist to be read badly, and to make the badness measurable. |
@@ -761,9 +775,10 @@ The evaluation dossier is `docs/AIVA_0.0.1_Evaluation_Dossier.md`. In short, wit
 | File | Lines | Budget | Docstrings and comments |
 |---|---|---|---|
 | aiva0_shared.py | 450 | 450 | 23% |
-| aiva0r_reading.py | 950 | 1100 | 29% |
-| aiva1_documents.py | 1447 | 1500 | 19% |
-| aiva2_package.py | 1362 | 1500 | 13% |
+| aiva0r_reading.py | 972 | 1100 | 29% |
+| aiva1f_formats.py | 417 | 600 | 25% |
+| aiva1_documents.py | 1453 | 1500 | 19% |
+| aiva2_package.py | 1426 | 1500 | 14% |
 | aiva3_mapping.py | 1155 | 1500 | 18% |
 | aiva4_checks.py | 1382 | 1500 | 14% |
 | aiva5_run_report.py | 1497 | 1500 | 16% |
@@ -981,189 +996,215 @@ Generated from the source: every function and class of the engine with its line 
 | `first_numbering` | 259 | function | The numbering at the start of a heading as written, and the name of its scheme. |
 | `infer_levels` | 267 | function | Give every heading its level. |
 | `without_page_furniture` | 299 | function | Leave out what a page carries only because it is a page: the running title, the footer with its date and page number, the logo. |
-| `tokens` | 342 | function | The countable pieces of a text: runs without white space, after the same normalisation every chunk's text goes through. |
-| `bag` | 348 | function | The tokens of a text as counts, so that a word appearing twice must be found twice. |
-| `bag_of` | 355 | function | The tokens of several texts as one set of counts. |
-| `minus` | 363 | function | What is left of `left` after taking away as much of `right` as it holds. |
-| `atom` | 372 | function | One countable piece of an input: where in the file it came from, and what it says. |
-| `atoms_of_markup` | 378 | function | Every text node and every tail under every element, and every attribute value, each with the place it was found in. |
-| `atoms_of_docx` | 413 | function | Every run of text in a Word file, wherever Word put it. |
-| `atoms_of_pdf` | 436 | function | Every word the text layer of every page yields. |
-| `atoms_of_plain_text` | 446 | function | Every non-blank line of a plain text file. |
-| `kept_and_relocated` | 470 | function | Two bags: what the units say in their text, and what they keep in their other fields. |
-| `marks_of_rendering` | 494 | function | Marks every reader makes, whatever the format: the form AIVA renders a table, a figure or an equation in; the markup an equation was read from, whose tags are not words the document says; a number a document did not write that AIVA counted back; and the place label AIVA gives a paragraph of a PDF ("p.4 2") so that a person can find it again. |
-| `account` | 513 | function | The content account of one file. |
-| `account_lines` | 552 | function | The account of one file in the plain words an analyst reads on Model_Package_Info. |
-| `account_of_package` | 570 | function | The content account of a package tarball. |
-| `walk_with_depth` | 645 | function | Every element under one element, with how deep it sits. |
-| `digest_row` | 652 | function | One tag's behaviour, cut to what a prompt can carry. |
-| `markup_digest` | 662 | function | One row per tag the file uses, with how it behaves here: how often it occurs, how deep it sits, what it sits inside and what sits inside it, how often it carries text of its own, how long that text runs, what attributes it has, how often it is the first child, and three short samples. |
-| `digest_text` | 709 | function | The digest as the lines a prompt shows. |
-| `slice_rules_question` | 732 | function | One question about the shape of one file. |
-| `validate_slice_rules` | 747 | function | The answer is a choice among things code has already put in front of the model: a tag it was shown, a family from the fixed list, a depth from 1 to 9. |
-| `overlay_from_answer` | 785 | function | The answer as an overlay on the tag rules, in the one order that matters: what the ANALYST wrote in Inputs/tag_rules.yaml wins over what AIVA SHIPS wins over what discovery PROVED by counting the shape wins over what the MODEL proposes wins over what discovery GUESSED with its fallback net So the model never overrides a person, never overrides a schema AIVA already knows, and never overrides a table whose rows were counted. |
-| `skill_body` | 812 | function | The Procedure, Quality rules and Never sections of a skill, as the instructions the model works under. |
-| `reading_doubts` | 835 | function | Where the built-in rules themselves say they are unsure. |
-| `guided_rules` | 846 | function | Ask the model what the tags of an unfamiliar file are for, and apply what it says. |
-| `manifest_digest` | 890 | function | Every member of the tarball: where it lies, how large it is, and which reader the built-in tests give it. |
-| `manifest_text` | 906 | function | The manifest as the lines a prompt shows. |
-| `package_plan_question` | 920 | function | One question about one tarball, asked only where members were left unplaced. |
-| `validate_package_plan` | 932 | function | A reader for every member left unplaced, each named from the fixed list, and for no other member. |
+| `tokens` | 347 | function | The countable pieces of a text: runs without white space, after the same normalisation every chunk's text goes through. |
+| `bag` | 353 | function | The tokens of a text as counts, so that a word appearing twice must be found twice. |
+| `bag_of` | 360 | function | The tokens of several texts as one set of counts. |
+| `minus` | 368 | function | What is left of `left` after taking away as much of `right` as it holds. |
+| `atom` | 377 | function | One countable piece of an input: where in the file it came from, and what it says. |
+| `atoms_of_markup` | 383 | function | Every text node and every tail under every element, and every attribute value, each with the place it was found in. |
+| `atoms_of_docx` | 418 | function | Every run of text in a Word file, wherever Word put it. |
+| `atoms_of_pdf` | 441 | function | Every word the text layer of every page yields. |
+| `atoms_of_plain_text` | 451 | function | Every non-blank line of a plain text file. |
+| `kept_and_relocated` | 475 | function | Two bags: what the units say in their text, and what they keep in their other fields. |
+| `marks_of_rendering` | 499 | function | Marks every reader makes, whatever the format: the form AIVA renders a table, a figure or an equation in; the markup an equation was read from, whose tags are not words the document says; a number a document did not write that AIVA counted back; and the place label AIVA gives a paragraph of a PDF ("p.4 2") so that a person can find it again. |
+| `account` | 518 | function | The content account of one file. |
+| `account_lines` | 565 | function | The account of one file in the plain words an analyst reads on Model_Package_Info. |
+| `account_of_package` | 590 | function | The content account of a package tarball. |
+| `walk_with_depth` | 667 | function | Every element under one element, with how deep it sits. |
+| `digest_row` | 674 | function | One tag's behaviour, cut to what a prompt can carry. |
+| `markup_digest` | 684 | function | One row per tag the file uses, with how it behaves here: how often it occurs, how deep it sits, what it sits inside and what sits inside it, how often it carries text of its own, how long that text runs, what attributes it has, how often it is the first child, and three short samples. |
+| `digest_text` | 731 | function | The digest as the lines a prompt shows. |
+| `slice_rules_question` | 754 | function | One question about the shape of one file. |
+| `validate_slice_rules` | 769 | function | The answer is a choice among things code has already put in front of the model: a tag it was shown, a family from the fixed list, a depth from 1 to 9. |
+| `overlay_from_answer` | 807 | function | The answer as an overlay on the tag rules, in the one order that matters: what the ANALYST wrote in Inputs/tag_rules.yaml wins over what AIVA SHIPS wins over what discovery PROVED by counting the shape wins over what the MODEL proposes wins over what discovery GUESSED with its fallback net So the model never overrides a person, never overrides a schema AIVA already knows, and never overrides a table whose rows were counted. |
+| `skill_body` | 834 | function | The Procedure, Quality rules and Never sections of a skill, as the instructions the model works under. |
+| `reading_doubts` | 857 | function | Where the built-in rules themselves say they are unsure. |
+| `guided_rules` | 868 | function | Ask the model what the tags of an unfamiliar file are for, and apply what it says. |
+| `manifest_digest` | 912 | function | Every member of the tarball: where it lies, how large it is, and which reader the built-in tests give it. |
+| `manifest_text` | 928 | function | The manifest as the lines a prompt shows. |
+| `package_plan_question` | 942 | function | One question about one tarball, asked only where members were left unplaced. |
+| `validate_package_plan` | 954 | function | A reader for every member left unplaced, each named from the fixed list, and for no other member. |
+
+**aiva1f_formats.py**
+
+| Name | Line | Kind | What it does |
+|---|---|---|---|
+| `looks_binary` | 82 | function | Bytes that are not text: a NUL byte, or more than one in ten bytes a control character. |
+| `sniff_zip` | 90 | function | What a ZIP archive holds, which is what it is. |
+| `detect_format` | 108 | function | The format of a file from its content, whatever its name says. |
+| `decode_text` | 142 | function | Bytes to text: a byte-order mark or a declared encoding decides, then UTF-8, then Latin-1. |
+| `input_files` | 155 | function | The documents of one Inputs corner, walking into its folders, in a fixed order; and every file left out, with why. |
+| `element` | 190 | function | One element of markup, its text escaped so that a < in a document is never a tag. |
+| `markdown_inline` | 194 | function | A line of Markdown without its inline marks: emphasis, code marks, and the target of a link or a picture, whose words are kept and whose address is not what the document says. |
+| `markdown_to_markup` | 206 | function | Markdown as markup: # headings, paragraphs, lists, tables, fenced code and quotations. |
+| `markdown_words` | 269 | function | The words of a Markdown file, with its syntax taken away by rule rather than by reading its structure: heading marks, list marks, table rules and bars, fence lines, quotation marks. |
+| `delimiter_of` | 282 | function | The separator of a file of delimited rows, where the first rows agree on one. |
+| `delimited_rows` | 293 | function | The rows of a file of delimited values, read by the rules of that format. |
+| `delimited_to_markup` | 298 | function | Rows of values as a table, the first row naming the columns. |
+| `delimited_words` | 305 | function | The words of a file of delimited values: its name, which heads its table, and its cells. |
+| `spreadsheet_to_markup` | 309 | function | A spreadsheet as one heading and one table for every sheet that holds anything. |
+| `rtf_to_text` | 331 | function | The words of an RTF file: its tables of fonts, colours and styles, its pictures and its control words taken away, a paragraph mark read as a new paragraph and an escaped character as that character. |
+| `latex_body` | 349 | function | A LaTeX file without its comments and its preamble. |
+| `latex_words` | 357 | function | The words of a LaTeX file: comments, environments and the names of commands taken away, the arguments of a command kept. |
+| `latex_to_markup` | 366 | function | LaTeX as markup: its sectioning commands as headings, its items as a list, and everything between as paragraphs of its words. |
+| `converted` | 387 | function | A file in a format read by converting it: (markup, words, what was done, in plain words). |
+| `reason_for` | 406 | function | Why a reader failed on a file, in words an analyst can act on. |
 
 **aiva1_documents.py**
 
 | Name | Line | Kind | What it does |
 |---|---|---|---|
-| `NotReadable` | 57 | class | A formula or a file that AIVA cannot read. |
-| `load_notation` | 69 | function | The names AIVA reads as functions in a written formula, from r_function_map.yaml. |
-| `tokenize_formula` | 74 | function | Cut a written formula into numbers, names and signs. |
-| `FormulaReader` | 95 | class | A small recursive-descent reader over the tokens of one formula. |
-| `FormulaReader.__init__` | 100 | function |  |
-| `FormulaReader.peek` | 104 | function | The token at the reading position (or further on), without taking it. |
-| `FormulaReader.take` | 109 | function | Take the next token; with `sign`, insist that it is that sign. |
-| `FormulaReader.statement` | 117 | function | A whole formula: an expression, or `left = right`. |
-| `FormulaReader.comparison` | 127 | function | An expression, optionally compared with another one. |
-| `FormulaReader.sum` | 135 | function | Terms joined by + and -, from left to right. |
-| `FormulaReader.product` | 143 | function | Factors joined by * and /, from left to right; juxtaposition only where the source allows it. |
-| `FormulaReader.term_follows` | 155 | function | Does another factor start here without a sign in between? |
-| `FormulaReader.unary` | 160 | function | A leading minus or plus. |
-| `FormulaReader.power` | 170 | function | A base with an optional power (right-associative), an inverse-function mark or a percent sign. |
-| `FormulaReader.minus_one_follows` | 181 | function | Is the next thing ^-1 or ^(-1) followed by an opening bracket? |
-| `FormulaReader.atom` | 190 | function | A number, a symbol, a function call or a bracketed expression. |
-| `parse_formula` | 223 | function | Read a formula written in linear notation into AIVA's expression tree. |
-| `read_equation` | 235 | function | Build the EquationData of a chunk: readable with its tree, or not readable with the reason. |
-| `inline_formula` | 249 | function | A formula written inside running text, such as "K = LGD * N(x)". |
-| `bracketed` | 266 | function | Put brackets around a part unless it is one number, one symbol or one call. |
-| `math_to_linear` | 278 | function | Office Math (OMML) and MathML to linear notation, by the local names of the elements: fractions, powers, subscripts, roots, brackets and function application. |
-| `math_children` | 333 | function | The linear text of all children, in order. |
-| `strip_outer_brackets` | 345 | function | Remove one pair of brackets that encloses the whole text. |
-| `latex_group` | 355 | function | The content of the {...} group that starts at `position`, and the position after it. |
-| `latex_to_linear` | 369 | function | The LaTeX subset found in roxygen \eqn{} and \deqn{} and in some XML, to linear notation: \frac, \sqrt, ^{}, _{}, Greek letters, \cdot, \times, \left, \right, text wrappers. |
-| `detect_format` | 415 | function | The format of a file from its first bytes, whatever its extension says. |
-| `decode_text` | 429 | function | Bytes to text: a byte-order mark or a declared encoding decides, then UTF-8, then Latin-1. |
-| `repair_markup` | 441 | function | The repairs AIVA makes before strict parsing. |
-| `TolerantReader` | 488 | class | Builds the same kind of element tree as the strict XML parser, from start, end and text events of the standard library's HTML parser. |
-| `TolerantReader.__init__` | 494 | function |  |
-| `TolerantReader.handle_starttag` | 499 | function | Open an element, first closing what HTML closes implicitly. |
-| `TolerantReader.handle_startendtag` | 509 | function | An element written as empty: opened and closed at once. |
-| `TolerantReader.handle_endtag` | 514 | function | Close the nearest open element of this name; a stray end tag is recorded as a repair. |
-| `TolerantReader.handle_data` | 524 | function | Text between tags. |
-| `TolerantReader.handle_comment` | 528 | function | Keep equation markup that Word's web export hides in conditional comments; drop other comments. |
-| `TolerantReader.feed_inner` | 536 | function | Read preserved equation markup found inside a comment into the tree being built. |
-| `TolerantReader.copy_children` | 545 | function | Copy an element read elsewhere into the tree being built. |
-| `TolerantReader.finish` | 556 | function | Close whatever is still open and return the root element. |
-| `parse_markup` | 564 | function | Strict XML parsing first; when that still fails after the repairs, the tolerant reader. |
-| `load_tag_rules` | 579 | function | The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml. |
-| `element_text` | 607 | function | The running text of an element without the text of figures, equations and captions in it. |
-| `new_block` | 623 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
-| `not_read_block` | 631 | function | A whole file, or a part, that could not be read still becomes one block: the "not read" class of the content account, never a silent gap. |
-| `WalkState` | 637 | class | What the walker carries along: the rules, the notation, images by name, the report of tags it met that are in no family, and what discovery made of those tags in this document. |
-| `WalkState.__post_init__` | 654 | function | Each file reads with its own view of the rules, so a tag discovered in one file never changes how the next file is read. |
-| `WalkState.family` | 660 | function | The family of a tag: what the rules say, else what discovery made of it here. |
-| `walk_element` | 664 | function | Turn one element and everything below it into blocks, in reading order. |
-| `walk_mixed` | 722 | function | An element that may hold both running text and blocks. |
-| `table_block` | 747 | function | A table is always one block: header cells, body rows and its caption stay together. |
-| `table_from_rows` | 780 | function | The one-cell display form of a table. |
-| `read_picture` | 810 | function | The words in a picture, read by OCR, as lines to show under the Figure; "" when there are none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside the package, so nothing is fetched when it runs). |
-| `picture_words` | 836 | function | PDF: the part of the page that a picture covers, drawn at 150 dpi and read by OCR. |
-| `figure_block` | 848 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
-| `equation_block` | 861 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
-| `blocks_from_markup` | 883 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
-| `blocks_from_mhtml` | 893 | function | Parts are read with the standard `email` package. |
-| `title_block` | 916 | function | The <title> of a web page, as a heading above everything in it. |
-| `word_value` | 932 | function | The value of a Word property such as a style id or an outline level, or None. |
-| `docx_paragraph_facts` | 937 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
-| `docx_number_formats` | 960 | function | How each numbering of a Word file shows its items, by numbering id and level: "bullet", "decimal", "lowerLetter" ... |
-| `docx_paragraph_parts` | 970 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
-| `docx_figure` | 986 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image, and the words in it where OCR is installed. |
-| `safe_xml` | 1000 | function | Parse one XML part of an Office file. |
-| `note_blocks` | 1006 | function | The footnotes and endnotes of a Word file, which are parts of their own and are not in the run of paragraphs a plain reader walks. |
-| `blocks_from_docx` | 1030 | function | Body elements in document order, so that tables stay where they are. |
-| `pdf_lines` | 1109 | function | Every line, table and picture of a PDF in reading order, each with its page, its place on the page, and whether it sits in the top or bottom margin ("edge"). |
-| `blocks_from_pdf` | 1133 | function | PDF keeps no structure, so this reader is the weakest (the manual recommends .docx where both exist). |
-| `blocks_from_pdf_text_only` | 1193 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
-| `cross_references` | 1210 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
-| `states_something_checkable` | 1216 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
-| `fold_lists` | 1232 | function | A list belongs to the paragraph that introduces it: "We apply the following principles:" and its three bullets are one thought, and a bullet alone cannot be traced to anything. |
-| `blocks_to_chunks` | 1249 | function | Blocks to chunks. |
-| `block_is_under_reconstructed` | 1312 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
-| `outline_lines` | 1322 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
-| `atoms_of_file` | 1339 | function | The smallest pieces of text the file holds, counted straight from the file and NOT from the blocks the reader made of it. |
-| `read_file_blocks` | 1366 | function | One input file to blocks, by the format found in its content. |
-| `read_corner` | 1386 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
-| `read_methodology` | 1441 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
-| `read_documentation` | 1445 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
+| `NotReadable` | 58 | class | A formula or a file that AIVA cannot read. |
+| `load_notation` | 70 | function | The names AIVA reads as functions in a written formula, from r_function_map.yaml. |
+| `tokenize_formula` | 75 | function | Cut a written formula into numbers, names and signs. |
+| `FormulaReader` | 96 | class | A small recursive-descent reader over the tokens of one formula. |
+| `FormulaReader.__init__` | 101 | function |  |
+| `FormulaReader.peek` | 105 | function | The token at the reading position (or further on), without taking it. |
+| `FormulaReader.take` | 110 | function | Take the next token; with `sign`, insist that it is that sign. |
+| `FormulaReader.statement` | 118 | function | A whole formula: an expression, or `left = right`. |
+| `FormulaReader.comparison` | 128 | function | An expression, optionally compared with another one. |
+| `FormulaReader.sum` | 136 | function | Terms joined by + and -, from left to right. |
+| `FormulaReader.product` | 144 | function | Factors joined by * and /, from left to right; juxtaposition only where the source allows it. |
+| `FormulaReader.term_follows` | 156 | function | Does another factor start here without a sign in between? |
+| `FormulaReader.unary` | 161 | function | A leading minus or plus. |
+| `FormulaReader.power` | 171 | function | A base with an optional power (right-associative), an inverse-function mark or a percent sign. |
+| `FormulaReader.minus_one_follows` | 182 | function | Is the next thing ^-1 or ^(-1) followed by an opening bracket? |
+| `FormulaReader.atom` | 191 | function | A number, a symbol, a function call or a bracketed expression. |
+| `parse_formula` | 224 | function | Read a formula written in linear notation into AIVA's expression tree. |
+| `read_equation` | 236 | function | Build the EquationData of a chunk: readable with its tree, or not readable with the reason. |
+| `inline_formula` | 250 | function | A formula written inside running text, such as "K = LGD * N(x)". |
+| `bracketed` | 267 | function | Put brackets around a part unless it is one number, one symbol or one call. |
+| `math_to_linear` | 279 | function | Office Math (OMML) and MathML to linear notation, by the local names of the elements: fractions, powers, subscripts, roots, brackets and function application. |
+| `math_children` | 334 | function | The linear text of all children, in order. |
+| `strip_outer_brackets` | 346 | function | Remove one pair of brackets that encloses the whole text. |
+| `latex_group` | 356 | function | The content of the {...} group that starts at `position`, and the position after it. |
+| `latex_to_linear` | 370 | function | The LaTeX subset found in roxygen \eqn{} and \deqn{} and in some XML, to linear notation: \frac, \sqrt, ^{}, _{}, Greek letters, \cdot, \times, \left, \right, text wrappers. |
+| `repair_markup` | 418 | function | The repairs AIVA makes before strict parsing. |
+| `TolerantReader` | 465 | class | Builds the same kind of element tree as the strict XML parser, from start, end and text events of the standard library's HTML parser. |
+| `TolerantReader.__init__` | 471 | function |  |
+| `TolerantReader.handle_starttag` | 476 | function | Open an element, first closing what HTML closes implicitly. |
+| `TolerantReader.handle_startendtag` | 486 | function | An element written as empty: opened and closed at once. |
+| `TolerantReader.handle_endtag` | 491 | function | Close the nearest open element of this name; a stray end tag is recorded as a repair. |
+| `TolerantReader.handle_data` | 501 | function | Text between tags. |
+| `TolerantReader.handle_comment` | 505 | function | Keep equation markup that Word's web export hides in conditional comments; drop other comments. |
+| `TolerantReader.feed_inner` | 513 | function | Read preserved equation markup found inside a comment into the tree being built. |
+| `TolerantReader.copy_children` | 522 | function | Copy an element read elsewhere into the tree being built. |
+| `TolerantReader.finish` | 533 | function | Close whatever is still open and return the root element. |
+| `parse_markup` | 541 | function | Strict XML parsing first; when that still fails after the repairs, the tolerant reader. |
+| `load_tag_rules` | 556 | function | The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml. |
+| `element_text` | 584 | function | The running text of an element without the text of figures, equations and captions in it. |
+| `new_block` | 600 | function | One block of a document before numbering: kind, text, where it was found, and what its kind needs. |
+| `not_read_block` | 608 | function | A whole file, or a part, that could not be read still becomes one block: the "not read" class of the content account, never a silent gap. |
+| `WalkState` | 614 | class | What the walker carries along: the rules, the notation, images by name, the report of tags it met that are in no family, and what discovery made of those tags in this document. |
+| `WalkState.__post_init__` | 631 | function | Each file reads with its own view of the rules, so a tag discovered in one file never changes how the next file is read. |
+| `WalkState.family` | 637 | function | The family of a tag: what the rules say, else what discovery made of it here. |
+| `walk_element` | 641 | function | Turn one element and everything below it into blocks, in reading order. |
+| `walk_mixed` | 699 | function | An element that may hold both running text and blocks. |
+| `table_block` | 724 | function | A table is always one block: header cells, body rows and its caption stay together. |
+| `table_from_rows` | 757 | function | The one-cell display form of a table. |
+| `read_picture` | 787 | function | The words in a picture, read by OCR, as lines to show under the Figure; "" when there are none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside the package, so nothing is fetched when it runs). |
+| `picture_words` | 813 | function | PDF: the part of the page that a picture covers, drawn at 150 dpi and read by OCR. |
+| `figure_block` | 825 | function | A figure: never read, kept with its caption or alternative text and the fingerprint of the image. |
+| `equation_block` | 838 | function | An equation element: MathML or Office Math is converted; LaTeX or linear text is read as written; an equation that is only a picture stays an Equation chunk that could not be read. |
+| `blocks_from_markup` | 860 | function | XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules. |
+| `blocks_from_mhtml` | 870 | function | Parts are read with the standard `email` package. |
+| `title_block` | 893 | function | The <title> of a web page, as a heading above everything in it. |
+| `word_value` | 909 | function | The value of a Word property such as a style id or an outline level, or None. |
+| `docx_paragraph_facts` | 914 | function | Heading level (from the style name or the outline level, following based-on styles) and whether Word numbers this paragraph automatically. |
+| `docx_number_formats` | 937 | function | How each numbering of a Word file shows its items, by numbering id and level: "bullet", "decimal", "lowerLetter" ... |
+| `docx_paragraph_parts` | 947 | function | The text of a paragraph with its formulas in place, its formulas, and its pictures. |
+| `docx_figure` | 963 | function | A picture in a Word file as a figure block with the fingerprint of the embedded image, and the words in it where OCR is installed. |
+| `safe_xml` | 977 | function | Parse one XML part of an Office file. |
+| `note_blocks` | 983 | function | The footnotes and endnotes of a Word file, which are parts of their own and are not in the run of paragraphs a plain reader walks. |
+| `blocks_from_docx` | 1007 | function | Body elements in document order, so that tables stay where they are. |
+| `pdf_lines` | 1086 | function | Every line, table and picture of a PDF in reading order, each with its page, its place on the page, and whether it sits in the top or bottom margin ("edge"). |
+| `blocks_from_pdf` | 1110 | function | PDF keeps no structure, so this reader is the weakest (the manual recommends .docx where both exist). |
+| `blocks_from_pdf_text_only` | 1170 | function | The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file. |
+| `cross_references` | 1187 | function | Cross-references as written: "Table 3", "section 4.2", "Annex A". |
+| `states_something_checkable` | 1193 | function | Does a documentation passage state something that can be checked against the methodology or the code: a number, a formula, a table, or a phrase from the rules file? |
+| `fold_lists` | 1209 | function | A list belongs to the paragraph that introduces it: "We apply the following principles:" and its three bullets are one thought, and a bullet alone cannot be traced to anything. |
+| `blocks_to_chunks` | 1226 | function | Blocks to chunks. |
+| `block_is_under_reconstructed` | 1289 | function | Was the numbering of the heading directly above this block reconstructed by counting? |
+| `outline_lines` | 1299 | function | The indented outline an analyst compares with the document's own table of contents: one line per section, with its range of references and the number of units in it. |
+| `atoms_of_file` | 1316 | function | The smallest pieces of text the file holds, counted straight from the file and NOT from the blocks the reader made of it. |
+| `read_file_blocks` | 1343 | function | One input file to blocks, by the format found in its content. |
+| `read_corner` | 1371 | function | Read every file of one corner, in file-name order, into chunks numbered in reading order. |
+| `read_methodology` | 1447 | function | Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ... |
+| `read_documentation` | 1451 | function | Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ... |
 
 **aiva2_package.py**
 
 | Name | Line | Kind | What it does |
 |---|---|---|---|
-| `NotParsed` | 56 | class | One R expression that AIVA's reader could not read. |
-| `unpack_package` | 60 | function | Read the tarball member by member, into memory, never onto disk by path. |
-| `strip_top_folder` | 80 | function | R tarballs hold one top folder named after the package; paths are shown without it. |
-| `read_description` | 87 | function | The fields of DESCRIPTION (name: value, continuation lines start with white space). |
-| `read_namespace` | 98 | function | Exported names and export patterns from NAMESPACE. |
-| `is_exported` | 110 | function | Is `name` exported by this NAMESPACE (by name, by pattern or as an S3 method)? |
-| `Token` | 118 | class | One token of R source: kind is num, str, name, op, newline or end. |
-| `tokenize_r` | 136 | function | R source to tokens. |
-| `Node` | 172 | class | One node of the syntax tree. |
-| `RParser` | 188 | class | Precedence climbing over R's documented operator table (?Syntax). |
-| `RParser.__init__` | 192 | function |  |
-| `RParser.peek` | 195 | function | The token at the reading position, without taking it. |
-| `RParser.take` | 201 | function | Take the next token; with `text`, insist that it is that token. |
-| `RParser.skip_newlines` | 210 | function | Skip line ends where R allows an expression to go on. |
-| `RParser.is_op` | 215 | function | Is the next token one of these operators? |
-| `RParser.expression` | 220 | function | Operator-precedence parsing of one expression; `minimum` is the weakest binding still accepted. |
-| `RParser.finish_paren` | 245 | function | A bracketed expression, after its opening bracket. |
-| `RParser.prefix` | 253 | function | What an expression can start with: a literal, a name, a unary sign, a bracket, a block or a keyword. |
-| `RParser.block` | 278 | function | The expressions between curly brackets. |
-| `RParser.condition` | 294 | function | The bracketed condition of if and while. |
-| `RParser.keyword` | 304 | function | if, for, while, repeat, function and the other reserved words. |
-| `RParser.function` | 341 | function | A function definition: its formal arguments with their defaults as written, and its body. |
-| `RParser.call_or_index` | 364 | function | Calls and the three kinds of indexing that may follow an expression. |
-| `parse_r_source` | 398 | function | Parse a file ONE top-level expression at a time. |
-| `CannotConvert` | 442 | class | A piece of code that cannot become a formula tree. |
-| `walk` | 445 | function | Every node of a tree, parents first. |
-| `callee_name` | 451 | function | The name of the function a call node calls: f(...) and pkg::f(...) both give "f". |
-| `assignment_parts` | 458 | function | (target, value) when the node is an assignment, whichever arrow it uses; else None. |
-| `number_token` | 465 | function | A number as written in the code, brought to one form, with its line. |
-| `unparse` | 473 | function | The tree back as short R-like text: used to show defaults and conditions as written. |
-| `has_arithmetic` | 499 | function | Does this code compute something: arithmetic, a mathematical function, a comparison with a number, or a number that is not on the list of trivial ones? |
-| `code_facts` | 522 | function | Calls, symbols read and written, numbers and strings of a piece of code, in order of appearance. |
-| `to_expr` | 560 | function | One R expression to AIVA's neutral formula tree, through r_function_map.yaml. |
-| `call_to_expr` | 593 | function | A call in R to the neutral expression tree, through r_function_map.yaml; anything else cannot be converted. |
-| `is_guard` | 621 | function | An argument check that does not change the value: stop(...), stopifnot(...), or an `if` without `else` whose body only holds such calls. |
-| `compose_function` | 631 | function | The value a straight-line function returns, as one formula in its arguments: local assignments are substituted in order. |
-| `draft` | 655 | function | A unit before it has its reference. |
-| `code_detail` | 663 | function | The facts about a piece of code that later steps use: symbols, numbers, calls, strings, expression. |
-| `formula_statements` | 669 | function | The formula statements inside one function: assignments, return(...) calls and the last expression, when they compute something. |
-| `function_units` | 714 | function | A function, the formula statements inside it, and any functions defined inside it. |
-| `statement_units` | 739 | function | The unit(s) of one top-level expression. |
-| `units_from_r_source` | 762 | function | All units of one R file: roxygen blocks, functions, formula statements, test blocks, top-level statements, and a "File not read" unit for each expression that could not be parsed. |
-| `braces_content` | 798 | function | The content of the {...} that starts at `position` (nested braces allowed), and the position after it. |
-| `roxygen_units` | 812 | function | Consecutive #' lines form one block. |
-| `help_page_unit` | 860 | function | A help page (.Rd): name, aliases, title, usage and arguments, read from the macro format with nested braces; % starts a comment. |
-| `vignette_units` | 885 | function | A vignette: prose becomes "Vignette text" units, one per stretch between code chunks; code chunks are read as R code (and never run). |
-| `expand` | 909 | function | Undo gzip, bzip2 or xz compression, recognised from the first bytes and never from the extension, and stop when the content grows beyond the cap. |
-| `cell_text` | 921 | function | One stored value as its canonical text: numbers as the shortest decimal that gives the same stored value back, missing values as NA, logical values as TRUE/FALSE, dates in ISO form. |
-| `table_of` | 945 | function | A decoded object as a table: (header, rows of canonical cell texts, column types, R-side description), or None when the object has no tabular meaning. |
-| `column_kind` | 1000 | function | Is a column made of numbers, of text, or of both? |
-| `row_key_columns` | 1009 | function | How a row is identified: real row names if present; otherwise the left-most single column, or the smallest left-most combination of up to three non-numeric columns, whose values are unique; otherwise the row number. |
-| `table_display` | 1024 | function | The one-cell display form: at most 50 rows, always below Excel's limit for one cell. |
-| `data_object_unit` | 1032 | function | One stored object to a unit and, when it is assessable, its full values. |
-| `decode_data_file` | 1058 | function | Decode one stored-data file without R. |
-| `data_object_unit_from_rows` | 1095 | function | A unit for a table given as header and rows (delimited text files under data/ or inst/extdata/). |
-| `data_reads` | 1103 | function | Where a function reads stored data, and how the code shows it: a bare symbol that is neither an argument nor assigned in the function; data("x"); readRDS(...) or load(...) with a literal file name; pkg::x; get("x"). |
-| `is_data_file` | 1138 | function | Does this path name a stored-data file that AIVA decodes? |
-| `is_parsed_r_file` | 1145 | function | Is this an R source file in a folder whose code AIVA parses? |
-| `built_in_reader` | 1149 | function | Which reader the built-in tests give a member, or "" where they give none. |
-| `file_units` | 1168 | function | The units of one file of the package, by where it lies and what it is. |
-| `link_documentation_units` | 1206 | function | Tie each roxygen block to the object it documents and each help page to the block that generated it (by name and aliases), and say whether the page is still in step with it. |
-| `finalise_units` | 1229 | function | Give every draft its reference, in reading order, and turn keys into references. |
-| `package_rows` | 1250 | function | The package lines of Model_Package_Info. |
-| `package_plan` | 1269 | function | Ask which existing reader should take each member the built-in tests leave unplaced. |
-| `safe_text` | 1296 | function | A member as text, or None where it holds bytes AIVA cannot decode. |
-| `read_package` | 1300 | function | Step 04, skill read-package. |
+| `NotParsed` | 58 | class | One R expression that AIVA's reader could not read. |
+| `is_archive` | 64 | function | Whether a file of the package folder is an archive holding the package, rather than one file of a package that was put there unpacked. |
+| `unpack_zip` | 69 | function | A package delivered as a ZIP, under exactly the limits a tarball is read under: no absolute path, no path that climbs out, no link, nothing over the cap, and nothing protected by a password. |
+| `loose_package` | 92 | function | A package put in the folder unpacked - its source folder rather than a built tarball - read file by file, under the same size limit. |
+| `unpack_package` | 106 | function | Read the tarball member by member, into memory, never onto disk by path. |
+| `strip_top_folder` | 128 | function | R tarballs hold one top folder named after the package; paths are shown without it. |
+| `read_description` | 135 | function | The fields of DESCRIPTION (name: value, continuation lines start with white space). |
+| `read_namespace` | 146 | function | Exported names and export patterns from NAMESPACE. |
+| `is_exported` | 158 | function | Is `name` exported by this NAMESPACE (by name, by pattern or as an S3 method)? |
+| `Token` | 166 | class | One token of R source: kind is num, str, name, op, newline or end. |
+| `tokenize_r` | 184 | function | R source to tokens. |
+| `Node` | 220 | class | One node of the syntax tree. |
+| `RParser` | 236 | class | Precedence climbing over R's documented operator table (?Syntax). |
+| `RParser.__init__` | 240 | function |  |
+| `RParser.peek` | 243 | function | The token at the reading position, without taking it. |
+| `RParser.take` | 249 | function | Take the next token; with `text`, insist that it is that token. |
+| `RParser.skip_newlines` | 258 | function | Skip line ends where R allows an expression to go on. |
+| `RParser.is_op` | 263 | function | Is the next token one of these operators? |
+| `RParser.expression` | 268 | function | Operator-precedence parsing of one expression; `minimum` is the weakest binding still accepted. |
+| `RParser.finish_paren` | 293 | function | A bracketed expression, after its opening bracket. |
+| `RParser.prefix` | 301 | function | What an expression can start with: a literal, a name, a unary sign, a bracket, a block or a keyword. |
+| `RParser.block` | 326 | function | The expressions between curly brackets. |
+| `RParser.condition` | 342 | function | The bracketed condition of if and while. |
+| `RParser.keyword` | 352 | function | if, for, while, repeat, function and the other reserved words. |
+| `RParser.function` | 389 | function | A function definition: its formal arguments with their defaults as written, and its body. |
+| `RParser.call_or_index` | 412 | function | Calls and the three kinds of indexing that may follow an expression. |
+| `parse_r_source` | 446 | function | Parse a file ONE top-level expression at a time. |
+| `CannotConvert` | 490 | class | A piece of code that cannot become a formula tree. |
+| `walk` | 493 | function | Every node of a tree, parents first. |
+| `callee_name` | 499 | function | The name of the function a call node calls: f(...) and pkg::f(...) both give "f". |
+| `assignment_parts` | 506 | function | (target, value) when the node is an assignment, whichever arrow it uses; else None. |
+| `number_token` | 513 | function | A number as written in the code, brought to one form, with its line. |
+| `unparse` | 521 | function | The tree back as short R-like text: used to show defaults and conditions as written. |
+| `has_arithmetic` | 547 | function | Does this code compute something: arithmetic, a mathematical function, a comparison with a number, or a number that is not on the list of trivial ones? |
+| `code_facts` | 570 | function | Calls, symbols read and written, numbers and strings of a piece of code, in order of appearance. |
+| `to_expr` | 608 | function | One R expression to AIVA's neutral formula tree, through r_function_map.yaml. |
+| `call_to_expr` | 641 | function | A call in R to the neutral expression tree, through r_function_map.yaml; anything else cannot be converted. |
+| `is_guard` | 669 | function | An argument check that does not change the value: stop(...), stopifnot(...), or an `if` without `else` whose body only holds such calls. |
+| `compose_function` | 679 | function | The value a straight-line function returns, as one formula in its arguments: local assignments are substituted in order. |
+| `draft` | 703 | function | A unit before it has its reference. |
+| `code_detail` | 711 | function | The facts about a piece of code that later steps use: symbols, numbers, calls, strings, expression. |
+| `formula_statements` | 717 | function | The formula statements inside one function: assignments, return(...) calls and the last expression, when they compute something. |
+| `function_units` | 762 | function | A function, the formula statements inside it, and any functions defined inside it. |
+| `statement_units` | 787 | function | The unit(s) of one top-level expression. |
+| `units_from_r_source` | 810 | function | All units of one R file: roxygen blocks, functions, formula statements, test blocks, top-level statements, and a "File not read" unit for each expression that could not be parsed. |
+| `braces_content` | 846 | function | The content of the {...} that starts at `position` (nested braces allowed), and the position after it. |
+| `roxygen_units` | 860 | function | Consecutive #' lines form one block. |
+| `help_page_unit` | 908 | function | A help page (.Rd): name, aliases, title, usage and arguments, read from the macro format with nested braces; % starts a comment. |
+| `vignette_units` | 933 | function | A vignette: prose becomes "Vignette text" units, one per stretch between code chunks; code chunks are read as R code (and never run). |
+| `expand` | 957 | function | Undo gzip, bzip2 or xz compression, recognised from the first bytes and never from the extension, and stop when the content grows beyond the cap. |
+| `cell_text` | 969 | function | One stored value as its canonical text: numbers as the shortest decimal that gives the same stored value back, missing values as NA, logical values as TRUE/FALSE, dates in ISO form. |
+| `table_of` | 993 | function | A decoded object as a table: (header, rows of canonical cell texts, column types, R-side description), or None when the object has no tabular meaning. |
+| `column_kind` | 1048 | function | Is a column made of numbers, of text, or of both? |
+| `row_key_columns` | 1057 | function | How a row is identified: real row names if present; otherwise the left-most single column, or the smallest left-most combination of up to three non-numeric columns, whose values are unique; otherwise the row number. |
+| `table_display` | 1072 | function | The one-cell display form: at most 50 rows, always below Excel's limit for one cell. |
+| `data_object_unit` | 1080 | function | One stored object to a unit and, when it is assessable, its full values. |
+| `decode_data_file` | 1106 | function | Decode one stored-data file without R. |
+| `data_object_unit_from_rows` | 1143 | function | A unit for a table given as header and rows (delimited text files under data/ or inst/extdata/). |
+| `data_reads` | 1151 | function | Where a function reads stored data, and how the code shows it: a bare symbol that is neither an argument nor assigned in the function; data("x"); readRDS(...) or load(...) with a literal file name; pkg::x; get("x"). |
+| `is_data_file` | 1186 | function | Does this path name a stored-data file that AIVA decodes? |
+| `is_parsed_r_file` | 1193 | function | Is this an R source file in a folder whose code AIVA parses? |
+| `built_in_reader` | 1197 | function | Which reader the built-in tests give a member, or "" where they give none. |
+| `file_units` | 1216 | function | The units of one file of the package, by where it lies and what it is. |
+| `link_documentation_units` | 1254 | function | Tie each roxygen block to the object it documents and each help page to the block that generated it (by name and aliases), and say whether the page is still in step with it. |
+| `finalise_units` | 1277 | function | Give every draft its reference, in reading order, and turn keys into references. |
+| `package_rows` | 1298 | function | The package lines of Model_Package_Info. |
+| `package_plan` | 1317 | function | Ask which existing reader should take each member the built-in tests leave unplaced. |
+| `safe_text` | 1344 | function | A member as text, or None where it holds bytes AIVA cannot decode. |
+| `read_package` | 1348 | function | Step 04, skill read-package. |
 
 **aiva3_mapping.py**
 
@@ -1292,15 +1333,15 @@ Generated from the source: every function and class of the engine with its line 
 
 | Name | Line | Kind | What it does |
 |---|---|---|---|
-| `RunPaused` | 62 | class | The run stopped on purpose and can be resumed. |
-| `make_settings` | 83 | function | The settings of a run. |
-| `RunPaths` | 106 | class | Where one run lives. |
-| `check_model_id` | 112 | function | Return "" when the model ID is usable, otherwise a plain sentence saying why not. |
-| `setup_project` | 119 | function | Create the project skeleton and say what is still missing. |
-| `new_run_id` | 138 | function | Run_<date>_<HHMM>, with a letter added when that folder already exists. |
-| `pick_scratch_root` | 147 | function | The first folder on the driver AIVA can actually write in, tried in order. |
-| `open_run` | 175 | function | Create or re-open a run folder and its local scratch folder. |
-| `list_input_files` | 197 | function | The input files of a project, by corner, in file-name order. |
+| `RunPaused` | 63 | class | The run stopped on purpose and can be resumed. |
+| `make_settings` | 84 | function | The settings of a run. |
+| `RunPaths` | 107 | class | Where one run lives. |
+| `check_model_id` | 113 | function | Return "" when the model ID is usable, otherwise a plain sentence saying why not. |
+| `setup_project` | 120 | function | Create the project skeleton and say what is still missing. |
+| `new_run_id` | 139 | function | Run_<date>_<HHMM>, with a letter added when that folder already exists. |
+| `pick_scratch_root` | 148 | function | The first folder on the driver AIVA can actually write in, tried in order. |
+| `open_run` | 176 | function | Create or re-open a run folder and its local scratch folder. |
+| `list_input_files` | 198 | function | The input files of a project, by corner, in file-name order. |
 | `LiveValues` | 211 | class | The three values chat() reads when it is CALLED: endpoint, token, user id. |
 | `LiveValues.update` | 219 | function | Take the latest widget values; a different token starts a new generation. |
 | `LiveValues.get` | 228 | function | One live value, read at the moment chat() is called. |

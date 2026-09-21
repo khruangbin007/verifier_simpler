@@ -40,6 +40,7 @@ import lzma
 import os
 import re
 import tarfile
+import zipfile
 import zlib
 from dataclasses import dataclass, field
 
@@ -47,9 +48,10 @@ import yaml
 
 import aiva0_shared as shared
 import aiva0r_reading
+import aiva1f_formats
 import aiva1_documents
 
-SKILL_VERSIONS = {"read-package": "0.0.3"}
+SKILL_VERSIONS = {"read-package": "0.0.4"}
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
 PARSER_NAME = "AIVA R reader 0.0.1"
 
@@ -57,10 +59,56 @@ class NotParsed(Exception):
     """One R expression that AIVA's reader could not read. The message is a plain reason."""
 
 # ---------------------------------------------------------------- safe unpacking and inventory
+ARCHIVE_NAMES = (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".zip")
+
+def is_archive(path):
+    """Whether a file of the package folder is an archive holding the package, rather than one
+    file of a package that was put there unpacked."""
+    return path.lower().endswith(ARCHIVE_NAMES) or (os.path.getsize(path) > 0 and tarfile.is_tarfile(path))
+
+def unpack_zip(zip_path, max_member_bytes):
+    """A package delivered as a ZIP, under exactly the limits a tarball is read under: no absolute
+    path, no path that climbs out, no link, nothing over the cap, and nothing protected by a
+    password. The size checked is the one the archive declares, before anything is expanded.
+    Enforces: R6"""
+    files, refused = {}, []
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.infolist():
+            name = member.filename.replace("\\", "/")
+            if name.endswith("/"):
+                continue
+            if name.startswith("/") or re.match(r"^[A-Za-z]:", name) or ".." in name.split("/"):
+                refused.append((name, "its path leaves the package folder"))
+            elif (member.external_attr >> 16) & 0o170000 == 0o120000:
+                refused.append((name, "it is a link"))
+            elif member.file_size > max_member_bytes:
+                refused.append((name, "it is larger than the size limit for one file"))
+            elif member.flag_bits & 0x1:
+                refused.append((name, "it is protected by a password"))
+            else:
+                files[name] = archive.read(member)
+    return files, refused
+
+def loose_package(paths, root, max_member_bytes):
+    """A package put in the folder unpacked - its source folder rather than a built tarball -
+    read file by file, under the same size limit. People very often have the one and not the
+    other, and until 0.0.2 a folder here stopped the run."""
+    files, refused = {}, []
+    for path in paths:
+        name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
+        if os.path.getsize(path) > max_member_bytes:
+            refused.append((name, "it is larger than the size limit for one file"))
+        else:
+            with open(path, "rb") as handle:
+                files[name] = handle.read()
+    return files, refused
+
 def unpack_package(tar_path, max_member_bytes):
     """Read the tarball member by member, into memory, never onto disk by path. A member with
     an absolute path, a path that climbs out with "..", a link, or a size over the cap is
     refused and reported; everything else is returned as {path: bytes}. Enforces: R6"""
+    if tar_path.lower().endswith(".zip") and zipfile.is_zipfile(tar_path):
+        return unpack_zip(tar_path, max_member_bytes)
     files, refused = {}, []
     with tarfile.open(tar_path, "r:*") as archive:
         for member in archive:
@@ -1063,7 +1111,7 @@ def decode_data_file(path, data, settings):
     stem = os.path.splitext(os.path.basename(path))[0]
     if path.lower().endswith((".csv", ".tsv")):
         delimiter = "\t" if path.lower().endswith(".tsv") else ","
-        table = [row for row in csv.reader(io.StringIO(aiva1_documents.decode_text(data)), delimiter=delimiter) if row]
+        table = [row for row in csv.reader(io.StringIO(aiva1f_formats.decode_text(data)), delimiter=delimiter) if row]
         frame_header, frame_rows = (table[0], table[1:]) if table else ([], [])
         unit, values = data_object_unit_from_rows(stem, frame_header, frame_rows, path, settings)
         return [unit], [values] if values else [], "%s: text table" % path
@@ -1170,7 +1218,7 @@ def file_units(path, data, context, facts, reader=""):
     for this member overrides only where the built-in tests give none."""
     lowered = path.lower()
     if reader and not is_data_file(path) and not lowered.startswith("src/"):
-        text = aiva1_documents.decode_text(data) if b"\x00" not in data[:4096] else None
+        text = aiva1f_formats.decode_text(data) if b"\x00" not in data[:4096] else None
         if text is not None:
             if reader == "r-source":
                 return units_from_r_source(path, text, context)
@@ -1191,7 +1239,7 @@ def file_units(path, data, context, facts, reader=""):
     if lowered.startswith("src/"):
         return [draft(shared.KIND_COMPILED, path, None, os.path.basename(path), "",
                       read_problem="Compiled code is not read by AIVA; it needs a manual review.")]
-    text = aiva1_documents.decode_text(data) if b"\x00" not in data[:4096] else None
+    text = aiva1f_formats.decode_text(data) if b"\x00" not in data[:4096] else None
     if text is None:
         return [draft(shared.KIND_NOT_READ, path, None, os.path.basename(path), "",
                       read_problem="A binary file of a kind AIVA does not know; it needs a manual review.")]
@@ -1295,7 +1343,7 @@ def package_plan(ctx, files, placed, package_name):
 
 def safe_text(data):
     """A member as text, or None where it holds bytes AIVA cannot decode."""
-    return aiva1_documents.decode_text(data) if b"\x00" not in data[:4096] else None
+    return aiva1f_formats.decode_text(data) if b"\x00" not in data[:4096] else None
 
 def read_package(ctx):
     """Step 04, skill read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
@@ -1303,13 +1351,19 @@ def read_package(ctx):
     for an unchanged tarball. Enforces: R2, R5"""
     tarballs = ctx.options["inputs"]["package"]
     if not tarballs:
-        return shared.StepResult({}, {"units": 0}, ["No package tarball was found in Inputs/2_Model_Package."])
-    files, refused = unpack_package(tarballs[0], int(ctx.settings["max_file_mb"] * 1024 * 1024))
+        return shared.StepResult({}, {"units": 0}, ["No package was found in Inputs/2_Model_Package."])
+    limit, root = int(ctx.settings["max_file_mb"] * 1024 * 1024), (ctx.options["inputs"].get("roots") or {}).get("package")
+    archives = [path for path in tarballs if is_archive(path)]
+    try:
+        files, refused = unpack_package(archives[0], limit) if archives else loose_package(tarballs, root, limit)
+    except Exception as problem:                     # a package that cannot be opened is named, never a stopped run (R2)
+        return shared.StepResult({}, {"units": 0}, ["The package could not be opened: %s." % aiva1f_formats.reason_for(problem)])
+    tarballs = archives or tarballs
     files = strip_top_folder(files)
     with open(os.path.join(ctx.options["references_dir"], "r_function_map.yaml"), encoding="utf-8") as handle:
         function_map = yaml.safe_load(handle)
-    description = read_description(aiva1_documents.decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
-    namespace = read_namespace(aiva1_documents.decode_text(files["NAMESPACE"])) if "NAMESPACE" in files else None
+    description = read_description(aiva1f_formats.decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
+    namespace = read_namespace(aiva1f_formats.decode_text(files["NAMESPACE"])) if "NAMESPACE" in files else None
     context = {"function_map": function_map, "notation": function_map["notation"], "namespace": namespace,
                "trivial": set(ctx.settings["trivial_numbers"]), "settings": ctx.settings, "tables": []}
     order = ("description", "namespace", "r", "data", "inst", "man", "tests", "vignettes")
@@ -1342,12 +1396,22 @@ def read_package(ctx):
                  for path in sorted(files)]
     for entry in inventory:                              # for identity part 3: the lines that must lie inside a unit
         if is_parsed_r_file(entry["file"]):
-            lines = aiva1_documents.decode_text(files[entry["file"]]).split("\n")
+            lines = aiva1f_formats.decode_text(files[entry["file"]]).split("\n")
             entry["nonblank_lines"] = [number for number, line in enumerate(lines, start=1) if line.strip()]
     info = {"name": description.get("Package", ""), "version": description.get("Version", ""), "parser": PARSER_NAME,
             "tarball": os.path.basename(tarballs[0]), "files": inventory,
             "rows": package_rows(description, namespace, units, facts, refused)}
     messages = ["%d units read from %d files of the package." % (len(units), len(files))]
+    r_files = sum(1 for path in files if path.lower().endswith(".r"))
+    if "DESCRIPTION" not in files or r_files * 10 < len(files):
+        # AIVA's reader of code reads R and nothing else. A model in Python, SAS or MATLAB comes
+        # through as files of running text, fully accounted for and impossible to check - so the
+        # analyst is told plainly, rather than left to wonder why nothing was linked. Enforces: R2
+        note = ("This does not look like an R package (%s). AIVA reads the code of R packages only: files in any "
+                "other language are kept as running text and nothing in them can be linked or checked."
+                % ("it has no DESCRIPTION file" if "DESCRIPTION" not in files else "%d of its %d files are R code" % (r_files, len(files))))
+        messages.append(note)
+        info["rows"].append({"group": "The package", "item": "what kind of package", "value": note})
     if len(tarballs) > 1:
         messages.append("More than one tarball was found; only %s was read." % os.path.basename(tarballs[0]))
     plain_units = [shared.to_plain(unit) for unit in units]

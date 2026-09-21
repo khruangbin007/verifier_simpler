@@ -6,6 +6,7 @@ import unittest
 import helpers
 import aiva0_shared as shared
 import aiva1_documents as documents
+import aiva1f_formats as formats
 import build_samples
 
 UNFAMILIAR_SCHEMA = """<table>
@@ -363,11 +364,11 @@ class ModelDocuments(unittest.TestCase):
 
 class ReadingFiles(unittest.TestCase):
     def test_format_is_found_from_content_not_from_the_extension(self):
-        self.assertEqual(documents.detect_format(b"%PDF-1.4 ..."), "pdf")
-        self.assertEqual(documents.detect_format(b"<?xml version='1.0'?><a/>"), "xml")
-        self.assertEqual(documents.detect_format(b"MIME-Version: 1.0\nContent-Type: multipart/related"), "mhtml")
-        self.assertEqual(documents.detect_format(b"  <html><body>x</body></html>"), "html")
-        self.assertEqual(documents.detect_format(b"Just some words."), "text")
+        self.assertEqual(formats.detect_format(b"%PDF-1.4 ..."), "pdf")
+        self.assertEqual(formats.detect_format(b"<?xml version='1.0'?><a/>"), "xml")
+        self.assertEqual(formats.detect_format(b"MIME-Version: 1.0\nContent-Type: multipart/related"), "mhtml")
+        self.assertEqual(formats.detect_format(b"  <html><body>x</body></html>"), "html")
+        self.assertEqual(formats.detect_format(b"Just some words."), "text")
 
     def test_xml_in_a_txt_file_nested_levels_tables_equations(self):
         chunks, result = helpers.chunks_of("method.txt", build_samples.F_METHODOLOGY)

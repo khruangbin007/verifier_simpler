@@ -50,11 +50,12 @@ import yaml
 
 import aiva0_shared as shared
 import aiva1_documents
+import aiva1f_formats
 import aiva2_package
 import aiva3_mapping
 import aiva4_checks
 
-SKILL_VERSIONS = {"prepare-run": "0.0.1", "confirm-outline": "0.0.2", "await-determinations": "0.0.1",
+SKILL_VERSIONS = {"prepare-run": "0.0.2", "confirm-outline": "0.0.2", "await-determinations": "0.0.1",
                   "record-determinations": "0.0.1", "build-report": "0.0.1"}
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 REFERENCES_DIR = os.path.join(ENGINE_DIR, "references")
@@ -94,11 +95,11 @@ def make_settings(overrides=None):
 # ---------------------------------------------------------------- paths and project setup
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
 INPUT_FOLDERS = (
-    ("methodology", "1_Methodology", "Put the canonical methodology here (XML, also inside a .txt "
-     "file; .mhtml; .docx; .pdf). Several files are read in file-name order."),
-    ("package", "2_Model_Package", "Put the single R package tarball (.tar.gz) here."),
-    ("documentation", "3_Model_Documentation", "Put the model documentation here (.docx is "
-     "preferred; .pdf, .mhtml and XML are read too). Several files are read in file-name order."))
+    ("methodology", "1_Methodology", "Put the canonical methodology here: XML (also inside a .txt), .mhtml, .docx, "
+     ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything AIVA cannot read is named."),
+    ("package", "2_Model_Package", "Put the R package here: its tarball (.tar.gz), a .zip of it, or its source folder."),
+    ("documentation", "3_Model_Documentation", "Put the model documentation here (.docx is preferred; .pdf, .mhtml, "
+     "XML, Markdown, .csv, .xlsx, .rtf and .tex are read too). Folders are read too, in name order."))
 LONGEST_AUDIT_NAME = "package_doc_checks.jsonl"
 PATH_BUDGET = 100
 
@@ -196,11 +197,10 @@ def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root=""
 
 def list_input_files(paths):
     """The input files of a project, by corner, in file-name order."""
-    inputs = {"glossary": None, "tag_rules": None}
-    for corner, folder, _ in INPUT_FOLDERS:
-        path = os.path.join(paths.inputs_dir, folder)
-        names = sorted(n for n in os.listdir(path) if n != "README.txt" and not n.startswith("."))
-        inputs[corner] = [os.path.join(path, n) for n in names]
+    inputs = {"glossary": None, "tag_rules": None, "roots": {}, "skipped": {}}
+    for corner, folder, _ in INPUT_FOLDERS:            # into folders; OS and editor leavings named, not read
+        inputs["roots"][corner] = os.path.join(paths.inputs_dir, folder)
+        inputs[corner], inputs["skipped"][corner] = aiva1f_formats.input_files(inputs["roots"][corner])
     for key, name in (("glossary", "glossary.xlsx"), ("tag_rules", "tag_rules.yaml")):
         if os.path.exists(os.path.join(paths.inputs_dir, name)):
             inputs[key] = os.path.join(paths.inputs_dir, name)

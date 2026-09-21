@@ -944,11 +944,14 @@ H_METHODOLOGY = """<?xml version="1.0" encoding="utf-8"?>
 </document>
 """
 
-# The guide's own title sits at depth 1, so every numbered section of it sits at depth 2.
+# The guide's own title sits at depth 1, so every numbered section of it sits at depth 2. The
+# methodology says some of the same sentences in the same words, so the rows about the PDF name
+# the PDF: without that, the measurement found the methodology's unit first and scored the PDF's
+# heading depth against a file that has no title above its sections.
 H_GOLD = [
-    ("evaporation is lowest", "the first column of a two-column page", "2"),
-    ("capped at two hundred litres", "the second column of a two-column page", "2"),
-    ("watered on the schedule alone", "the last paragraph before the footnote", "2"),
+    ("evaporation is lowest", "the first column of a two-column page", "2", "irrigate_field_guide.pdf"),
+    ("capped at two hundred litres", "the second column of a two-column page", "2", "irrigate_field_guide.pdf"),
+    ("watered on the schedule alone", "the last paragraph before the footnote", "2", "irrigate_field_guide.pdf"),
     ("not from the gauge", "a footnote at the foot of the page", ""),
     ("Annex: how a skipped run is recorded", "a heading carrying no number at all", ""),
     ("a dry bed can be told from an unwatered one", "a paragraph under the unnumbered annex heading", ""),
@@ -1118,15 +1121,16 @@ def build_i_wordtraps():
 
 
 def write_gold(sample, rows):
-    """gold_reading.csv: a phrase that must end in some unit, where it sits in the file, and the
-    heading level the unit should carry where the file makes that plain. It is READING gold: it
+    """gold_reading.csv: a phrase that must end in some unit, where it sits in the file, the
+    heading level the unit should carry where the file makes that plain, and - where the same
+    words sit in more than one file - which file the row is about. It is READING gold: it
     says nothing about links, checks or statuses."""
     path = os.path.join(SAMPLES, sample, "gold_reading.csv")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(("must_appear", "where_it_sits", "expected_level"))
-        writer.writerows(rows)
+        writer.writerow(("must_appear", "where_it_sits", "expected_level", "in_file"))
+        writer.writerows(tuple(row) + ("",) * (4 - len(row)) for row in rows)
 
 BUILDERS.update({"G_schema": build_g_schema, "H_twocolumn": build_h_twocolumn, "I_wordtraps": build_i_wordtraps})
 

@@ -26,7 +26,7 @@ import aiva4_checks                    # noqa: E402
 import aiva5_run_report as run         # noqa: E402
 import count_lines                     # noqa: E402
 
-BUNDLES = ("aiva0_shared", "aiva0r_reading", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
+BUNDLES = ("aiva0_shared", "aiva0r_reading", "aiva1f_formats", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
 RULES = ["R%d" % n for n in range(1, 14)]
 SETTING_NOTES = {
     "agentic_reading": "Whether a reading step may ask the model what the tags of a file whose shape AIVA does not know are for. \"off\" asks nothing and reads as the built-in rules read; \"rules\" asks one question per file the rules are unsure about and applies the answer under everything the rules already know.",

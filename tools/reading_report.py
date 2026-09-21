@@ -63,16 +63,18 @@ def one_run(sample, mode, chat, live):
     calls = store.read_calls()
     gold = gold_of(sample)
 
-    def holding(phrase):
+    def holding(phrase, in_file=""):
         for unit in units:
+            if in_file and unit.get("source_file") != in_file:
+                continue
             if phrase in (unit.get("text") or "") or phrase in " ".join(unit.get("heading_chain") or ()):
                 return unit
         return None
 
     wanted = [row for row in gold if row["expected_level"]]
-    return {"phrases": sum(1 for row in gold if holding(row["must_appear"])), "gold": len(gold),
-            "levels": sum(1 for row in wanted if holding(row["must_appear"])
-                          and str(holding(row["must_appear"])["level"]) == row["expected_level"]),
+    return {"phrases": sum(1 for row in gold if holding(row["must_appear"], row.get("in_file") or "")), "gold": len(gold),
+            "levels": sum(1 for row in wanted if holding(row["must_appear"], row.get("in_file") or "")
+                          and str(holding(row["must_appear"], row.get("in_file") or "")["level"]) == row["expected_level"]),
             "wanted": len(wanted),
             "chained": sum(1 for unit in units if unit.get("heading_chain")), "units": len(units),
             "calls": len(calls), "tokens": sum(call.get("estimated_tokens") or 0 for call in calls if call.get("final")),

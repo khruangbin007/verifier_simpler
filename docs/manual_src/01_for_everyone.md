@@ -32,7 +32,7 @@ AIVA reads all three, cuts them into units, links what corresponds, checks formu
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
 | R9 | No domain concept in the engine, its vocabulary, its categories or its prompts. Domain flavour lives in sample data and in the optional glossary. |
 | R10 | Plain language outward. No internal names, no technical traces, whole numbers shown as whole numbers, in anything an analyst reads. |
-| R11 | Seven flat bundles, one-way imports, plain code, line budgets. The reading floor sits directly above the contracts: it imports the shared file and nothing else in the engine, and every step stands on it. |
+| R11 | Eight flat bundles, one-way imports, plain code, line budgets. The reading floor sits directly above the contracts: it imports the shared file and nothing else in the engine, and every step stands on it. The front door of reading sits directly above the floor and below every reader: it decides what a file is before any reader runs. |
 | R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
 

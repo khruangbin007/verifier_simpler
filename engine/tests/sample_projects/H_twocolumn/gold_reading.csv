@@ -1,8 +1,8 @@
-must_appear,where_it_sits,expected_level
-evaporation is lowest,the first column of a two-column page,2
-capped at two hundred litres,the second column of a two-column page,2
-watered on the schedule alone,the last paragraph before the footnote,2
-not from the gauge,a footnote at the foot of the page,
-Annex: how a skipped run is recorded,a heading carrying no number at all,
-a dry bed can be told from an unwatered one,a paragraph under the unnumbered annex heading,
-keeps skipped runs for ninety days,the last paragraph of the annex,
+must_appear,where_it_sits,expected_level,in_file
+evaporation is lowest,the first column of a two-column page,2,irrigate_field_guide.pdf
+capped at two hundred litres,the second column of a two-column page,2,irrigate_field_guide.pdf
+watered on the schedule alone,the last paragraph before the footnote,2,irrigate_field_guide.pdf
+not from the gauge,a footnote at the foot of the page,,
+Annex: how a skipped run is recorded,a heading carrying no number at all,,
+a dry bed can be told from an unwatered one,a paragraph under the unnumbered annex heading,,
+keeps skipped runs for ninety days,the last paragraph of the annex,,

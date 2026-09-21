@@ -31,7 +31,10 @@ HARD = ("G_schema", "H_twocolumn", "I_wordtraps")
 # measured separately, in test_guided_reading.py and evaluation/guided_reading_2026-09-18.md.
 TODAY = {
     "G_schema": {"present": 8, "levels_right": 0, "chained": 5},
-    "H_twocolumn": {"present": 7, "levels_right": 2, "chained": 20},
+    # H was 2 until the gold named the file each row is about: the same sentence sits in its
+    # methodology, where the section has no title above it, so the PDF was scored against the
+    # wrong file. The PDF reader places all three.
+    "H_twocolumn": {"present": 7, "levels_right": 3, "chained": 20},
     "I_wordtraps": {"present": 7, "levels_right": 3, "chained": 20},
 }
 
@@ -58,8 +61,11 @@ def reading_of(sample, mode="off"):
     return units, store.read("content_accounts"), len(store.read_calls())
 
 
-def holding(units, phrase):
+def holding(units, phrase, in_file=""):
+    """The first unit holding a phrase - in the file the gold names, where it names one."""
     for unit in units:
+        if in_file and unit.get("source_file") != in_file:
+            continue
         if phrase in (unit.get("text") or "") or phrase in " ".join(unit.get("heading_chain") or ()):
             return unit
     return None
@@ -68,11 +74,11 @@ def holding(units, phrase):
 def score(sample, mode="off"):
     units, accounts, calls = reading_of(sample, mode)
     gold = gold_of(sample)
-    present = sum(1 for row in gold if holding(units, row["must_appear"]))
+    present = sum(1 for row in gold if holding(units, row["must_appear"], row.get("in_file") or ""))
     wanted = [row for row in gold if row["expected_level"]]
     right = sum(1 for row in wanted
-                if holding(units, row["must_appear"])
-                and str(holding(units, row["must_appear"]).get("level")) == row["expected_level"])
+                if holding(units, row["must_appear"], row.get("in_file") or "")
+                and str(holding(units, row["must_appear"], row.get("in_file") or "").get("level")) == row["expected_level"])
     chained = sum(1 for unit in units if unit.get("heading_chain"))
     return {"present": present, "levels_right": right, "chained": chained,
             "gold": len(gold), "wanted": len(wanted), "units": len(units),

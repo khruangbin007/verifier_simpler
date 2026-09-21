@@ -1,9 +1,9 @@
-must_appear,where_it_sits,expected_level
-A standard loan runs for fourteen days,a statement in a tag the rules do not know,1
-Loan periods,a heading in a tag the rules do not know,1
-renewable twice,a list item inside a table cell,
-no fine in the first two days,a second list item inside the same table cell,
-consulted on the premises only,a table cell holding plain text beside cells holding lists,
-capped at eight units,a statement in the second block,1
-Librarians may waive a fine,a side note in a tag that appears only once,
-A loan with a reservation against it may not be renewed,the last statement of the last block,1
+must_appear,where_it_sits,expected_level,in_file
+A standard loan runs for fourteen days,a statement in a tag the rules do not know,1,
+Loan periods,a heading in a tag the rules do not know,1,
+renewable twice,a list item inside a table cell,,
+no fine in the first two days,a second list item inside the same table cell,,
+consulted on the premises only,a table cell holding plain text beside cells holding lists,,
+capped at eight units,a statement in the second block,1,
+Librarians may waive a fine,a side note in a tag that appears only once,,
+A loan with a reservation against it may not be renewed,the last statement of the last block,1,

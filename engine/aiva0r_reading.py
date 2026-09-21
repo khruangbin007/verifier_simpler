@@ -337,7 +337,12 @@ EXPLAINED_BY_PLACE = {
     "header": ("declared drop", "the running header of a page, which the page carries because it is a page"),
     "footer": ("declared drop", "the running footer of a page, which the page carries because it is a page"),
     "comment": ("declared drop", "a comment somebody left on the document, which is not what the document says"),
+    "whole file not read": ("not read", "a file in a format AIVA does not read, named with its reason and a next step"),
 }
+
+# Below this many bytes a file may honestly hold no text; above it, a reader that found none at
+# all and said nothing has probably not opened it. The account refuses to close over that.
+VACUOUS_BYTES = 1024
 
 def tokens(text):
     """The countable pieces of a text: runs without white space, after the same normalisation
@@ -510,7 +515,7 @@ def marks_of_rendering(chunks):
             found.extend(chunk.get("heading_chain") or ())
     return found
 
-def account(file_name, atoms, chunks, dropped=(), marks=()):
+def account(file_name, atoms, chunks, dropped=(), marks=(), file_bytes=0):
     """The content account of one file. Every atom ends in exactly one class, and every token a
     unit shows comes from an atom or from a named mark. What a unit does not show word for word
     is explained by WHERE it was found (EXPLAINED_BY_PLACE) before it is called a loss, so that
@@ -530,8 +535,9 @@ def account(file_name, atoms, chunks, dropped=(), marks=()):
         if one["place"] in EXPLAINED_BY_PLACE:
             name = EXPLAINED_BY_PLACE[one["place"]][0]
             found[name] = found[name] + max(1, len(tokens(one["text"])))
+    refused = any(one["place"] == "whole file not read" for one in atoms)
     for chunk in chunks:
-        if chunk.get("not_read_reason"):
+        if chunk.get("not_read_reason") and not refused:
             found["not read"] += 1
     placed = dict(kept)
     for extra_bag in (moved, dropped_bag):
@@ -546,7 +552,14 @@ def account(file_name, atoms, chunks, dropped=(), marks=()):
                                         and any(piece in left for piece in tokens(one["text"])))[:12]
     found["what unaccounted"] = sorted(left)[:24]
     found["what injected"] = sorted(added)[:24]
-    found["closed"] = found["unaccounted"] == 0 and found["injected"] == 0
+    # A file that is large, yielded no text at all, and was neither refused nor said to be
+    # unreadable has probably not been opened. Until 0.0.2 such a file closed its account, because
+    # an account over nothing balances. That is the one place the identity held while everything
+    # was lost, so it is the one place it now refuses to close. Enforces: R13
+    found["vacuous"] = (not refused and file_bytes > VACUOUS_BYTES and not sum(source.values())
+                        and not any(chunk.get("not_read_reason") for chunk in chunks))
+    found["file_bytes"] = file_bytes
+    found["closed"] = found["unaccounted"] == 0 and found["injected"] == 0 and not found["vacuous"]
     return found
 
 def account_lines(found):
@@ -556,6 +569,13 @@ def account_lines(found):
              "%d read into another form, %d left out under a named rule, %d in a part that could not be read."
              % (found["atoms"], found["in unit text"], found["relocated"], found["rewritten"],
                 found["declared drop"], found["not read"])]
+    if found.get("vacuous"):
+        lines.append("The file is %d KB and yielded no text at all, and no reader said it could not read it: "
+                     "it has probably not been opened. Check the file itself." % max(1, found["file_bytes"] // 1024))
+    if found.get("held as text only"):
+        lines.append("%d of the lines inside a unit are held only as running text, in files AIVA could not read as "
+                     "code, data or a help page: they are kept, and nothing in them can be linked or checked."
+                     % found["held as text only"])
     if found["closed"]:
         lines.append("Content account closed: nothing was lost and nothing was added.")
     if found["unaccounted"]:
@@ -574,7 +594,7 @@ def account_of_package(files, units, refused, is_text_file):
     picture, stored data in a binary form) is counted as one atom of its own, because its lines
     cannot be counted without reading it. Extends the line coverage that read-package already
     kept for parsed R files to every member of the tarball. Enforces: R13"""
-    inside, not_read, atoms, unaccounted, fenced = 0, 0, 0, [], 0
+    inside, not_read, atoms, unaccounted, fenced, text_only = 0, 0, 0, [], 0, 0
     covered = {}
     for unit in units:
         lines = unit.get("lines")
@@ -604,6 +624,8 @@ def account_of_package(files, units, refused, is_text_file):
         fenced += len(fences)
         held = covered.get(path, set())
         whole_file = any(unit.get("file") == path and not unit.get("lines") for unit in units)
+        if any(unit.get("file") == path and unit.get("kind") == "Other file" for unit in units):
+            text_only += len(numbers)
         for number in numbers:
             if number in held or whole_file:
                 inside += 1
@@ -614,7 +636,7 @@ def account_of_package(files, units, refused, is_text_file):
     found = {"file": "the package", "atoms": atoms + len(refused), "in unit text": inside, "relocated": 0,
              "rewritten": 0, "declared drop": len(refused) + fenced, "not read": not_read,
              "unaccounted": len(unaccounted), "injected": 0, "where unaccounted": sorted(unaccounted)[:12],
-             "what unaccounted": [], "what injected": []}
+             "what unaccounted": [], "what injected": [], "held as text only": text_only}
     found["closed"] = found["unaccounted"] == 0
     return found
 

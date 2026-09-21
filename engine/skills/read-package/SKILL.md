@@ -2,7 +2,7 @@
 name: read-package
 description: "Reads the R package statically into model units: code, roxygen blocks, help pages, tests and stored parameter data. Use after the documents are read."
 metadata:
-  version: "0.0.3"
+  version: "0.0.4"
   carried-out-by: "aiva2_package.read_package"
 ---
 ## Purpose
@@ -15,7 +15,7 @@ The single .tar.gz in Inputs/2_Model_Package; references/r_function_map.yaml.
 model_units; parameter_tables; content_accounts; shape_digests; package_info. Sheets: Chunks_Model, Model_Package_Info.
 
 ## Procedure
-1. Unpack the tarball, refusing any member that breaks the limits. 2. Work out which reader each member gets from where it lies and what it is; where the built-in tests give a member none, ask which existing reader should take it and apply the answer. 3. Parse R source into functions, objects and formula statements. 4. Decode stored data into tables of values. 5. Read help pages and vignettes. 6. Tie each roxygen block to what it documents. 7. Number every unit in a fixed order.
+1. Unpack the package - a tarball, a ZIP, or a source folder put in unpacked - refusing any member that breaks the limits; where it is not an R package, say so. 2. Work out which reader each member gets from where it lies and what it is; where the built-in tests give a member none, ask which existing reader should take it and apply the answer. 3. Parse R source into functions, objects and formula statements. 4. Decode stored data into tables of values. 5. Read help pages and vignettes. 6. Tie each roxygen block to what it documents. 7. Number every unit in a fixed order.
 
 ## Quality rules
 - Every non-blank line of every member that holds text lies inside a unit, is refused with a reason, or is carried by a unit that says it could not be read. A member AIVA cannot read as text is counted as one piece of its own.
