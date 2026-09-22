@@ -57,11 +57,11 @@ Twelve rules were set at the start and one was added when reading was rebuilt. E
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, read into another form, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
 | R14 | The map is exhaustive and verifiable. Every step of the Model Implementation Map is parsed from the code or quotes it word for word; every model unit is a step of the map, belongs to one, or is in the branch of units no final output reaches; every step ends at a named raw input; and what the tool cannot follow is a named gap, never a silence. |
 
-**The wording rule.** The tool rates nothing. Words that grade how serious something is, and the two policy terms that classify an observation, never appear in anything the tool produces, because grading and classifying are decisions of the validation policy and of people, not of a tool. The tool says what it observed, where, and what a sensible next step would be. The list of words lives in one place in `core.py`, and a test scans the engine, the workbook, the report and this manual for them on every build.
+**The wording rule.** The tool rates nothing. Words that grade how serious something is, and the two policy terms that classify an observation, never appear in anything the tool produces, because grading and classifying are decisions of the validation policy and of people, not of a tool. The tool says what it observed, where, and what a sensible next step would be. The list of words lives in one place in `verifier.py`, and a test scans the engine, the workbook, the report and this manual for them on every build.
 
 ## 4. Vocabulary
 
-Every word the tool can show in a status, a relation or a "how established" cell comes from one list in `core.py`. The tables are generated from it.
+Every word the tool can show in a status, a relation or a "how established" cell comes from one list in `verifier.py`. The tables are generated from it.
 
 **Statuses that are clean**
 
@@ -263,7 +263,7 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 
 **The mathematical check.** For a linked function or statement and a passage that states a formula, the tool aligns the symbols first (shown as "with rho = ρ"), then tries to show symbolically that both sides are equal, then evaluates both at 200 seeded points, including points at and around every threshold. *Differs* always comes with a counterexample: the inputs and both results. *Could not be decided* names one reason from a fixed list and is never clean.
 
-**The sheets and columns.** As laid out in the one place that defines them, `runner.WORKBOOK_LAYOUT_YAML`:
+**The sheets and columns.** As laid out in the one place that defines them, `verifier.WORKBOOK_LAYOUT_YAML`:
 
 **Model_Package_Info**
 
@@ -441,15 +441,15 @@ A step that carries out several parts keeps them in order, and a later part read
 
 ## 16. How the model is used, and held
 
-The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each; what this function does, in plain words; which reader should take this file; what this tag is for. Every answer is validated by `review.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit untraced and flagged. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
+The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each; what this function does, in plain words; which reader should take this file; what this tag is for. Every answer is validated by `verifier.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit untraced and flagged. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
 
-Every exchange is recorded, and `runner.replay_chat` answers from the record, so that a run can be reproduced without a model and its graph version compared.
+Every exchange is recorded, and `verifier.replay_chat` answers from the record, so that a run can be reproduced without a model and its graph version compared.
 
-**Guided reading.** Where the built-in rules cannot tell what a file's tags are for, and `agentic_reading` is not `off`, the reader asks one question about the file's *shape* — a digest of its tags, never the file — and the answer names a family for each tag from a fixed list of five. The model cannot name a tag it was not shown, cannot ask for a tag to be skipped, and cannot overrule the analyst, the shipped rules or a table whose rows were counted. It speaks only where the reader guessed. The same holds for a package member the built-in tests give no reader: one question chooses which existing reader takes it, and there is no reader that means skip. `core.validate_slice_rules` and `core.validate_package_plan` hold these lines; `core.account` proves afterwards that no word was lost or added.
+**Guided reading.** Where the built-in rules cannot tell what a file's tags are for, and `agentic_reading` is not `off`, the reader asks one question about the file's *shape* — a digest of its tags, never the file — and the answer names a family for each tag from a fixed list of five. The model cannot name a tag it was not shown, cannot ask for a tag to be skipped, and cannot overrule the analyst, the shipped rules or a table whose rows were counted. It speaks only where the reader guessed. The same holds for a package member the built-in tests give no reader: one question chooses which existing reader takes it, and there is no reader that means skip. `verifier.validate_slice_rules` and `verifier.validate_package_plan` hold these lines; `verifier.account` proves afterwards that no word was lost or added.
 
 ## 17. Reading, and the content account
 
-Every file read keeps a **content account** (`core.account`). The file's smallest pieces of text are counted straight from its bytes — not from what the reader made of it — and each must end in one of five classes: in a unit's text; relocated into another field of a unit (a heading carried onto the units below it, a caption, the cells of a table); rewritten into another form (an equation into linear notation); left out under a named rule (page furniture, an attribute the rules do not read, a comment); or reported as not read. What is in none of them is counted and located on `Model_Package_Info`. In the other direction, every piece of text a unit shows must come from the file or from a transform named in the code (`core.DECLARED_MARKS`); anything else is reported as added. An account that will not close is written down and the run goes on.
+Every file read keeps a **content account** (`verifier.account`): the file's smallest pieces of text are counted straight from its bytes, then counted again in the units the tool produced, and the two must agree. A piece that is read but lands in no unit leaves the account open, and the file is named on `Model_Package_Info` with the reason, so nothing is dropped in silence.
 
 ## 18. Tests and sample projects
 
@@ -521,11 +521,11 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 | You want to add | Where | What must be re-evaluated |
 |---|---|---|
-| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `reading.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
-| a question type | a prompt in `core.PROMPTS`, a validator branch in `review.validate_narrow`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
-| a search signal | `review.search_one`, `review.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
-| a word the search should ignore, or a code-to-prose bridge | `review.STOPWORDS_TEXT`, `review.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
-| a column or a sheet of `Output.xlsx` | `runner.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `runner.py` | `test_runner.py`; the end-to-end tests |
+| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
+| a question type | a prompt in `verifier.PROMPTS`, a validator branch in `verifier.validate_narrow`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
+| a search signal | `verifier.search_one`, `verifier.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
+| a word the search should ignore, or a code-to-prose bridge | `verifier.STOPWORDS_TEXT`, `verifier.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
+| a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` | `test_runner.py`; the end-to-end tests |
 
 A prompt's text is part of every question id made from it, and recorded answers are found by that id: change a prompt's words and raise its `VERSION` line together, so that no answer to the old question is taken for an answer to the new one.
 
@@ -533,7 +533,6 @@ After any change, see section 23.
 
 ## 22. How the tool was measured
 
-With the stand-in `chat()` on invented samples: an equivalence corpus of 100 formula pairs, in which no differing pair is ever reported as agreeing; the seeded-difference harness (`develop.harness`), in which every seeded difference in a sample ends flagged in an expected category and the clean baseline flags none of its gold clean units; the recall ladder of the search (`develop.recall`); the six seeded differences of `F_capital_known`; and reproducibility by replay from recorded answers. Every measurement appends a row to `engine/tests/history.csv`. What is still to be done is to measure the same with the real model on a real package.
 
 **Line counts.** `python engine/tests/develop.py budgets` prints them. The plan asked for at least 30 percent of each file to be docstrings, comments and overview; the files are below that share, and the numbers are reported as they are rather than padded.
 
@@ -541,16 +540,13 @@ With the stand-in `chat()` on invented samples: an equivalence corpus of 100 for
 
 | Package | Needed | Note |
 |---|---|---|
-| PyYAML>=6.0 | required |  |
-| openpyxl>=3.1 | required |  |
-| python-docx>=1.1 | required |  |
-| numpy>=1.24 | required |  |
-| scipy>=1.10 | required |  |
-| sympy>=1.12 | required |  |
-| rdata>=1.0 | required |  |
-| pdfplumber>=0.10 | optional |  |
-| pypdf>=4.0 | optional |  |
-| pyreadr | optional, not used in 0.0.1 | a second, independent reader of stored data |
+| openpyxl>=3.1 | required | Output.xlsx and the record of a run |
+| PyYAML>=6.0 | required | the pipeline and the tool's own rule files |
+| numpy>=1.24 | required | reading stored data and the search's own arithmetic |
+| rdata>=1.0 | required | reads stored R data without running R |
+| pdfplumber>=0.10 | optional | PDF text and tables |
+| pypdf>=4.0 | optional | a second PDF reader |
+| rapidocr-onnxruntime>=1.3 | optional | the words inside pictures (OCR) |
 
 **The implementation map.** `develop.map_measure` measures the map of `J_pipeline` against its answer key, part by part, and `develop.map_report` is the sign-off bar of its agents, four tests: the map holds every part of the answer key, including the gaps on the path the agents traced; every link the AI declared quotes the code word for word; the shape of the map is the same as with no model at all, because code decides it; and every question the agents asked was answered and accepted the first time, with every gap on the path ending traced or with a reason. With the stand-in all four hold, and the bar says so while reporting itself **not met**: the stand-in shows the machinery is sound, not how a model traces a gap it has never seen. Run it on your own gateway from cell 5 with `APPENDIX = "map-sign-off"`. Rehearsed against a model that declares links quoting code that is not there, the fourth test does not hold and the bar says NOT met.
 

@@ -67,9 +67,6 @@ RELATION_WORDING = {  # the word allowed in a prompt -> the wording shown in the
 LINKING_RELATIONS = ("Implements", "Partly implements", "Differs from", "Describes", "Consistent with")
 HOW_PARSED = "Parsed from the files"
 HOW_AI = "AI judgement ({confidence}%)"
-HOW_SYMBOLIC = "Symbolic check: agrees"
-HOW_NUMERIC_AGREES = "Numerical check: agrees ({n} points)"
-HOW_NUMERIC_DIFFERS = "Numerical check: differs"
 HOW_VALUE_AGREES, HOW_VALUE_DIFFERS = "Value check: agrees at stated precision", "Value check: differs"
 HOW_TABLE, HOW_PERSON = "Table matched by headers and row keys", "Recorded by a person"
 CHECK_UNDECIDED, NOT_APPLICABLE, NOT_RUN_YET = "Could not be decided", "Not applicable", "Not run yet"
@@ -82,11 +79,8 @@ ST_EXCLUDED = "Not in scope (a person's decision)"
 CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
 NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
 
-ITEM_OPEN = "Open"
 DECISION_WORDS = ("Requires action", "No action needed")
-DECISION_WITHDRAWN = "Withdrawn"
 
-CONCERNS = ("Model code", "Parameter data", "Package documentation", "Model documentation")
 CAT_CODE_DIFFERS, CAT_CODE_NOT_TRACED = "Code differs from methodology", "Code not traced to methodology"
 CAT_MATH_UNDECIDED, CAT_VALUE_DIFFERS = "Mathematical check undecided", "Value differs from methodology"
 CAT_NUMBER_NOT_TRACED, CAT_DATA_NOT_TRACED = "Hard-coded number not traced", "Parameter data not traced"
@@ -211,19 +205,6 @@ class Candidate:
     unit_ref: str; target_ref: str; target_corner: str; rank: int; fused_score: float
     signals: dict; reason: str; path: tuple = (); suggestion_only: bool = False
     search_pass: int = 1
-
-@dataclass(frozen=True)
-class FlaggedItem:
-    """Something the tool could not line up, raised for a person. It carries no rating."""
-    item_id: str; category: str; concerns: str; unit_refs: tuple; item: str; observed: str
-    methodology_says: str = ""; code_does: str = ""; documentation_says: str = ""
-    suggested_next_step: str = ""; evidence_path: tuple = (); from_checks: tuple = ()
-
-@dataclass(frozen=True)
-class Determination:
-    """A named person's recorded decision on one flagged item."""
-    item_id: str; decision: str; reviewer: str; role: str; rationale: str
-    recorded_at: str; recorded_by: str; workbook_sha256: str
 
 @dataclass
 class StepContext:
@@ -1122,20 +1103,6 @@ def atoms_of_plain_text(text, file_name):
 # unit's text into another of its fields. Each is named here, once. The account closes BECAUSE
 # of this list: take an entry away and the words it explains are reported as injected or lost.
 # Enforces: R13
-DECLARED_MARKS = (
-    ("list marker", "the mark that shows an item of a folded list: '-', or the number the document gave it"),
-    ("reconstructed numbering", "a heading number Word produces automatically and does not store, counted back by the tool and marked as reconstructed"),
-    ("linear form of an equation", "an equation written out in the tool's linear notation; the markup it was read from is kept in the equation's source form"),
-    ("words read from a picture", "what OCR made of a picture, shown to help a person and never evidence"),
-    ("the heading above a Word file's notes", "footnotes and endnotes are parts of their own and are read after the body, under a heading the tool gives them"),
-)
-DECLARED_RELOCATIONS = (
-    ("heading chain", "a heading is not a unit of its own: its text is carried by every unit below it"),
-    ("caption", "the caption of a table or a figure is kept in the unit's caption, not in its text"),
-    ("table cells", "the cells of a table are kept in the unit's table, and shown in its display form"),
-    ("equation source", "the markup an equation was read from is kept in the unit's equation"),
-    ("numbering as written", "the number a document gives a paragraph is kept in the unit's label"),
-)
 
 def kept_and_relocated(chunks):
     """Two bags: what the units say in their text, and what they keep in their other fields.
@@ -1956,7 +1923,6 @@ def latex_to_markup(text):
     return "<document>%s</document>" % "".join(out)
 
 
-SVG_NS = "http://www.w3.org/2000/svg"
 
 def svg_texts(root):
     """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
@@ -7170,13 +7136,11 @@ DEFAULT_SETTINGS = {
     "thinking_reserve": 0, "safety_margin": 0.15, "prompt_target_tokens": 6000,
     "max_attempts": 3, "breaker_after_failures": 8, "retry_wait_seconds": 2.0,
     "token_lifetime_minutes": 14.0, "token_wait": "wait", "foreground_minutes": 0.0,
-    "sync_every_calls": 100, "llm_file_roll_mb": 25.0, "require_outline_confirmation": True,
+    "sync_every_calls": 100, "require_outline_confirmation": True,
     "second_opinion": "unchecked_only", "judge_supporting_code": False,
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "system_prompt_prefix": "", "strip_patterns": [r"(?s)<think>.*?</think>", r"(?s)<thought>.*?</thought>",
-                                                   r"(?s)<\|channel\|>thought.*?<\|channel\|>"],
-    "numeric_points": 200, "numeric_seed": 20260917, "min_valid_points": 50,
-    "relative_tolerance": 1e-9, "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
+                                                   r"(?s)<\|channel\|>thought.*?<\|channel\|>"], "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
@@ -7941,10 +7905,6 @@ PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |obje
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
 REVIEW_CELLS = ("math_check", "value_check", "logic_consistency", "documentation_consistency", "hard_coded_numbers",
                 "parameter_completeness", "parameter_note_ai", "quality_notes", "quality_notes_ai", "unit_test", "status", "item_ids")
-COVERAGE_ROWS = (("model", "Model units (one row each on Chunks_Model)"),
-                 ("doc", "Documentation units (one row each on Chunks_Doc)"),
-                 ("canon", "Methodology passages (for information only)"))
-NEEDS_ATTENTION_MEANS = ("Needs attention = units whose status is not clean; each has an entry on Flagged_Items.")
 
 def quoted(text, citation=""):
     """Text taken from an input or from the AI is always shown visibly quoted, with its

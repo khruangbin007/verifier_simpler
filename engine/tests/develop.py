@@ -1,15 +1,14 @@
 """
 Verifier 0.0.3 - develop.py - everything that is about the tool rather than about a run: how it
-is measured, released, checked against its own manual, and how the notebook is built.
+is measured, checked against its own manual, and how the notebook is built.
 For whoever maintains the tool.
 
 WHAT THIS FILE DOES
   Measurement. Seeded differences (mutants of a sample package, its data and its documentation)
-  and the harness that runs them; recall of the candidate search against gold links; a live
+  recall of the candidate search against gold links; a live
   trial that compares two runs at different concurrency; an environment probe for a new
   cluster; and the sign-off bar for guided reading. Each returns its report as text and records
   its numbers in one history file, engine/tests/history.csv. No report file is written.
-  Release. The SHA-256 of every file that makes up the engine, kept in engine/release.json;
   a run's manifest is compared with it, so a run can prove which code produced it.
   Checks on the code itself. Line budgets, and that the one manual names only things that
   exist and explains every setting and every design rule.
@@ -18,13 +17,12 @@ WHAT THIS FILE DOES
 
 WHAT IT TAKES IN AND PRODUCES
   In: the sample projects, a chat() where a measurement needs one, the manual.
-  Out: report text; rows in engine/tests/history.csv; engine/release.json; the notebook.
+  Out: report text; rows in engine/tests/history.csv; the notebook.
 
 WHICH SHEETS SHOW ITS RESULTS
   None: nothing here is part of a run. What it measures is described in the manual.
 
 DESIGN RULES ENFORCED HERE
-  R5  the release manifest pins the bytes of the code a run reports having used.
   R10 the check on the manual keeps every word of it true of the code.
   R11 line budgets; the notebook is generated, never edited by hand.
 
@@ -57,7 +55,6 @@ ENGINE = ROOT if os.path.basename(ROOT) == "engine" else os.path.join(ROOT, "eng
 TESTS = os.path.join(ENGINE, "tests")
 SAMPLES = os.path.join(TESTS, "sample_projects")
 HISTORY = os.path.join(TESTS, "history.csv")
-RELEASE_FILE = os.path.join(ENGINE, "release.json")
 MANUAL = os.path.join(os.path.dirname(ENGINE), "docs", "Manual.md")
 NOTEBOOK = os.path.join(os.path.dirname(ENGINE), "Verifier.ipynb")
 for folder in (ENGINE, TESTS):
@@ -244,32 +241,6 @@ def docx_mutants(name, data):
     return mutants
 
 
-def mutants_of(inputs_dir):
-    """Every mutant of one sample: {"id", "operator", "file", "line", "what", "expected", "inputs": {relative path: bytes}}."""
-    package_dir = os.path.join(inputs_dir, "2_Model_Package")
-    tar_name = sorted(os.listdir(package_dir))[0]
-    top, files = read_tarball(os.path.join(package_dir, tar_name))
-    found = []
-    for path in sorted(files):
-        if path.startswith("R/") and path.lower().endswith(".r"):
-            text = files[path].decode("utf-8")
-            for mutant in code_mutants(path, text) + roxygen_mutants(path, text):
-                mutant["inputs"] = {"2_Model_Package/" + tar_name: write_tarball(top, dict(files, **{path: mutant.pop("text").encode("utf-8")}))}
-                found.append(mutant)
-        elif path.lower().endswith((".rda", ".rds", ".rdata")):
-            for mutant in data_mutants(path, files[path]):
-                mutant["inputs"] = {"2_Model_Package/" + tar_name: write_tarball(top, dict(files, **{path: mutant.pop("bytes")}))}
-                found.append(mutant)
-    doc_dir = os.path.join(inputs_dir, "3_Model_Documentation")
-    for name in sorted(os.listdir(doc_dir)):
-        if name.lower().endswith(".docx"):
-            with open(os.path.join(doc_dir, name), "rb") as handle:
-                for mutant in docx_mutants(name, handle.read()):
-                    mutant["inputs"] = {"3_Model_Documentation/" + name: mutant.pop("bytes")}
-                    found.append(mutant)
-    for number, mutant in enumerate(found, start=1):
-        mutant["id"] = "S-%03d" % number
-    return found
 
 
 # ================================================================================================
@@ -332,46 +303,6 @@ def outcome_of(mutant, result):
     return "not flagged", []
 
 
-def harness(arguments):
-    import standin_chat
-    sample = arguments[0] if arguments and not arguments[0].startswith("--") else "F_capital"
-    limit = int(arguments[arguments.index("--limit") + 1]) if "--limit" in arguments else 0
-    only = arguments[arguments.index("--operator") + 1] if "--operator" in arguments else ""
-    chat = cached(standin_chat.make_chat(misbehave="--misbehave" in arguments))
-    baseline = run_once(sample, {}, chat)
-    with open(os.path.join(SAMPLES, sample, "gold_clean_units.csv"), encoding="utf-8") as handle:
-        gold_clean = [row["unit_ref"] for row in csv.DictReader(handle)]
-    clean = {s["unit_ref"]: s["clean"] for s in baseline["unit_status"]}
-    falsely = [ref for ref in gold_clean if not clean.get(ref, False)]
-    mutants = [m for m in mutants_of(os.path.join(SAMPLES, sample, "Inputs")) if not only or m["operator"] == only]
-    mutants = mutants[:limit] if limit else mutants
-    rows = []
-    for mutant in mutants:
-        outcome, categories = outcome_of(mutant, run_once(sample, mutant["inputs"], chat))
-        rows.append((mutant["id"], mutant["operator"], mutant["file"], mutant["line"] or "", mutant["what"], outcome, "; ".join(categories)))
-        print(*rows[-1], sep=" | ", flush=True)
-    today = datetime.date.today().isoformat()
-    operators = sorted({row[1] for row in rows})
-    handle = io.StringIO()
-    if True:
-        handle.write("# Seeded-difference harness: %s\n\nRun on %s with the stand-in chat() (%s). Counts, not only percentages: with 30 mutants of a type, "
-                     "30 of 30 supports a claim of about 90 percent, not 100.\n\n" % (sample, today, "misbehaving" if "--misbehave" in arguments else "well-behaved"))
-        handle.write("False-flag rate on the clean baseline: %d of %d units listed in gold_clean_units.csv ended flagged%s.\n\n"
-                     % (len(falsely), len(gold_clean), " (%s)" % ", ".join(falsely) if falsely else ""))
-        handle.write("| Operator | Mutants | Flagged as expected | Flagged otherwise | Not flagged |\n|---|---|---|---|---|\n")
-        for operator in operators:
-            mine = [row for row in rows if row[1] == operator]
-            handle.write("| %s | %d | %d | %d | %d |\n" % (operator, len(mine), sum(r[5] == "flagged as expected" for r in mine),
-                                                         sum(r[5] == "flagged otherwise" for r in mine), sum(r[5] == "not flagged" for r in mine)))
-        handle.write("\n## Every mutant\n\n| Id | Operator | File | Line | What changed | Outcome | Categories raised |\n|---|---|---|---|---|---|---|\n")
-        for row in rows:
-            handle.write("| " + " | ".join(str(cell) for cell in row) + " |\n")
-        handle.write("\nEvery mutant that ended *not flagged* has to be inspected by hand and labelled *equivalent* or *missed*.\n")
-    remember("harness", today, sample, "stand-in", mutants=len(rows), flagged_as_expected=sum(r[5] == "flagged as expected" for r in rows),
-             flagged_otherwise=sum(r[5] == "flagged otherwise" for r in rows), not_flagged=sum(r[5] == "not flagged" for r in rows),
-             false_flags=len(falsely), gold_clean_units=len(gold_clean))
-    print(handle.getvalue())
-    return handle.getvalue()
 
 
 # ================================================================================================
@@ -853,20 +784,6 @@ def current():
     return {"engine_version": core.ENGINE_VERSION, "files": files, "requirements": requirements}
 
 
-def release(arguments):
-    target = RELEASE_FILE
-    now = current()
-    if "--check" in arguments:
-        with open(target, encoding="utf-8") as handle:
-            frozen = json.load(handle)
-        changed = sorted(name for name in set(now["files"]) | set(frozen["files"]) if now["files"].get(name) != frozen["files"].get(name))
-        print("\n".join("differs from the release: " + name for name in changed) if changed else "Every file equals the release manifest.")
-        return 1 if changed else 0
-    with open(target, "w", encoding="utf-8") as handle:
-        json.dump(now, handle, indent=1, sort_keys=True)
-        handle.write("\n")
-    print("%s: %d files" % (target, len(now["files"])))
-    return 0
 
 
 # ================================================================================================
@@ -1346,9 +1263,9 @@ CELL_5 = r'''# ===== Cell 5 of 5 - finish: verify the evidence pack =====
 # Run this when the run has finished, to check the run folder against its own record: the inputs are the
 # files that were read, the engine is the one that produced it, re-reading gives the same content, the
 # graph chain verifies, and no access token was written anywhere in the folder.
-# APPENDIX runs a maintainer's check instead: "probe" (a new cluster), "sanity" (the sample projects with the
-# stand-in), "harness" (seeded differences), "sign-off" (guided reading against your real chat()), or
-# "map-sign-off" (the implementation map's agents against your real chat()).
+# APPENDIX runs a maintainer's check instead: "probe" (a new cluster), "sanity" (the sample projects with
+# the stand-in), "sign-off" (guided reading against your real chat()), or "map-sign-off" (the
+# implementation map's agents against your real chat()).
 APPENDIX = ""
 
 if APPENDIX:
@@ -1362,8 +1279,6 @@ if APPENDIX:
         demo_paths = verifier.open_run(demo, "SANITY")
         print(verifier.run_pipeline(demo_paths, verifier.make_settings({"require_outline_confirmation": False}), chat=standin_chat.chat)["message"])
         print("Open", os.path.join(demo_paths.run_dir, "Output.xlsx"))
-    elif APPENDIX == "harness":
-        develop.harness(["A_minimal", "--limit", "10"])
     elif APPENDIX == "sign-off":
         print(develop.run(ACTIVE_CHAT, LIVE, label="the real model"))
     elif APPENDIX == "map-sign-off":
@@ -1402,14 +1317,10 @@ if __name__ == "__main__":
         for row in rows:
             print("%-12s %6d %7d %9.0f%% %s" % (row["name"], row["total"], row["budget"], 100 * row["share"], "within budget" if row["ok"] else "OVER BUDGET"))
         sys.exit(0 if within else 1)
-    if what == "release":
-        sys.exit(release(sys.argv[2:]))
     if what == "check-docs":
         sys.exit(check_docs())
     if what == "notebook":
         print(build_notebook(), "with 5 cells")
-    if what == "harness":
-        harness(sys.argv[2:])
     if what == "recall":
         recall(sys.argv[2:] or ["A_minimal", "F_capital"])
     if what == "map-bar":

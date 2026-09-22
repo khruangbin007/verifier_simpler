@@ -1,8 +1,12 @@
 # What the engine needs. Cell 3 installs these; a missing one stops the run.
 openpyxl==3.1.2
 PyYAML==6.0.1
+numpy>=1.24
+rdata>=1.0
 
 # --- optional ---
 # Installed in a second step that is allowed to fail: each one missing degrades a named capability
-# into a plain note, and nothing else changes. Reads the words inside pictures (OCR).
-rapidocr-onnxruntime>=1.3
+# into a plain note, and nothing else changes.
+pdfplumber>=0.10          # text and tables from PDF; the manual recommends .docx where there is a choice
+pypdf>=4.0                # a second PDF reader, used where pdfplumber cannot read a page
+rapidocr-onnxruntime>=1.3 # reads the words inside pictures (OCR)
