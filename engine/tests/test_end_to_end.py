@@ -77,9 +77,14 @@ class WhatAnAnalystReads(unittest.TestCase):
         import openpyxl
         workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
         layout = {s["name"]: s for s in runner.load_layout()["sheets"]}
-        for name in ("Mapping_Model_to_Canon_and_Doc", "Mapping_Doc_to_Canon_and_Model"):
+        # the review's own cells, which the two mapping sheets used to hold: on a unit's row each shows
+        # content, "Not applicable" or "Not run yet". A sheet's own columns (a reading note, say) may be blank,
+        # and so may a row of the map, where a row is a step and not a unit.
+        cells = {key for record in runner.open_store(self.paths, self.settings).read("unit_status") for key in (record.get("cells") or {})}
+        for name in ("Chunks_Doc", "Chunks_Model"):
             sheet = workbook[name]
-            wanted = [i for i, c in enumerate(layout[name]["columns"]) if c["group"] == "assessments"]
+            wanted = [i for i, c in enumerate(layout[name]["columns"]) if c["field"] in cells | {"status", "item_ids"}]
+            self.assertTrue(wanted, name)
             for row in sheet.iter_rows(min_row=2, values_only=True):
                 self.assertTrue(all(row[i] not in (None, "") for i in wanted), "%s row %s" % (name, row[0]))
 
@@ -102,7 +107,7 @@ class WhatAnAnalystReads(unittest.TestCase):
         workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
         coverage = workbook["Mapping_Coverage"]
         header = [c.value for c in coverage[1]]
-        for position, name in enumerate(("Mapping_Model_to_Canon_and_Doc", "Mapping_Doc_to_Canon_and_Model"), start=2):
+        for position, name in enumerate(("Chunks_Model", "Chunks_Doc"), start=2):
             sheet = workbook[name]
             column = [c.value for c in sheet[1]].index("Overall status")
             statuses = [row[column] for row in sheet.iter_rows(min_row=2, values_only=True)]

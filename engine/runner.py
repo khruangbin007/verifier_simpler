@@ -901,8 +901,10 @@ CELL_WITHHELD = "This text could not be shown in plain words; the technical text
 CUT_NOTE = " ... (cut here; the full text is in the audit files)"
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
-COVERAGE_ROWS = (("model", "Model units (one row each on Mapping_Model_to_Canon_and_Doc)"),
-                 ("doc", "Documentation units (one row each on Mapping_Doc_to_Canon_and_Model)"),
+REVIEW_CELLS = ("math_check", "value_check", "logic_consistency", "documentation_consistency", "hard_coded_numbers",
+                "parameter_completeness", "parameter_note_ai", "quality_notes", "quality_notes_ai", "unit_test", "status", "item_ids")
+COVERAGE_ROWS = (("model", "Model units (one row each on Chunks_Model)"),
+                 ("doc", "Documentation units (one row each on Chunks_Doc)"),
                  ("canon", "Methodology passages (for information only)"))
 NEEDS_ATTENTION_MEANS = ("Needs attention = units whose status is not clean; each has an entry on Flagged_Items.")
 
@@ -1093,6 +1095,7 @@ def implementation_map(store, settings=None):
             if source in others or help_page in others:
                 others += [ref for ref in (help_page, source) if ref not in others]
     statuses = {s["unit_ref"]: s for s in store.read("unit_status")}
+    assessed = assessment_of(store)
     items = {}
     for item in store.read("flagged_items"):
         for ref in item["unit_refs"]:
@@ -1128,8 +1131,8 @@ def implementation_map(store, settings=None):
         mine = [c for c in (node["name"], about) if c in concept_of]
         linked = links.get(ref, []) + (links.get(functions[about]["ref"], []) if about in functions and functions[about]["ref"] != ref else [])
         status = statuses.get(ref, {})
-        cells = [text for key, text in sorted((status.get("cells") or {}).items())
-                 if key in ("math_check", "value_check", "logic_consistency", "hard_coded_numbers") and text and text != core.NOT_APPLICABLE]
+        cells = ["%s: %s" % (key.replace("_", " ").capitalize(), text) for key, text in sorted((status.get("cells") or {}).items())
+                 if text and text not in (core.NOT_APPLICABLE, core.NOT_RUN_YET)]
         first_of_unit = ref not in unit_shown
         unit_shown.add(ref)
         if not first_of_unit:
@@ -1143,7 +1146,7 @@ def implementation_map(store, settings=None):
                 "concepts": "; ".join(sorted({"%s %s" % (concept_of[c], c) for c in mine})),
                 "methodology": "\n".join(dict.fromkeys("%s (%s)" % (other, how_link) for other, how_link in linked if other in canon)),
                 "documentation": "\n".join(dict.fromkeys("%s (%s)" % (other, how_link) for other, how_link in linked if other in doc)),
-                "checks": "\n".join(cells), "status": status.get("status", ""), "flagged": ", ".join(sorted(set(items.get(ref, [])))) if first_of_unit else "",
+                "checks": "\n".join(cells), "searched": assessed.get(ref, {}).get("searched", "") if first_of_unit else "", "status": status.get("status", ""), "flagged": ", ".join(sorted(set(items.get(ref, [])))) if first_of_unit else "",
                 "how": how, "related": ", ".join(sorted(set(related.get(functions[about]["ref"], [])))) if first_row_of_function else "",
                 "final_output": decided.get(about, "") if first_row_of_function else ""}
 
@@ -1189,7 +1192,7 @@ def implementation_map(store, settings=None):
         if key in shown and node["kind"] != "number":
             rows.append({"map_id": map_id, "level": level, "step": "see %s" % shown[key], "role": "The same step as %s" % shown[key],
                          "function": node.get("function", ""), "variable": node["name"], "model_ref": "", "code": "", "concepts": "",
-                         "methodology": "", "documentation": "", "checks": "", "status": "", "flagged": "", "how": how, "related": "", "final_output": ""})
+                         "methodology": "", "documentation": "", "checks": "", "searched": "", "status": "", "flagged": "", "how": how, "related": "", "final_output": ""})
             return
         shown[key] = map_id
         row = row_for(node_id, level, map_id, how, frames)
@@ -1209,7 +1212,7 @@ def implementation_map(store, settings=None):
               and functions[name]["lines"][0] <= u["lines"][0] and u["lines"][-1] <= functions[name]["lines"][-1]}
     def branch(number, title, members):
         rows.append({"map_id": number, "level": 0, "step": title, "role": "Branch", "function": "", "variable": "", "model_ref": "", "code": "",
-                     "concepts": "", "methodology": "", "documentation": "", "checks": "", "status": "", "flagged": "",
+                     "concepts": "", "methodology": "", "documentation": "", "checks": "", "searched": "", "status": "", "flagged": "",
                      "how": "none" if not members else "%d" % len(members), "related": "", "final_output": ""})
         for position, member in enumerate(members, start=1):
             rows.append(dict(member, map_id="%s.%02d" % (number, position), level=1))
@@ -1223,8 +1226,13 @@ def implementation_map(store, settings=None):
     leftover = [u for u in units if u["ref"] not in mapped and u["ref"] not in inside]
     branch("90", "Model units no final output reaches", [
         {"step": u["name"] or u["kind"], "role": "Not reached from any final output", "function": u["name"] if u["kind"] == core.KIND_FUNCTION else "",
-         "variable": "", "model_ref": u["ref"], "code": core.cut_text(u["text"], 200), "concepts": "", "methodology": "", "documentation": "",
-         "checks": "", "status": statuses.get(u["ref"], {}).get("status", ""), "flagged": ", ".join(sorted(set(items.get(u["ref"], [])))),
+         "variable": "", "model_ref": u["ref"], "code": core.cut_text(u["text"], 200), "concepts": "",
+         "methodology": "\n".join(dict.fromkeys("%s (%s)" % (other, how_link) for other, how_link in links.get(u["ref"], []) if other.startswith("C-"))),
+         "documentation": "\n".join(dict.fromkeys("%s (%s)" % (other, how_link) for other, how_link in links.get(u["ref"], []) if other.startswith("D-"))),
+         "checks": "\n".join("%s: %s" % (key.replace("_", " ").capitalize(), text) for key, text in sorted((statuses.get(u["ref"], {}).get("cells") or {}).items())
+                             if text and text not in (core.NOT_APPLICABLE, core.NOT_RUN_YET)),
+         "searched": assessed.get(u["ref"], {}).get("searched", ""),
+         "status": statuses.get(u["ref"], {}).get("status", ""), "flagged": ", ".join(sorted(set(items.get(u["ref"], [])))),
          "how": "nothing in the package calls it" if u["name"] in not_reached else "no step of the map is this unit or contains it",
          "related": "", "final_output": decided.get(u["name"], "") if u["kind"] == core.KIND_FUNCTION else ""} for u in leftover])
     on_map = {ref for r in rows if r["map_id"][:2] not in ("90",) for ref in [r["model_ref"]] if ref} | inside
@@ -1250,12 +1258,12 @@ def implementation_map(store, settings=None):
     branch("91", "Methodology no step implements", [
         {"step": core.cut_text(c["text"], 160), "role": "States something no step of the map is linked to", "function": "", "variable": "",
          "model_ref": "", "code": "", "concepts": "", "methodology": "%s (%s)" % (c["ref"], " > ".join(c["heading_chain"])), "documentation": "",
-         "checks": "", "status": "", "flagged": "", "how": "no step of the map is linked to it by the AI judge, and it states a number, formula or rule",
+         "checks": "", "searched": "", "status": "", "flagged": "", "how": "no step of the map is linked to it by the AI judge, and it states a number, formula or rule",
          "related": "", "final_output": ""} for c in canon.values() if c["ref"] not in implemented and checkable(c) and not by_values(c)])
     named = {u["unit_ref"] for u in review.latest_concepts(store.read)[1] if u["concepts"]}
     branch("92", "Documentation describing nothing in the map", [
         {"step": core.cut_text(c["text"], 160), "role": "Describes nothing in the map", "function": "", "variable": "", "model_ref": "", "code": "",
-         "concepts": "", "methodology": "", "documentation": "%s (%s)" % (c["ref"], " > ".join(c["heading_chain"])), "checks": "",
+         "concepts": "", "methodology": "", "documentation": "%s (%s)" % (c["ref"], " > ".join(c["heading_chain"])), "checks": "", "searched": "",
          "status": statuses.get(c["ref"], {}).get("status", ""), "flagged": ", ".join(sorted(set(items.get(c["ref"], [])))),
          "how": "no step of the map is linked to it, and it names none of the model's concepts", "related": "", "final_output": ""}
         for c in doc.values() if c["ref"] not in implemented and c["ref"] not in named])
@@ -1354,10 +1362,12 @@ def link_columns(unit_ref, prefix, corner_letter, links, searches, texts):
             prefix + "_why_not": "" if shown else search.get("note", ""),
             prefix + "_text": texts_by_ref((e["target"], texts.get(e["target"], "")) for e in shown)}
 
-def rows_mapping(store, corner):
-    """One row per model unit (corner "model") or per documentation unit (corner "doc").
-    The words in the assessment cells were written by verifier3 and verifier4; this only lays out."""
-    units = store.read("model_units") if corner == "model" else store.read("chunks_doc")
+def assessment_of(store):
+    """What the review made of each unit, for whichever sheet shows it: the links it was given with how
+    each was established, what was searched for it and why it was not linked, its checks, its status and
+    its flagged items. Until the two mapping sheets were removed this laid out those sheets; the same
+    words now go to Chunks_Doc, to Chunks_Model and to the map."""
+    units = store.read("model_units") + store.read("chunks_doc")
     texts = {r["ref"]: r["text"] for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
     links, searches = {}, {}
     for record in store.read("graph_ledger"):
@@ -1371,18 +1381,20 @@ def rows_mapping(store, corner):
         merged.update({k: v for k, v in record.items() if v})
         searches[key] = merged
     statuses = {r["unit_ref"]: r for r in store.read("unit_status")}
-    base_rows = rows_model_units(units) if corner == "model" else rows_chunks(units)
-    rows = []
-    for row in base_rows:
-        row.update(link_columns(row["ref"], "canon", "C-", links, searches, texts))
-        other = ("doc", "D-") if corner == "model" else ("model", "M-")
-        row.update(link_columns(row["ref"], other[0], other[1], links, searches, texts))
-        status = statuses.get(row["ref"])
+    found = {}
+    for unit in units:
+        model = unit["ref"].startswith("M-")
+        row = dict(link_columns(unit["ref"], "canon", "C-", links, searches, texts))
+        other = ("doc", "D-") if model else ("model", "M-")
+        row.update(link_columns(unit["ref"], other[0], other[1], links, searches, texts))
+        status = statuses.get(unit["ref"])
         row["status"] = status["status"] if status else core.NOT_RUN_YET
         row["item_ids"] = ("\n".join(status["item_ids"]) or "No item") if status else ""
         row["cells"] = status["cells"] if status else {}
-        rows.append(row)
-    return rows
+        row["searched"] = "\n".join(filter(None, [row.get("canon_searched", ""), row.get("canon_why_not", ""),
+                                                  row.get(other[0] + "_searched", ""), row.get(other[0] + "_why_not", "")])) or core.NOT_APPLICABLE
+        found[unit["ref"]] = row
+    return found
 
 def rows_coverage(model_rows, doc_rows, store):
     """Counted from the rows actually written: the second, independent route of the
@@ -1432,17 +1444,20 @@ def rows_flagged(store):
 
 def sheet_rows(store, paths, settings, progress):
     """The rows of all eight sheets, by sheet name."""
-    model_rows, doc_rows = rows_mapping(store, "model"), rows_mapping(store, "doc")
-    for row in model_rows + doc_rows:
-        for name, text in row.pop("cells").items():
-            row[name] = text
+    assessed = assessment_of(store)
+    def with_assessment(rows):
+        for row in rows:
+            found = assessed.get(row["ref"], {})
+            row.update({key: value for key, value in found.items() if key != "cells"})
+            row.update(found.get("cells") or {})
+        return rows
+    model_rows = with_assessment(rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store), concept_names_by_ref(store)))
+    doc_rows = with_assessment(rows_chunks(store.read("chunks_doc"), scope_of(store), concept_names_by_ref(store)))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
             "Chunks_Canon": rows_chunks(store.read("chunks_canon"), scope_of(store), concept_names_by_ref(store)),
-            "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store), concept_names_by_ref(store)),
-            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store), concept_names_by_ref(store)),
+            "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
             "Concepts": rows_concepts(store),
             "Model_Implementation_Map": implementation_map(store, settings),
-            "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
             "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
 
 def check_written_totals(rows, store):
@@ -1496,6 +1511,20 @@ sheets:
   - {header: Source file, group: identity, field: source_file, width: 28}
   - {header: Cross-references, group: documentation, field: refs_out, width: 24}
   - {header: States something checkable, group: assessments, field: checkable, width: 16}
+  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
+  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
+  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
+  - {header: Model ref(s), group: documentation, field: model_refs, width: 14}
+  - {header: Relation (model), group: documentation, field: model_relation, width: 22}
+  - {header: How established (model), group: documentation, field: model_how, width: 50}
+  - {header: What was searched / why not mapped, group: methodology, field: searched, width: 40}
+  - {header: Value check, group: assessments, field: value_check, width: 50}
+  - {header: Math check, group: assessments, field: math_check, width: 50}
+  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
+  - {header: Parameter note (AI), group: assessments, field: parameter_note_ai, width: 44}
+  - {header: Documentation quality notes, group: assessments, field: quality_notes, width: 40}
+  - {header: Overall status, group: assessments, field: status, width: 26}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 16}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Chunks_Model
   columns:
@@ -1512,6 +1541,8 @@ sheets:
   - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
   - {header: Numbers used, group: code_text, field: numbers, width: 20}
   - {header: Exported, group: identity, field: exported, width: 10}
+  - {header: Overall status, group: assessments, field: status, width: 26}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 16}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Concepts
   columns:
@@ -1538,62 +1569,12 @@ sheets:
   - {header: Methodology, group: assessments, field: methodology, width: 30}
   - {header: Documentation, group: assessments, field: documentation, width: 30}
   - {header: Checks, group: assessments, field: checks, width: 36}
+  - {header: What was searched / why not mapped, group: assessments, field: searched, width: 40}
   - {header: Status, group: assessments, field: status, width: 24}
   - {header: Flagged items, group: assessments, field: flagged, width: 16}
   - {header: How established, group: assessments, field: how, width: 44}
   - {header: Related model units, group: assessments, field: related, width: 22}
   - {header: Final output (your decision), group: reviewer_input, field: final_output, width: 16, input_text: true}
-- name: Mapping_Model_to_Canon_and_Doc
-  columns:
-  - {header: Model ref, group: identity, field: ref, width: 10}
-  - {header: Kind, group: identity, field: kind, width: 18}
-  - {header: Name, group: identity, field: name, width: 22, input_text: true}
-  - {header: File and lines, group: identity, field: where, width: 26}
-  - {header: Code text, group: code_text, field: text, width: 60, input_text: true}
-  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
-  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
-  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
-  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
-  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
-  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
-  - {header: Doc ref(s), group: documentation, field: doc_refs, width: 14}
-  - {header: Relation (doc), group: documentation, field: doc_relation, width: 22}
-  - {header: How established (doc), group: documentation, field: doc_how, width: 50}
-  - {header: What was searched (doc), group: documentation, field: doc_searched, width: 50}
-  - {header: Why not mapped (doc), group: documentation, field: doc_why_not, width: 40}
-  - {header: Doc text, group: documentation, field: doc_text, width: 60, input_text: true}
-  - {header: Math check, group: assessments, field: math_check, width: 50}
-  - {header: Parameter completeness, group: assessments, field: parameter_completeness, width: 50}
-  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
-  - {header: Documentation consistency, group: assessments, field: documentation_consistency, width: 50}
-  - {header: Hard-coded numbers, group: assessments, field: hard_coded_numbers, width: 44}
-  - {header: Unit test, group: assessments, field: unit_test, width: 34}
-  - {header: Quality notes (AI), group: assessments, field: quality_notes_ai, width: 44}
-  - {header: Overall status, group: assessments, field: status, width: 30}
-  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
-- name: Mapping_Doc_to_Canon_and_Model
-  columns:
-  - {header: Doc ref, group: identity, field: ref, width: 10}
-  - {header: Type, group: identity, field: kind, width: 11}
-  - {header: Section (heading chain), group: identity, field: section, width: 40}
-  - {header: Doc text, group: documentation, field: text, width: 60, input_text: true}
-  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
-  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
-  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
-  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
-  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
-  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
-  - {header: Model ref(s), group: code_text, field: model_refs, width: 14}
-  - {header: Relation (model), group: code_text, field: model_relation, width: 22}
-  - {header: How established (model), group: code_text, field: model_how, width: 50}
-  - {header: Model text, group: code_text, field: model_text, width: 60, input_text: true}
-  - {header: Value check, group: assessments, field: value_check, width: 50}
-  - {header: Math check, group: assessments, field: math_check, width: 50}
-  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
-  - {header: Parameter note (AI), group: assessments, field: parameter_note_ai, width: 44}
-  - {header: Documentation quality notes, group: assessments, field: quality_notes, width: 44}
-  - {header: Overall status, group: assessments, field: status, width: 30}
-  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
 - name: Mapping_Coverage
   columns:
   - {header: Corner, group: identity, field: corner, width: 30}
@@ -1652,7 +1633,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     for row_number, row in enumerate(rows, start=2):
         for number, column in enumerate(columns, start=1):
             value = row.get(column["field"])
-            if value in (None, "") and column["group"] == "assessments" and sheet_layout["name"].startswith(("Mapping_Model", "Mapping_Doc")):
+            if value in (None, "") and column["field"] in REVIEW_CELLS and sheet_layout["name"].startswith("Chunks_"):
                 value = core.NOT_RUN_YET
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap

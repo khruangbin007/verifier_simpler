@@ -310,62 +310,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Exported | identity |  |
 | Reading note | assessments |  |
 
-**Mapping_Model_to_Canon_and_Doc**
-
-| Column | Colour group | What it shows |
-|---|---|---|
-| Model ref | identity |  |
-| Kind | identity |  |
-| Name | identity |  |
-| File and lines | identity |  |
-| Code text | code text |  |
-| Canon ref(s) | methodology |  |
-| Relation (canon) | methodology |  |
-| How established (canon) | methodology |  |
-| What was searched (canon) | methodology |  |
-| Why not mapped (canon) | methodology |  |
-| Canon text | methodology |  |
-| Doc ref(s) | documentation |  |
-| Relation (doc) | documentation |  |
-| How established (doc) | documentation |  |
-| What was searched (doc) | documentation |  |
-| Why not mapped (doc) | documentation |  |
-| Doc text | documentation |  |
-| Math check | assessments | Result of comparing the unit's formula with every linked formula: the aligned symbols, then agrees, differs with a counterexample, or could not be decided with its reason. |
-| Parameter completeness | assessments | For a stored table: the cell-by-cell comparison with the linked table. For code: which symbol of the formula each code symbol stands for. |
-| Logic consistency | assessments | Floors, caps and thresholds stated in linked passages, and whether the code applies them. On the documentation sheet: the judged relations. |
-| Documentation consistency | assessments | Results of the checks of the roxygen block and help page, and where the model documentation describes the unit. |
-| Hard-coded numbers | assessments | Every non-trivial number in the code, and where the linked passages state it. |
-| Unit test | assessments | Which test block calls the function. For information only; it never raises an item. |
-| Quality notes (AI) | assessments | Text written by the model, labelled as such and filtered. |
-| Overall status | assessments | The one final status of the unit (the statuses are listed in this section). |
-| Flagged item(s) | assessments | Ids of the rows on Flagged_Items that name this unit. |
-
-**Mapping_Doc_to_Canon_and_Model**
-
-| Column | Colour group | What it shows |
-|---|---|---|
-| Doc ref | identity |  |
-| Type | identity |  |
-| Section (heading chain) | identity |  |
-| Doc text | documentation |  |
-| Canon ref(s) | methodology |  |
-| Relation (canon) | methodology |  |
-| How established (canon) | methodology |  |
-| What was searched (canon) | methodology |  |
-| Why not mapped (canon) | methodology |  |
-| Canon text | methodology |  |
-| Model ref(s) | code text |  |
-| Relation (model) | code text |  |
-| How established (model) | code text |  |
-| Model text | code text |  |
-| Value check | assessments | Numbers and tables of the documentation compared with the methodology under the value rule. |
-| Math check | assessments | Result of comparing the unit's formula with every linked formula: the aligned symbols, then agrees, differs with a counterexample, or could not be decided with its reason. |
-| Logic consistency | assessments | Floors, caps and thresholds stated in linked passages, and whether the code applies them. On the documentation sheet: the judged relations. |
-| Parameter note (AI) | assessments | A column mapping or symbol alignment proposed by the model, where one was asked for. |
-| Documentation quality notes | assessments | Deterministic notes: references that resolve to nothing, reconstructed numbering, unreadable parts, repeated paragraphs. |
-| Overall status | assessments | The one final status of the unit (the statuses are listed in this section). |
-| Flagged item(s) | assessments | Ids of the rows on Flagged_Items that name this unit. |
+**Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets, one of the model to the methodology and the documentation, the other of the documentation to the methodology and the model, held one row per model unit and one row per documentation unit: what each was linked to, what was searched for it, its checks, its status and its flagged items. The Model Implementation Map now shows the model unit in its place in the computation, so those two sheets are gone and nothing they held is lost. A model unit's links, what was searched for it, its checks and its status are on its row of `Model_Implementation_Map` — on its first row, where it appears more than once, and in branch 90 for the units no final output reaches — and its status and flagged items are also on `Chunks_Model`, beside the unit itself. A documentation unit's links, what was searched, its checks, its status and its flagged items are on `Chunks_Doc`, beside the passage.
 
 **Mapping_Coverage**
 

@@ -22,8 +22,9 @@ WHAT IT TAKES IN AND PRODUCES
   rule_checks, package_doc_checks, unit_status, flagged_items and coverage records.
 
 WHICH SHEETS SHOW ITS RESULTS
-  Mapping_Canon_Model, Mapping_Model_Doc and Mapping_Canon_Doc (the links, with refs, relations
-  and how each was established); Flagged_Items; and the coverage identity on Model_Package_Info.
+  Model_Implementation_Map (each model unit in its place in the computation, with its links, checks
+  and status), Chunks_Doc (a documentation passage with its links and checks), Chunks_Model,
+  Mapping_Coverage, Flagged_Items; and the coverage identity on Model_Package_Info.
 
 DESIGN RULES ENFORCED HERE
   R1  a status is a plain observation; a flagged item is a question for a person, never a grade
@@ -2935,7 +2936,7 @@ def lines_or(lines, fallback):
     return "\n".join(dict.fromkeys(lines)) if lines else fallback
 
 def model_cells(unit, world, facts):
-    """The assessment cells of one row of Mapping_Model_to_Canon_and_Doc. Every cell shows real
+    """The assessment cells of a model unit, shown on its row of the map and its status on Chunks_Model. Every cell shows real
     content or "Not applicable" for this kind of unit."""
     mine, na = facts.get(unit["ref"], {}), core.NOT_APPLICABLE
     is_code = unit["kind"] in (core.KIND_FUNCTION, core.KIND_FORMULA)
@@ -2960,7 +2961,7 @@ def model_cells(unit, world, facts):
             "quality_notes_ai": lines_or(ai_notes, "No note")}
 
 def doc_cells(chunk, world, facts, duplicates):
-    """The assessment cells of one row of Mapping_Doc_to_Canon_and_Model."""
+    """The assessment cells of a documentation unit, shown beside the passage on Chunks_Doc."""
     mine, na = facts.get(chunk["ref"], {}), core.NOT_APPLICABLE
     relations = ["%s %s" % (world["links"][(chunk["ref"], ref)]["relation"], ref) for ref in linked(world, chunk["ref"], "C-") if (chunk["ref"], ref) in world["links"]]
     relations += ["%s: %s" % (ref, (world["links"].get((ref, chunk["ref"])) or world["links"].get((chunk["ref"], ref)))["relation"]) for ref in linked(world, chunk["ref"], "M-")]
