@@ -64,8 +64,8 @@ for folder in (ENGINE, TESTS):
     if folder not in sys.path:
         sys.path.insert(0, folder)
 
-import core        # noqa: E402
-import runner      # noqa: E402
+import verifier    # noqa: E402
+core = reading = review = runner = verifier   # the engine is one module now
 
 
 def remember(measure, date, sample, chat, **numbers):
@@ -877,7 +877,7 @@ def map_measure(sample="J_pipeline", record=True, chat=None):
     is given. Raw inputs are the leaves of the walk down from each final output. What the map says of the
     documents is read from its branches 91 and 92, on a whole run with the stand-in. Returns {part: (found, total)}."""
     import helpers
-    import reading
+    import verifier
     import yaml
     with open(os.path.join(SAMPLES, sample, "gold_map.yaml"), encoding="utf-8") as handle:
         gold = yaml.safe_load(handle)
@@ -1034,10 +1034,10 @@ def manual_problems():
     """Every way the one manual can drift from the code, as plain sentences. The manual may name
     a function (`module.name`), a sheet, a test, a setting or a design rule; each must exist, and
     every setting and every design rule must be explained. An empty list means they agree."""
-    import review
+    import verifier
     text = open(MANUAL, encoding="utf-8").read()
     found = []
-    import reading
+    import verifier
     modules = {"core": core, "reading": reading, "review": review, "runner": runner, "develop": sys.modules[__name__]}
     for module, name in sorted(set(re.findall(r"`(core|reading|review|runner|develop)\.([A-Za-z_]\w*)`", text))):
         if name == "py":
@@ -1145,10 +1145,12 @@ if missing:
             print("The install did not finish. What pip said:\n" + hide(done.stderr)[-1500:])
             print("If pip found no versions that fit, the index lacks an older version that works with this runtime's own packages. Nothing the runtime depends on was changed.")
         else:
-            optional = requirements.replace("requirements.txt", "requirements-optional.txt")
-            if os.path.exists(optional):
-                extra = subprocess.run(command[:4] + ["-r", optional] + command[6:], capture_output=True, text=True)
-                print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures are then not read.")
+            wanted = open(requirements, encoding="utf-8").read().split("# --- optional ---")
+            if len(wanted) > 1:
+                spare = os.path.join(tempfile.gettempdir(), "optional.txt")
+                open(spare, "w", encoding="utf-8").write(wanted[1])
+                extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
+                print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures of text will say so.")
             probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
             if probe.returncode:
                 print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip().splitlines()[-1]))
@@ -1161,7 +1163,7 @@ else:
     for folder in (os.path.join(HOME, "engine"), os.path.join(HOME, "engine", "tests")):
         if folder not in sys.path:
             sys.path.insert(0, folder)
-    import runner
+    import verifier
     if "LIVE" not in globals():
         LIVE = runner.LiveValues()
     LIVE.update(w.get("llm_endpoint"), w.get("llm_token"), w.get("reviewer_id"))

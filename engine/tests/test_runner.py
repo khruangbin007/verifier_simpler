@@ -6,8 +6,8 @@ import time
 import unittest
 
 import helpers
-import core
-import runner
+import verifier
+core = runner = verifier   # the engine is one module now
 import failing_chat
 import standin_chat
 

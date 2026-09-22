@@ -10,8 +10,9 @@ import os
 import unittest
 
 import helpers
+import verifier
+runner = verifier   # the engine is one module now
 import develop
-import runner
 
 
 class ManualAndCode(unittest.TestCase):

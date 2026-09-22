@@ -5,10 +5,8 @@ import tarfile
 import unittest
 
 import helpers
-import core
-import reading
-import review
-import runner
+import verifier
+core = reading = review = runner = verifier   # the engine is one module now
 import build_samples
 import develop
 

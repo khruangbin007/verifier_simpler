@@ -7,7 +7,8 @@ import re
 import unittest
 
 import helpers
-import core
+import verifier
+core = verifier   # the engine is one module now
 import develop
 
 BUNDLES = ("core", "reading", "review", "runner", "develop")

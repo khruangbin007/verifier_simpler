@@ -4,10 +4,8 @@ import unittest
 import yaml
 
 import helpers
-import core
-import reading
-import review
-import runner
+import verifier
+core = reading = review = runner = verifier   # the engine is one module now
 SETTINGS = runner.make_settings()
 NOTATION = reading.load_notation()
 STOP = set()

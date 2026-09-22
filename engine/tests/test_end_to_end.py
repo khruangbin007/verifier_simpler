@@ -7,8 +7,8 @@ import shutil
 import unittest
 
 import helpers
-import core
-import runner
+import verifier
+core = runner = verifier   # the engine is one module now
 import standin_chat
 
 AUDIT_KINDS = ("chunks_canon", "chunks_doc", "model_units", "parameter_tables", "candidates", "search_records", "graph_ledger",

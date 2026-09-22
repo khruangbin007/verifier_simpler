@@ -14,10 +14,8 @@ import unittest
 import yaml
 
 import helpers
-import core
-import reading
-import review
-import runner
+import verifier
+core = reading = review = runner = verifier   # the engine is one module now
 SHAPE = """<?xml version="1.0"?>
 <rules>
   <ruleblock idx="1."><blockcaption>Loan periods</blockcaption>

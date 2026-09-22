@@ -13,10 +13,8 @@ import unittest
 import yaml
 
 import helpers
-import core
-import reading
-import review
-import runner
+import verifier
+core = reading = review = runner = verifier   # the engine is one module now
 import fixture_package
 def read(mode, chat=None):
     folder = helpers.scratch()

@@ -1,12 +1,8 @@
-# Everything must exist on the internal JFrog index (plan 2.15). Required first.
-PyYAML>=6.0
-openpyxl>=3.1
-python-docx>=1.1
-numpy>=1.24
-scipy>=1.10
-sympy>=1.12
-rdata>=1.0
-# Optional: each missing one degrades a named capability into a status and a flagged item.
-pdfplumber>=0.10
-pypdf>=4.0
-# pyreadr   (optional second reader of parameter data; compiled wheel)
+# What the engine needs. Cell 3 installs these; a missing one stops the run.
+openpyxl==3.1.2
+PyYAML==6.0.1
+
+# --- optional ---
+# Installed in a second step that is allowed to fail: each one missing degrades a named capability
+# into a plain note, and nothing else changes. Reads the words inside pictures (OCR).
+rapidocr-onnxruntime>=1.3

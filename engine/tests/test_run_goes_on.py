@@ -12,8 +12,8 @@ import os
 import unittest
 
 import helpers
-import core
-import runner
+import verifier
+core = runner = verifier   # the engine is one module now
 import standin_chat
 
 BROKEN = "review.build_graph"

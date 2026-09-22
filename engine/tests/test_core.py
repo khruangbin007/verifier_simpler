@@ -1,5 +1,4 @@
 """Tests of core.py: contracts, canonical JSON, hashes, numbers, symbols, the expression tree."""
-import core
 import unittest
 import helpers  # noqa: F401  (sets the import path)
 from core import Expr

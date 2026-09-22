@@ -7,9 +7,8 @@ import yaml
 import os
 
 import helpers
-import core
-import review
-import runner
+import verifier
+core = review = runner = verifier   # the engine is one module now
 SETTINGS = runner.make_settings()
 PROVENANCE = core.Provenance("Run_X", "05", "build-graph", "0.0.1")
 
