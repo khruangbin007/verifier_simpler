@@ -1195,9 +1195,12 @@ def compare_values(stated, other, exact=False):
     return "differs", ""
 
 def number_of(text):
-    """The single number a table cell or a default holds, or None."""
+    """The single number a table cell or a default holds, or None. A cell that writes one value
+    twice - "0.15 (15%)" - holds one number, not none."""
     found = core.find_numbers(str(text))
-    return found[0] if len(found) == 1 else core.parse_number(str(text).strip())
+    if found and all(Decimal(n["value"]) == Decimal(found[0]["value"]) for n in found):
+        return found[0]
+    return core.parse_number(str(text).strip()) if not found else None
 
 # ---------------------------------------------------------------- expression tree -> SymPy, node by node
 class NotEvaluable(Exception):
@@ -2346,7 +2349,7 @@ def lines_or(lines, fallback):
 def model_cells(unit, world, facts):
     """The assessment cells of one row of Mapping_Model_to_Canon_and_Doc. Every cell shows real
     content or "Not applicable" for this kind of unit."""
-    mine, code, na = facts.get(unit["ref"], {}), unit.get("code"), core.NOT_APPLICABLE
+    mine, na = facts.get(unit["ref"], {}), core.NOT_APPLICABLE
     is_code = unit["kind"] in (core.KIND_FUNCTION, core.KIND_FORMULA)
     math = [r for r in mine.get("math", [])]
     pairs = ["%s: `%s` (%s)" % (stated, c, how) for r in math for c, stated, how in r["alignment"]]

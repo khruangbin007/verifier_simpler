@@ -265,6 +265,28 @@ class Store(unittest.TestCase):
         self.assertEqual(len(other.read_calls()), 4)
         self.assertEqual(other.read("coverage"), [{"total": 2}])
 
+    def test_a_read_during_a_half_written_line_sees_only_the_complete_lines(self):
+        """Cell 4 reads the record while the run's own thread writes it. A line caught half way
+        is left for the next read, never parsed, never an exception in the status cell."""
+        store, _ = fresh_store()
+        os.makedirs(store.local_dir)
+        store.append("a", [{"n": 1}])
+        with open(store.path(runner.RECORDS_FILE), "a", encoding="utf-8") as handle:
+            handle.write('{"kind": "a", "record": {"n": 2, "text": "half of a lo')
+        self.assertEqual(store.read("a"), [{"n": 1}])
+        with open(store.path(runner.RECORDS_FILE), "a", encoding="utf-8") as handle:
+            handle.write('ng line"}}\n')
+        self.assertEqual(store.read("a"), [{"n": 1}, {"n": 2, "text": "half of a long line"}])
+
+    def test_the_manifest_is_never_seen_half_written(self):
+        """The manifest is rewritten whole; it is written beside and swapped in, so a reader in
+        the other thread sees the old one or the new one and never an empty file."""
+        store, _ = fresh_store()
+        os.makedirs(store.local_dir)
+        store.append("run_manifest", [{"run_id": "r1"}])
+        self.assertFalse(os.path.exists(store.path(runner.MANIFEST_FILE + ".writing")))
+        self.assertEqual(store.read("run_manifest"), [{"run_id": "r1"}])
+
     def test_a_record_kind_is_read_back_in_the_order_written_and_kinds_do_not_mix(self):
         store, _ = fresh_store()
         os.makedirs(store.local_dir)

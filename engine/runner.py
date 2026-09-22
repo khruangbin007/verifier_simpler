@@ -43,6 +43,7 @@ import datetime
 import getpass
 import gzip
 import inspect
+import io
 import json
 import os
 import re
@@ -262,21 +263,29 @@ class AuditStore:
     local_dir: str; remote_dir: str
     synced: dict = field(default_factory=dict)
     cache: list = field(default_factory=list)      # records.jsonl as read, so a read does not re-parse the file
-    cached_size: int = -1
+    cached_size: int = 0                            # bytes of records.jsonl already parsed into the cache
 
     def path(self, name):
         return os.path.join(self.local_dir, name)
 
     def records(self):
-        """Every line of records.jsonl, parsed once per change of the file."""
+        """Every complete line of records.jsonl, parsed once: only the bytes written since the
+        last read are parsed, and only up to the last line break. A line that is still being
+        written by the run's own thread (cell 4 reads while it writes) is left for the next
+        read rather than raising. The file only ever grows, so a shorter file means a fresh run
+        of the same folder and the cache starts again."""
         target = self.path(RECORDS_FILE)
         size = os.path.getsize(target) if os.path.exists(target) else 0
-        if size != self.cached_size:
-            self.cache = []
-            if size:
-                with open(target, encoding="utf-8") as handle:
-                    self.cache = [json.loads(line) for line in handle if line.strip()]
-            self.cached_size = size
+        if size < self.cached_size:
+            self.cache, self.cached_size = [], 0
+        if size > self.cached_size:
+            with open(target, "rb") as handle:
+                handle.seek(self.cached_size)
+                new = handle.read(size - self.cached_size)
+            complete = new.rfind(b"\n") + 1
+            if complete:
+                self.cache.extend(json.loads(line) for line in new[:complete].decode("utf-8").split("\n") if line.strip())
+                self.cached_size += complete
         return self.cache
 
     def manifest(self):
@@ -300,8 +309,10 @@ class AuditStore:
         if kind in AUDIT_OBJECTS:
             whole = self.manifest()
             whole[kind] = core.to_plain(records[-1])
-            with open(self.path(MANIFEST_FILE), "w", encoding="utf-8") as handle:
+            partial = self.path(MANIFEST_FILE + ".writing")   # written beside, then swapped in: a reader in
+            with open(partial, "w", encoding="utf-8") as handle:  # the other thread never sees a half-written file
                 handle.write(json.dumps(whole, sort_keys=True, indent=1, ensure_ascii=False))
+            os.replace(partial, self.path(MANIFEST_FILE))
             return
         with open(self.path(RECORDS_FILE), "a", encoding="utf-8") as handle:
             for record in records:
@@ -1403,6 +1414,25 @@ def build_report(ctx):
     return core.StepResult({"graph_summary": [summary]}, {"nodes": len(nodes), "edges": len(edges)}, [])
 
 # ---------------------------------------------------------------- verify this evidence pack
+def contents_of(path):
+    """Every byte string a file holds, looking INSIDE the compressed ones: the call log is gzip,
+    and the workbook and the report are ZIP archives, so a token written into any of them would
+    be invisible to a search of the raw bytes. Yields the raw bytes first, then each member of a
+    ZIP and the decompressed stream of a gzip. Enforces: R8"""
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    yield raw
+    try:
+        if raw.startswith(b"\x1f\x8b"):
+            yield gzip.decompress(raw)
+        elif raw.startswith(b"PK\x03\x04"):
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                for member in archive.namelist():
+                    yield archive.read(member)
+    except Exception:
+        return                                       # a damaged archive is caught by the other lines of the verification
+
 def verify_evidence_pack(paths, settings, live=None):
     """Works from a run folder and the Inputs folder alone. Returns rows (what was checked,
     "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
@@ -1444,13 +1474,11 @@ def verify_evidence_pack(paths, settings, live=None):
         line("The workbook carries this run's ids and fingerprints", all(found.get(k) == v for k, v in identity.items()))
     except Exception:
         line("The workbook carries this run's ids and fingerprints", False, "Output.xlsx could not be opened")
-    secrets = [value for value in (list(live.recent_tokens) if live else []) if value]
+    secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
     leaked = []
     for folder, _, names in os.walk(paths.run_dir):
         for name in names:
-            with open(os.path.join(folder, name), "rb") as handle:
-                data = handle.read()
-            leaked += [name for value in secrets if value.encode("utf-8") in data]
+            leaked += [name for data in contents_of(os.path.join(folder, name)) for value in secrets if value in data]
     line("No access token was written into the run folder", not leaked, ", ".join(sorted(set(leaked))))
     return rows
 

@@ -316,8 +316,13 @@ def chain_head(records):
     return records[-1]["record_hash"] if records else GENESIS_HASH
 
 # ---------------------------------------------------------------- numbers
+# A number as prose writes it. Thousands may be grouped with commas in groups of exactly three
+# ("1,000", "250,000.5"): that grouping is unambiguous, so it is read as one number. A comma
+# between other digit counts ("1,5") is not a grouping and stays two numbers, because in some
+# writing it is a decimal comma and guessing which would be guessing. Space grouping ("1 000") is
+# not read either, since "section 3 100 samples" would fuse. Enforces: R3
 _NUMBER_RE = re.compile(
-    r"(?<![\w.])(?P<num>[-\u2212]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
+    r"(?<![\w.])(?P<num>[-\u2212]?(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?)"
     r"(?P<unit>\s?%|\s?(?:basis points?|bps?)\b|(?:st|nd|rd|th)\s+percentile\b)?")
 _LABEL_BEFORE_RE = re.compile(
     r"(?:table|section|sections|equation|eq\.|figure|fig\.|annex|appendix|chapter|paragraph|"
@@ -329,6 +334,8 @@ def parse_number(as_written, unit=""):
     first; `decimals` counts decimals after that conversion, because the value rule
     (plan 2.8) compares at the precision the methodology states."""
     text = as_written.replace("\u2212", "-").strip()
+    if re.fullmatch(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?:[eE][-+]?\d+)?", text):
+        text = text.replace(",", "")                 # the thousands grouping is how it was written, not part of the value
     try:
         value = Decimal(text)
     except InvalidOperation:
@@ -1447,16 +1454,17 @@ def detect_format(data, file_name=""):
         return "image"
     if looks_binary(data):
         return "binary"
-    lowered = head.lower()
+    lowered, name = head.lower(), file_name.lower()
+    if name.endswith(MARKDOWN_NAMES):
+        return "markdown"                            # Markdown may open with an HTML comment or table; the name decides
     if lowered.startswith((b"mime-version:", b"from:", b"content-type:")) or b"multipart/related" in lowered[:1024]:
         return "mhtml"
     if lowered.startswith(b"<"):
         return "html" if re.match(rb"<(!doctype\s+html|html)\b", lowered) else "xml"
-    name = file_name.lower()
     sample = decode_text(data[:16384])
     if name.endswith(LATEX_NAMES) and re.search(r"\\[a-zA-Z]+", sample) or re.search(r"\\documentclass|\\begin\{document\}", sample):
         return "latex"
-    if name.endswith(MARKDOWN_NAMES) or len(re.findall(r"(?m)^#{1,6} \S", sample)) >= 2:
+    if len(re.findall(r"(?m)^#{1,6} \S", sample)) >= 2:
         return "markdown"
     if name.endswith(DELIMITED_NAMES) and delimiter_of(sample):
         return "delimited"
@@ -1526,8 +1534,13 @@ def markdown_inline(text):
 TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 LIST_MARK = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+
 def markdown_to_markup(text):
-    """Markdown as markup: # headings, paragraphs, lists, tables, fenced code and quotations."""
+    """Markdown as markup: # headings, paragraphs, lists, tables, fenced code and quotations. An
+    HTML comment is left out by the same rule in the markup and in the words: it is a note to
+    whoever edits the file, not what the document says."""
+    text = HTML_COMMENT.sub("", text)
     out, paragraph, rows, fenced, items = [], [], [], None, []
     def flush():
         if paragraph:
@@ -1593,7 +1606,7 @@ def markdown_words(text):
     """The words of a Markdown file, with its syntax taken away by rule rather than by reading its
     structure: heading marks, list marks, table rules and bars, fence lines, quotation marks."""
     kept = []
-    for line in text.split("\n"):
+    for line in HTML_COMMENT.sub("", text).split("\n"):
         if TABLE_RULE.match(line) or line.strip().startswith(("```", "~~~")) or re.match(r"^(=+|-+)\s*$", line):
             continue
         line = re.sub(r"^\s*#{1,6}\s+|\s+#+\s*$", " ", line)

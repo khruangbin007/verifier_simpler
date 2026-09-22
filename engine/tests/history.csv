@@ -37,3 +37,4 @@ reading,2026-09-21,F_capital,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=
 reading,2026-09-21,F_capital,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=1 tokens=1906 lost=0 added=0
 reading,2026-09-21,F_capital_known,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=0 tokens=0 lost=0 added=0
 reading,2026-09-21,F_capital_known,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=1 tokens=1906 lost=0 added=0
+harness,2026-09-22,A_minimal,stand-in,false_flags=0 flagged_as_expected=2 flagged_otherwise=0 gold_clean_units=26 mutants=2 not_flagged=0

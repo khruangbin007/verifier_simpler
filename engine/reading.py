@@ -819,6 +819,9 @@ def read_picture(data, state):
     try:
         found = sorted(PICTURE_READER[0](data)[0] or [], key=lambda item: (round(item[0][0][1] / 14), item[0][0][0]))
     except Exception:                                    # a form the reader cannot open (.emf, .wmf)
+        unread = "The words inside one or more pictures were not read: the picture is in a form the reader cannot open."
+        if unread not in state.notes:
+            state.notes.append(unread)                   # the picture is still a unit; only its words are missing (R2)
         return ""
     rows = {}
     for box, words, _ in found:                          # what stands on one line of the picture stays on one line
@@ -1260,7 +1263,6 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             chain.append(block["text"])
             carried.append((block, False))
             paragraph_number, section_numbering = 0, block["numbering"]
-            reconstructed = block["reconstructed"]
             # The number belongs to the heading whether the document wrote it (num="1.") or Word
             # left it to be counted back. Without it a citation to "section 2" can be resolved
             # against nothing, and the number itself reaches no unit at all. Enforces: R13

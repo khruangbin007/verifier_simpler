@@ -206,6 +206,17 @@ class Finding4MarkdownKeepsItsStructure(unittest.TestCase):
         self.assertNotIn("**", text)
         self.assertTrue(account["closed"], (account["what unaccounted"], account["what injected"]))
 
+    def test_a_markdown_file_that_opens_with_an_html_comment_is_still_markdown(self):
+        """A wiki export begins with a comment. It starts with "<", which looked like XML; the
+        name decides for Markdown, and the comment - a note to an editor, not what the document
+        says - is left out by one rule in the markup and in the words, so the account closes."""
+        data = b"<!-- exported from the wiki on Monday -->\n# Capital\n\nThe buffer is three per cent.\n"
+        self.assertEqual(core.detect_format(data, "rules.md"), "markdown")
+        chunks, _, account = read("rules.md", data)
+        self.assertEqual([(chunk["heading_chain"], chunk["text"]) for chunk in chunks],
+                         [(["Capital"], "The buffer is three per cent.")])
+        self.assertTrue(account["closed"], (account["what unaccounted"], account["what injected"]))
+
     def test_an_underscore_inside_a_name_survives(self):
         chunks, _, _ = read("names.md", b"# Symbols\n\nThe parameter rho_a is the asset correlation.\n")
         self.assertIn("rho_a", " ".join(chunk["text"] for chunk in chunks))

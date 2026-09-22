@@ -433,7 +433,7 @@ def recall(samples):
 # ================================================================================================
 # ---------------------------------------------------------------- from tools/live_trial.py
 
-def one_run(sample, chat, live, concurrency):
+def trial_run(sample, chat, live, concurrency):
     """Steps 01 to 08 on a fresh copy of the sample. Returns the accepted links, the call records and the seconds used."""
     projects = tempfile.mkdtemp(prefix="verifier_trial_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "TRIAL", "2026-01-01", "Inputs"))
@@ -483,8 +483,8 @@ def measures(sample, result):
 def run_trial(chat, live=None, samples=("F_capital", "A_minimal"), concurrency=4, label="the real chat()"):
     lines = ["# Live trial of the judge questions", "", "Run on %s with %s." % (datetime.date.today().isoformat(), label), ""]
     for sample in samples:
-        first = measures(sample, one_run(sample, chat, live, 1))
-        second = measures(sample, one_run(sample, chat, live, concurrency))
+        first = measures(sample, trial_run(sample, chat, live, 1))
+        second = measures(sample, trial_run(sample, chat, live, concurrency))
         same = first.pop("links") == second.pop("links")
         lines += ["## %s" % sample, "", "| Measure | Concurrency 1 | Concurrency %d |" % concurrency, "|---|---|---|"]
         lines += ["| %s | %s | %s |" % (name, first[name], second[name]) for name in first]
@@ -608,13 +608,20 @@ def run_probe(folder, chat=None, live=None, quick=False):
         ("P-6 Does a file written by the notebook show at once in the Workspace browser?", ["Look for verifier_probe_visible.txt in the Projects folder. Seen at once: [ ] yes  [ ] no"]),
         ("P-7 Download and upload", ["Download _verifier_probe/copied_probe.xlsx and upload it unchanged into the same folder.", "Its SHA-256 before download: %s" % digest,
                                      "Same SHA-256 after upload: [ ] yes [ ] no. Name the upload got: ________. Was the .xlsx unpacked like a .zip: [ ] yes [ ] no"]),
-        ("P-8 Does the token widget accept a string as long as a real token?", ["Paste a real token into the widget, run cell 5, and compare the length it reports with the token's length: [ ] same [ ] cut"]),
-        ("P-9 Mode A: does changing the token widget re-run cell 5 by itself while a background run works?", ["Start cell 12 in mode A with the stand-in, paste another token, run cell 13: token age went back to zero by itself: [ ] yes [ ] no"]),
-        ("P-10 Mode B: the same with cell 5 run by hand", ["Token age went back to zero after running cell 5 by hand: [ ] yes [ ] no"]),
+        ("P-8 Does the token widget accept a string as long as a real token?", ["Paste a real token into the widget, run cell 1, and compare the length it reports with the token's length: [ ] same [ ] cut"]),
+        ("P-9 Mode A: does changing the token widget re-run cell 1 by itself while a background run works?", ["Start cell 4 in mode A with the stand-in, paste another token, run cell 4 again: token age went back to zero by itself: [ ] yes [ ] no"]),
+        ("P-10 Mode B: the same with cell 1 run by hand", ["Token age went back to zero after running cell 1 by hand: [ ] yes [ ] no"]),
         ("P-11 For information: widgets seen from inside a running loop", ["dbutils.widgets.get inside a foreground loop saw a changed value: [ ] yes [ ] no"]),
         ("P-12 Optional: does a trivial Spark action from the background thread keep the cluster alive?", ["Cluster stayed up past its auto-termination time during a background run: [ ] yes [ ] no [ ] not tried"]),
-        ("P-13 What chat() returns or raises with an empty token", probe_chat(chat, live) if chat else ["chat() was not given to the probe; run it from the notebook after cell 6."]),
+        ("P-13 What chat() returns or raises with an empty token", probe_chat(chat, live) if chat else ["chat() was not given to the probe; run it from the notebook after cell 2."]),
         ("P-14 Which folder on the driver the tool may build a run in", probe_scratch())]
+    handle = io.StringIO()
+    handle.write("# Environment probe\n\nFolder probed: `%s`. Python %s. Run at %s%s.\n\n" % (
+        folder, sys.version.split()[0], datetime.datetime.now().isoformat(timespec="seconds"), " (quick sizes)" if quick else ""))
+    for title, lines in sections:
+        handle.write("## %s\n\n%s\n\n" % (title, "\n".join("- " + line for line in lines)))
+    shutil.rmtree(work, ignore_errors=True)
+    return handle.getvalue()
 
 def probe_scratch():
     """Where the driver lets this user write. A cluster is shared, so a scratch folder made by
@@ -623,14 +630,6 @@ def probe_scratch():
         return ["the tool would build runs in: %s" % runner.pick_scratch_root()]
     except PermissionError as problem:
         return ["No folder on the driver allowed it. %s" % problem]
-    handle = io.StringIO()
-    if True:
-        handle.write("# Environment probe\n\nFolder probed: `%s`. Python %s. Run at %s%s.\n\n" % (
-            folder, sys.version.split()[0], datetime.datetime.now().isoformat(timespec="seconds"), " (quick sizes)" if quick else ""))
-        for title, lines in sections:
-            handle.write("## %s\n\n%s\n\n" % (title, "\n".join("- " + line for line in lines)))
-    shutil.rmtree(work, ignore_errors=True)
-    return handle.getvalue()
 
 
 # ================================================================================================
@@ -910,7 +909,7 @@ def check_docs():
 # ---------------------------------------------------------------- the notebook, five cells
 CELL_1 = r'''# ===== Cell 1 of 5 - set up: widgets, packages, the engine =====
 # Run this first, and run it again after anything restarts Python. It is safe to run any number of times.
-import importlib, importlib.metadata, os, re, subprocess, sys, tempfile
+import importlib, importlib.metadata, importlib.util, os, re, subprocess, sys, tempfile
 
 def notebook_folder():
     try:

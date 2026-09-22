@@ -246,6 +246,21 @@ class VerifyingARunFolder(unittest.TestCase):
             handle.write(b" ")
         self.assertIn("Input files have the recorded fingerprints", self.not_confirmed())
 
+    def test_a_token_inside_a_compressed_file_is_found(self):
+        """The call log is gzip and the workbook is a ZIP. A token written into either would be
+        invisible to a search of the raw bytes; the check looks inside."""
+        import gzip
+        live = runner.LiveValues()
+        live.update("https://x", "tok-PLANTED-SECRET-9x8y7z", "u1")
+        def token_line():
+            return [verdict for what, verdict, _ in runner.verify_evidence_pack(self.paths, self.settings, live=live)
+                    if what.startswith("No access token")][0]
+        self.assertEqual(token_line(), "Confirmed")
+        path = os.path.join(self.paths.audit_dir, runner.CALLS_FILE)
+        with open(path, "ab") as raw, gzip.GzipFile(fileobj=raw, mode="ab", mtime=0) as packed:
+            packed.write(b'{"answer": "Bearer tok-PLANTED-SECRET-9x8y7z"}\n')
+        self.assertEqual(token_line(), "Not confirmed")
+
     def test_a_changed_chunk_a_broken_chain_and_a_deleted_status_are_each_detected(self):
         self.rewrite("chunks_canon", lambda records: [dict(records[0], content_hash="0" * 64)] + records[1:])
         self.assertIn("Re-reading the inputs gives the recorded content hashes (chunks_canon)", self.not_confirmed())
