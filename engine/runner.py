@@ -84,7 +84,7 @@ DEFAULT_SETTINGS = {
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
     "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
-    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_pairs_max": 300, "concepts_with_ai": True}
+    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -989,26 +989,30 @@ def chunk_note(chunk):
     return "; ".join(notes)
 
 def concept_names_by_ref(store):
-    """Each unit's concepts as the Chunks sheets show them: the concept names, joined by '; '."""
-    concepts, unit_concepts = review.latest_concepts(store.read)
-    names = {c["concept_id"]: c["name"] for c in concepts}
-    return {u["unit_ref"]: "; ".join(names[c] for c in u["concepts"] if c in names) for u in unit_concepts}
+    """Each unit's concepts as the Chunks sheets show them: the words that unit writes, exactly, for
+    each model concept it names, joined by '; '. Never the model's name for it: that mapping, and
+    every guess in it, is on the Concepts sheet only."""
+    _, unit_concepts = review.latest_concepts(store.read)
+    return {u["unit_ref"]: "; ".join(u.get("as_written") or []) for u in unit_concepts}
 
 def rows_concepts(store):
-    """The rows of Concepts: one per concept, with every form it is written in, the units that use
-    it in each corner, the files, how each join was made, and what the model found it related to."""
+    """The rows of Concepts: one per model concept, model first - the names its code gives it and how
+    its roxygen and help pages describe it - then the same words found in the methodology, the
+    documentation and the rest of the model, and apart from those, the model's guesses of synonyms,
+    acronyms and abbreviations. Every form is shown as written, with the units that write it."""
     concepts, _ = review.latest_concepts(store.read)
-    file_of = {r["ref"]: r.get("source_file") or r.get("file") or "" for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
-    names = {c["concept_id"]: c["name"] for c in concepts}
+    def listed(forms):
+        return "\n".join("%s (%s)" % (form, ", ".join(refs)) for form, refs in forms.items())
     rows = []
     for concept in concepts:
-        refs = concept["refs"]
-        rows.append({"concept_id": concept["concept_id"], "name": concept["name"], "acronyms": "; ".join(concept["acronyms"]),
-                     "forms": "; ".join(concept["forms"]),
-                     "canon": "; ".join(refs.get("canon", [])), "doc": "; ".join(refs.get("doc", [])), "model": "; ".join(refs.get("model", [])),
-                     "files": "; ".join(sorted({file_of.get(ref, "") for found in refs.values() for ref in found} - {""})),
-                     "established": "\n".join(concept["established"]),
-                     "related": "\n".join("%s: %s %s" % (relation, other, names.get(other, "")) for relation, other in concept["related"])})
+        found, guessed = concept["found"], concept["guessed"]
+        rows.append({"concept_id": concept["concept_id"], "in_model": listed(concept["identifiers"]),
+                     "described": listed(concept["described"]),
+                     "canon": listed(found.get("canon", {})), "doc": listed(found.get("doc", {})),
+                     "model": listed({form: refs for form, refs in found.get("model", {}).items()}),
+                     "guessed": "\n".join("%s: %s" % (corner, listed(forms).replace("\n", "; ")) for corner, forms in
+                                          (("Methodology", guessed.get("canon", {})), ("Documentation", guessed.get("doc", {}))) if forms),
+                     "established": "\n".join(concept["how"][:12])})
     return rows
 
 def scope_of(store):
@@ -1197,7 +1201,7 @@ sheets:
   - {header: Para no., group: identity, field: para_no, width: 9}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: methodology, field: text, width: 90, input_text: true}
-  - {header: Extracted concepts, group: methodology, field: concepts, width: 40}
+  - {header: Extracted concepts with candidate equivalent in model, group: methodology, field: concepts, width: 42}
   - {header: Source file, group: identity, field: source_file, width: 28}
   - {header: Cross-references, group: methodology, field: refs_out, width: 24}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
@@ -1210,7 +1214,7 @@ sheets:
   - {header: Para no., group: identity, field: para_no, width: 9}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: documentation, field: text, width: 90, input_text: true}
-  - {header: Extracted concepts, group: documentation, field: concepts, width: 40}
+  - {header: Extracted concepts with candidate equivalent in model, group: documentation, field: concepts, width: 42}
   - {header: Source file, group: identity, field: source_file, width: 28}
   - {header: Cross-references, group: documentation, field: refs_out, width: 24}
   - {header: States something checkable, group: assessments, field: checkable, width: 16}
@@ -1225,7 +1229,7 @@ sheets:
   - {header: Name, group: identity, field: name, width: 24, input_text: true}
   - {header: Inside, group: identity, field: inside, width: 20}
   - {header: Text, group: code_text, field: text, width: 80, input_text: true}
-  - {header: Extracted concepts, group: code_text, field: concepts, width: 40}
+  - {header: Extracted concepts with candidate equivalent in model, group: code_text, field: concepts, width: 42}
   - {header: LLM Interpretation, group: assessments, field: llm_interpretation, width: 60}
   - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
   - {header: Numbers used, group: code_text, field: numbers, width: 20}
@@ -1234,15 +1238,13 @@ sheets:
 - name: Concepts
   columns:
   - {header: Concept id, group: identity, field: concept_id, width: 11}
-  - {header: Concept, group: identity, field: name, width: 34}
-  - {header: Acronyms and abbreviations, group: identity, field: acronyms, width: 18}
-  - {header: 'Other forms used, as written', group: identity, field: forms, width: 36}
-  - {header: Methodology, group: assessments, field: canon, width: 26}
-  - {header: Documentation, group: assessments, field: doc, width: 26}
-  - {header: Model, group: assessments, field: model, width: 26}
-  - {header: Files, group: assessments, field: files, width: 30}
+  - {header: 'In the model, as the code names it', group: identity, field: in_model, width: 30}
+  - {header: Described in the model as, group: identity, field: described, width: 34}
+  - {header: Same words in the methodology, group: assessments, field: canon, width: 34}
+  - {header: Same words in the documentation, group: assessments, field: doc, width: 34}
+  - {header: Same words in the rest of the model, group: assessments, field: model, width: 30}
+  - {header: Candidate synonyms and acronyms (AI guess), group: assessments, field: guessed, width: 40}
   - {header: How established, group: assessments, field: established, width: 60}
-  - {header: Related concepts, group: assessments, field: related, width: 40}
 - name: Mapping_Model_to_Canon_and_Doc
   columns:
   - {header: Model ref, group: identity, field: ref, width: 10}
@@ -1343,8 +1345,8 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     wrap = Alignment(wrap_text=True, vertical="top")
     for number, column in enumerate(columns, start=1):
         header = column["header"]
-        if column["field"] == "concepts" and settings.get("concept_subject"):   # "Extracted financial concepts"
-            header = "Extracted %s concepts" % settings["concept_subject"].strip().lower()
+        if column["field"] == "concepts" and settings.get("concept_subject"):   # "Extracted financial concepts with ..."
+            header = header.replace("Extracted concepts", "Extracted %s concepts" % settings["concept_subject"].strip().lower(), 1)
         cell = sheet.cell(row=1, column=number, value=header)
         cell.font, cell.alignment = Font(bold=True), wrap
         cell.fill = PatternFill("solid", start_color=colours[column["group"]])
