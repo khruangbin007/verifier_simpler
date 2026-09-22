@@ -79,7 +79,6 @@ ST_EXCLUDED = "Not in scope (a person's decision)"
 CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
 NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
 
-DECISION_WORDS = ("Requires action", "No action needed")
 
 CAT_CODE_DIFFERS, CAT_CODE_NOT_TRACED = "Code differs from methodology", "Code not traced to methodology"
 CAT_MATH_UNDECIDED, CAT_VALUE_DIFFERS = "Mathematical check undecided", "Value differs from methodology"
@@ -1296,214 +1295,19 @@ DIGEST_SAMPLES = 3
 # Enforces: R13
 SLICE_FAMILIES = ("heading", "container", "paragraph", "list_container", "list_item")
 
-def walk_with_depth(element, depth):
-    """Every element under one element, with how deep it sits."""
-    yield depth, element
-    for child in element:
-        for found in walk_with_depth(child, depth + 1):
-            yield found
 
-def digest_row(row):
-    """One tag's behaviour, cut to what a prompt can carry."""
-    lengths = row["text_lengths"]
-    return {"tag": row["tag"], "count": row["count"],
-            "depth": "%d-%d" % (min(row["depths"]), max(row["depths"])),
-            "inside": sorted(row["inside"])[:6], "holds": sorted(row["holds"])[:8],
-            "with_text": row["with_text"], "mean_text": int(sum(lengths) / len(lengths)) if lengths else 0,
-            "attributes": sorted(row["attributes"])[:6], "first_child": row["first_child"],
-            "known_as": row["known_as"] or "", "guessed_as": row["guessed_as"], "samples": row["samples"]}
 
-def markup_digest(root, rules, file_name):
-    """One row per tag the file uses, with how it behaves here: how often it occurs, how deep it
-    sits, what it sits inside and what sits inside it, how often it carries text of its own, how
-    long that text runs, what attributes it has, how often it is the first child, and three
-    short samples. A tag the rules already name is marked as known, so that a proposal can be
-    told from a repetition of what the tool already does. Enforces: R7"""
-    # What the tool ships or the analyst wrote is KNOWN and is not the model's business. What
-    # discovery worked out on the spot is a GUESS, and saying which is which is the whole point:
-    # a proposal is wanted exactly where code guessed, and nowhere else.
-    settled = set(rules.get("shipped_tags") or ()) | set(rules.get("analyst_tags") or ())
-    families, rows, order = rules.get("family_of", {}), {}, []
-    parents = {id(child): element for element in root.iter() for child in element}
-    for depth, element in walk_with_depth(root, 0):
-        name = local_name(element.tag)
-        if not name:
-            continue
-        row = rows.get(name)
-        if row is None:
-            row = rows[name] = {"tag": name, "count": 0, "depths": set(), "inside": set(), "holds": set(),
-                                "with_text": 0, "text_lengths": [], "attributes": set(), "first_child": 0,
-                                "samples": [], "known_as": "", "guessed_as": ""}
-            family = families.get(name) or ""
-            # Settled: what the tool ships, what the analyst wrote, and what discovery PROVED by
-            # counting the rows. A guess is only what discovery's fallback net produced, and a
-            # guess is the only thing a proposal is wanted about.
-            if name in settled or family in PROVEN_BY_SHAPE:
-                row["known_as"] = family
-            else:
-                row["guessed_as"] = family
-            order.append(name)
-        row["count"] += 1
-        row["depths"].add(depth)
-        parent = parents.get(id(element))
-        if parent is not None:
-            row["inside"].add(local_name(parent.tag))
-            if len(parent) and parent[0] is element:
-                row["first_child"] += 1
-        row["holds"].update(local_name(child.tag) for child in element if local_name(child.tag))
-        row["attributes"].update(local_name(key) for key in element.attrib)
-        own = normalise_text(element.text or "")
-        if own:
-            row["with_text"] += 1
-            row["text_lengths"].append(len(own))
-            if len(row["samples"]) < DIGEST_SAMPLES:
-                row["samples"].append(own[:DIGEST_SAMPLE_CHARS])
-    return {"file": file_name, "kind": "markup", "tags": [digest_row(rows[name]) for name in order]}
 
-def digest_text(digest):
-    """The digest as the lines a prompt shows. Structure only: counts, places and short samples."""
-    lines = []
-    for row in digest["tags"]:
-        parts = ["<%s> x%d depth %s" % (row["tag"], row["count"], row["depth"])]
-        if row["known_as"]:
-            parts.append("ALREADY READ AS: %s" % row["known_as"])
-        elif row["guessed_as"]:
-            parts.append("GUESSED AS: %s" % row["guessed_as"])
-        if row["inside"]:
-            parts.append("inside: %s" % ", ".join(row["inside"]))
-        if row["holds"]:
-            parts.append("holds: %s" % ", ".join(row["holds"]))
-        parts.append("has own text %d of %d times, averaging %d characters" % (row["with_text"], row["count"], row["mean_text"]))
-        if row["first_child"]:
-            parts.append("is the first child %d times" % row["first_child"])
-        if row["attributes"]:
-            parts.append("attributes: %s" % ", ".join(row["attributes"]))
-        lines.append(" | ".join(parts))
-        for sample in row["samples"]:
-            lines.append("    sample: %s" % sample)
-    return "\n".join(lines)
 
-def slice_rules_question(digest, rules, prompt, settings):
-    """One question about the shape of one file. The reader's own procedure and prohibitions are
-    the first thing in the prompt's system half, so what the reader is contracted to do is what the
-    model is told to do, and a changed contract is a new prompt version and a new question.
-    Enforces: R3, R5"""
-    system = prompt["system"].strip()
-    main = prompt["main"].replace("[[UNIT]]", digest_text(digest))
-    return {"question_type": "slice-rules", "unit_ref": digest["file"], "system_prompt": system,
-            "main_prompt": main, "letters": {}, "planted": [], "passage_texts": {}, "unit_text": "",
-            "strip_patterns": list(settings["strip_patterns"]),
-            "tags_shown": [row["tag"] for row in digest["tags"]],
-            "holds_other_tags": {row["tag"]: bool(row["holds"]) for row in digest["tags"]},
-            "estimated_tokens": estimate_tokens(main),
-            "too_large": estimate_tokens(main) > prompt_budget(settings, system),
-            "question_id": sha256_text(prompt["version"] + "\n" + system + "\n" + main)}
 
-def validate_slice_rules(question, answer, rejected):
-    """The answer is a choice among things code has already put in front of the model: a tag it
-    was shown, a family from the fixed list, a depth from 1 to 9. There is no field through
-    which prose can reach a unit, so a wrong answer can mislabel a tag and can never add a word
-    to a document or take one out of it. "ignore" is refused outright, because it is the one
-    family that would let an answer lose content. Enforces: R3, R7, R13"""
-    shown = set(question["tags_shown"])
-    families = answer.get("families")
-    if not isinstance(families, dict) or not families:
-        raise rejected(REJECTION_REASONS[0])
-    holds = question.get("holds_other_tags") or {}
-    for tag, family in families.items():
-        if tag not in shown:
-            raise rejected(REJECTION_REASONS[1])
-        if family == "ignore" or family not in SLICE_FAMILIES:
-            raise rejected(REJECTION_REASONS[0])
-        # A tag that holds other tags is not a paragraph, an item or an inline mark. Reading it
-        # as one would take the words of everything inside it into a unit AND read those things
-        # again below, so the document would say twice what it says once. Code counted what each
-        # tag holds; a proposal does not get to contradict the count. Enforces: R13
-        if holds.get(tag) and family in ("paragraph", "list_item"):
-            raise rejected(REJECTION_REASONS[4])
-    levels = answer.get("levels") or {}
-    if not isinstance(levels, dict):
-        raise rejected(REJECTION_REASONS[0])
-    for tag, level in levels.items():
-        if tag not in shown or families.get(tag) != "heading":
-            raise rejected(REJECTION_REASONS[1])
-        if not isinstance(level, int) or isinstance(level, bool) or not 1 <= level <= 9:
-            raise rejected(REJECTION_REASONS[0])
-    why = answer.get("why") or {}
-    if not isinstance(why, dict) or any(tag not in shown for tag in why):
-        raise rejected(REJECTION_REASONS[1])
 
 # Families discovery does not guess at: it counts the widths of the rows and refuses to call
 # something a table unless the counting holds up. A proposal may not overturn them.
 PROVEN_BY_SHAPE = ("table", "table_part", "row", "header_cell", "cell")
 
-def overlay_from_answer(answer, rules, analyst_tags, discovered=None):
-    """The answer as an overlay on the tag rules, in the one order that matters:
-
-        what the ANALYST wrote in Inputs/tag_rules.yaml   wins over
-        what the tool SHIPS                                   wins over
-        what discovery PROVED by counting the shape       wins over
-        what the MODEL proposes                           wins over
-        what discovery GUESSED with its fallback net
-
-    So the model never overrides a person, never overrides a schema the tool already knows, and
-    never overrides a table whose rows were counted. It speaks where code only guessed, which
-    is exactly where the reading was weak. Returns (families to apply, levels, why)."""
-    shipped, discovered = set(rules.get("shipped_tags") or ()), discovered or {}
-    families, levels, why = {}, {}, {}
-    for tag, family in (answer.get("families") or {}).items():
-        if tag in analyst_tags or tag in shipped or discovered.get(tag) in PROVEN_BY_SHAPE:
-            continue
-        families[tag] = family
-        if family == "heading" and tag in (answer.get("levels") or {}):
-            levels[tag] = answer["levels"][tag]
-        if tag in (answer.get("why") or {}):
-            why[tag] = answer["why"][tag]
-    return families, levels, why
 
 # ---------------------------------------------------------------- asking about the shape of a file
-def reading_doubts(root, state, discovered):
-    """Where the built-in rules themselves say they are unsure. Only these ask a question; a
-    file the rules read confidently costs no call at all and comes out exactly as before."""
-    doubts = []
-    if state.unknown_tags:
-        doubts.append("%d tag(s) are not named by the rules" % len(state.unknown_tags))
-    headings = [tag for tag, family in state.rules["family_of"].items() if family == "heading"]
-    if discovered and not headings:
-        doubts.append("the file has a shape the rules do not know and no tag in it is read as a heading")
-    return doubts
 
-def guided_rules(root, file_name, state, discovered):
-    """Ask the model what the tags of an unfamiliar file are for, and apply what it says.
-
-    Nothing here can add a word to a document or take one out of it: the answer is a choice
-    among tags code has already shown and families from a fixed list, and it is refused if it
-    names anything else. A refused, failed or absent answer leaves the built-in reading exactly
-    as it was, so the worst case is the reader without guidance. Enforces: R3, R13"""
-    if state.ask is None or state.settings.get("agentic_reading") == "off":
-        return
-    if not reading_doubts(root, state, discovered):
-        return
-    digest = markup_digest(root, state.rules, file_name)
-    state.digests.append(digest)
-    prompt = load_prompt("slice-rules")
-    question = slice_rules_question(digest, state.rules, prompt, state.settings)
-    if question["too_large"]:
-        state.notes.append("%s: its shape is too large to ask about, so the built-in rules read it." % file_name)
-        return
-    found = state.ask([question]).get(question["question_id"])
-    answer = (found or {}).get("answer")
-    if not answer:
-        state.notes.append("%s: read by the built-in rules; a guided reading was not available." % file_name)
-        return
-    families, levels, why = overlay_from_answer(answer, state.rules, set(state.rules.get("analyst_tags") or ()), discovered)
-    changed = {tag: family for tag, family in families.items() if discovered.get(tag) != family}
-    state.rules["family_of"].update(families)
-    state.guided.update(families)
-    for tag in sorted(changed):
-        state.notes.append("%s: <%s> read as %s on the model's proposal, where the built-in rules read it as %s%s"
-                           % (file_name, tag, changed[tag], discovered.get(tag) or "nothing in particular",
-                              " (%s)" % why[tag] if tag in why else ""))
 
 
 # ---------------------------------------------------------------- asking how to read a package
@@ -1517,21 +1321,6 @@ def guided_rules(root, file_name, state, discovered):
 PACKAGE_READERS = ("r-source", "r-data", "help-page", "vignette", "table-file", "prose")
 MANIFEST_SAMPLE_LINES = 5
 
-def manifest_digest(files, placed, decode, package_name=""):
-    """Every member of the tarball: where it lies, how large it is, and which reader the
-    built-in tests give it. A member they give none is shown with its first few lines, because
-    that is what tells a reader of R code from a licence. Nothing else of the file is shown."""
-    rows = []
-    for path in sorted(files):
-        data = files[path]
-        row = {"path": path, "bytes": len(data), "extension": os.path.splitext(path)[1].lower(),
-               "folder": path.split("/")[0] if "/" in path else "", "placed_as": placed.get(path) or "", "first_lines": []}
-        if not row["placed_as"]:
-            text = decode(data)
-            if text is not None:
-                row["first_lines"] = [line[:120] for line in text.split("\n")[:MANIFEST_SAMPLE_LINES] if line.strip()]
-        rows.append(row)
-    return {"file": package_name or "the package", "kind": "package", "members": rows}
 
 def manifest_text(digest):
     """The manifest as the lines a prompt shows."""
@@ -1547,37 +1336,7 @@ def manifest_text(digest):
             lines.append("    line: %s" % sample)
     return "\n".join(lines)
 
-def package_plan_question(digest, prompt, settings):
-    """One question about one tarball, asked only where members were left unplaced."""
-    system = prompt["system"].strip()
-    main = prompt["main"].replace("[[UNIT]]", manifest_text(digest))
-    unplaced = [row["path"] for row in digest["members"] if not row["placed_as"]]
-    return {"question_type": "package-plan", "unit_ref": digest["file"], "system_prompt": system,
-            "main_prompt": main, "letters": {}, "planted": [], "passage_texts": {}, "unit_text": "",
-            "strip_patterns": list(settings["strip_patterns"]), "unplaced": unplaced,
-            "estimated_tokens": estimate_tokens(main),
-            "too_large": estimate_tokens(main) > prompt_budget(settings, system),
-            "question_id": sha256_text(prompt["version"] + "\n" + system + "\n" + main)}
 
-def validate_package_plan(question, answer, rejected):
-    """A reader for every member left unplaced, each named from the fixed list, and for no other
-    member. There is no reader that means "skip": a member the tool cannot make sense of becomes a
-    unit that says so, never a gap. Enforces: R3, R13"""
-    unplaced = set(question["unplaced"])
-    readers = answer.get("readers")
-    if not isinstance(readers, dict) or not readers:
-        raise rejected(REJECTION_REASONS[0])
-    for path, reader in readers.items():
-        if path not in unplaced:
-            raise rejected(REJECTION_REASONS[1])
-        if reader not in PACKAGE_READERS:
-            raise rejected(REJECTION_REASONS[0])
-    missing = unplaced - set(readers)
-    if missing:
-        raise rejected(REJECTION_REASONS[4])
-    why = answer.get("why") or {}
-    if not isinstance(why, dict) or any(path not in unplaced for path in why):
-        raise rejected(REJECTION_REASONS[1])
 
 
 # ================================================================================================
@@ -3098,7 +2857,6 @@ def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
     root = parse_markup(text, file_name, repairs, tolerant_only)
     discovered = discover_families(root, state.rules, state.unknown_tags)
     state.rules["family_of"].update(discovered)
-    guided_rules(root, file_name, state, discovered)
     walk_element(root, "", 0, state)
     return state.blocks
 
@@ -4967,31 +4725,6 @@ def package_rows(description, namespace, units, facts, refused):
     rows.extend(("Package", "Member of the tarball refused", "%s: %s" % entry) for entry in refused)
     return [{"group": group, "item": item, "value": value} for group, item, value in rows if value != ""]
 
-def package_plan(ctx, files, placed, package_name):
-    """Ask which existing reader should take each member the built-in tests leave unplaced.
-
-    The answer chooses among readers the tool already has. It never reaches the R tokenizer, the
-    parser, the expression trees or the decoder of stored data: a model's reading of code is an
-    assertion about the code, not a parse of it. A file sent to a reader that cannot make sense
-    of it becomes a unit saying so, exactly as today, and there is no answer that leaves a
-    member unread. Enforces: R3, R7, R13"""
-    unplaced = [path for path in sorted(files) if not placed.get(path)]
-    if not unplaced or ctx.ask is None or ctx.settings.get("agentic_reading") == "off":
-        return {}, [], []
-    digest = manifest_digest(files, placed, safe_text, package_name)
-    prompt = load_prompt("package-plan")
-    question = package_plan_question(digest, prompt, ctx.settings)
-    if question["too_large"]:
-        return {}, [digest], ["The list of files in the package is too large to ask about, so the built-in tests read it."]
-    found = ctx.ask([question]).get(question["question_id"])
-    answer = (found or {}).get("answer")
-    if not answer:
-        return {}, [digest], ["The package was read by the built-in tests; a guided reading was not available."]
-    readers, why = answer["readers"], answer.get("why") or {}
-    notes = ["%s was read as %s on the model's proposal%s"
-             % (path, readers[path], " (%s)" % why[path] if path in why else "")
-             for path in sorted(readers)]
-    return readers, [digest], notes
 
 def safe_text(data):
     """A member as text, or None where it holds bytes the tool cannot decode."""
@@ -5021,8 +4754,7 @@ def read_package(ctx):
     def rank(path):
         top = path.split("/")[0].lower()
         return (order.index(top) if top in order else len(order), path)
-    placed = {path: built_in_reader(path, files[path]) for path in files}
-    chosen, digests, plan_notes = package_plan(ctx, files, placed, description.get("Package", ""))
+    chosen, digests, plan_notes = {}, [], []
     drafts, facts = [], {"data": []}
     for path in sorted(files, key=rank):
         drafts.extend(file_units(path, files[path], context, facts, chosen.get(path, "")))
@@ -6915,11 +6647,7 @@ def validate_answer(question, text):
             answer = None
         if not isinstance(answer, dict):
             raise Rejected(REJECTION_REASONS[0])
-        if question["question_type"] == "slice-rules":
-            validate_slice_rules(question, answer, Rejected)
-        elif question["question_type"] == "package-plan":
-            validate_package_plan(question, answer, Rejected)
-        elif question["question_type"] == "match-concepts":
+        if question["question_type"] == "match-concepts":
             validate_concepts(question, answer)
         elif question["question_type"] == "trace-gap":
             validate_trace(question, answer)
@@ -6942,12 +6670,6 @@ def shown_ai_text(text):
     return AI_WORDING_NOT_SHOWN if _NOT_SHOWN.search(text) else text
 
 # ---------------------------------------------------------------- steps 07 and 09: judge-links
-def needs_second_opinion(settings, target):
-    """`unchecked_only`: a second, oppositely framed question is asked for accepted links that
-    no deterministic check will back, that is, passages without a formula or a table."""
-    mode = settings["second_opinion"]
-    backed = bool(target.get("table")) or bool((target.get("equation") or {}).get("readable"))
-    return mode == "all" or (mode == "unchecked_only" and not backed and target.get("heading_chain") is not None)
 
 # ---------------------------------------------------------------- what each piece of code does, in plain words
 INTERPRETED_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST)
@@ -7049,7 +6771,7 @@ def judge_links(ctx):
         else:
             questions[question["question_id"]] = question
     answers = ctx.ask(list(questions.values())) if questions else {}
-    edges, problems, records, doc_judgements, follow_ups = [], list(skipped), [], [], {}
+    edges, problems, records, doc_judgements = [], list(skipped), [], []
     for question_id in sorted(questions):
         question, final = questions[question_id], answers.get(question_id)
         unit_ref, corner = question["unit_ref"], question["target_corner"]
@@ -7075,43 +6797,17 @@ def judge_links(ctx):
                          evidence={"how_text": "%s. %s" % (how, reasons.get(target, "")), "question_id": question_id,
                                    "quote_from_passage": match["quote_from_passage"], "quote_from_unit": match["quote_from_unit"],
                                    "search_pass": search_pass})), provenance=provenance))
-            linking = RELATION_WORDING[match["relation"]] in LINKING_RELATIONS
-            if linking and match["relation"] not in ("deviates from", "inconsistent with") and needs_second_opinion(settings, world["targets"][corner][target]):
-                follow_ups.setdefault((unit_ref, corner), []).append(target)
         linked = [m for m in accepted if RELATION_WORDING[m["relation"]] in LINKING_RELATIONS]
         note = "" if linked else "%d passages were shown to the AI. None accepted: %s" % (
             shown, "the AI's reason was \u201c%s\u201d" % shown_ai_text(answer.get("none_reason")) if answer.get("none_reason")
             else "the AI only saw passages on the same topic")
         records.append({"unit_ref": unit_ref, "target_corner": corner, "search_pass": search_pass, "note": note})
-    opinions = second_opinions(ctx, follow_ups, sources, world) if follow_ups else []
     ledger = ledger_records(ctx.read("graph_ledger"), edges)
     return StepResult({"graph_ledger": ledger, "judgement_problems": problems, "search_records": records,
-                              "doc_judgements": doc_judgements, "second_opinions": opinions},
+                              "doc_judgements": doc_judgements},
                              {"questions": len(questions), "links recorded": len(edges), "answers not usable": len(problems) - len(skipped),
                               "questions too large to ask": len(skipped)}, [])
 
-def second_opinions(ctx, follow_ups, sources, world):
-    """The oppositely framed question ("identify any difference ...") for links no check can
-    back. A named difference with verbatim quotations is recorded; account-coverage turns
-    it into a flagged item of the category "AI answers disagree"."""
-    questions = {}
-    for (unit_ref, corner), targets in sorted(follow_ups.items()):
-        source, pool = sources[unit_ref], world["targets"][corner]
-        text = cut_text(source["text"], int(ctx.settings["max_unit_chars"]))
-        passages = [(ref, passage_label(pool[ref]), passage_text(pool[ref], ctx.settings)) for ref in sorted(set(targets))]
-        question = assemble_question("second-opinion", unit_ref, [("UNIT (%s)" % passage_label(source), text)], passages,
-                                     load_prompt("second-opinion"), ctx.settings, more={"target_corner": corner})
-        if not question["too_large"]:
-            questions[question["question_id"]] = question
-    answers, opinions = ctx.ask(list(questions.values())), []
-    for question_id in sorted(questions):
-        final, question = answers.get(question_id), questions[question_id]
-        if final and final["outcome"] == "accepted":
-            for difference in final["answer"]["differences"]:
-                opinions.append({"unit_ref": question["unit_ref"], "target_ref": question["letters"][difference["letter"]],
-                                 "quote_from_passage": difference["quote_from_passage"], "quote_from_unit": difference["quote_from_unit"],
-                                 "what_differs": shown_ai_text(difference.get("what_differs")), "question_id": question_id})
-    return opinions
 
 
 # ================================================================================================
@@ -7136,14 +6832,13 @@ DEFAULT_SETTINGS = {
     "thinking_reserve": 0, "safety_margin": 0.15, "prompt_target_tokens": 6000,
     "max_attempts": 3, "breaker_after_failures": 8, "retry_wait_seconds": 2.0,
     "token_lifetime_minutes": 14.0, "token_wait": "wait", "foreground_minutes": 0.0,
-    "sync_every_calls": 100, "require_outline_confirmation": True,
-    "second_opinion": "unchecked_only", "judge_supporting_code": False,
+    "sync_every_calls": 100, "require_outline_confirmation": True, "judge_supporting_code": False,
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "system_prompt_prefix": "", "strip_patterns": [r"(?s)<think>.*?</think>", r"(?s)<thought>.*?</thought>",
                                                    r"(?s)<\|channel\|>thought.*?<\|channel\|>"], "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
+    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True,
     "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
     "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
     "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
@@ -7903,8 +7598,6 @@ CELL_WITHHELD = "This text could not be shown in plain words; the technical text
 CUT_NOTE = " ... (cut here; the full text is in the audit files)"
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
-REVIEW_CELLS = ("math_check", "value_check", "logic_consistency", "documentation_consistency", "hard_coded_numbers",
-                "parameter_completeness", "parameter_note_ai", "quality_notes", "quality_notes_ai", "unit_test", "status", "item_ids")
 
 def quoted(text, citation=""):
     """Text taken from an input or from the AI is always shown visibly quoted, with its
@@ -7942,13 +7635,10 @@ def texts_by_ref(pairs):
 
 def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
-    items = store.read("flagged_items")
-    ledger, decisions = store.read("graph_ledger"), store.read("determinations")
+    ledger = store.read("graph_ledger")
     return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id,
             "engine_version": ENGINE_VERSION,
-            "item_list_hash": sha256_text("\n".join(i["item_id"] for i in items)) if items else "",
-            "graph_version_id": "G-" + chain_head(ledger)[:12] if ledger else "",
-            "determinations_fingerprint": "DR-" + chain_head(decisions)[:12] if decisions else ""}
+            "graph_version_id": "G-" + chain_head(ledger)[:12] if ledger else ""}
 
 def rows_package_info(store, paths, settings, progress):
     """The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls."""
@@ -7961,8 +7651,6 @@ def rows_package_info(store, paths, settings, progress):
     add("Identity", "Run progress", progress)
     add("Identity", "Engine version", identity["engine_version"])
     add("Identity", "Graph version id", identity["graph_version_id"] or NOT_RUN_YET)
-    add("Identity", "Determinations record fingerprint", identity["determinations_fingerprint"] or "No determination recorded yet")
-    add("Identity", "Item list fingerprint", identity["item_list_hash"] or NOT_RUN_YET)
     manifest = (store.read("run_manifest") or [{}])[0]
     if manifest.get("engine_files"):
         add("Identity", "Engine files fingerprint", sha256_text(canonical_json(manifest["engine_files"]))[:16] +
@@ -8302,17 +7990,12 @@ def assessment_of(store):
         merged = dict(searches.get(key, {}))
         merged.update({k: v for k, v in record.items() if v})
         searches[key] = merged
-    statuses = {r["unit_ref"]: r for r in store.read("unit_status")}
     found = {}
     for unit in units:
         model = unit["ref"].startswith("M-")
         row = dict(link_columns(unit["ref"], "canon", "C-", links, searches, texts))
         other = ("doc", "D-") if model else ("model", "M-")
         row.update(link_columns(unit["ref"], other[0], other[1], links, searches, texts))
-        status = statuses.get(unit["ref"])
-        row["status"] = status["status"] if status else NOT_RUN_YET
-        row["item_ids"] = ("\n".join(status["item_ids"]) or "No item") if status else ""
-        row["cells"] = status["cells"] if status else {}
         row["searched"] = "\n".join(filter(None, [row.get("canon_searched", ""), row.get("canon_why_not", ""),
                                                   row.get(other[0] + "_searched", ""), row.get(other[0] + "_why_not", "")])) or NOT_APPLICABLE
         found[unit["ref"]] = row
@@ -8368,9 +8051,7 @@ def sheet_rows(store, paths, settings, progress):
     assessed = assessment_of(store)
     def with_assessment(rows):
         for row in rows:
-            found = assessed.get(row["ref"], {})
-            row.update({key: value for key, value in found.items() if key != "cells"})
-            row.update(found.get("cells") or {})
+            row.update(assessed.get(row["ref"], {}))
         return rows
     model_rows = with_assessment(rows_model_units(store.read("model_units"), store.read("interpretations"), concept_names_by_ref(store)))
     doc_rows = with_assessment(rows_chunks(store.read("chunks_doc"), concept_names_by_ref(store)))
@@ -8522,13 +8203,8 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
     for row_number, row in enumerate(rows, start=2):
         for number, column in enumerate(columns, start=1):
             value = row.get(column["field"])
-            if value in (None, "") and column["field"] in REVIEW_CELLS and sheet_layout["name"].startswith("Chunks_"):
-                value = NOT_RUN_YET
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap
-            if column["group"] == "reviewer_input":
-                cell.fill = PatternFill("solid", start_color=colours["reviewer_input"])
-                cell.protection = Protection(locked=False)
     if sheet_layout["name"] == "Model_Implementation_Map":     # collapsible: each parent a summary row above its members
         sheet.sheet_properties.outlinePr.summaryBelow = False
         sheet.column_dimensions.group(get_column_letter(1), get_column_letter(MAP_ID_COLUMNS), outline_level=1)
@@ -8552,20 +8228,13 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
-    fields = [c["field"] for c in columns]
-    for field_name, words in (("decision", DECISION_WORDS),):
-        if field_name in fields and rows:            # the drop-downs: Decision on Flagged_Items, Use in review on the Chunks sheets
-            letter = get_column_letter(fields.index(field_name) + 1)
-            choice = DataValidation(type="list", formula1='"%s"' % ",".join(words), allow_blank=True)
-            sheet.add_data_validation(choice)
-            choice.add("%s2:%s%d" % (letter, letter, len(rows) + 1))
     if settings["protect_sheets"]:
         sheet.protection.sheet = True
         sheet.protection.autoFilter = False          # False = not locked: filtering stays possible
         sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsx on local disk from the audit records. All eight sheets always
+    """Build Output.xlsx on local disk from the record of the run. All seven sheets always
     exist; a sheet whose step has not run shows its header only."""
     import openpyxl
     layout = load_layout()
