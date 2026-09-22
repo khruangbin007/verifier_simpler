@@ -1163,6 +1163,233 @@ def write_gold(sample, rows):
 
 BUILDERS.update({"G_schema": build_g_schema, "H_twocolumn": build_h_twocolumn, "I_wordtraps": build_i_wordtraps})
 
+
+
+# ================================================================================================
+# J_pipeline: a package shaped like the ones the Model Implementation Map must read - one large R
+# file beside many help pages, dplyr pipelines that create columns, a purrr lambda, do.call over a
+# list built at run time, a recursive function, dead code, a small operator, a file read from inst/,
+# hard-coded thresholds - with a methodology section the code does not implement and documentation
+# describing something the package does not have. gold_map.yaml says what a complete map must hold.
+J_R_SOURCE = r'''#' Harbour rating
+#'
+#' The final rating of each harbour, from its factor scores, the factor weights, the adjustments
+#' and the anchor rating.
+#' @param facilities a data frame of harbours: throughput, berth_utilisation, liquidity_days
+#' @param adjustments the names of the adjustments to apply
+#' @return the facilities with their final rating
+#' @export
+harbour_rating <- function(facilities, adjustments = c("size", "governance")) {
+  scored <- facilities %>%
+    factor_scores() %>%
+    dplyr::mutate(base_score = weighted_score(throughput_score, utilisation_score, liquidity_score))
+  adjusted <- adjust_score(scored, adjustments)
+  anchored <- anchor_rating(adjusted)
+  anchored %>% dplyr::mutate(final_rating = cap_rating(anchor, adjusted_score))
+}
+
+#' Factor scores
+#'
+#' Each factor scored from 1 (strongest) to 5 against its thresholds.
+#' @param facilities a data frame of harbours
+#' @export
+factor_scores <- function(facilities) {
+  limits <- utils::read.csv(system.file("extdata", "thresholds.csv", package = "harbourscore"))
+  facilities %>%
+    dplyr::mutate(
+      throughput_score = dplyr::case_when(throughput >= limits$high[1] ~ 1, throughput >= limits$low[1] ~ 3, TRUE ~ 5),
+      utilisation_score = dplyr::case_when(berth_utilisation <= 0.6 ~ 1, berth_utilisation <= 0.85 ~ 3, TRUE ~ 5),
+      liquidity_score = dplyr::if_else(liquidity_days >= 180, 1, 4))
+}
+
+#' Weighted score
+#'
+#' The factor scores weighted by the stored factor weights.
+#' @param throughput_score score of the throughput
+#' @param utilisation_score score of the berth utilisation
+#' @param liquidity_score score of the liquidity
+#' @export
+weighted_score <- function(throughput_score, utilisation_score, liquidity_score) {
+  w <- factor_weights
+  w$weight[w$factor == "throughput"] * throughput_score +
+    w$weight[w$factor == "utilisation"] * utilisation_score +
+    w$weight[w$factor == "liquidity"] * liquidity_score
+}
+
+#' Adjusted score
+#'
+#' The weighted score with the points of each adjustment added.
+#' @param scored the scored facilities
+#' @param adjustments the names of the adjustments to apply
+#' @export
+adjust_score <- function(scored, adjustments) {
+  steps <- purrr::map_dbl(adjustments, function(name) adjustment_table$points[adjustment_table$adjustment == name])
+  scored %>% dplyr::mutate(adjusted_score = base_score + sum(steps))
+}
+
+#' Anchor rating
+#'
+#' The adjusted score rounded to the half point, looked up in the anchor table.
+#' @param adjusted the adjusted facilities
+anchor_rating <- function(adjusted) {
+  adjusted %>%
+    dplyr::mutate(score_band = round(adjusted_score * 2) / 2) %>%
+    dplyr::left_join(anchor_table, by = "score_band")
+}
+
+#' Capped rating
+#'
+#' A score above 4.5 takes the rating two notches below the anchor.
+#' @param anchor the anchor rating
+#' @param adjusted_score the adjusted score
+cap_rating <- function(anchor, adjusted_score) {
+  if (adjusted_score > 4.5) notch_down(anchor, 2) else anchor
+}
+
+#' Notch down
+#'
+#' A rating moved down the rating scale, one notch at a time.
+#' @param rating a rating
+#' @param n the number of notches
+#' @export
+notch_down <- function(rating, n) {
+  if (n <= 0) return(rating)
+  notch_down(rating_scale$rating[match(rating, rating_scale$rating) + 1], n - 1)
+}
+
+combine_results <- function(parts) {
+  do.call(rbind, parts)
+}
+
+legacy_score <- function(x) {
+  x * 1.1
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+'''
+
+J_METHODOLOGY = """<?xml version="1.0" encoding="UTF-8"?>
+<doc><title>Harbour Facility Scoring: Methodology</title>
+<section num="1."><title>Overview</title>
+<para>Each harbour receives one rating from four factors, their weights, adjustments and an anchor.</para></section>
+<section num="2."><title>Factor scores</title>
+<para>The throughput is scored against the high and low thresholds: 1 at or above the high threshold, 3 at or above the low threshold, 5 below it.</para>
+<para>The berth utilisation is scored 1 at or below 60%, 3 at or below 85%, and 5 above 85%.</para>
+<para>The liquidity is scored 1 where the liquidity days are 180 or more, and 4 otherwise.</para></section>
+<section num="3."><title>Weighted score</title>
+<para>The weighted score is the sum of each factor score times its weight: throughput 40%, utilisation 35%, liquidity 25%.</para></section>
+<section num="4."><title>Adjustments</title>
+<para>The size and governance adjustments add their points to the weighted score, giving the adjusted score.</para></section>
+<section num="5."><title>Anchor and cap</title>
+<para>The adjusted score, rounded to the half point, is looked up in the anchor table to give the anchor rating.</para>
+<para>An adjusted score above 4.5 takes the rating two notches below the anchor.</para></section>
+<section num="6."><title>Stress test</title>
+<para>The rating is lowered by one notch when the throughput falls by more than 20% in the stress scenario.</para></section>
+</doc>
+"""
+
+
+def j_package():
+    import pandas
+    weights = pandas.DataFrame({"factor": ["throughput", "utilisation", "liquidity"], "weight": [0.40, 0.35, 0.25]})
+    adjustments = pandas.DataFrame({"adjustment": ["size", "governance"], "points": [0.5, -0.5]})
+    anchors = pandas.DataFrame({"score_band": [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
+                                "anchor": ["aaa", "aa", "a", "bbb", "bb", "b", "ccc", "cc", "c"]})
+    scale = pandas.DataFrame({"position": list(range(1, 10)), "rating": ["aaa", "aa", "a", "bbb", "bb", "b", "ccc", "cc", "c"]})
+    pages = [("harbour_rating", "Harbour rating", [("facilities", None, "a data frame of harbours: throughput, berth_utilisation, liquidity_days"),
+                                                   ("adjustments", 'c("size", "governance")', "the names of the adjustments to apply")]),
+             ("factor_scores", "Factor scores", [("facilities", None, "a data frame of harbours")]),
+             ("weighted_score", "Weighted score", [("throughput_score", None, "score of the throughput"), ("utilisation_score", None, "score of the berth utilisation"),
+                                                   ("liquidity_score", None, "score of the liquidity")]),
+             ("adjust_score", "Adjusted score", [("scored", None, "the scored facilities"), ("adjustments", None, "the names of the adjustments to apply")]),
+             ("anchor_rating", "Anchor rating", [("adjusted", None, "the adjusted facilities")]),
+             ("cap_rating", "Capped rating", [("anchor", None, "the anchor rating"), ("adjusted_score", None, "the adjusted score")]),
+             ("notch_down", "Notch down", [("rating", None, "a rating"), ("n", None, "the number of notches")])]
+    files = {
+        "DESCRIPTION": "Package: harbourscore\nTitle: Harbour Facility Scoring\nVersion: 1.2.0\nDescription: Scores and rates harbour facilities.\n"
+                       "Imports: dplyr, purrr\nLicense: MIT\nEncoding: UTF-8\n",
+        "NAMESPACE": "".join("export(%s)\n" % n for n in ("harbour_rating", "factor_scores", "weighted_score", "adjust_score", "notch_down")) + "importFrom(dplyr,\"%>%\")\n",
+        "R/harbourscore.R": J_R_SOURCE,
+        "data/factor_weights.rda": r_data({"factor_weights": weights}),
+        "data/adjustment_table.rda": r_data({"adjustment_table": adjustments}),
+        "data/anchor_table.rda": r_data({"anchor_table": anchors}),
+        "data/rating_scale.rda": r_data({"rating_scale": scale}),
+        "inst/extdata/thresholds.csv": "factor,low,high\nthroughput,2000000,8000000\n",
+        "tests/testthat/test-harbour.R": "test_that(\"a strong harbour rates aaa\", {\n  facilities <- data.frame(throughput = 9e6, berth_utilisation = 0.5, liquidity_days = 200)\n"
+                                        "  expect_equal(harbour_rating(facilities, character(0))$final_rating, \"aaa\")\n})\n",
+        "vignettes/harbourscore.Rmd": "---\ntitle: Rating harbours\n---\n\nThe rating of a set of harbours:\n\n```{r}\nratings <- harbour_rating(example_facilities)\n```\n"}
+    for name, title, arguments in pages:
+        files["man/%s.Rd" % name] = rd_page(name, title, arguments, "R/harbourscore.R")
+    for name, title in (("factor_weights", "Factor weights"), ("adjustment_table", "Adjustment points"), ("anchor_table", "Anchor ratings"), ("rating_scale", "Rating scale")):
+        files["man/%s.Rd" % name] = "\\name{%s}\n\\alias{%s}\n\\docType{data}\n\\title{%s}\n\\description{%s, as stored data.}\n" % (name, name, title, title)
+    return files
+
+
+J_GOLD = """# What a complete Model Implementation Map of harbourscore must hold. Written by hand from the code;
+# every name here is written in R/harbourscore.R as it stands.
+package: harbourscore
+final_outputs: [harbour_rating]
+not_reached: [combine_results, legacy_score, "%||%"]
+calls:                                   # the implementation hierarchy: who calls whom, in the package
+  harbour_rating: [factor_scores, weighted_score, adjust_score, anchor_rating, cap_rating]
+  cap_rating: [notch_down]
+  notch_down: [notch_down]               # recursion: a loop, not an infinite tree
+flows:                                   # within a function: each value, and the values it is computed from
+  harbour_rating:
+    scored: [facilities]
+    adjusted: [scored, adjustments]
+    anchored: [adjusted]
+  factor_scores:
+    limits: ["inst/extdata/thresholds.csv"]
+  weighted_score:
+    w: [factor_weights]
+  adjust_score:
+    steps: [adjustments, adjustment_table]
+columns:                                 # data-frame columns a dplyr verb creates, and what each is computed from
+  throughput_score: [throughput, limits]
+  utilisation_score: [berth_utilisation]
+  liquidity_score: [liquidity_days]
+  base_score: [throughput_score, utilisation_score, liquidity_score]
+  adjusted_score: [base_score, steps]
+  score_band: [adjusted_score]
+  final_rating: [anchor, adjusted_score]
+raw_inputs:
+  argument: [facilities, adjustments]
+  column_of_an_argument: [throughput, berth_utilisation, liquidity_days]
+  stored_data: [factor_weights, adjustment_table, anchor_table, rating_scale]
+  file: ["inst/extdata/thresholds.csv"]
+  hard_coded_number: ["0.6", "0.85", "180", "4.5", "2"]
+gaps:                                    # what code alone cannot follow; the agents' work
+  - {function: adjust_score, code: "function(name) adjustment_table$points[adjustment_table$adjustment == name]", why: "a purrr lambda"}
+  - {function: combine_results, code: "do.call(rbind, parts)", why: "do.call over a list built at run time"}
+methodology_not_implemented: ["Stress test"]
+documentation_describing_nothing: ["quarterly dashboard"]
+"""
+
+
+def build_j_pipeline():
+    sample = "J_pipeline"
+    write_bytes(sample, "canon", "harbour_methodology.txt", J_METHODOLOGY)
+    write_bytes(sample, "package", "harbourscore_1.2.0.tar.gz", tarball("harbourscore", j_package()))
+    write_bytes(sample, "doc", "harbourscore_documentation.docx", fixed_zip(docx_file([
+        ("h", 1, "harbourscore: model documentation"),
+        ("h", 2, "What the model does"),
+        ("p", "harbour_rating gives each harbour its final rating. It scores the throughput, the berth utilisation and the liquidity with "
+              "factor_scores, weights the scores with weighted_score, adds the adjustments with adjust_score, looks the adjusted score up "
+              "in the anchor table and caps the rating two notches below the anchor above a score of 4.5."),
+        ("h", 2, "Inputs"),
+        ("p", "The facilities data frame carries the throughput, the berth utilisation and the liquidity days of each harbour. "
+              "The thresholds of the throughput are read from the file thresholds.csv; the weights, the adjustment points, the anchor "
+              "table and the rating scale are stored data of the package."),
+        ("h", 2, "Reporting"),
+        ("p", "The package also produces a quarterly dashboard of port congestion for the operations team.")])))
+    with open(os.path.join(SAMPLES, sample, "gold_map.yaml"), "w", encoding="utf-8") as handle:
+        handle.write(J_GOLD)
+
+
+BUILDERS["J_pipeline"] = build_j_pipeline
+
+
 if __name__ == "__main__":
     for name in (sys.argv[1:] or list(BUILDERS)):
         BUILDERS[name]()

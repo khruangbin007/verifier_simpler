@@ -1,5 +1,6 @@
 """Tests of verifier2_package: safe unpacking, the R reader, documentation units and stored data."""
 import io
+import os
 import tarfile
 import unittest
 
@@ -118,6 +119,53 @@ class StoredData(unittest.TestCase):
         units, _ = helpers.units_of({"data/odd.rda": b"this is not R data at all"})
         odd = next(u for u in units if u["file"] == "data/odd.rda")
         self.assertTrue(odd["kind"] == core.KIND_NOT_READ or not odd["data"]["assessable"])
+
+
+class ImplementationMapSample(unittest.TestCase):
+    """Stage 1 of the Model Implementation Map: a package shaped like the real ones - one R file among
+    many help pages, dplyr pipelines, a purrr lambda, do.call, recursion, dead code - and an answer key
+    that says what a complete map must hold. The baseline says what today's reader already recovers."""
+
+    @classmethod
+    def setUpClass(cls):
+        import yaml
+        import build_samples
+        with open(os.path.join(helpers.SAMPLES_DIR, "J_pipeline", "gold_map.yaml"), encoding="utf-8") as handle:
+            cls.gold = yaml.safe_load(handle)
+        cls.source, cls.methodology = build_samples.J_R_SOURCE, build_samples.J_METHODOLOGY
+
+    def test_every_name_in_the_answer_key_is_written_in_the_code(self):
+        gold = self.gold
+        names = set(gold["final_outputs"] + gold["not_reached"]) | set(gold["calls"]) | {c for cs in gold["calls"].values() for c in cs}
+        names |= {v for flows in gold["flows"].values() for v in flows} | set(gold["columns"])
+        names |= {s for flows in gold["flows"].values() for ss in flows.values() for s in ss if "/" not in s}
+        names |= {s for ss in gold["columns"].values() for s in ss}
+        raw = gold["raw_inputs"]
+        names |= set(raw["argument"] + raw["column_of_an_argument"] + raw["stored_data"] + raw["hard_coded_number"])
+        for name in sorted(names):
+            self.assertIn(name, self.source, "the answer key names '%s', which the code does not write" % name)
+        for gap in gold["gaps"]:
+            self.assertIn(gap["code"], self.source)
+        for heading in gold["methodology_not_implemented"]:
+            self.assertIn(heading, self.methodology)
+
+    def test_the_sample_is_read_as_an_r_package_with_every_function(self):
+        path = os.path.join(helpers.SAMPLES_DIR, "J_pipeline", "Inputs", "2_Model_Package", "harbourscore_1.2.0.tar.gz")
+        result = reading.read_package(helpers.context_for({"package": [path]}))
+        self.assertFalse([m for m in result.messages if "R package" in m])
+        functions = {unit.name for unit in result.records["model_units"] if unit.kind == core.KIND_FUNCTION}
+        expected = set(self.gold["final_outputs"] + self.gold["not_reached"]) | set(self.gold["calls"]) | {c for cs in self.gold["calls"].values() for c in cs}
+        self.assertEqual(functions, expected)
+
+    def test_the_baseline_measures_every_part_of_the_answer_key(self):
+        import develop
+        found = develop.map_baseline("J_pipeline", record=False)
+        self.assertEqual(found["calls between package functions"], (6, 7), "all but the recursive call")
+        self.assertEqual(found["columns a dplyr verb creates, with what each is computed from"][0], 0, "no column is recorded yet")
+        self.assertEqual(found["final outputs and not-reached functions among the candidates code finds"], (4, 4))
+        for part, (got, total) in found.items():
+            self.assertLessEqual(got, total, part)
+            self.assertGreater(total, 0, part)
 
 
 if __name__ == "__main__":

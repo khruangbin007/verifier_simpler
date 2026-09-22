@@ -866,6 +866,63 @@ def release(arguments):
 
 
 # ================================================================================================
+# ---------------------------------------------------------------- the implementation map: what the reader recovers
+def map_baseline(sample="J_pipeline", record=True):
+    """How much of a sample's answer key (gold_map.yaml) today's reader already recovers, part by part:
+    the work list for building the Model Implementation Map. Nothing here builds the map; a part the
+    reader has no record for scores zero. Returns {part: (found, total)}, and appends it to history."""
+    import helpers
+    import yaml
+    with open(os.path.join(SAMPLES, sample, "gold_map.yaml"), encoding="utf-8") as handle:
+        gold = yaml.safe_load(handle)
+    paths, settings, _ = helpers.run_sample(sample, stop_after="05")
+    store = runner.open_store(paths, settings)
+    units = store.read("model_units")
+    name = {u["ref"]: u["name"] for u in units}
+    functions = {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION}
+    edges = [r for r in store.read("graph_ledger") if r["record_type"] == "edge"]
+    calls = {(name.get(e["source"]), name.get(e["target"])) for e in edges if e["kind"] == "calls"}
+    reads = {(name.get(e["source"]), name.get(e["target"])) for e in edges if e["kind"] == "reads_data"}
+    roots = set(functions) - {callee for caller, callee in calls if caller != callee}
+    code = lambda unit: unit.get("code") or {}
+    def computed_from(variable, source, inside=None):
+        """Some statement sets the variable and reads the source - per statement, not per function."""
+        return any(variable in (code(u).get("symbols_written") or []) and source in (code(u).get("symbols_read") or [])
+                   and (inside is None or u.get("parent_ref") == functions[inside]["ref"]) for u in units if u["kind"] == core.KIND_FORMULA)
+    numbers = {str(n.get("value") if isinstance(n, dict) else n) for u in units for n in code(u).get("numbers") or []}
+    formals = {formal for output in gold["final_outputs"] if output in functions for formal, _ in code(functions[output]).get("formals") or []}
+    raw = gold["raw_inputs"]
+    found = {
+        "final outputs and not-reached functions among the candidates code finds":
+            (len(roots & set(gold["final_outputs"] + gold["not_reached"])), len(gold["final_outputs"]) + len(gold["not_reached"])),
+        "calls between package functions": (sum((caller, callee) in calls for caller, callees in gold["calls"].items() for callee in callees),
+                                            sum(len(callees) for callees in gold["calls"].values())),
+        "values within a function, with what each is computed from":
+            (sum(computed_from(v, source, f) for f, flows in gold["flows"].items() for v, sources in flows.items() for source in sources),
+             sum(len(sources) for flows in gold["flows"].values() for sources in flows.values())),
+        "columns a dplyr verb creates, with what each is computed from":
+            (sum(computed_from(column, source) for column, sources in gold["columns"].items() for source in sources),
+             sum(len(sources) for sources in gold["columns"].values())),
+        "raw inputs: arguments of a final output": (len(set(raw["argument"]) & formals), len(raw["argument"])),
+        "raw inputs: columns of an argument": (0, len(raw["column_of_an_argument"])),
+        "raw inputs: stored data": (sum(any(target == table for _, target in reads) for table in raw["stored_data"]), len(raw["stored_data"])),
+        "raw inputs: files": (sum(any(os.path.basename(path) in (target or "") for _, target in reads) for path in raw["file"]), len(raw["file"])),
+        "raw inputs: hard-coded numbers": (len(set(raw["hard_coded_number"]) & numbers), len(raw["hard_coded_number"])),
+        "gaps named, for the agents": (0, len(gold["gaps"])),
+        "methodology no step implements": (0, len(gold["methodology_not_implemented"])),
+        "documentation describing nothing in the map": (0, len(gold["documentation_describing_nothing"]))}
+    if record:
+        remember("map-baseline", datetime.date.today().isoformat(), sample, "no model",
+                 **{re.sub(r"\W+", "_", part.split(",")[0])[:40]: "%d/%d" % pair for part, pair in found.items()})
+    return found
+
+
+def map_baseline_text(found):
+    width = max(len(part) for part in found)
+    return "\n".join("%-*s %2d of %2d" % (width, part, got, total) for part, (got, total) in found.items())
+
+
+# ================================================================================================
 # ---------------------------------------------------------------- the manual against the code
 def manual_problems():
     """Every way the one manual can drift from the code, as plain sentences. The manual may name
@@ -1244,6 +1301,8 @@ if __name__ == "__main__":
         harness(sys.argv[2:])
     if what == "recall":
         recall(sys.argv[2:] or ["A_minimal", "F_capital"])
+    if what == "map-baseline":
+        print(map_baseline_text(map_baseline(sys.argv[2] if len(sys.argv) > 2 else "J_pipeline")))
     if what == "reading-report":
         import standin_chat
         print(run(standin_chat.chat_well_behaved, label="the stand-in"))
