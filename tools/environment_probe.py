@@ -109,11 +109,11 @@ def probe_replace(folder):
 
 
 def probe_chat(chat, live):
-    import aiva5_run_report as run
-    live = live or run.LiveValues()
+    import runner
+    live = live or runner.LiveValues()
     kept = dict(live.values)
     live.update(kept.get("llm_endpoint", ""), "", kept.get("llm_user_id", ""))
-    answer, failure, seen = run.call_chat(chat, "You answer with one word.", "Say yes.", live)
+    answer, failure, seen = runner.call_chat(chat, "You answer with one word.", "Say yes.", live)
     live.update(kept.get("llm_endpoint", ""), kept.get("llm_token", ""), kept.get("llm_user_id", ""))
     return ["with an empty token chat() gave: %s" % (("an answer: %r" % answer[:60]) if answer else "no answer"),
             "the wrapper read this as: %s" % (failure or "a normal answer"), "what was seen (tokens removed): %s" % (seen[:300] or "nothing unusual")]
@@ -148,9 +148,9 @@ def run_probe(folder, docs_dir, chat=None, live=None, quick=False):
 def probe_scratch():
     """Where the driver lets this user write. A cluster is shared, so a scratch folder made by
     one user can refuse another; this says which folder AIVA settled on before a run needs it."""
-    import aiva5_run_report as run
+    import runner
     try:
-        return ["AIVA would build runs in: %s" % run.pick_scratch_root()]
+        return ["AIVA would build runs in: %s" % runner.pick_scratch_root()]
     except PermissionError as problem:
         return ["No folder on the driver allowed it. %s" % problem]
     os.makedirs(docs_dir, exist_ok=True)

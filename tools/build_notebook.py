@@ -3,6 +3,7 @@
 Thirteen widgets and eighteen cells. The notebook holds no logic of its own: every cell calls a
 function of the engine. Run `python tools/build_notebook.py` after changing anything here.
 """
+import runner
 import json
 import os
 
@@ -138,8 +139,6 @@ AIVA_HOME = notebook_folder()
 for folder in (os.path.join(AIVA_HOME, "engine"), os.path.join(AIVA_HOME, "engine", "tests"), os.path.join(AIVA_HOME, "tools")):
     if folder not in sys.path:
         sys.path.insert(0, folder)
-import aiva5_run_report as aiva
-
 print("AIVA folder:", AIVA_HOME)
 print("Python", sys.version.split()[0])
 for name in ("yaml", "openpyxl", "docx", "numpy", "scipy", "sympy", "pdfplumber", "pypdf", "rdata"):
@@ -173,7 +172,7 @@ code("Cell 5 - USE THE LATEST WIDGET VALUES (the only cell that reads the three 
 # With Databricks' default widget behaviour this cell runs again by itself whenever a widget value changes and
 # the main thread is free. It copies the three values into memory and prints the token's age, never the token.
 if "LIVE" not in globals():
-    LIVE = aiva.LiveValues()
+    LIVE = runner.LiveValues()
 LIVE.update(dbutils.widgets.get("llm_endpoint"), dbutils.widgets.get("llm_token"), dbutils.widgets.get("llm_user_id"))
 
 def aiva_live(name):
@@ -229,7 +228,7 @@ if USE_STANDIN:
 else:
     ACTIVE_CHAT = chat
     started = time.time()
-    answer_of_call = aiva.call_chat(ACTIVE_CHAT, "You answer with one word.", "Answer with the single word: ready", LIVE)
+    answer_of_call = runner.call_chat(ACTIVE_CHAT, "You answer with one word.", "Answer with the single word: ready", LIVE)
     answer, failure, seen = answer_of_call
     SECONDS_PER_CALL = time.time() - started
     if answer:
@@ -241,7 +240,7 @@ else:
 
 code("Cell 8 - project setup", '''
 def current_settings():
-    return aiva.make_settings({"concurrency_limit": int(dbutils.widgets.get("concurrency_limit") or 4), "token_cap": int(dbutils.widgets.get("token_cap") or 40000),
+    return runner.make_settings({"concurrency_limit": int(dbutils.widgets.get("concurrency_limit") or 4), "token_cap": int(dbutils.widgets.get("token_cap") or 40000),
                                "reviewer_id": dbutils.widgets.get("reviewer_id"), "reviewer_role": dbutils.widgets.get("reviewer_role")})
 
 def current_paths(new_run_allowed=True):
@@ -251,11 +250,11 @@ def current_paths(new_run_allowed=True):
     run_id = "" if run_id == "New run" else run_id
     if not run_id and "PATHS" in globals() and PATHS.model_id == dbutils.widgets.get("model_id") and (not project_date or PATHS.project_date == project_date):
         return PATHS                                   # keep working on the run this session opened
-    return aiva.open_run(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), project_date, run_id,
+    return runner.open_run(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), project_date, run_id,
                          scratch_root=dbutils.widgets.get("scratch_dir"))
 
 project = dbutils.widgets.get("project")
-project_dir, missing = aiva.setup_project(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), "" if project.startswith("New project") else project)
+project_dir, missing = runner.setup_project(dbutils.widgets.get("projects_dir"), dbutils.widgets.get("model_id"), "" if project.startswith("New project") else project)
 print("Project folder:", project_dir)
 print("\\n".join(missing) if missing else "All three Inputs folders hold at least one file. Go on with cell 9.")
 ''')
@@ -263,9 +262,9 @@ print("\\n".join(missing) if missing else "All three Inputs folders hold at leas
 code("Cell 9 - start or resume the run: reading steps (no AI involved)", '''
 SETTINGS = current_settings()
 PATHS = current_paths()
-RESULT = aiva.run_pipeline(PATHS, SETTINGS, chat=None, live=LIVE, stop_after="06")
+RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=None, live=LIVE, stop_after="06")
 print(RESULT["message"])
-store = aiva.open_store(PATHS, SETTINGS)
+store = runner.open_store(PATHS, SETTINGS)
 for outline in store.read("outline"):
     if outline["corner"] == "canon":
         print("\\nOutline of the methodology as AIVA read it (first 60 lines):\\n" + "\\n".join(outline["lines"][:60]))
@@ -275,14 +274,14 @@ print("\\nRun folder:", PATHS.run_dir, "\\nOpen Outputs/Output.xlsx: the three C
 code("Cell 10 - confirm the outline of the methodology", '''
 # Run this after you have checked Level and Section (heading chain) on sheet Chunks_Canon against the
 # methodology's own table of contents. The AI steps do not start without it.
-print(aiva.confirm_outline(PATHS, SETTINGS, dbutils.widgets.get("reviewer_id")))
+print(runner.confirm_outline(PATHS, SETTINGS, dbutils.widgets.get("reviewer_id")))
 ''')
 
 code("Cell 11 - call plan", '''
 # The two steps that ask the most questions. "07a" asks one per piece of code, to fill the column
 # "LLM Interpretation" on Chunks_Model; to save those calls, set interpret_code to False in cell 8.
 for step_id in ("07a", "08"):
-    plan = aiva.call_plan(PATHS, SETTINGS, step_id, seconds_per_call=SECONDS_PER_CALL)
+    plan = runner.call_plan(PATHS, SETTINGS, step_id, seconds_per_call=SECONDS_PER_CALL)
     print("Questions for step %s (%s): %d" % (step_id, plan["step"], plan["questions"]))
     for question_type, count in sorted(plan["by_type"].items()):
         print("  %-26s %d" % (question_type, count))
@@ -294,7 +293,7 @@ code("Cell 12 - run the AI steps and the checks", '''
 import threading
 MODE = "A"                    # "A" or "B": background thread (cell 13 shows progress). "C": foreground, stops by itself after FOREGROUND_MINUTES.
 FOREGROUND_MINUTES = 12
-STATE = aiva.AskState()
+STATE = runner.AskState()
 
 def keep_alive():
     try:
@@ -304,7 +303,7 @@ def keep_alive():
 
 def work():
     settings = dict(SETTINGS, foreground_minutes=FOREGROUND_MINUTES if MODE == "C" else 0.0, token_wait="stop" if MODE == "C" else "wait")
-    RESULT.update(aiva.run_pipeline(PATHS, aiva.make_settings({k: v for k, v in settings.items() if v != aiva.DEFAULT_SETTINGS.get(k)}),
+    RESULT.update(runner.run_pipeline(PATHS, runner.make_settings({k: v for k, v in settings.items() if v != runner.DEFAULT_SETTINGS.get(k)}),
                                     chat=ACTIVE_CHAT, live=LIVE, state=STATE, keep_alive=keep_alive))
 
 if MODE == "C":
@@ -320,11 +319,11 @@ code("Cell 13 - status (run again to refresh); pause and stop switches", '''
 PAUSE, STOP = False, False    # set one to True and run this cell to pause or stop the background run; False again to go on
 if "STATE" in globals():
     STATE.control["pause"], STATE.control["stop"] = PAUSE, STOP
-store = aiva.open_store(PATHS, SETTINGS)
-print(aiva.progress_text(store, RESULT.get("message", "") if "RESULT" in globals() else ""))
+store = runner.open_store(PATHS, SETTINGS)
+print(runner.progress_text(store, RESULT.get("message", "") if "RESULT" in globals() else ""))
 for record in store.read("step_records"):
     print("  step %s %-22s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted(record["counts"].items()))))
-for label, value in aiva.call_statistics(store):
+for label, value in runner.call_statistics(store):
     print("  %-52s %s" % (label, value))
 print("Token pasted %.1f minutes ago.%s" % (LIVE.token_age_minutes(), " The run is WAITING FOR A FRESH TOKEN: paste it into the widget (mode B: then run cell 5)." if "STATE" in globals() and STATE.waiting_for_token else ""))
 print("Background run is", "working" if "WORKER" in globals() and WORKER.is_alive() else "not working at the moment")
@@ -332,8 +331,8 @@ print("Background run is", "working" if "WORKER" in globals() and WORKER.is_aliv
 
 code("Cell 14 - determinations: run after uploading the completed Output.xlsx into Outputs/", '''
 SETTINGS = current_settings()
-RESULT = aiva.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE, determinations=True)
-store = aiva.open_store(PATHS, SETTINGS)
+RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE, determinations=True)
+store = runner.open_store(PATHS, SETTINGS)
 last = [r for r in store.read("step_records") if r["name"] == "record-determinations"][-1:]
 for record in last:
     print("Determinations recorded this time:", record["counts"].get("determinations recorded", 0))
@@ -342,7 +341,7 @@ print("Both output files were rebuilt. Outputs/ holds Output.xlsx and Validation
 ''')
 
 code("Cell 15 - verify this evidence pack", '''
-for what, verdict, detail in aiva.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
+for what, verdict, detail in runner.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
     print("%-14s %s%s" % (verdict, what, " (" + detail + ")" if detail else ""))
 ''')
 
@@ -358,9 +357,9 @@ import datetime, os, shutil, tempfile, standin_chat
 SAMPLE, STOP_AFTER = {1: ("F_capital", "02"), 2: ("F_capital", "04"), 3: ("A_minimal", "08"), 4: ("F_capital_known", ""), 5: ("A_minimal", "")}[REVIEWER]
 demo_projects = tempfile.mkdtemp(prefix="aiva_sanity_")
 shutil.copytree(os.path.join(AIVA_HOME, "engine", "tests", "sample_projects", SAMPLE, "Inputs"), os.path.join(demo_projects, "SANITY", datetime.date.today().isoformat(), "Inputs"))
-demo_settings = aiva.make_settings({"require_outline_confirmation": False})
-demo_paths = aiva.open_run(demo_projects, "SANITY")
-print(aiva.run_pipeline(demo_paths, demo_settings, chat=standin_chat.chat, stop_after=STOP_AFTER)["message"])
+demo_settings = runner.make_settings({"require_outline_confirmation": False})
+demo_paths = runner.open_run(demo_projects, "SANITY")
+print(runner.run_pipeline(demo_paths, demo_settings, chat=standin_chat.chat, stop_after=STOP_AFTER)["message"])
 print("Open", os.path.join(demo_paths.outputs_dir, "Output.xlsx"), "and compare with 'HOW TO SANITY-CHECK IT' at the top of the bundle you review.")
 ''')
 

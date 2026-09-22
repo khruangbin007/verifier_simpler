@@ -10,8 +10,8 @@ import sys
 import tokenize
 
 ENGINE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
-BUDGETS = {"aiva0_shared.py": 450, "aiva0r_reading.py": 1100, "aiva1f_formats.py": 600, "aiva1_documents.py": 1500, "aiva2_package.py": 1500,
-           "aiva3_mapping.py": 1500, "aiva4_checks.py": 1500, "aiva5_run_report.py": 1500}
+BUDGETS = {"core.py": 450, "core.py": 1100, "core.py": 600, "reading.py": 1500, "reading.py": 1500,
+           "review.py": 1500, "review.py": 1500, "runner.py": 1500}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 

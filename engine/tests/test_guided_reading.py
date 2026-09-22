@@ -14,11 +14,10 @@ import unittest
 import yaml
 
 import helpers
-import aiva0r_reading as reading
-import aiva1_documents
-import aiva3_mapping as mapping
-import aiva5_run_report as run
-
+import core
+import reading
+import review
+import runner
 SHAPE = """<?xml version="1.0"?>
 <rules>
   <ruleblock idx="1."><blockcaption>Loan periods</blockcaption>
@@ -30,18 +29,18 @@ SHAPE = """<?xml version="1.0"?>
 
 
 def a_question(text=SHAPE, rules=None):
-    settings = run.make_settings({})
-    rules = rules or aiva1_documents.load_tag_rules(run.REFERENCES_DIR)
-    root = aiva1_documents.parse_markup(text, "s.xml", [], False)
-    digest = reading.markup_digest(root, rules, "s.xml")
-    prompt = reading.load_prompt(run.REFERENCES_DIR, "slice-rules")
-    return reading.slice_rules_question(digest, rules, prompt, settings), root, rules
+    settings = runner.make_settings({})
+    rules = rules or reading.load_tag_rules(runner.REFERENCES_DIR)
+    root = reading.parse_markup(text, "s.xml", [], False)
+    digest = core.markup_digest(root, rules, "s.xml")
+    prompt = core.load_prompt(runner.REFERENCES_DIR, "slice-rules")
+    return core.slice_rules_question(digest, rules, prompt, settings), root, rules
 
 
 class TheDigestShowsShapeAndNotTheDocument(unittest.TestCase):
     def test_the_digest_carries_counts_and_places_for_every_tag_in_the_file(self):
         _, root, rules = a_question()
-        digest = reading.markup_digest(root, rules, "s.xml")
+        digest = core.markup_digest(root, rules, "s.xml")
         tags = {row["tag"] for row in digest["tags"]}
         self.assertEqual(tags, {"rules", "ruleblock", "blockcaption", "statementbody"})
         block = [row for row in digest["tags"] if row["tag"] == "blockcaption"][0]
@@ -50,27 +49,27 @@ class TheDigestShowsShapeAndNotTheDocument(unittest.TestCase):
 
     def test_no_sample_in_the_digest_runs_past_its_limit(self):
         _, root, rules = a_question()
-        for row in reading.markup_digest(root, rules, "s.xml")["tags"]:
-            self.assertLessEqual(len(row["samples"]), reading.DIGEST_SAMPLES)
+        for row in core.markup_digest(root, rules, "s.xml")["tags"]:
+            self.assertLessEqual(len(row["samples"]), core.DIGEST_SAMPLES)
             for sample in row["samples"]:
-                self.assertLessEqual(len(sample), reading.DIGEST_SAMPLE_CHARS)
+                self.assertLessEqual(len(sample), core.DIGEST_SAMPLE_CHARS)
 
     def test_the_question_id_changes_when_the_prompt_changes(self):
         """The reader's procedure and prohibitions are the first thing in the prompt's system
         half, so a changed contract is a new prompt version and a new question id."""
-        settings = run.make_settings({})
+        settings = runner.make_settings({})
         _, root, rules = a_question()
-        digest = reading.markup_digest(root, rules, "s.xml")
-        prompt = reading.load_prompt(run.REFERENCES_DIR, "slice-rules")
+        digest = core.markup_digest(root, rules, "s.xml")
+        prompt = core.load_prompt(runner.REFERENCES_DIR, "slice-rules")
         self.assertIn("THE READER NEVER", prompt["system"], "the contract lives in the prompt now")
-        plain = reading.slice_rules_question(digest, rules, prompt, settings)
+        plain = core.slice_rules_question(digest, rules, prompt, settings)
         changed = dict(prompt, system=prompt["system"] + "\n- never lose a word", version="VERSION 99")
-        again = reading.slice_rules_question(digest, rules, changed, settings)
+        again = core.slice_rules_question(digest, rules, changed, settings)
         self.assertNotEqual(plain["question_id"], again["question_id"])
 
 class TheBadAnswerCorpus(unittest.TestCase):
     def test_every_answer_in_the_corpus_is_handled_as_the_corpus_says(self):
-        import aiva0_shared as shared
+        import core
         question, _, _ = a_question()
         question["tags_shown"] = ["rules", "ruleblock", "blockcaption", "statementbody"]
         question["holds_other_tags"] = {"rules": True, "ruleblock": True, "blockcaption": False, "statementbody": False}
@@ -78,12 +77,12 @@ class TheBadAnswerCorpus(unittest.TestCase):
             corpus = yaml.safe_load(handle)["answers"]
         self.assertGreaterEqual(len(corpus), 20, "the corpus should cover every way an answer can be wrong")
         for case in corpus:
-            outcome, answer = mapping.validate_answer(question, case["text"])
+            outcome, answer = review.validate_answer(question, case["text"])
             if case["expected"] == "accepted":
                 self.assertEqual(outcome, "accepted", case["name"])
                 self.assertIsInstance(answer, dict, case["name"])
             else:
-                self.assertEqual(outcome, "rejected: %s" % shared.REJECTION_REASONS[case["expected"]], case["name"])
+                self.assertEqual(outcome, "rejected: %s" % core.REJECTION_REASONS[case["expected"]], case["name"])
                 self.assertIsNone(answer, case["name"])
 
 
@@ -95,7 +94,7 @@ class NoAnswerCanChangeWhatAFileSays(unittest.TestCase):
         tags = ["rules", "ruleblock", "blockcaption", "statementbody"]
         for _ in range(40):
             holds = {"rules": True, "ruleblock": True, "blockcaption": False, "statementbody": False}
-            allowed = lambda tag: [f for f in reading.SLICE_FAMILIES
+            allowed = lambda tag: [f for f in core.SLICE_FAMILIES
                                    if not (holds[tag] and f in ("paragraph", "list_item"))]
             answer = {"families": {tag: chance.choice(allowed(tag)) for tag in tags}, "levels": {}, "why": {}}
             for tag, family in answer["families"].items():
@@ -114,25 +113,25 @@ class TheOrderOfPrecedence(unittest.TestCase):
     def test_the_model_never_overrides_the_analyst(self):
         rules = {"shipped_tags": [], "family_of": {}}
         answer = {"families": {"statementbody": "heading"}}
-        families, _, _ = reading.overlay_from_answer(answer, rules, {"statementbody"})
+        families, _, _ = core.overlay_from_answer(answer, rules, {"statementbody"})
         self.assertEqual(families, {}, "what the analyst wrote in Inputs/tag_rules.yaml wins")
 
     def test_the_model_never_overrides_a_tag_aiva_ships(self):
         rules = {"shipped_tags": ["para"], "family_of": {}}
-        families, _, _ = reading.overlay_from_answer({"families": {"para": "heading"}}, rules, set())
+        families, _, _ = core.overlay_from_answer({"families": {"para": "heading"}}, rules, set())
         self.assertEqual(families, {}, "a schema AIVA already knows is read exactly as before")
 
     def test_the_model_never_overrides_a_table_whose_rows_were_counted(self):
         rules = {"shipped_tags": [], "family_of": {}}
         answer = {"families": {"gridcell": "paragraph", "blockcaption": "heading"}}
-        families, _, _ = reading.overlay_from_answer(answer, rules, set(), {"gridcell": "cell"})
+        families, _, _ = core.overlay_from_answer(answer, rules, set(), {"gridcell": "cell"})
         self.assertNotIn("gridcell", families, "a family proved by counting is not a guess to overturn")
         self.assertIn("blockcaption", families, "but the model does speak where code only guessed")
 
     def test_a_level_is_kept_only_for_a_tag_the_answer_called_a_heading(self):
         rules = {"shipped_tags": [], "family_of": {}}
         answer = {"families": {"a": "heading", "b": "paragraph"}, "levels": {"a": 3, "b": 2}}
-        _, levels, _ = reading.overlay_from_answer(answer, rules, set())
+        _, levels, _ = core.overlay_from_answer(answer, rules, set())
         self.assertEqual(levels, {"a": 3})
 
 

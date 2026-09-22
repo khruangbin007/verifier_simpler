@@ -18,7 +18,7 @@ for folder in (os.path.join(ROOT, "engine"), os.path.join(ROOT, "engine", "tests
     if folder not in sys.path:
         sys.path.insert(0, folder)
 
-import aiva5_run_report as run      # noqa: E402
+import runner      # noqa: E402
 
 SAMPLES = os.path.join(ROOT, "engine", "tests", "sample_projects")
 LADDER = (("fields only", ["fields"]), ("+ bridge vocabulary", ["fields", "bridge"]), ("+ explicit references", ["fields", "bridge", "references"]),
@@ -30,10 +30,10 @@ KS = (3, 5, 12)
 def shortlists(sample, signals):
     projects = tempfile.mkdtemp(prefix="aiva_recall_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "RECALL", "2026-01-01", "Inputs"))
-    settings = run.make_settings({"require_outline_confirmation": False, "signals": signals})
-    paths = run.open_run(projects, "RECALL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_recall_local_"))
-    run.run_pipeline(paths, settings, chat=None, stop_after="06")
-    store = run.open_store(paths, settings)
+    settings = runner.make_settings({"require_outline_confirmation": False, "signals": signals})
+    paths = runner.open_run(projects, "RECALL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_recall_local_"))
+    runner.run_pipeline(paths, settings, chat=None, stop_after="06")
+    store = runner.open_store(paths, settings)
     found = {}
     for candidate in store.read("candidates"):
         if candidate["target_corner"] == "canon" and candidate["search_pass"] == 1:

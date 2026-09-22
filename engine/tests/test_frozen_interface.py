@@ -37,20 +37,20 @@ SETTLED_SAMPLES = ("A_minimal", "D_dosing", "F_capital", "F_capital_known")
 
 
 def units_of_sample(sample):
-    """Steps 01 to 04 of one sample, as plain dictionaries, with nothing that varies by run."""
-    import aiva0_shared as shared
-    import aiva5_run_report as run
+    """Steps 01 to 04 of one sample, as plain dictionaries, with nothing that varies by runner."""
+    import core
+    import runner
     import standin_chat
 
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "FROZEN", "2026-09-18")
-    settings = run.make_settings({"require_outline_confirmation": False})
-    paths = run.open_run(projects, "FROZEN", "2026-09-18", scratch_root=helpers.scratch())
-    run.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after="04")
-    store = run.open_store(paths, settings)
+    settings = runner.make_settings({"require_outline_confirmation": False})
+    paths = runner.open_run(projects, "FROZEN", "2026-09-18", scratch_root=helpers.scratch())
+    runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after="04")
+    store = runner.open_store(paths, settings)
     found = {}
     for kind in KINDS:
-        rows = [shared.to_plain(row) for row in store.read(kind)]
+        rows = [core.to_plain(row) for row in store.read(kind)]
         found[kind] = [helpers.without_times(row) for row in rows]
     return found
 

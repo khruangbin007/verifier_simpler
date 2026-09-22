@@ -13,14 +13,11 @@ import unittest
 import yaml
 
 import helpers
+import core
+import reading
+import review
+import runner
 import fixture_package
-import aiva0_shared as shared
-import aiva0r_reading as reading
-import aiva2_package as package
-import aiva3_mapping as mapping
-import aiva5_run_report as run
-
-
 def read(mode, chat=None):
     folder = helpers.scratch()
     path = os.path.join(folder, "oddly_0.1.0.tar.gz")
@@ -29,8 +26,8 @@ def read(mode, chat=None):
     asking = helpers.asker(chat or helpers.standin()) if mode != "off" else None
     context = helpers.context_for({"package": [path]},
                                   settings=helpers.made_settings({"agentic_reading": mode}), ask=asking)
-    result = package.read_package(context)
-    units = [shared.to_plain(unit) for unit in result.records["model_units"]]
+    result = reading.read_package(context)
+    units = [core.to_plain(unit) for unit in result.records["model_units"]]
     return units, result
 
 
@@ -39,12 +36,12 @@ def a_question():
     path = os.path.join(folder, "oddly_0.1.0.tar.gz")
     with open(path, "wb") as handle:
         handle.write(fixture_package.tarball())
-    files, _ = package.unpack_package(path, 200 * 1024 * 1024)
-    files = package.strip_top_folder(files)
-    placed = {member: package.built_in_reader(member, files[member]) for member in files}
-    digest = reading.manifest_digest(files, placed, package.safe_text, "oddly")
-    prompt = reading.load_prompt(run.REFERENCES_DIR, "package-plan")
-    return reading.package_plan_question(digest, prompt, run.make_settings({}))
+    files, _ = reading.unpack_package(path, 200 * 1024 * 1024)
+    files = reading.strip_top_folder(files)
+    placed = {member: reading.built_in_reader(member, files[member]) for member in files}
+    digest = core.manifest_digest(files, placed, reading.safe_text, "oddly")
+    prompt = core.load_prompt(runner.REFERENCES_DIR, "package-plan")
+    return core.package_plan_question(digest, prompt, runner.make_settings({}))
 
 
 class TheManifestShowsWhereFilesLieAndNothingElse(unittest.TestCase):
@@ -71,23 +68,23 @@ class TheBadAnswerCorpus(unittest.TestCase):
             corpus = yaml.safe_load(handle)["answers"]
         self.assertGreaterEqual(len(corpus), 15)
         for case in corpus:
-            outcome, answer = mapping.validate_answer(question, case["text"])
+            outcome, answer = review.validate_answer(question, case["text"])
             if case["expected"] == "accepted":
                 self.assertEqual(outcome, "accepted", case["name"])
             else:
-                self.assertEqual(outcome, "rejected: %s" % shared.REJECTION_REASONS[case["expected"]], case["name"])
+                self.assertEqual(outcome, "rejected: %s" % core.REJECTION_REASONS[case["expected"]], case["name"])
 
 
 class NoAnswerCanLeaveAMemberUnread(unittest.TestCase):
     def test_there_is_no_reader_that_means_skip(self):
-        self.assertNotIn("skip", reading.PACKAGE_READERS)
-        self.assertNotIn("ignore", reading.PACKAGE_READERS)
+        self.assertNotIn("skip", core.PACKAGE_READERS)
+        self.assertNotIn("ignore", core.PACKAGE_READERS)
 
     def test_an_answer_that_leaves_a_member_out_is_refused(self):
         question = a_question()
         question["unplaced"] = ["tools/calculations.R", "tools/build.notes"]
-        outcome, _ = mapping.validate_answer(question, '{"readers": {"tools/calculations.R": "r-source"}}')
-        self.assertEqual(outcome, "rejected: %s" % shared.REJECTION_REASONS[4])
+        outcome, _ = review.validate_answer(question, '{"readers": {"tools/calculations.R": "r-source"}}')
+        self.assertEqual(outcome, "rejected: %s" % core.REJECTION_REASONS[4])
 
     def test_a_member_sent_to_the_wrong_reader_becomes_a_unit_saying_so(self):
         """The answer is allowed to be wrong. What it may never do is make a file disappear."""
@@ -142,7 +139,7 @@ class WhatThePlanRecovers(unittest.TestCase):
         context = helpers.context_for({"package": [path]},
                                       settings=helpers.made_settings({"agentic_reading": "rules"}),
                                       ask=helpers.asker(counting))
-        package.read_package(context)
+        reading.read_package(context)
         self.assertEqual(spent, [], "a package the tests place entirely costs no call")
 
 

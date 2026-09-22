@@ -19,10 +19,10 @@ class ManualAndCode(unittest.TestCase):
 
     def test_a_name_that_does_not_exist_is_reported(self):
         engine, tests = check_docs.engine_names(), check_docs.test_names()
-        self.assertIs(check_docs.reference_exists("aiva3_mapping.judge_links", engine, tests, set()), True)
-        self.assertIs(check_docs.reference_exists("aiva3_mapping.no_such_function", engine, tests, set()), False)
+        self.assertIs(check_docs.reference_exists("review.judge_links", engine, tests, set()), True)
+        self.assertIs(check_docs.reference_exists("review.no_such_function", engine, tests, set()), False)
         self.assertIs(check_docs.reference_exists("cell 19", engine, tests, set()), False)
-        self.assertIs(check_docs.reference_exists("test_aiva4_checks.ValueRule.test_the_table_of_the_rule", engine, tests, set()), True)
+        self.assertIs(check_docs.reference_exists("test_review.ValueRule.test_the_table_of_the_rule", engine, tests, set()), True)
         self.assertIsNone(check_docs.reference_exists("rho_a", engine, tests, set()))
 
 
@@ -33,9 +33,9 @@ class Release(unittest.TestCase):
 
     def test_every_run_names_exactly_the_engine_files_that_produced_it(self):
         import json
-        import aiva5_run_report as run
+        import runner
         paths, settings, _ = helpers.run_sample("A_minimal", stop_after="01")
-        recorded = run.open_store(paths, settings).read("run_manifest")[0]["engine_files"]
+        recorded = runner.open_store(paths, settings).read("run_manifest")[0]["engine_files"]
         with open(os.path.join(helpers.ROOT_DIR, "docs", "release_manifest.json"), encoding="utf-8") as handle:
             released = {name: digest for name, digest in json.load(handle)["files"].items() if name.startswith("engine/")}
         self.assertEqual(recorded, released)

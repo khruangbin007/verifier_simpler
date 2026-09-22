@@ -24,7 +24,7 @@ for folder in (os.path.join(ROOT, "engine"), os.path.join(ROOT, "engine", "tests
     if folder not in sys.path:
         sys.path.insert(0, folder)
 
-import aiva5_run_report as run      # noqa: E402
+import runner      # noqa: E402
 import seed_differences             # noqa: E402
 import standin_chat                 # noqa: E402
 
@@ -50,10 +50,10 @@ def run_once(sample, replaced, chat):
     for relative, data in replaced.items():
         with open(os.path.join(inputs, relative), "wb") as handle:
             handle.write(data)
-    settings = run.make_settings({"require_outline_confirmation": False})
-    paths = run.open_run(projects, "HARNESS", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_harness_local_"))
-    run.run_pipeline(paths, settings, chat=chat)
-    store = run.open_store(paths, settings)
+    settings = runner.make_settings({"require_outline_confirmation": False})
+    paths = runner.open_run(projects, "HARNESS", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_harness_local_"))
+    runner.run_pipeline(paths, settings, chat=chat)
+    store = runner.open_store(paths, settings)
     result = {kind: store.read(kind) for kind in ("unit_status", "flagged_items", "model_units", "chunks_doc")}
     shutil.rmtree(projects, ignore_errors=True)
     shutil.rmtree(paths.local_dir, ignore_errors=True)

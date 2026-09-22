@@ -21,12 +21,12 @@ for folder in (ENGINE, os.path.join(ROOT, "tools")):
     if folder not in sys.path:
         sys.path.insert(0, folder)
 
-import aiva0_shared as shared          # noqa: E402
+import core          # noqa: E402
 import aiva4_checks                    # noqa: E402
-import aiva5_run_report as run         # noqa: E402
+import runner         # noqa: E402
 import count_lines                     # noqa: E402
 
-BUNDLES = ("aiva0_shared", "aiva0r_reading", "aiva1f_formats", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
+BUNDLES = ("core", "core", "core", "reading", "reading", "review", "review", "runner")
 RULES = ["R%d" % n for n in range(1, 14)]
 SETTING_NOTES = {
     "agentic_reading": "Whether a reading step may ask the model what the tags of a file whose shape AIVA does not know are for. \"off\" asks nothing and reads as the built-in rules read; \"rules\" asks one question per file the rules are unsure about and applies the answer under everything the rules already know.",
@@ -79,14 +79,14 @@ def first_sentence(text):
 def part_status_rules():
     out = []
     for corner, title in (("model", "Units of the package"), ("doc", "Units of the documentation")):
-        rows = [(n, rule, status, when) for n, (c, rule, status, when) in enumerate([r for r in aiva4_checks.STATUS_RULES if r[0] == corner], start=1)]
+        rows = [(n, rule, status, when) for n, (c, rule, status, when) in enumerate([r for r in review.STATUS_RULES if r[0] == corner], start=1)]
         out.append("**%s** (the first rule that fits decides)\n\n%s" % (title, table(("Order", "Rule", "Status", "When it applies"), rows)))
     return "\n\n".join(out)
 
 
 def part_columns():
     out = []
-    for sheet in run.load_layout()["sheets"]:
+    for sheet in runner.load_layout()["sheets"]:
         rows = [(column["header"], column["group"].replace("_", " "), COLUMN_NOTES.get(column["header"], "")) for column in sheet["columns"]]
         out.append("**%s**\n\n%s" % (sheet["name"], table(("Column", "Colour group", "What it shows"), rows)))
     return "\n\n".join(out)
@@ -99,7 +99,7 @@ def skill_front_matter(name):
 
 def part_skills():
     rows = []
-    for step in run.load_pipeline()["steps"]:
+    for step in runner.load_pipeline()["steps"]:
         front = skill_front_matter(step["skill"])
         rows.append((step["id"], step["skill"], front["metadata"]["version"], step.get("function", "a person"), front["description"]))
     return table(("Step", "Skill", "Version", "Carried out by", "What it does"), rows)
@@ -132,7 +132,7 @@ def part_rules_to_functions():
 
 
 def part_settings():
-    return table(("Setting", "Default", "Meaning"), [("`%s`" % name, default, SETTING_NOTES.get(name, "")) for name, default in run.DEFAULT_SETTINGS.items()])
+    return table(("Setting", "Default", "Meaning"), [("`%s`" % name, default, SETTING_NOTES.get(name, "")) for name, default in runner.DEFAULT_SETTINGS.items()])
 
 
 def part_prompts():
@@ -180,14 +180,14 @@ def part_dependencies():
 
 
 def part_vocabulary():
-    parts = [("Statuses that are clean", [(s,) for s in shared.CLEAN_STATUSES]), ("Statuses that need attention", [(s,) for s in shared.NOT_CLEAN_STATUSES]),
-             ("Relations, as shown", [(shown, asked) for asked, shown in shared.RELATION_WORDING.items()]),
-             ("How a link was established", [(text,) for text in (shared.HOW_PARSED, shared.HOW_AI, shared.HOW_SYMBOLIC, shared.HOW_NUMERIC_AGREES, shared.HOW_NUMERIC_DIFFERS,
-                                                                  shared.HOW_VALUE_AGREES, shared.HOW_VALUE_DIFFERS, shared.HOW_TABLE, shared.HOW_PERSON)]),
-             ("Kinds of model unit", [(kind,) for kind in shared.UNIT_KINDS]), ("Kinds of chunk", [(kind,) for kind in shared.CHUNK_KINDS]),
-             ("Reasons for a check that could not be decided", [(reason,) for reason in shared.UNDECIDED_REASONS]),
-             ("Reasons why an answer of the model could not be used", [(reason,) for reason in shared.REJECTION_REASONS]),
-             ("Fixed cell texts", [(shared.CHECK_UNDECIDED,), (shared.NOT_APPLICABLE,), (shared.NOT_RUN_YET,), (shared.AI_WORDING_NOT_SHOWN,)])]
+    parts = [("Statuses that are clean", [(s,) for s in core.CLEAN_STATUSES]), ("Statuses that need attention", [(s,) for s in core.NOT_CLEAN_STATUSES]),
+             ("Relations, as shown", [(shown, asked) for asked, shown in core.RELATION_WORDING.items()]),
+             ("How a link was established", [(text,) for text in (core.HOW_PARSED, core.HOW_AI, core.HOW_SYMBOLIC, core.HOW_NUMERIC_AGREES, core.HOW_NUMERIC_DIFFERS,
+                                                                  core.HOW_VALUE_AGREES, core.HOW_VALUE_DIFFERS, core.HOW_TABLE, core.HOW_PERSON)]),
+             ("Kinds of model unit", [(kind,) for kind in core.UNIT_KINDS]), ("Kinds of chunk", [(kind,) for kind in core.CHUNK_KINDS]),
+             ("Reasons for a check that could not be decided", [(reason,) for reason in core.UNDECIDED_REASONS]),
+             ("Reasons why an answer of the model could not be used", [(reason,) for reason in core.REJECTION_REASONS]),
+             ("Fixed cell texts", [(core.CHECK_UNDECIDED,), (core.NOT_APPLICABLE,), (core.NOT_RUN_YET,), (core.AI_WORDING_NOT_SHOWN,)])]
     out = []
     for title, rows in parts:
         header = ("Shown in the workbook", "Word allowed in a prompt") if title.startswith("Relations") else ("Wording",)
@@ -196,10 +196,10 @@ def part_vocabulary():
 
 
 def part_categories():
-    rows = [(category, aiva4_checks.NEXT_STEPS[category]) for category in shared.CATEGORIES]
-    words = ", ".join("*%s*" % word for word in shared.DECISION_WORDS)
-    return ("**Concerns:** " + ", ".join(shared.CONCERNS) + ".\n\n" + table(("Category", "Suggested next step, as shown"), rows) +
-            "\n\n**Decision words:** %s. A cleared decision is recorded as *%s*; an item without an active decision is *%s*." % (words, shared.DECISION_WITHDRAWN, shared.ITEM_OPEN))
+    rows = [(category, review.NEXT_STEPS[category]) for category in core.CATEGORIES]
+    words = ", ".join("*%s*" % word for word in core.DECISION_WORDS)
+    return ("**Concerns:** " + ", ".join(core.CONCERNS) + ".\n\n" + table(("Category", "Suggested next step, as shown"), rows) +
+            "\n\n**Decision words:** %s. A cleared decision is recorded as *%s*; an item without an active decision is *%s*." % (words, core.DECISION_WITHDRAWN, core.ITEM_OPEN))
 
 
 def part_code_index():

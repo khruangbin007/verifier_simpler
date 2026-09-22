@@ -51,16 +51,16 @@ def gold_of(sample):
 def one_run(sample, mode, chat, live):
     """Steps 01 to 04 of one sample in one mode, measured."""
     import helpers
-    import aiva0_shared as shared
-    import aiva5_run_report as run
+    import core
+    import runner
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "R6", "2026-09-18")
-    settings = run.make_settings({"require_outline_confirmation": False, "agentic_reading": mode})
-    paths = run.open_run(projects, "R6", "2026-09-18", scratch_root=helpers.scratch())
-    run.run_pipeline(paths, settings, chat=chat, live=live, stop_after="04")
-    store = run.open_store(paths, settings)
-    units = [shared.to_plain(unit) for unit in store.read("chunks_canon")]
-    units += [shared.to_plain(unit) for unit in store.read("chunks_doc")]
+    settings = runner.make_settings({"require_outline_confirmation": False, "agentic_reading": mode})
+    paths = runner.open_run(projects, "R6", "2026-09-18", scratch_root=helpers.scratch())
+    runner.run_pipeline(paths, settings, chat=chat, live=live, stop_after="04")
+    store = runner.open_store(paths, settings)
+    units = [core.to_plain(unit) for unit in store.read("chunks_canon")]
+    units += [core.to_plain(unit) for unit in store.read("chunks_doc")]
     accounts = store.read("content_accounts")
     calls = store.read_calls()
     gold = gold_of(sample)

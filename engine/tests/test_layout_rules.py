@@ -7,10 +7,10 @@ import re
 import unittest
 
 import helpers
-import aiva0_shared as shared
+import core
 import count_lines
 
-BUNDLES = ("aiva0_shared", "aiva0r_reading", "aiva1f_formats", "aiva1_documents", "aiva2_package", "aiva3_mapping", "aiva4_checks", "aiva5_run_report")
+BUNDLES = ("core", "core", "core", "reading", "reading", "review", "review", "runner")
 FORBIDDEN_NAMES = ("eval", "exec", "compile", "__import__")           # called as a bare name
 FORBIDDEN_ATTRIBUTES = ("sympify", "parse_expr", "system", "popen", "lambdify")   # called on any owner
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Error|Exception)\b|<class |object at 0x|\bnan\b|\baiva\d_\w+|"
@@ -89,11 +89,11 @@ class StaticWordingLint(unittest.TestCase):
         for path in self.lintable_files():
             with open(path, encoding="utf-8") as handle:
                 text = handle.read()
-            if path.endswith("aiva0_shared.py"):
+            if path.endswith("core.py"):
                 start = text.index("BANNED_WORDING_PATTERNS = (")
                 text = text[:start] + text[text.index(")\n", text.index("impact", start)):]
             text = re.sub(r"<!-- wording-policy-sentence -->.*?<!-- end -->", "", text, flags=re.S)
-            self.assertEqual(shared.has_banned_wording(text), "", "banned wording in %s" % os.path.relpath(path, helpers.ROOT_DIR))
+            self.assertEqual(core.has_banned_wording(text), "", "banned wording in %s" % os.path.relpath(path, helpers.ROOT_DIR))
 
     def test_no_domain_concept_in_engine_prompts_or_stop_words(self):
         domain_words = re.compile(r"\b(credit|loan|bank|capital|default|dose|dosing|patient|clearance|obligor|mortgage)\b", re.I)
@@ -106,9 +106,9 @@ class StaticWordingLint(unittest.TestCase):
 def scan_workbook(test, path):
     """The dynamic lint for Output.xlsx: used by every end-to-end test."""
     import openpyxl
-    import aiva5_run_report as run
+    import runner
     input_columns = {}
-    for sheet_layout in run.load_layout()["sheets"]:
+    for sheet_layout in runner.load_layout()["sheets"]:
         input_columns[sheet_layout["name"]] = {c["header"] for c in sheet_layout["columns"] if c.get("input_text")}
     workbook = openpyxl.load_workbook(path)
     for sheet in workbook.worksheets:
@@ -122,7 +122,7 @@ def scan_workbook(test, path):
                     continue
                 text = own_words(cell.value)
                 where = "%s!%s: %s" % (sheet.title, cell.coordinate, cell.value[:120])
-                test.assertEqual(shared.has_banned_wording(text), "", where)
+                test.assertEqual(core.has_banned_wording(text), "", where)
                 test.assertIsNone(PYTHON_TRACES.search(text), where)
                 test.assertIsNone(re.search(r"(?<![\w.])\d+\.0(?!\d)", text), "whole number shown with a decimal point: " + where)
 
@@ -136,7 +136,7 @@ def scan_document(test, path):
         for row in table.rows:
             texts.extend(cell.text for cell in row.cells)
     for text in texts:
-        test.assertEqual(shared.has_banned_wording(own_words(text)), "", text[:120])
+        test.assertEqual(core.has_banned_wording(own_words(text)), "", text[:120])
         test.assertIsNone(PYTHON_TRACES.search(own_words(text)), text[:120])
 
 

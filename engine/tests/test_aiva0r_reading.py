@@ -1,4 +1,4 @@
-"""test_aiva0r_reading.py - the reading floor, and above all the content account of R13.
+"""test_core.py - the reading floor, and above all the content account of R13.
 
 A reader may decide HOW a file is sliced. It may not add a word the file does not contain and
 it may not lose a word the file does contain. These tests plant a sentence in each of the
@@ -10,10 +10,8 @@ import unittest
 import zipfile
 
 import helpers
-import aiva0r_reading as reading
-import aiva1_documents
-
-
+import core
+import reading
 def plain(chunks):
     return chunks
 
@@ -49,11 +47,11 @@ class TokensAndBags(unittest.TestCase):
     look like a change of content."""
 
     def test_white_space_is_not_counted_and_a_repeated_word_is_counted_twice(self):
-        self.assertEqual(reading.tokens("  a   b\n c "), ["a", "b", "c"])
-        self.assertEqual(reading.bag("a b a"), {"a": 2, "b": 1})
+        self.assertEqual(core.tokens("  a   b\n c "), ["a", "b", "c"])
+        self.assertEqual(core.bag("a b a"), {"a": 2, "b": 1})
 
     def test_taking_away_stops_at_zero_and_never_goes_below(self):
-        self.assertEqual(reading.minus({"a": 2, "b": 1}, {"a": 3}), {"b": 1})
+        self.assertEqual(core.minus({"a": 2, "b": 1}, {"a": 3}), {"b": 1})
 
 
 class NothingIsLost(unittest.TestCase):
@@ -104,9 +102,9 @@ class NothingIsAdded(unittest.TestCase):
     """Every word a unit shows comes from the file or from a transform named in the code."""
 
     def test_a_word_no_atom_holds_and_no_rule_explains_is_reported_as_added(self):
-        atoms = [reading.atom("body", "f line 1", "The buffer is three per cent.")]
+        atoms = [core.atom("body", "f line 1", "The buffer is three per cent.")]
         chunks = [{"kind": "Paragraph", "text": "The buffer is four per cent.", "heading_chain": ()}]
-        found = reading.account("f", atoms, chunks)
+        found = core.account("f", atoms, chunks)
         self.assertEqual(found["injected"], 1)
         self.assertEqual(found["what injected"], ["four"])
         self.assertFalse(found["closed"])
@@ -132,27 +130,27 @@ class TheAccountClosesBecauseTheTransformsAreNamed(unittest.TestCase):
         self.assertEqual(found["unaccounted"], 0)
 
     def test_without_the_marks_the_rendered_form_of_a_table_is_reported_as_added(self):
-        atoms = [reading.atom("body", "t line 1", "Segment"), reading.atom("body", "t line 2", "Retail")]
+        atoms = [core.atom("body", "t line 1", "Segment"), core.atom("body", "t line 2", "Retail")]
         chunks = [{"kind": "Table", "text": "Segment;\nRetail;", "heading_chain": (),
                    "table": {"header": ["Segment"], "rows": [["Retail"]]}}]
-        without = reading.account("t", atoms, chunks)
-        with_marks = reading.account("t", atoms, chunks, marks=reading.marks_of_rendering(chunks))
+        without = core.account("t", atoms, chunks)
+        with_marks = core.account("t", atoms, chunks, marks=core.marks_of_rendering(chunks))
         self.assertGreater(without["injected"], 0, "the rendered form should need a rule to explain it")
         self.assertEqual(with_marks["injected"], 0, "naming the rendering should explain it")
 
     def test_an_equation_is_neither_lost_nor_carried_but_rewritten(self):
-        atoms = [reading.atom("equation", "e element 4 <math>", "D W R")]
+        atoms = [core.atom("equation", "e element 4 <math>", "D W R")]
         chunks = [{"kind": "Equation", "text": "d = w * r", "heading_chain": (),
                    "equation": {"source_form": "mathml", "linear": "d = w * r"}}]
-        found = reading.account("e", atoms, chunks, marks=reading.marks_of_rendering(chunks))
+        found = core.account("e", atoms, chunks, marks=core.marks_of_rendering(chunks))
         self.assertEqual(found["rewritten"], 3, "the symbols of an equation are read into another form")
         self.assertEqual(found["unaccounted"], 0, "and so are not a loss")
-        self.assertIn("rewritten", reading.ATOM_CLASSES)
+        self.assertIn("rewritten", core.ATOM_CLASSES)
 
     def test_page_furniture_is_a_declared_drop_that_the_account_counts(self):
-        atoms = [reading.atom("body", "p.1", "Running title"), reading.atom("body", "p.1", "Real text.")]
+        atoms = [core.atom("body", "p.1", "Running title"), core.atom("body", "p.1", "Real text.")]
         chunks = [{"kind": "Paragraph", "text": "Real text.", "heading_chain": ()}]
-        found = reading.account("p", atoms, chunks, dropped=["Running title"])
+        found = core.account("p", atoms, chunks, dropped=["Running title"])
         self.assertEqual(found["declared drop"], 2)
         self.assertEqual(found["unaccounted"], 0)
         self.assertTrue(found["closed"])
@@ -160,17 +158,17 @@ class TheAccountClosesBecauseTheTransformsAreNamed(unittest.TestCase):
 
 class WhatTheAnalystIsTold(unittest.TestCase):
     def test_a_closed_account_says_so_in_plain_words(self):
-        atoms = [reading.atom("body", "f line 1", "One two.")]
-        found = reading.account("f", atoms, [{"kind": "Paragraph", "text": "One two.", "heading_chain": ()}])
-        lines = reading.account_lines(found)
+        atoms = [core.atom("body", "f line 1", "One two.")]
+        found = core.account("f", atoms, [{"kind": "Paragraph", "text": "One two.", "heading_chain": ()}])
+        lines = core.account_lines(found)
         self.assertTrue(any("nothing was lost and nothing was added" in line for line in lines))
         for line in lines:
             self.assertEqual(helpers.banned_wording(line), "", line)
 
     def test_an_open_account_says_how_much_and_where(self):
-        atoms = [reading.atom("body", "f line 9", "A sentence nobody kept.")]
-        found = reading.account("f", atoms, [{"kind": "Paragraph", "text": "", "heading_chain": ()}])
-        lines = " ".join(reading.account_lines(found))
+        atoms = [core.atom("body", "f line 9", "A sentence nobody kept.")]
+        found = core.account("f", atoms, [{"kind": "Paragraph", "text": "", "heading_chain": ()}])
+        lines = " ".join(core.account_lines(found))
         self.assertIn("f line 9", lines)
         self.assertIn("in no unit and under no rule", lines)
 

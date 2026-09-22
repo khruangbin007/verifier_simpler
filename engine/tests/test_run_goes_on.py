@@ -1,4 +1,4 @@
-"""test_run_goes_on.py - R2 says nothing stops a run. Until 21 September 2026 that held for the
+"""test_run_goes_on.py - R2 says nothing stops a runner. Until 21 September 2026 that held for the
 reading steps only: run_step called a step function with nothing around it, so a fault inside ANY
 step ended the run with a traceback, no Output.xlsx, and every step that had worked thrown away.
 
@@ -12,27 +12,27 @@ import os
 import unittest
 
 import helpers
-import aiva0_shared as shared
-import aiva5_run_report as run
+import core
+import runner
 import standin_chat
 
-BROKEN = "aiva3_mapping.build_graph"
+BROKEN = "review.build_graph"
 
 
 def a_run(replace=None):
     """A_minimal run to the end of its automatic steps, with one step function replaced."""
-    real = run.STEP_FUNCTIONS[BROKEN]
+    real = runner.STEP_FUNCTIONS[BROKEN]
     if replace is not None:
-        run.STEP_FUNCTIONS[BROKEN] = replace
+        runner.STEP_FUNCTIONS[BROKEN] = replace
     try:
         projects = helpers.scratch()
         helpers.copy_sample("A_minimal", projects, "GOESON", "2026-09-21")
-        settings = run.make_settings({"require_outline_confirmation": False})
-        paths = run.open_run(projects, "GOESON", "2026-09-21", scratch_root=helpers.scratch())
-        outcome = run.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved)
-        return outcome, paths, run.open_store(paths, settings).read("step_records")
+        settings = runner.make_settings({"require_outline_confirmation": False})
+        paths = runner.open_run(projects, "GOESON", "2026-09-21", scratch_root=helpers.scratch())
+        outcome = runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved)
+        return outcome, paths, runner.open_store(paths, settings).read("step_records")
     finally:
-        run.STEP_FUNCTIONS[BROKEN] = real
+        runner.STEP_FUNCTIONS[BROKEN] = real
 
 
 def fails(context):
@@ -67,7 +67,7 @@ class AStepThatFailsDoesNotStopTheRun(unittest.TestCase):
         said = [record for record in self.records if record["step_id"] == "05"][0]["messages"][0]
         self.assertIn("Step 05 (build-graph) could not finish", said)
         self.assertIn("The steps after it ran on what there was", said)
-        self.assertEqual(shared.has_banned_wording(said), "", said)
+        self.assertEqual(core.has_banned_wording(said), "", said)
 
     def test_the_details_are_kept_for_a_maintainer_and_not_put_in_the_evidence_pack(self):
         kept = glob.glob(os.path.join(self.paths.local_dir, "work", "step_05_did_not_finish.txt"))
@@ -82,7 +82,7 @@ class AStepThatFailsDoesNotStopTheRun(unittest.TestCase):
 class APauseIsNotAFailure(unittest.TestCase):
     def test_a_pause_raised_inside_a_step_still_pauses_the_run(self):
         def pauses(context):
-            raise run.RunPaused("Paste a fresh token, then run the cell again; no call will be repeated.")
+            raise runner.RunPaused("Paste a fresh token, then run the cell again; no call will be repeated.")
         outcome, _, records = a_run(pauses)
         self.assertEqual(outcome["state"], "paused")
         self.assertIn("fresh token", outcome["message"])

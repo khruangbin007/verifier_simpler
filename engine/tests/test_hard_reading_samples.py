@@ -47,17 +47,17 @@ def gold_of(sample):
 
 def reading_of(sample, mode="off"):
     """Steps 01 to 04 of a hard sample: its units, and the content accounts of its files."""
-    import aiva0_shared as shared
-    import aiva5_run_report as run
+    import core
+    import runner
     import standin_chat
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "HARD", "2026-09-18")
-    settings = run.make_settings({"require_outline_confirmation": False, "agentic_reading": mode})
-    paths = run.open_run(projects, "HARD", "2026-09-18", scratch_root=helpers.scratch())
-    run.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after="04")
-    store = run.open_store(paths, settings)
-    units = [shared.to_plain(unit) for unit in store.read("chunks_canon")]
-    units += [shared.to_plain(unit) for unit in store.read("chunks_doc")]
+    settings = runner.make_settings({"require_outline_confirmation": False, "agentic_reading": mode})
+    paths = runner.open_run(projects, "HARD", "2026-09-18", scratch_root=helpers.scratch())
+    runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after="04")
+    store = runner.open_store(paths, settings)
+    units = [core.to_plain(unit) for unit in store.read("chunks_canon")]
+    units += [core.to_plain(unit) for unit in store.read("chunks_doc")]
     return units, store.read("content_accounts"), len(store.read_calls())
 
 

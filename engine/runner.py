@@ -1,36 +1,6 @@
-"""
-AIVA 0.0.1 - aiva5_run_report.py - running a review and reporting it. For Reviewer 5.
+"""OVERVIEW PLACEHOLDER: runner"""
 
-WHAT THIS FILE DOES
-  It is the only file that touches the outside world: the project folders, the audit
-  store, the language model behind chat(), Output.xlsx, the Word report, the record of
-  determinations and the verification of an evidence pack. The four bundles below it
-  only receive a context and return records.
-
-WHAT IT TAKES IN AND PRODUCES
-  In: a Projects folder, a model ID, the three input folders, the analyst's chat()
-  function and the live values (endpoint, token, user id) held in memory.
-  Out: one run folder = Outputs/ (Output.xlsx, Validation_Report.docx) + _audit/.
-
-WHICH SHEETS SHOW ITS RESULTS
-  All eight. This file lays them out from references/workbook_layout.yaml; the words in
-  the cells are written by the bundle that knows what they mean.
-
-DESIGN RULES ENFORCED HERE (function names in brackets)
-  R3  a failed or rejected call never stops a run           [ask_one, make_asker]
-  R5  results never depend on thread timing; replay         [run_batch, replay_chat]
-  R6  inputs are never modified; a run writes only inside its own folder [open_run, AuditStore]
-  R8  the access token never persists                       [LiveValues.redact, make_settings]
-  R10 plain language outward                                [plain_cell]
-  R11 only functions named in STEP_FUNCTIONS can run        [load_pipeline]
-  R12 build on local disk, copy whole files, few files      [AuditStore.sync, copy_whole]
-
-HOW TO SANITY-CHECK IT
-  Run `python -m unittest engine/tests/test_aiva5_run_report.py`. In the notebook run the
-  appendix cell "Reviewer 5 sanity check" with the stand-in chat(), then open Output.xlsx:
-  eight sheets, yellow reviewer columns, identity rows on Model_Package_Info; search the
-  run folder for your test token: it must not occur.
-"""
+from dataclasses import dataclass, field, replace
 import concurrent.futures
 import datetime
 import getpass
@@ -45,17 +15,15 @@ import tempfile
 import threading
 import time
 import traceback
-from dataclasses import dataclass, field, replace
 
 import yaml
 
-import aiva0_shared as shared
-import aiva1_documents
-import aiva1f_formats
-import aiva2_package
-import aiva3_mapping
-import aiva4_checks
+import core
+import reading
+import review
 
+# ================================================================================================
+# ---------------------------------------------------------------- from aiva5_run_report
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 REFERENCES_DIR = os.path.join(ENGINE_DIR, "references")
 
@@ -81,7 +49,7 @@ DEFAULT_SETTINGS = {
     "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
 
 def make_settings(overrides=None):
-    """The settings of a run. Only names on the allow-list above exist, so a new setting
+    """The settings of a  Only names on the allow-list above exist, so a new setting
     can never leak into the manifest by default, and no setting can hold the token.
     Enforces: R8"""
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
@@ -118,7 +86,7 @@ def setup_project(projects_dir, model_id, project_date=""):
     project_date = project_date or datetime.date.today().isoformat()
     project_dir = os.path.join(projects_dir, model_id, project_date)
     missing = []
-    for _, folder, readme in aiva1f_formats.INPUT_FOLDERS:
+    for _, folder, readme in core.INPUT_FOLDERS:
         path = os.path.join(project_dir, "Inputs", folder)
         os.makedirs(path, exist_ok=True)
         readme_path = os.path.join(path, "README.txt")
@@ -173,7 +141,7 @@ def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root=""
     run_id = run_id or new_run_id(project_dir, now)
     run_dir = os.path.join(project_dir, run_id)
     scratch_root = pick_scratch_root(scratch_root)
-    place = shared.sha256_text(os.path.abspath(run_dir))[:8]       # two Projects folders never share scratch space
+    place = core.sha256_text(os.path.abspath(run_dir))[:8]       # two Projects folders never share scratch space
     local_dir = os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run_id, place))
     paths = RunPaths(projects_dir, model_id, project_date, project_dir,
                      os.path.join(project_dir, "Inputs"), run_id, run_dir,
@@ -265,11 +233,11 @@ class AuditStore:
         """Append records of one kind; the three single-object kinds are rewritten whole."""
         if kind in AUDIT_OBJECTS:
             with open(self.path(kind), "w", encoding="utf-8") as handle:
-                handle.write(json.dumps(shared.to_plain(records[-1]), sort_keys=True, indent=1, ensure_ascii=False))
+                handle.write(json.dumps(core.to_plain(records[-1]), sort_keys=True, indent=1, ensure_ascii=False))
             return
         with open(self.path(kind), "a", encoding="utf-8") as handle:
             for record in records:
-                handle.write(shared.canonical_json(record) + "\n")
+                handle.write(core.canonical_json(record) + "\n")
 
     def call_files(self):
         """The gzip files of call records, in order."""
@@ -286,7 +254,7 @@ class AuditStore:
         with open(current, "ab") as raw:
             with gzip.GzipFile(filename="", mode="ab", fileobj=raw, mtime=0) as handle:
                 for record in records:
-                    handle.write((shared.canonical_json(record) + "\n").encode("utf-8"))
+                    handle.write((core.canonical_json(record) + "\n").encode("utf-8"))
 
     def read_calls(self):
         """Every call record of the run, in the order written."""
@@ -496,7 +464,7 @@ def ask_one(question, chat, live, settings, validate, state, sleep):
             "question_id": question["question_id"], "question_type": question["question_type"],
             "unit_ref": question.get("unit_ref", ""), "attempt": len(records) + 1,
             "letters": question.get("letters", {}), "planted": question.get("planted", []),
-            "prompt_hash": question["question_id"], "response_hash": shared.sha256_text(answer_text or seen),
+            "prompt_hash": question["question_id"], "response_hash": core.sha256_text(answer_text or seen),
             "system_prompt": live.redact(system_prompt), "main_prompt": live.redact(question["main_prompt"]),
             "response_text": answer_text if answer_text is not None else seen, "outcome": outcome,
             "answer": answer, "final": final, "started_at": started,
@@ -555,7 +523,7 @@ def make_asker(chat, live, store, settings, validate, state=None, sleep=time.sle
     return ask
 
 def replay_chat(call_records):
-    """A chat() that answers from the recorded answers of an earlier run. Running the
+    """A chat() that answers from the recorded answers of an earlier  Running the
     pipeline with it must reproduce the same graph version id, statuses and items, which
     is what reproducibility means for a model that samples its answers. Enforces: R5"""
     recorded = {}
@@ -653,7 +621,7 @@ def run_pipeline(paths, settings, chat=None, live=None, determinations=False, st
             if human_step_open(step, store, settings, determinations):
                 rebuild_outputs(store, paths, settings, HUMAN_MESSAGES[step["name"]])
                 return {"state": "waiting for a person", "message": HUMAN_MESSAGES[step["name"]], "steps_run": steps_run}
-            record_step(store, step, shared.StepResult(), 0.0)
+            record_step(store, step, core.StepResult(), 0.0)
             continue
         try:
             run_step(step, store, paths, settings, chat, live, state, sleep)
@@ -665,7 +633,7 @@ def run_pipeline(paths, settings, chat=None, live=None, determinations=False, st
             keep_alive()
         if stop_after and step["id"] == stop_after:
             break
-    message = "Every step has run." if not stop_after else "Stopped after step %s as asked." % stop_after
+    message = "Every step has " if not stop_after else "Stopped after step %s as asked." % stop_after
     rebuild_outputs(store, paths, settings, message)
     return {"state": "finished", "message": message, "steps_run": steps_run}
 
@@ -675,15 +643,15 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     notes = []
     ask = None
     if step["name"] in CHAT_STEPS and chat is not None:
-        ask = make_asker(chat, live, store, settings, aiva3_mapping.validate_answer, state, sleep)
-    provenance = shared.Provenance(paths.run_id, step["id"], step["name"], step["version"],
+        ask = make_asker(chat, live, store, settings, review.validate_answer, state, sleep)
+    provenance = core.Provenance(paths.run_id, step["id"], step["name"], step["version"],
                                    created_at=datetime.datetime.now().isoformat(timespec="seconds"))
     options = dict(step.get("with") or {})
-    options.update({"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
+    options.update({"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
-    context = shared.StepContext(settings, options, store.read, ask, work_dir, notes.append, provenance)
+    context = core.StepContext(settings, options, store.read, ask, work_dir, notes.append, provenance)
     function = STEP_FUNCTIONS[step["carried_out_by"]]
     started = time.time()
     try:
@@ -691,7 +659,7 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     except RunPaused:
         raise                                        # a pause is how a run waits for a person; it is not a failure
     except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
-        result = shared.StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
+        result = core.StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
     for kind in sorted(result.records):
         store.append(kind, result.records[kind])
     result.messages = list(result.messages) + notes
@@ -733,7 +701,7 @@ def fingerprint_file(path, corner, inputs_dir):
     with open(path, "rb") as handle:
         data = handle.read()
     return {"corner": corner, "file": os.path.relpath(path, inputs_dir).replace(os.sep, "/"),
-            "bytes": len(data), "sha256": shared.sha256_bytes(data), "swhid": shared.swhid_content(data)}
+            "bytes": len(data), "sha256": core.sha256_bytes(data), "swhid": core.swhid_content(data)}
 
 def engine_file_hashes():
     """SHA-256 of every file that makes up the engine (code, pipeline, references), so
@@ -753,7 +721,7 @@ def prepare_run(ctx):
     import importlib.metadata
     paths, inputs = ctx.options["paths"], ctx.options["inputs"]
     fingerprints = []
-    for corner, _, _ in aiva1f_formats.INPUT_FOLDERS:
+    for corner, _, _ in core.INPUT_FOLDERS:
         fingerprints.extend(fingerprint_file(path, corner, paths.inputs_dir) for path in inputs[corner])
     for key in ("glossary", "tag_rules"):
         if inputs[key]:
@@ -771,11 +739,11 @@ def prepare_run(ctx):
         changes = ["%s: changed" % n for n in sorted(now) if n in before and before[n] != now[n]]
         changes += ["%s: new" % n for n in sorted(now) if n not in before]
         changes += ["%s: no longer present" % n for n in sorted(before) if n not in now]
-    manifest = dict(ctx.options["run"], engine_version=shared.ENGINE_VERSION, versions=versions, engine_files=engine_file_hashes(),
+    manifest = dict(ctx.options["run"], engine_version=core.ENGINE_VERSION, versions=versions, engine_files=engine_file_hashes(),
                     settings=ctx.settings, inputs=fingerprints, changes_since_previous_run=changes,
                     previous_run=previous["run_id"] if previous else "",
                     started_at=datetime.datetime.now().isoformat(timespec="seconds"))
-    return shared.StepResult({"run_manifest": [manifest]}, {"input files": len(fingerprints)},
+    return core.StepResult({"run_manifest": [manifest]}, {"input files": len(fingerprints)},
                              ["%d input files fingerprinted." % len(fingerprints)])
 
 def previous_run_inputs(paths):
@@ -815,11 +783,11 @@ def plain_cell(value, input_text, store):
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value) if value == int(value) else shared.plain_number(value)
+        return int(value) if value == int(value) else core.plain_number(value)
     text = str(value)
     if not input_text:
         own_words = re.sub(r"\u201c.*?\u201d", "", text, flags=re.S)
-        if PYTHON_TRACES.search(own_words) or shared.has_banned_wording(own_words):
+        if PYTHON_TRACES.search(own_words) or core.has_banned_wording(own_words):
             log_line(store, "cell text withheld: " + text)
             text = CELL_WITHHELD
     return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
@@ -837,10 +805,10 @@ def run_identity(store, paths):
     items = store.read("flagged_items")
     ledger, decisions = store.read("graph_ledger"), store.read("determinations")
     return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id,
-            "engine_version": shared.ENGINE_VERSION,
-            "item_list_hash": shared.sha256_text("\n".join(i["item_id"] for i in items)) if items else "",
-            "graph_version_id": "G-" + shared.chain_head(ledger)[:12] if ledger else "",
-            "determinations_fingerprint": "DR-" + shared.chain_head(decisions)[:12] if decisions else ""}
+            "engine_version": core.ENGINE_VERSION,
+            "item_list_hash": core.sha256_text("\n".join(i["item_id"] for i in items)) if items else "",
+            "graph_version_id": "G-" + core.chain_head(ledger)[:12] if ledger else "",
+            "determinations_fingerprint": "DR-" + core.chain_head(decisions)[:12] if decisions else ""}
 
 def rows_package_info(store, paths, settings, progress):
     """The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls."""
@@ -852,12 +820,12 @@ def rows_package_info(store, paths, settings, progress):
     add("Identity", "Run", identity["run_id"])
     add("Identity", "Run progress", progress)
     add("Identity", "Engine version", identity["engine_version"])
-    add("Identity", "Graph version id", identity["graph_version_id"] or shared.NOT_RUN_YET)
+    add("Identity", "Graph version id", identity["graph_version_id"] or core.NOT_RUN_YET)
     add("Identity", "Determinations record fingerprint", identity["determinations_fingerprint"] or "No determination recorded yet")
-    add("Identity", "Item list fingerprint", identity["item_list_hash"] or shared.NOT_RUN_YET)
+    add("Identity", "Item list fingerprint", identity["item_list_hash"] or core.NOT_RUN_YET)
     manifest = (store.read("run_manifest") or [{}])[0]
     if manifest.get("engine_files"):
-        add("Identity", "Engine files fingerprint", shared.sha256_text(shared.canonical_json(manifest["engine_files"]))[:16] +
+        add("Identity", "Engine files fingerprint", core.sha256_text(core.canonical_json(manifest["engine_files"]))[:16] +
             " (%d files; the full list is in the run manifest)" % len(manifest["engine_files"]))
     for entry in manifest.get("inputs", []):
         add("Inputs", entry["file"], "SHA-256 %s (%d bytes)" % (entry["sha256"], entry["bytes"]))
@@ -876,11 +844,11 @@ def rows_package_info(store, paths, settings, progress):
     for name in sorted(repairs):
         kinds = sorted(set(repairs[name]))
         add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
-    add("How values are compared", "The value-comparison rule", aiva4_checks.VALUE_RULE_TEXT)
+    add("How values are compared", "The value-comparison rule", review.VALUE_RULE_TEXT)
     add("How values are compared", "Numbers treated as trivial", ", ".join(settings["trivial_numbers"]))
     add("How formulas are compared", "Sample points and seed",
         "%d points, seed %d, relative tolerance %s" % (settings["numeric_points"], settings["numeric_seed"],
-                                                       shared.plain_number(settings["relative_tolerance"], 3)))
+                                                       core.plain_number(settings["relative_tolerance"], 3)))
     for label, value in call_statistics(store):
         add("AI calls", label, value)
     return rows
@@ -913,11 +881,11 @@ def rows_chunks(chunks):
 def unit_expression(unit):
     """A unit's formula or arguments as shown on Chunks_Model."""
     code, data = unit.get("code") or {}, unit.get("data") or {}
-    if unit["kind"] == shared.KIND_FUNCTION:
+    if unit["kind"] == core.KIND_FUNCTION:
         formals = ["%s = %s" % (n, d) if d not in (None, "") else n for n, d in code.get("formals", [])]
         return "arguments: " + (", ".join(formals) or "none")
     if code.get("expression"):
-        return shared.expr_to_text(shared.expr_from_dict(code["expression"]))
+        return core.expr_to_text(core.expr_from_dict(code["expression"]))
     if data:
         return "rows identified by: %s; %s" % (", ".join(data.get("row_keys", [])) or "row number",
                                                " x ".join(str(d) for d in data.get("dims", [])))
@@ -950,7 +918,7 @@ def link_columns(unit_ref, prefix, corner_letter, links, searches, texts):
     return {prefix + "_refs": "\n".join(e["target"] for e in shown),
             prefix + "_relation": lines_by_ref((e["target"], e["relation"]) for e in shown),
             prefix + "_how": lines_by_ref((e["target"], e["evidence"].get("how_text", "")) for e in shown),
-            prefix + "_searched": search.get("searched_text", "") or (shared.NOT_RUN_YET if not searches else ""),
+            prefix + "_searched": search.get("searched_text", "") or (core.NOT_RUN_YET if not searches else ""),
             prefix + "_why_not": "" if shown else search.get("note", ""),
             prefix + "_text": texts_by_ref((e["target"], texts.get(e["target"], "")) for e in shown)}
 
@@ -978,7 +946,7 @@ def rows_mapping(store, corner):
         other = ("doc", "D-") if corner == "model" else ("model", "M-")
         row.update(link_columns(row["ref"], other[0], other[1], links, searches, texts))
         status = statuses.get(row["ref"])
-        row["status"] = status["status"] if status else shared.NOT_RUN_YET
+        row["status"] = status["status"] if status else core.NOT_RUN_YET
         row["item_ids"] = ("\n".join(status["item_ids"]) or "No item") if status else ""
         row["cells"] = status["cells"] if status else {}
         rows.append(row)
@@ -991,13 +959,13 @@ def rows_coverage(model_rows, doc_rows, store):
     for corner, label in COVERAGE_ROWS[:2]:
         written = model_rows if corner == "model" else doc_rows
         row = {"corner": label, "total": len(written), "how_to_read": NEEDS_ATTENTION_MEANS}
-        for status in shared.CLEAN_STATUSES + shared.NOT_CLEAN_STATUSES:
+        for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES:
             row[status] = sum(1 for r in written if r["status"] == status)
-        row["needs_attention"] = sum(row[status] for status in shared.NOT_CLEAN_STATUSES)
+        row["needs_attention"] = sum(row[status] for status in core.NOT_CLEAN_STATUSES)
         rows.append(row)
     canon = store.read("chunks_canon")
     pointed = {e["target"] for e in store.read("graph_ledger")
-               if e.get("record_type") == "edge" and e["kind"] == "corresponds" and e["relation"] in shared.LINKING_RELATIONS}
+               if e.get("record_type") == "edge" and e["kind"] == "corresponds" and e["relation"] in core.LINKING_RELATIONS}
     count = sum(1 for c in canon if c["ref"] in pointed)
     rows.append({"corner": COVERAGE_ROWS[2][1], "total": len(canon), "how_to_read":
                  "%d of %d passages are pointed to by at least one link. The others are listed in the "
@@ -1016,9 +984,9 @@ def rows_flagged(store):
     latest, rows = latest_determinations(store), []
     for item in store.read("flagged_items"):
         decided = latest.get(item["item_id"])
-        active = decided is not None and decided["decision"] != shared.DECISION_WITHDRAWN
+        active = decided is not None and decided["decision"] != core.DECISION_WITHDRAWN
         row = dict(item, unit_refs="\n".join(item["unit_refs"]),
-                   status=decided["decision"] if active else shared.ITEM_OPEN,
+                   status=decided["decision"] if active else core.ITEM_OPEN,
                    last_decision_recorded=decided["recorded_at"] if decided else "")
         for name in ("decision", "reviewer", "role", "rationale"):
             row[name] = decided[name] if active else ""
@@ -1046,9 +1014,9 @@ def check_written_totals(rows, store):
     for position, corner in enumerate(("model", "doc")):
         counted, written = coverage[0][corner], rows["Mapping_Coverage"][position]
         same = counted["total"] == written["total"] and all(
-            counted["by_status"].get(s, 0) == written[s] for s in shared.CLEAN_STATUSES + shared.NOT_CLEAN_STATUSES)
+            counted["by_status"].get(s, 0) == written[s] for s in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES)
         if not same:
-            raise aiva4_checks.AivaDefect(
+            raise review.AivaDefect(
                 "Part 4 of the coverage identity does not hold: the totals counted for the %s corner differ "
                 "from the rows written to the workbook. This is a defect in AIVA, not in the model under review." % corner)
 
@@ -1074,7 +1042,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
         for number, column in enumerate(columns, start=1):
             value = row.get(column["field"])
             if value in (None, "") and column["group"] == "assessments" and sheet_layout["name"].startswith(("Mapping_Model", "Mapping_Doc")):
-                value = shared.NOT_RUN_YET
+                value = core.NOT_RUN_YET
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap
             if column["group"] == "reviewer_input":
@@ -1085,7 +1053,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
     if sheet_layout["name"] == "Flagged_Items" and rows:
         decision_column = get_column_letter([c["field"] for c in columns].index("decision") + 1)
-        choice = DataValidation(type="list", formula1='"%s"' % ",".join(shared.DECISION_WORDS), allow_blank=True)
+        choice = DataValidation(type="list", formula1='"%s"' % ",".join(core.DECISION_WORDS), allow_blank=True)
         sheet.add_data_validation(choice)
         choice.add("%s2:%s%d" % (decision_column, decision_column, len(rows) + 1))
     if settings["protect_sheets"]:
@@ -1106,7 +1074,7 @@ def build_workbook(store, paths, settings, progress, target):
         sheet = workbook.create_sheet(sheet_layout["name"])
         write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
     workbook.properties.title = "AIVA Output"
-    workbook.properties.description = shared.canonical_json(run_identity(store, paths))
+    workbook.properties.description = core.canonical_json(run_identity(store, paths))
     workbook.save(target)
     return rows
 
@@ -1114,7 +1082,7 @@ def build_workbook(store, paths, settings, progress, target):
 def file_sha256(path):
     """SHA-256 of a file's bytes."""
     with open(path, "rb") as handle:
-        return shared.sha256_bytes(handle.read())
+        return core.sha256_bytes(handle.read())
 
 def progress_text(store, waiting_message):
     """Where the run stands, in one or two plain sentences."""
@@ -1205,9 +1173,9 @@ def call_statistics(store):
             ("Answers accepted", sum(1 for c in final if c["outcome"] == "accepted")),
             ("Questions that stayed without an answer", sum(1 for c in final if c["outcome"].startswith("failed")))]
     rows += [("Answers %s" % reason, count) for reason, count in sorted(rejected.items())]
-    planted = sum(1 for c in with_planted if c["outcome"] == "rejected: " + shared.REJECTION_REASONS[3])
+    planted = sum(1 for c in with_planted if c["outcome"] == "rejected: " + core.REJECTION_REASONS[3])
     rows.append(("Answers that accepted a planted control passage", "%d of %d questions that held one" % (planted, len(with_planted))))
-    rows.append(("Median seconds per call", shared.plain_number(seconds[len(seconds) // 2], 3)))
+    rows.append(("Median seconds per call", core.plain_number(seconds[len(seconds) // 2], 3)))
     return rows
 
 def call_plan(paths, settings, step_id, seconds_per_call=0.0):
@@ -1219,10 +1187,10 @@ def call_plan(paths, settings, step_id, seconds_per_call=0.0):
         collected.extend(questions)
         return {}
     options = dict(step.get("with") or {})
-    options.update({"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
+    options.update({"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
-    provenance = shared.Provenance(paths.run_id, step["id"], step["name"], step["version"])
-    STEP_FUNCTIONS[step["carried_out_by"]](shared.StepContext(settings, options, store.read, collect, paths.local_dir, lambda text: None, provenance))
+    provenance = core.Provenance(paths.run_id, step["id"], step["name"], step["version"])
+    STEP_FUNCTIONS[step["carried_out_by"]](core.StepContext(settings, options, store.read, collect, paths.local_dir, lambda text: None, provenance))
     by_type = {}
     for question in collected:
         by_type[question["question_type"]] = by_type.get(question["question_type"], 0) + 1
@@ -1288,11 +1256,11 @@ def record_determinations(ctx):
     manifest = (ctx.read("run_manifest") or [{}])[0]
     items = {item["item_id"] for item in ctx.read("flagged_items")}
     identity = {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id,
-                "item_list_hash": shared.sha256_text("\n".join(i["item_id"] for i in ctx.read("flagged_items"))) if items else ""}
+                "item_list_hash": core.sha256_text("\n".join(i["item_id"] for i in ctx.read("flagged_items"))) if items else ""}
     uploads, messages = find_uploads(paths, identity)
     edited = [p for p in uploads if file_sha256(p) != manifest.get("last_workbook_sha256")]
     if not edited:
-        return shared.StepResult({}, {"determinations recorded": 0}, messages + ["No edited workbook of this run was found in Outputs/."])
+        return core.StepResult({}, {"determinations recorded": 0}, messages + ["No edited workbook of this run was found in Outputs/."])
     chosen = edited[-1]
     digest = file_sha256(chosen)
     os.makedirs(os.path.join(paths.audit_dir, "uploads"), exist_ok=True)
@@ -1307,28 +1275,28 @@ def record_determinations(ctx):
     for item_id in sorted(cells):
         values = cells[item_id]
         previous = latest.get(item_id)
-        decision = next((word for word in shared.DECISION_WORDS if word.lower() == values["decision"].lower()), "")
+        decision = next((word for word in core.DECISION_WORDS if word.lower() == values["decision"].lower()), "")
         if values["decision"] and not decision:
-            messages.append("Item %s: the decision must be one of: %s. Nothing was recorded for it." % (item_id, ", ".join(shared.DECISION_WORDS)))
+            messages.append("Item %s: the decision must be one of: %s. Nothing was recorded for it." % (item_id, ", ".join(core.DECISION_WORDS)))
             continue
         if decision and not (values["reviewer"] and values["role"] and values["rationale"]):
             messages.append("Item %s: a decision needs a reviewer, a role and a rationale. Nothing was recorded for it." % item_id)
             continue
         if not decision:
-            if previous and previous["decision"] != shared.DECISION_WITHDRAWN:
-                records.append(shared.Determination(item_id, shared.DECISION_WITHDRAWN, previous["reviewer"], previous["role"],
+            if previous and previous["decision"] != core.DECISION_WITHDRAWN:
+                records.append(core.Determination(item_id, core.DECISION_WITHDRAWN, previous["reviewer"], previous["role"],
                                                     "The recorded decision was cleared in the workbook.", now, settings["reviewer_id"], digest))
             continue
         same = previous and all(previous[key] == value for key, value in dict(values, decision=decision).items())
         if not same:
-            records.append(shared.Determination(item_id, decision, values["reviewer"], values["role"], values["rationale"], now,
+            records.append(core.Determination(item_id, decision, values["reviewer"], values["role"], values["rationale"], now,
                                                 settings["reviewer_id"], digest))
     for path in uploads:                                 # tidy Outputs/ back to exactly the two files AIVA writes
         if os.path.basename(path) != "Output.xlsx":
             os.remove(path)
-    chained = shared.chain_records(shared.chain_head(ctx.read("determinations")), [shared.to_plain(r) for r in records])
+    chained = core.chain_records(core.chain_head(ctx.read("determinations")), [core.to_plain(r) for r in records])
     manifest.update(last_upload_sha256=digest)
-    return shared.StepResult({"determinations": chained, "run_manifest": [manifest]}, {"determinations recorded": len(chained)},
+    return core.StepResult({"determinations": chained, "run_manifest": [manifest]}, {"determinations recorded": len(chained)},
                              messages + ["Text typed outside the four yellow columns is ignored."])
 
 # ---------------------------------------------------------------- Validation_Report.docx
@@ -1339,7 +1307,7 @@ def build_report_file(store, paths, settings, target):
     from docx.enum.section import WD_ORIENT
     identity, document = run_identity(store, paths), docx.Document()
     items, latest = store.read("flagged_items"), latest_determinations(store)
-    decided = {k: v for k, v in latest.items() if v["decision"] != shared.DECISION_WITHDRAWN}
+    decided = {k: v for k, v in latest.items() if v["decision"] != core.DECISION_WITHDRAWN}
     info = (store.read("package_info") or [{}])[0]
     document.add_heading("AIVA validation report", level=1)
     open_count = sum(1 for item in items if item["item_id"] not in decided)
@@ -1357,7 +1325,7 @@ def build_report_file(store, paths, settings, target):
         document.add_paragraph("Changed since run %s: %s" % (manifest.get("previous_run", ""), change))
     document.add_heading("2. What AIVA did and did not assess", level=2)
     document.add_paragraph(REPORT_SCOPE)
-    limits = [(s["unit_ref"], s["reason_shown"]) for s in store.read("unit_status") if s["status"] == shared.ST_NOT_ASSESSED]
+    limits = [(s["unit_ref"], s["reason_shown"]) for s in store.read("unit_status") if s["status"] == core.ST_NOT_ASSESSED]
     limits += [("Repair", "%s: %s" % (r["file"], r["kind"])) for r in store.read("read_repairs")][:40]
     docx_table(document, ("Unit or file", "Limit of this run"), limits or [("None", "Nothing was left unread or unassessed")])
     document.add_heading("3. Coverage", level=2)
@@ -1390,7 +1358,7 @@ def build_report_file(store, paths, settings, target):
             document.add_paragraph("Determination: none recorded yet (the item is open).")
     document.add_heading("6. Methodology passages that nothing points to (for information)", level=2)
     pointed = {e["target"] for e in store.read("graph_ledger") if e.get("record_type") == "edge" and e["kind"] == "corresponds"
-               and e["relation"] in shared.LINKING_RELATIONS}
+               and e["relation"] in core.LINKING_RELATIONS}
     unpointed = [(c["ref"], " > ".join(c["heading_chain"][-2:]), c["kind"]) for c in store.read("chunks_canon") if c["ref"] not in pointed]
     docx_table(document, ("Passage", "Section", "Kind"), unpointed or [("None", "", "")])
     document.add_heading("7. How to re-verify this pack", level=2)
@@ -1422,7 +1390,7 @@ def build_report(ctx):
     lines += ['<edge source="%s" target="%s"><data key="kind">%s</data></edge>' % (escape(e["source"]), escape(e["target"]), escape(e["kind"])) for e in edges]
     with open(os.path.join(folder, "graph.graphml"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines + ["</graph>", "</graphml>"]))
-    return shared.StepResult({}, {"nodes exported": len(nodes), "edges exported": len(edges)}, [])
+    return core.StepResult({}, {"nodes exported": len(nodes), "edges exported": len(edges)}, [])
 
 # ---------------------------------------------------------------- verify this evidence pack
 def verify_evidence_pack(paths, settings, live=None):
@@ -1439,17 +1407,17 @@ def verify_evidence_pack(paths, settings, live=None):
     installed, recorded = engine_file_hashes(), manifest.get("engine_files", {})
     other = sorted(name for name in set(installed) | set(recorded) if installed.get(name) != recorded.get(name))
     line("The engine files that produced this run are the ones installed here", not other, ", ".join(other[:5]))
-    options = {"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR}
-    context = shared.StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
-    for kind, function in (("chunks_canon", aiva1_documents.read_methodology), ("chunks_doc", aiva1_documents.read_documentation),
-                           ("model_units", aiva2_package.read_package)):
-        fresh = {shared.to_plain(r)["ref"]: shared.to_plain(r)["content_hash"] for r in function(context).records.get(kind, [])}
+    options = {"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR}
+    context = core.StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
+    for kind, function in (("chunks_canon", reading.read_methodology), ("chunks_doc", reading.read_documentation),
+                           ("model_units", reading.read_package)):
+        fresh = {core.to_plain(r)["ref"]: core.to_plain(r)["content_hash"] for r in function(context).records.get(kind, [])}
         recorded = {r["ref"]: r["content_hash"] for r in store.read(kind)}
         differing = sorted(ref for ref in set(fresh) | set(recorded) if fresh.get(ref) != recorded.get(ref))
         line("Re-reading the inputs gives the recorded content hashes (%s)" % kind, not differing, ", ".join(differing[:5]))
-    ledger_ok, position, _ = shared.verify_chain(store.read("graph_ledger"), aiva3_mapping.LEDGER_VOLATILE)
+    ledger_ok, position, _ = core.verify_chain(store.read("graph_ledger"), review.LEDGER_VOLATILE)
     line("The graph ledger chain verifies", ledger_ok, "" if ledger_ok else "record %d no longer verifies" % (position + 1))
-    decisions_ok, position, _ = shared.verify_chain(store.read("determinations"))
+    decisions_ok, position, _ = core.verify_chain(store.read("determinations"))
     line("The determinations chain verifies", decisions_ok, "" if decisions_ok else "record %d no longer verifies" % (position + 1))
     statuses, items = store.read("unit_status"), store.read("flagged_items")
     named = {ref for item in items for ref in item["unit_refs"]}
@@ -1477,17 +1445,17 @@ def verify_evidence_pack(paths, settings, live=None):
     return rows
 
 STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
-    "aiva1_documents.read_methodology": aiva1_documents.read_methodology,
-    "aiva1_documents.read_documentation": aiva1_documents.read_documentation,
-    "aiva2_package.read_package": aiva2_package.read_package,
-    "aiva3_mapping.build_graph": aiva3_mapping.build_graph,
-    "aiva3_mapping.find_candidates": aiva3_mapping.find_candidates,
-    "aiva3_mapping.judge_links": aiva3_mapping.judge_links, "aiva3_mapping.interpret_code": aiva3_mapping.interpret_code,
-    "aiva4_checks.check_mathematics": aiva4_checks.check_mathematics,
-    "aiva4_checks.check_values": aiva4_checks.check_values,
-    "aiva4_checks.check_rules": aiva4_checks.check_rules,
-    "aiva4_checks.check_package_docs": aiva4_checks.check_package_docs,
-    "aiva4_checks.account_coverage": aiva4_checks.account_coverage,
-    "aiva5_run_report.prepare_run": prepare_run,
-    "aiva5_run_report.record_determinations": record_determinations,
-    "aiva5_run_report.build_report": build_report}
+    "reading.read_methodology": reading.read_methodology,
+    "reading.read_documentation": reading.read_documentation,
+    "reading.read_package": reading.read_package,
+    "review.build_graph": review.build_graph,
+    "review.find_candidates": review.find_candidates,
+    "review.judge_links": review.judge_links, "review.interpret_code": review.interpret_code,
+    "review.check_mathematics": review.check_mathematics,
+    "review.check_values": review.check_values,
+    "review.check_rules": review.check_rules,
+    "review.check_package_docs": review.check_package_docs,
+    "review.account_coverage": review.account_coverage,
+    "runner.prepare_run": prepare_run,
+    "runner.record_determinations": record_determinations,
+    "runner.build_report": build_report}

@@ -16,12 +16,8 @@ import unittest
 import zipfile
 
 import helpers
-import aiva0_shared as shared
-import aiva1_documents as documents
-import aiva1f_formats as formats
-import aiva2_package as package
-
-
+import core
+import reading
 def zipped(members):
     raw = io.BytesIO()
     with zipfile.ZipFile(raw, "w") as archive:
@@ -60,7 +56,7 @@ class Finding1TheRunIsNeverStoppedByAFile(unittest.TestCase):
         os.makedirs(os.path.join(folder, "chapters"))
         with open(os.path.join(folder, "chapters", "one.xml"), "w") as handle:
             handle.write("<doc><para>Inside a subfolder.</para></doc>")
-        found, _ = formats.input_files(folder)
+        found, _ = core.input_files(folder)
         self.assertEqual([os.path.relpath(path, folder) for path in found], [os.path.join("chapters", "one.xml")])
 
     def test_an_encrypted_pdf_is_named_and_the_run_goes_on(self):
@@ -79,15 +75,15 @@ class Finding1TheRunIsNeverStoppedByAFile(unittest.TestCase):
         with open(path, "wb") as handle:
             handle.write(zipped({"pkg/DESCRIPTION": "Package: pkg\nVersion: 0.1\n",
                                  "pkg/R/k.R": "capital_k <- function(pd) pd * 12.5\n"}))
-        result = package.read_package(helpers.context_for({"package": [path]}))
-        kinds = [shared.to_plain(unit)["kind"] for unit in result.records["model_units"]]
+        result = reading.read_package(helpers.context_for({"package": [path]}))
+        kinds = [core.to_plain(unit)["kind"] for unit in result.records["model_units"]]
         self.assertIn("Function", kinds, "the R code inside a ZIP should be parsed")
 
     def test_a_damaged_package_is_named_and_the_run_goes_on(self):
         path = os.path.join(helpers.scratch(), "broken.tar.gz")
         with open(path, "wb") as handle:
             handle.write(b"\x1f\x8b\x08 not really a tarball")
-        result = package.read_package(helpers.context_for({"package": [path]}))
+        result = reading.read_package(helpers.context_for({"package": [path]}))
         self.assertIn("could not be opened", result.messages[0])
         self.assertIn("damaged", result.messages[0])
 
@@ -98,11 +94,11 @@ class Finding1TheRunIsNeverStoppedByAFile(unittest.TestCase):
             handle.write("Package: pkg\nVersion: 0.1\n")
         with open(os.path.join(source, "pkg", "R", "k.R"), "w") as handle:
             handle.write("capital_k <- function(pd) pd * 12.5\n")
-        found, _ = formats.input_files(source)
+        found, _ = core.input_files(source)
         context = helpers.context_for({"package": found})
         context.options["inputs"]["roots"] = {"package": source}
-        result = package.read_package(context)
-        kinds = [shared.to_plain(unit)["kind"] for unit in result.records["model_units"]]
+        result = reading.read_package(context)
+        kinds = [core.to_plain(unit)["kind"] for unit in result.records["model_units"]]
         self.assertIn("Function", kinds, "a package's source folder is a package")
 
     def test_a_reader_that_fails_on_one_file_leaves_the_others_read(self):
@@ -112,7 +108,7 @@ class Finding1TheRunIsNeverStoppedByAFile(unittest.TestCase):
             handle.write("<doc><para>The good file.</para></doc>")
         with open(bad, "wb") as handle:
             handle.write(b"%PDF-1.4 and then nothing a PDF reader can use")
-        result = documents.read_methodology(helpers.context_for({"methodology": [good, bad]}))
+        result = reading.read_methodology(helpers.context_for({"methodology": [good, bad]}))
         texts = [chunk.text for chunk in result.records["chunks_canon"]]
         self.assertIn("The good file.", texts)
 
@@ -122,12 +118,12 @@ class Finding2EveryZipIsLookedInside(unittest.TestCase):
     e-book and a plain ZIP. All were sent to the Word reader, failed, and closed their account."""
 
     def test_each_kind_of_zip_is_told_apart(self):
-        self.assertEqual(formats.detect_format(zipped({"word/document.xml": "<w/>"})), "docx")
-        self.assertEqual(formats.detect_format(spreadsheet()), "xlsx")
-        self.assertEqual(formats.detect_format(zipped({"ppt/presentation.xml": "<p/>"})), "pptx")
-        self.assertEqual(formats.detect_format(zipped({"content.xml": "<c/>", "mimetype": "x"})), "odf")
-        self.assertEqual(formats.detect_format(zipped({"META-INF/container.xml": "<c/>"})), "epub")
-        self.assertEqual(formats.detect_format(zipped({"notes.txt": "x"})), "zip")
+        self.assertEqual(core.detect_format(zipped({"word/document.xml": "<w/>"})), "docx")
+        self.assertEqual(core.detect_format(spreadsheet()), "xlsx")
+        self.assertEqual(core.detect_format(zipped({"ppt/presentation.xml": "<p/>"})), "pptx")
+        self.assertEqual(core.detect_format(zipped({"content.xml": "<c/>", "mimetype": "x"})), "odf")
+        self.assertEqual(core.detect_format(zipped({"META-INF/container.xml": "<c/>"})), "epub")
+        self.assertEqual(core.detect_format(zipped({"notes.txt": "x"})), "zip")
 
     def test_a_spreadsheet_is_read_sheet_by_sheet_as_tables(self):
         chunks, _, account = read("method.xlsx", spreadsheet())
@@ -151,23 +147,23 @@ class Finding2bTheAccountNoLongerClosesOverNothing(unittest.TestCase):
     while everything was lost."""
 
     def test_a_large_file_that_yields_no_text_and_says_nothing_opens_the_account(self):
-        import aiva0r_reading as reading
-        found = reading.account("empty.docx", [], [], file_bytes=40000)
+        import core as reading
+        found = core.account("empty.docx", [], [], file_bytes=40000)
         self.assertTrue(found["vacuous"])
         self.assertFalse(found["closed"])
-        self.assertTrue(any("probably not been opened" in line for line in reading.account_lines(found)))
+        self.assertTrue(any("probably not been opened" in line for line in core.account_lines(found)))
 
     def test_a_file_refused_by_name_is_not_called_vacuous(self):
-        import aiva0r_reading as reading
-        atoms = [reading.atom("whole file not read", "deck.pptx", "")]
-        found = reading.account("deck.pptx", atoms, [{"kind": "Paragraph", "text": "", "not_read_reason": "a slide deck"}],
+        import core as reading
+        atoms = [core.atom("whole file not read", "deck.pptx", "")]
+        found = core.account("deck.pptx", atoms, [{"kind": "Paragraph", "text": "", "not_read_reason": "a slide deck"}],
                                 file_bytes=40000)
         self.assertFalse(found["vacuous"], "a refusal in plain words is honest, not silent")
         self.assertTrue(found["closed"])
 
     def test_a_small_empty_file_is_simply_empty(self):
-        import aiva0r_reading as reading
-        self.assertFalse(reading.account("tiny.txt", [], [], file_bytes=12)["vacuous"])
+        import core as reading
+        self.assertFalse(core.account("tiny.txt", [], [], file_bytes=12)["vacuous"])
 
 
 class Finding3BinaryIsNeverDecodedAsText(unittest.TestCase):
@@ -184,7 +180,7 @@ class Finding3BinaryIsNeverDecodedAsText(unittest.TestCase):
             self.assertIn(says, refused_reason(chunks), name)
 
     def test_text_with_the_odd_control_character_is_still_text(self):
-        self.assertEqual(formats.detect_format(b"A line.\x0cA new page.\nAnother line."), "text")
+        self.assertEqual(core.detect_format(b"A line.\x0cA new page.\nAnother line."), "text")
 
 
 class Finding4MarkdownKeepsItsStructure(unittest.TestCase):
@@ -223,7 +219,7 @@ class Finding5DelimitedRowsAreATable(unittest.TestCase):
         self.assertTrue(account["closed"], account["what unaccounted"])
 
     def test_prose_that_happens_to_hold_commas_is_not_a_table(self):
-        self.assertEqual(formats.detect_format(b"First, the buffer.\nSecond, the floor, which is lower.\n", "notes.txt"), "text")
+        self.assertEqual(core.detect_format(b"First, the buffer.\nSecond, the floor, which is lower.\n", "notes.txt"), "text")
 
 
 class Finding6RtfAndLatexLeaveTheirMarkupBehind(unittest.TestCase):
@@ -251,7 +247,7 @@ class Finding7ANonRPackageIsNamedAsOne(unittest.TestCase):
             info = tarfile.TarInfo("m/capital.py")
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
-        result = package.read_package(helpers.context_for({"package": [path]}))
+        result = reading.read_package(helpers.context_for({"package": [path]}))
         said = " ".join(result.messages)
         self.assertIn("does not look like an R package", said)
         self.assertIn("nothing in them can be linked or checked", said)
@@ -260,7 +256,7 @@ class Finding7ANonRPackageIsNamedAsOne(unittest.TestCase):
         path = os.path.join(helpers.scratch(), "model.zip")
         with open(path, "wb") as handle:
             handle.write(zipped({"pkg/DESCRIPTION": "Package: pkg\n", "pkg/R/k.R": "k <- 1\n"}))
-        result = package.read_package(helpers.context_for({"package": [path]}))
+        result = reading.read_package(helpers.context_for({"package": [path]}))
         self.assertFalse([message for message in result.messages if "R package" in message])
 
 
@@ -271,7 +267,7 @@ class Finding8OnlyDocumentsAreRead(unittest.TestCase):
                            ("desktop.ini", b"x"), (".DS_Store", b"\x00")):
             with open(os.path.join(folder, name), "wb") as handle:
                 handle.write(data)
-        found, skipped = formats.input_files(folder)
+        found, skipped = core.input_files(folder)
         self.assertEqual([os.path.basename(path) for path in found], ["method.xml"])
         self.assertEqual(sorted(name for name, _ in skipped), sorted(["~$method.docx", "Thumbs.db", "desktop.ini", ".DS_Store"]))
 
@@ -282,7 +278,7 @@ class Finding8OnlyDocumentsAreRead(unittest.TestCase):
             handle.write("<html><body><p>The page.</p></body></html>")
         with open(os.path.join(folder, "method_files", "style.css"), "w") as handle:
             handle.write("p { margin: 0 }")
-        found, skipped = formats.input_files(folder)
+        found, skipped = core.input_files(folder)
         self.assertEqual([os.path.basename(path) for path in found], ["method.htm"])
         self.assertEqual(skipped, [("method_files", "the support folder of a saved web page")])
 
@@ -291,7 +287,7 @@ class Finding8OnlyDocumentsAreRead(unittest.TestCase):
         os.makedirs(os.path.join(folder, "annex_files"))
         with open(os.path.join(folder, "annex_files", "a.xml"), "w") as handle:
             handle.write("<doc/>")
-        found, _ = formats.input_files(folder)
+        found, _ = core.input_files(folder)
         self.assertEqual(len(found), 1, "only a folder beside a page of the same name is the page's")
 
 
@@ -304,7 +300,7 @@ class Finding9TheAnalystIsToldWhatEachFileWasReadAs(unittest.TestCase):
             paths.append(os.path.join(folder, name))
             with open(paths[-1], "wb") as handle:
                 handle.write(data)
-        result = documents.read_methodology(helpers.context_for({"methodology": paths}))
+        result = reading.read_methodology(helpers.context_for({"methodology": paths}))
         said = "\n".join(result.messages)
         self.assertIn("Read as: 1 Markdown, 1 XML.", said)
         self.assertIn("Not read: c.pptx - the file is a slide deck", said)
@@ -321,7 +317,7 @@ class Finding10TextHeldOnlyAsTextIsCounted(unittest.TestCase):
         path = os.path.join(helpers.scratch(), "oddly_0.1.0.tar.gz")
         with open(path, "wb") as handle:
             handle.write(fixture_package.tarball())
-        result = package.read_package(helpers.context_for({"package": [path]}))
+        result = reading.read_package(helpers.context_for({"package": [path]}))
         account = result.records["content_accounts"][0]
         self.assertGreater(account["held as text only"], 0)
         rows = [row["value"] for row in result.records["package_info"][0]["rows"] if row["item"] == "content account"]

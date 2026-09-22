@@ -4,9 +4,8 @@ import textwrap
 import unittest
 
 import helpers
-import aiva0_shared as shared
-import aiva1_documents as documents
-import aiva1f_formats as formats
+import core
+import reading
 import build_samples
 
 UNFAMILIAR_SCHEMA = """<table>
@@ -81,41 +80,41 @@ TIE--Transportation infrastructure enterprise.</tablefootnote>
 """
 
 
-NOTATION = documents.load_notation(helpers.os.path.join(helpers.ENGINE_DIR, "references"))
+NOTATION = reading.load_notation(helpers.os.path.join(helpers.ENGINE_DIR, "references"))
 
 
 class FormulaNotation(unittest.TestCase):
     def test_precedence_and_associativity(self):
         for text, expected in (("y = a - b - c", "y = a - b - c"), ("y = a/b/c", "y = a / b / c"), ("y = -x^2", "y = -x^2"),
                                ("y = 2^3^2", "y = 2^3^2"), ("y = a*(b + c)", "y = a * (b + c)"), ("y = 12.5% * x", "y = 0.125 * x")):
-            self.assertEqual(shared.expr_to_text(documents.parse_formula(text, NOTATION)), expected)
-        tree = documents.parse_formula("y = a - (b - c)", NOTATION)
-        self.assertEqual(shared.expr_to_text(tree), "y = a - (b - c)")
+            self.assertEqual(core.expr_to_text(reading.parse_formula(text, NOTATION)), expected)
+        tree = reading.parse_formula("y = a - (b - c)", NOTATION)
+        self.assertEqual(core.expr_to_text(tree), "y = a - (b - c)")
 
     def test_functions_and_inverse(self):
-        tree = documents.parse_formula("K = LGD * N((N^-1(PD) + sqrt(R) * N^-1(0.999)) / sqrt(1 - R))", NOTATION)
-        names = [node.name for node in shared.expr_walk(tree) if node.op == "call"]
+        tree = reading.parse_formula("K = LGD * N((N^-1(PD) + sqrt(R) * N^-1(0.999)) / sqrt(1 - R))", NOTATION)
+        names = [node.name for node in core.expr_walk(tree) if node.op == "call"]
         self.assertEqual(sorted(set(names)), ["normal_cdf", "normal_inverse", "sqrt"])
 
     def test_ambiguous_notation_is_not_guessed(self):
         for text in ("y = 2x", "y = (a+b)(c+d)", "y = f(x)", "y = a +"):
-            with self.assertRaises(documents.NotReadable, msg=text):
-                documents.parse_formula(text, NOTATION)
+            with self.assertRaises(reading.NotReadable, msg=text):
+                reading.parse_formula(text, NOTATION)
 
     def test_juxtaposition_is_a_product_only_for_markup_sources(self):
-        tree = documents.parse_formula("y = 2 x", NOTATION, implicit_product=True)
-        self.assertEqual(shared.expr_to_text(tree), "y = 2 * x")
+        tree = reading.parse_formula("y = 2 x", NOTATION, implicit_product=True)
+        self.assertEqual(core.expr_to_text(tree), "y = 2 * x")
 
     def test_mathml_and_latex_conversion(self):
         import xml.etree.ElementTree as ET
         math = ET.fromstring('<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>y</mi><mo>=</mo><mfrac><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow>'
                              '<msqrt><mi>c</mi></msqrt></mfrac></math>')
-        linear = documents.math_to_linear(math)
-        self.assertEqual(shared.expr_to_text(documents.parse_formula(linear, NOTATION, implicit_product=True)), "y = (a + b) / sqrt(c)")
-        latex = documents.latex_to_linear(r"K = \frac{a + b}{\sqrt{1 - \rho}} \cdot \Phi^{-1}(0.999)")
-        tree = documents.parse_formula(latex, NOTATION, implicit_product=True)
-        self.assertIn("normal_inverse", [n.name for n in shared.expr_walk(tree)])
-        self.assertIn("rho", shared.expr_symbols(tree))
+        linear = reading.math_to_linear(math)
+        self.assertEqual(core.expr_to_text(reading.parse_formula(linear, NOTATION, implicit_product=True)), "y = (a + b) / sqrt(c)")
+        latex = reading.latex_to_linear(r"K = \frac{a + b}{\sqrt{1 - \rho}} \cdot \Phi^{-1}(0.999)")
+        tree = reading.parse_formula(latex, NOTATION, implicit_product=True)
+        self.assertIn("normal_inverse", [n.name for n in core.expr_walk(tree)])
+        self.assertIn("rho", core.expr_symbols(tree))
 
 
 class UnfamiliarSchema(unittest.TestCase):
@@ -289,13 +288,13 @@ class ModelDocuments(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.kept = list(documents.PICTURE_READER)
-        documents.PICTURE_READER[:] = [StandInReader()]
+        cls.kept = list(reading.PICTURE_READER)
+        reading.PICTURE_READER[:] = [StandInReader()]
         cls.pdf, cls.pdf_result = helpers.chunks_of("MID.PDF", model_document_pdf(), corner="documentation")
 
     @classmethod
     def tearDownClass(cls):
-        documents.PICTURE_READER[:] = cls.kept
+        reading.PICTURE_READER[:] = cls.kept
 
     def test_what_a_page_carries_only_because_it_is_a_page_is_left_out_and_said(self):
         text = " ".join(c["text"] for c in self.pdf)
@@ -328,15 +327,15 @@ class ModelDocuments(unittest.TestCase):
     def test_the_words_in_a_picture_are_shown_as_a_machine_reading_and_the_figure_stays_a_figure(self):
         figure = next(c for c in self.pdf if c["kind"] == "Figure")
         lines = figure["text"].split("\n")
-        self.assertEqual(lines[:2], ["Picture on page 3", documents.OCR_NOTE])
+        self.assertEqual(lines[:2], ["Picture on page 3", reading.OCR_NOTE])
         self.assertEqual(lines[2:], ["Enterprise Risk Weights", "60%  Market Position"], "what stands on one line of the picture stays on one line")
 
     def test_without_the_ocr_package_a_picture_is_still_a_figure_and_the_file_says_so_once(self):
-        documents.PICTURE_READER[:] = [None]
+        reading.PICTURE_READER[:] = [None]
         try:
             chunks, result = helpers.chunks_of("MID.PDF", model_document_pdf(), corner="documentation")
         finally:
-            documents.PICTURE_READER[:] = [StandInReader()]
+            reading.PICTURE_READER[:] = [StandInReader()]
         self.assertEqual([c["text"] for c in chunks if c["kind"] == "Figure"], ["Picture on page 3"])
         notes = [row["value"] for row in result.records["info_rows"] if "rapidocr-onnxruntime" in row["value"]]
         self.assertEqual(len(notes), 1)
@@ -359,16 +358,16 @@ class ModelDocuments(unittest.TestCase):
         self.assertEqual([c["kind"] for c in chunks], ["Paragraph", "Paragraph", "Figure"])
         self.assertEqual(chunks[0]["text"].split("\n")[1:], ["- Economic Assessment (10%)", "- Market Position Assessment (60%)"])
         self.assertEqual(chunks[1]["text"].split("\n")[1:], ["1. Score each factor from 1 to 6.", "2. Weight the scores."])
-        self.assertIn(documents.OCR_NOTE, chunks[2]["text"])
+        self.assertIn(reading.OCR_NOTE, chunks[2]["text"])
 
 
 class ReadingFiles(unittest.TestCase):
     def test_format_is_found_from_content_not_from_the_extension(self):
-        self.assertEqual(formats.detect_format(b"%PDF-1.4 ..."), "pdf")
-        self.assertEqual(formats.detect_format(b"<?xml version='1.0'?><a/>"), "xml")
-        self.assertEqual(formats.detect_format(b"MIME-Version: 1.0\nContent-Type: multipart/related"), "mhtml")
-        self.assertEqual(formats.detect_format(b"  <html><body>x</body></html>"), "html")
-        self.assertEqual(formats.detect_format(b"Just some words."), "text")
+        self.assertEqual(core.detect_format(b"%PDF-1.4 ..."), "pdf")
+        self.assertEqual(core.detect_format(b"<?xml version='1.0'?><a/>"), "xml")
+        self.assertEqual(core.detect_format(b"MIME-Version: 1.0\nContent-Type: multipart/related"), "mhtml")
+        self.assertEqual(core.detect_format(b"  <html><body>x</body></html>"), "html")
+        self.assertEqual(core.detect_format(b"Just some words."), "text")
 
     def test_xml_in_a_txt_file_nested_levels_tables_equations(self):
         chunks, result = helpers.chunks_of("method.txt", build_samples.F_METHODOLOGY)
@@ -435,8 +434,8 @@ class ReadingFiles(unittest.TestCase):
     def test_entities_defined_inside_an_office_file_are_never_expanded(self):
         bomb = b'<?xml version="1.0"?><!DOCTYPE d [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">]><d>&b;</d>'
         with self.assertRaises(Exception):
-            documents.safe_xml(bomb)
-        self.assertEqual(documents.safe_xml(b'<?xml version="1.0"?><!DOCTYPE d><d>fine</d>').text, "fine")
+            reading.safe_xml(bomb)
+        self.assertEqual(reading.safe_xml(b'<?xml version="1.0"?><!DOCTYPE d><d>fine</d>').text, "fine")
 
     def test_checkable_statements_and_cross_references(self):
         chunks, _ = helpers.chunks_of("m.xml", "<doc><section><title>1 Rates</title><p>This part gives the background of the method.</p>"

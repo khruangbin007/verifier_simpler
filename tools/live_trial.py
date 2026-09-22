@@ -26,8 +26,8 @@ for folder in (os.path.join(ROOT, "engine"), os.path.join(ROOT, "engine", "tests
     if folder not in sys.path:
         sys.path.insert(0, folder)
 
-import aiva0_shared as shared       # noqa: E402
-import aiva5_run_report as run      # noqa: E402
+import core       # noqa: E402
+import runner      # noqa: E402
 
 SAMPLES = os.path.join(ROOT, "engine", "tests", "sample_projects")
 
@@ -36,11 +36,11 @@ def one_run(sample, chat, live, concurrency):
     """Steps 01 to 08 on a fresh copy of the sample. Returns the accepted links, the call records and the seconds used."""
     projects = tempfile.mkdtemp(prefix="aiva_trial_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "TRIAL", "2026-01-01", "Inputs"))
-    settings = run.make_settings({"require_outline_confirmation": False, "concurrency_limit": concurrency})
-    paths = run.open_run(projects, "TRIAL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_trial_local_"))
+    settings = runner.make_settings({"require_outline_confirmation": False, "concurrency_limit": concurrency})
+    paths = runner.open_run(projects, "TRIAL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_trial_local_"))
     started = datetime.datetime.now()
-    run.run_pipeline(paths, settings, chat=chat, live=live, stop_after="08")
-    store = run.open_store(paths, settings)
+    runner.run_pipeline(paths, settings, chat=chat, live=live, stop_after="08")
+    store = runner.open_store(paths, settings)
     links = [e for e in store.read("graph_ledger") if e["record_type"] == "edge" and e["kind"] == "corresponds"]
     result = {"links": links, "calls": store.read_calls(), "opinions": store.read("second_opinions"),
               "seconds": (datetime.datetime.now() - started).total_seconds()}
@@ -54,7 +54,7 @@ def measures(sample, result):
         gold = {row["unit_ref"]: set(row["acceptable_methodology_refs"].split(";")) for row in csv.DictReader(handle)}
     calls = result["calls"]
     final = [c for c in calls if c["final"]]
-    to_canon = [e for e in result["links"] if e["target"].startswith("C-") and e["relation"] in shared.LINKING_RELATIONS and e["source"] in gold]
+    to_canon = [e for e in result["links"] if e["target"].startswith("C-") and e["relation"] in core.LINKING_RELATIONS and e["source"] in gold]
     correct = [e for e in to_canon if e["target"] in gold[e["source"]]]
     found_gold = {e["source"] for e in correct}
     bands = {}
@@ -68,9 +68,9 @@ def measures(sample, result):
             rejected[call["outcome"][10:]] = rejected.get(call["outcome"][10:], 0) + 1
     with_planted = [c for c in final if c.get("planted")]
     return {"questions": len(final), "attempts": len(calls),
-            "attempts that could not be read": sum(1 for c in calls if c["outcome"] == "rejected: " + shared.REJECTION_REASONS[0]),
+            "attempts that could not be read": sum(1 for c in calls if c["outcome"] == "rejected: " + core.REJECTION_REASONS[0]),
             "rejected, by reason": rejected, "questions without any answer": sum(1 for c in final if c["outcome"].startswith("failed")),
-            "planted passage accepted": "%d of %d" % (rejected.get(shared.REJECTION_REASONS[3], 0), len(with_planted)),
+            "planted passage accepted": "%d of %d" % (rejected.get(core.REJECTION_REASONS[3], 0), len(with_planted)),
             "accepted links to the methodology that are in the gold file": "%d of %d" % (len(correct), len(to_canon)),
             "gold units with an accepted gold link": "%d of %d" % (len(found_gold), len(gold)),
             "stated confidence against correctness": {band: "%d of %d right" % pair for band, pair in sorted(bands.items())},
