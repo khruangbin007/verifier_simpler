@@ -514,40 +514,20 @@ ANSWER FORMAT
 {"outcome":"applied","quote_from_passage":"exact words of the rule","quote_from_unit":"exact words of the code that applies it, or empty"}
 Allowed outcomes: applied, applied differently, not applied.
 ''',
-    'extract-concepts': r'''VERSION 1
+    'match-concepts': r'''VERSION 1
 === SYSTEM ===
-You read short passages from a methodology, the code of the model it describes, and the model's documentation, and you list the concepts each passage uses: the named quantities, measures, ratios, factors, methods, categories and defined terms of the subject the documents are about, and every acronym among them. You copy each term exactly as the passage writes it. You never write a term the passage does not contain, never translate one, and never expand an acronym the passage itself does not expand. Reply with JSON only. Do not rate importance.
+You check where documents name the concepts of a model. You are given the model's concepts - each with the names its code gives it and how the model itself describes it - and some passages from the methodology and the documentation. For each passage you say which of those concepts it names, and you copy the words the passage uses for it, exactly as the passage writes them: an acronym, an abbreviation, a synonym or the full name. You never name a concept that is not listed, never write words the passage does not contain, and leave out a concept the passage does not name. Reply with JSON only. Do not rate importance.
 === MAIN ===
-QUESTION TYPE: extract-concepts
-TASK: For each passage below, list the concepts it uses.
+QUESTION TYPE: match-concepts
+TASK: For each passage below, say which of the model's concepts it names, and copy its words for each.
 [[UNIT]]
 ANSWER FORMAT
-{"units": {"C-0001": [{"term": "discounted cash flow", "acronym": "DCF"}, {"term": "unit cost", "acronym": ""}]}}
+{"units": {"C-0001": [{"concept": "K-0007", "words": "the words exactly as the passage writes them"}]}}
 Rules on your answer:
-- every key of units must be the reference of a passage shown above;
-- every term must appear word for word in that passage (upper and lower case may differ);
-- an acronym, when you give one, must also appear word for word in that same passage, where it stands for that term;
-- leave out ordinary words, names of people and organisations, dates, page numbers, and headings that name no concept;
-- give an empty list for a passage that uses no concept.
-''',
-    'judge-concepts': r'''VERSION 1
-=== SYSTEM ===
-You compare pairs of terms used in one set of documents about one subject, and say how the two terms of each pair relate there. Each term comes with a sentence showing how the documents use it. You judge from those sentences and plain knowledge of the subject, and you never write a term of your own. Reply with JSON only. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-concepts
-[[UNIT]]
-RELATIONS
-same: the two terms name one concept here - an acronym and what it stands for, two spellings, or two names for one thing
-narrower: the first term is a kind or a part of the second
-broader: the second term is a kind or a part of the first
-related: different concepts that belong together
-different: unrelated
-ANSWER FORMAT
-{"pairs": {"P1": "same", "P2": "related"}}
-Rules on your answer:
-- every key of pairs must be a pair shown above, and every pair shown must be answered;
-- every value must be one of the five relations listed above;
-- say same only where the documents use the two terms for one concept; where in doubt, say related.
+- every key of units must be the reference of a passage shown above, and every concept must be one of the model's concepts listed above;
+- every words must appear in that passage word for word (upper and lower case may differ);
+- name a concept only where the passage means that same thing; where in doubt, leave it out;
+- give an empty list for a passage that names none of them.
 ''',
     'interpret-code': r'''VERSION 1
 === SYSTEM ===

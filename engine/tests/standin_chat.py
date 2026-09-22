@@ -224,46 +224,45 @@ def slice_rules(main_prompt, misbehave=False):
     return {"families": families, "levels": levels, "why": why}
 
 
-def extract_concepts(main_prompt, misbehave=False):
-    """Read the passages back out of the prompt and list, for each, what a careful reader would:
-    each acronym, and each run of two or more capitalised words, exactly as written. A misbehaving
-    answer names a term the passage does not hold, which the validator has to refuse."""
-    units, ref = {}, None
+def match_concepts(main_prompt, misbehave=False):
+    """What a careful reader would answer: for each passage, each listed concept whose name the passage
+    writes in other words it can see - an acronym-like name spelled by the initials of words in a row,
+    or a name whose parts begin words in a row - with those words copied from the passage. A
+    misbehaving answer copies words the passage does not hold, which the validator has to refuse."""
+    concepts, passages, ref, reading = {}, {}, None, "concepts"
     for line in main_prompt.split("\n"):
-        found = re.match(r"^\[([CDM]-\d{4})\]$", line.strip())
-        if found:
+        stripped = line.strip()
+        if stripped == "THE PASSAGES":
+            reading = "passages"
+            continue
+        found = re.match(r"^\[(K-\d{4})\] (.+?)(?: \u2014 described in the model as: .*)?$", stripped)
+        if reading == "concepts" and found:
+            concepts[found.group(1)] = [name.strip() for name in found.group(2).split(" / ")]
+        found = re.match(r"^\[([CDM]-\d{4})\]$", stripped)
+        if reading == "passages" and found:
             ref = found.group(1)
-            units[ref] = []
-        elif ref and line.strip() not in (">>>", "<<<"):
-            for acronym in re.findall(r"(?<![\w&])([A-Z][A-Z0-9&]{1,6})(?![\w&])", line):
-                units[ref].append({"term": acronym, "acronym": ""})
-            for term in re.findall(r"(?<=[a-z,;]\s)([A-Z][a-z]+(?:\s[A-Z][a-z]+){1,4})", line):
-                units[ref].append({"term": term, "acronym": ""})
-    if misbehave and units:
-        units[sorted(units)[0]].append({"term": "a term no passage holds", "acronym": ""})
-    return {"units": {ref: [dict(t) for t in dict.fromkeys(tuple(sorted(t.items())) for t in terms)] for ref, terms in units.items()}}
-
-
-def judge_concepts(main_prompt):
-    """Say 'same' where an acronym's letters are the initials of the other name, 'related' where the
-    two names share a word, and 'different' otherwise - what the prompt asks, read from its pairs."""
-    pairs, current = {}, None
-    for line in main_prompt.split("\n"):
-        found = re.match(r"^(P\d+)$", line.strip())
-        if found:
-            current = found.group(1)
-            pairs[current] = []
-        elif current and line.strip().startswith(("first:", "second:")):
-            pairs[current].append(line.split(":", 1)[1].strip())
-    verdicts = {}
-    for pair_id, (first, second) in ((p, names) for p, names in pairs.items() if len(names) == 2):
-        acronym = re.search(r"\(([A-Z][A-Z0-9&]+)\)$", first) or re.search(r"\(([A-Z][A-Z0-9&]+)\)$", second)
-        other = re.sub(r"\s*\([^)]*\)$", "", second if acronym and acronym.string == first else first)
-        initials = "".join(w[0] for w in re.findall(r"[A-Za-z]+", other) if w.lower() not in ("of", "and", "to", "the", "for")).upper()
-        words = lambda text: set(re.findall(r"[a-z]{4,}", text.lower()))
-        verdicts[pair_id] = ("same" if acronym and acronym.group(1).replace("&", "") == initials
-                             else "related" if words(first) & words(second) else "different")
-    return {"pairs": verdicts}
+            passages[ref] = ""
+        elif reading == "passages" and ref and stripped not in (">>>", "<<<"):
+            passages[ref] += line + "\n"
+    units = {}
+    for ref, text in passages.items():
+        words = re.findall(r"[A-Za-z][\w'-]*", text)
+        named = []
+        for cid, names in concepts.items():
+            for name in names:
+                parts = [p.lower() for p in re.split(r"[_.]+", name) if p]
+                size = len(parts[0]) if len(parts) == 1 else len(parts)
+                for start in range(len(words) - size + 1):
+                    window = words[start:start + size]
+                    initials = "".join(w[0].lower() for w in window)
+                    if (len(parts) == 1 and 2 <= len(parts[0]) <= 6 and initials == parts[0]) or \
+                       (len(parts) >= 2 and all(w.lower().startswith(p) for w, p in zip(window, parts))):
+                        named.append({"concept": cid, "words": " ".join(window)})
+                        break
+        if misbehave and concepts:
+            named.append({"concept": sorted(concepts)[0], "words": "words no passage holds"})
+        units[ref] = [dict(t) for t in dict.fromkeys(tuple(sorted(n.items())) for n in named)]
+    return {"units": units}
 
 
 def package_plan(main_prompt, misbehave=False):
@@ -326,10 +325,8 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(align_symbols(main_prompt))
     if question_type == "read-formula-from-prose":
         return json.dumps(read_formula_from_prose(main_prompt))
-    if question_type == "extract-concepts":
-        return json.dumps(extract_concepts(main_prompt, misbehave and bucket == 3))
-    if question_type == "judge-concepts":
-        return json.dumps(judge_concepts(main_prompt))
+    if question_type == "match-concepts":
+        return json.dumps(match_concepts(main_prompt, misbehave and bucket == 3))
     if question_type == "package-plan":
         return json.dumps(package_plan(main_prompt, misbehave and bucket == 5))
     if question_type == "slice-rules":

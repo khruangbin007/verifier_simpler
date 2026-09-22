@@ -190,9 +190,15 @@ class QuestionsAndValidators(unittest.TestCase):
 
 
 class Concepts(unittest.TestCase):
-    """Concepts: the terms of art of whatever the documents are about, every form each is written
-    in, and where each form is used. Code proves what it can; the model adds and judges the rest,
-    and can never name a term the text does not hold. Shared concepts come first in the search."""
+    """Concepts, model first: the model's names and how its own roxygen and help pages describe them are
+    the basis; the documents are searched for those and nothing else; what a unit shows is the words
+    it writes, exactly; and the model's guesses of synonyms and acronyms are kept apart, on the
+    Concepts sheet only."""
+
+    MODEL = [{"ref": "M-0001", "kind": "Function", "name": "capital_k", "text": "capital_k <- function(pd, sacp) pd * sacp",
+              "code": {"formals": [["pd", ""], ["sacp", ""]]}},
+             {"ref": "M-0002", "kind": "Roxygen block", "name": "capital_k", "text": "#' @param pd probability of default",
+              "roxygen": {"documents_name": "capital_k", "tags": [{"tag": "param", "name": "pd", "text": "probability of default"}]}}]
 
     @classmethod
     def setUpClass(cls):
@@ -200,64 +206,62 @@ class Concepts(unittest.TestCase):
         cls.store = runner.open_store(cls.paths, cls.settings)
         cls.concepts, cls.per_unit = review.latest_concepts(cls.store.read)
 
-    def test_an_acronym_defined_in_the_methodology_joins_its_expansion_in_every_corner(self):
-        pd = [c for c in self.concepts if "PD" in c["acronyms"]][0]
-        self.assertEqual(pd["name"], "probability of default")
-        self.assertTrue(pd["refs"].get("canon") and pd["refs"].get("doc"), "used in the methodology and the documentation")
-        self.assertTrue(any(line.startswith("defined in C-") for line in pd["established"]), "the join says where it was proved")
+    def registry(self, canon_text, guessed=()):
+        sources = [({"ref": "C-0001", "text": canon_text, "heading_chain": []}, "canon")] + [(unit, "model") for unit in self.MODEL]
+        return review.concept_registry(sources, guessed)
 
-    def test_the_chunks_sheets_show_the_concepts_and_the_header_names_the_subject(self):
+    def test_every_concept_is_the_models_and_says_how_the_model_names_it(self):
+        self.assertTrue(self.concepts)
+        for concept in self.concepts:
+            self.assertTrue(concept["identifiers"], "a concept with no name in the code is not a concept")
+        pd = [c for c in self.concepts if "pd" in c["identifiers"]][0]
+        self.assertIn("probability of default", pd["described"], "the roxygen @param text, word for word")
+
+    def test_a_term_of_the_documents_with_no_likely_equivalent_in_the_model_is_never_extracted(self):
+        _, per_unit = self.registry("The Enterprise Risk Profile and the probability of default decide it.")
+        self.assertEqual(per_unit[0]["as_written"], ["probability of default"], "not 'Enterprise Risk Profile'")
+
+    def test_what_a_unit_shows_is_its_own_words_exactly(self):
+        _, per_unit = self.registry("Both the PD and the Probability-Of-Default are shown.")
+        self.assertEqual(per_unit[0]["as_written"], ["PD", "Probability-Of-Default"], "the source's capitals and hyphens, not the model's")
+
+    def test_a_guess_is_kept_as_the_unit_writes_it_and_apart_from_what_code_proved(self):
+        concepts, per_unit = self.registry("The stand-alone credit profile applies.",
+                                           guessed=[("C-0001", "stand-alone credit profile", "sacp")])
+        sacp = [c for c in concepts if c["key"] == "sacp"][0]
+        self.assertEqual(sacp["found"]["canon"], {}, "code did not prove it")
+        self.assertEqual(sacp["guessed"]["canon"], {"stand-alone credit profile": ["C-0001"]}, "the model guessed it")
+        self.assertEqual(per_unit[0]["as_written"], ["stand-alone credit profile"])
+
+    def test_a_guess_must_be_the_passages_words_and_a_listed_concept(self):
+        question = {"question_type": "match-concepts", "unit_texts": {"C-0001": "The stand-alone credit profile applies."},
+                    "concept_ids": ["K-0001", "K-0002"]}
+        review.validate_concepts(question, {"units": {"C-0001": [{"concept": "K-0002", "words": "Stand-Alone Credit Profile"}]}})
+        self.assertEqual(review.verbatim("Stand-Alone Credit Profile", question["unit_texts"]["C-0001"]), "stand-alone credit profile",
+                         "what is kept is the passage's words, not the model's rendering of them")
+        for bad in ({"units": {"C-0001": [{"concept": "K-0009", "words": "credit profile"}]}},
+                    {"units": {"C-0001": [{"concept": "K-0002", "words": "standalone profile"}]}},
+                    {"units": {"C-0009": []}}, {"units": []}):
+            with self.assertRaises(review.Rejected):
+                review.validate_concepts(question, bad)
+
+    def test_the_chunks_sheets_show_only_the_units_words_under_the_renamed_header(self):
         import openpyxl
         book = openpyxl.load_workbook(os.path.join(self.paths.run_dir, "Output.xlsx"), read_only=True)
-        for name in ("Chunks_Canon", "Chunks_Doc", "Chunks_Model"):
-            rows = list(book[name].iter_rows(values_only=True))
-            self.assertIn("Extracted financial concepts", rows[0], name)
+        header = "Extracted financial concepts with candidate equivalent in model"
         rows = list(book["Chunks_Canon"].iter_rows(values_only=True))
-        column = rows[0].index("Extracted financial concepts")
-        self.assertTrue(any("probability of default" in str(row[column] or "") for row in rows[1:]))
-        concepts = list(book["Concepts"].iter_rows(values_only=True))
-        self.assertEqual(len(concepts) - 1, len(self.concepts), "one row per concept")
-        self.assertEqual(len({row[0] for row in concepts[1:]}), len(self.concepts), "each concept once")
+        for name in ("Chunks_Canon", "Chunks_Doc", "Chunks_Model"):
+            self.assertIn(header, next(book[name].iter_rows(max_row=1, values_only=True)), name)
+        column, text_column = rows[0].index(header), rows[0].index("Text")
+        for row in rows[1:]:
+            for words in filter(None, str(row[column] or "").split("; ")):
+                self.assertIn(words, row[text_column], "every extracted concept is the unit's own words")
+        self.assertEqual(book["Concepts"].max_row - 1, len(self.concepts), "one row per model concept")
 
     def test_a_shared_concept_puts_a_passage_on_the_shortlist_with_its_reason(self):
         shared = [c for c in self.store.read("candidates") if "concepts" in (c.get("signals") or {})]
         self.assertTrue(shared)
         self.assertTrue(all("shares the concept" in c["reason"] for c in shared))
-
-    def test_a_term_the_passage_does_not_hold_is_refused(self):
-        question = {"question_type": "extract-concepts", "unit_texts": {"C-0001": "The debt-to-net-revenue ratio is used."}}
-        review.validate_concepts(question, {"units": {"C-0001": [{"term": "Debt to net revenue", "acronym": ""}]}})
-        for bad in ({"units": {"C-0001": [{"term": "net debt", "acronym": ""}]}},
-                    {"units": {"C-0009": []}}, {"units": {"C-0001": [{"term": "ratio", "acronym": "DNR"}]}}, {"units": []}):
-            with self.assertRaises(review.Rejected):
-                review.validate_concepts(question, bad)
-
-    def test_a_judged_pair_must_be_one_shown_and_answered_with_one_of_five_relations(self):
-        question = {"question_type": "judge-concepts", "pair_ids": ["P1", "P2"]}
-        review.validate_concepts(question, {"pairs": {"P1": "same", "P2": "related"}})
-        for bad in ({"pairs": {"P1": "same"}}, {"pairs": {"P1": "same", "P2": "similar"}},
-                    {"pairs": {"P1": "same", "P2": "same", "P3": "same"}}, {"pairs": ["same"]}):
-            with self.assertRaises(review.Rejected):
-                review.validate_concepts(question, bad)
-
-    def test_only_what_the_model_calls_the_same_is_joined(self):
-        units = [({"ref": "C-0001", "text": "The Net Present Value and the Present Value Factor are shown."}, "canon"),
-                 ({"ref": "D-0001", "text": "The model reports the Discounted Value of each flow."}, "doc")]
-        npv, pvf, dv = review.concept_key("Net Present Value"), review.concept_key("Present Value Factor"), review.concept_key("Discounted Value")
-        concepts, _ = review.concept_registry(units, extra_joins=[(npv, dv, "AI judgement: the same concept")],
-                                              relations=[(npv, pvf, "related")])
-        joined = [c for c in concepts if c["name"] in ("Net Present Value", "Discounted Value")]
-        self.assertEqual(len(joined), 1, "'same' joins two names into one concept")
-        self.assertEqual(sorted(c["name"] for c in concepts), sorted([joined[0]["name"], "Present Value Factor"]))
-        self.assertEqual([relation for relation, _ in joined[0]["related"]], ["related"], "'related' is kept, and joins nothing")
-
-    def test_a_lone_heading_names_no_concept_and_capitals_read_in_ordinary_case(self):
-        self.assertEqual(review.heading_term("OVERVIEW AND SCOPE"), "Overview and scope")
-        self.assertEqual(review.heading_term("a) Economic fundamentals (10% weighting)"), "Economic fundamentals")
-        mentions, _ = review.unit_mentions({"ref": "C-0001", "text": "Plain words.", "heading_chain": ["Summary"]}, "canon", set())
-        self.assertEqual(mentions, [])
-
-
 
 
 class InterpretingTheCode(unittest.TestCase):
