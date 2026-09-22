@@ -295,14 +295,14 @@ def cached(chat):
 
 def run_once(sample, replaced, chat):
     """Run the pipeline on a copy of the sample's inputs with some input files replaced."""
-    projects = tempfile.mkdtemp(prefix="aiva_harness_")
+    projects = tempfile.mkdtemp(prefix="verifier_harness_")
     inputs = os.path.join(projects, "HARNESS", "2026-01-01", "Inputs")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), inputs)
     for relative, data in replaced.items():
         with open(os.path.join(inputs, relative), "wb") as handle:
             handle.write(data)
     settings = runner.make_settings({"require_outline_confirmation": False})
-    paths = runner.open_run(projects, "HARNESS", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_harness_local_"))
+    paths = runner.open_run(projects, "HARNESS", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_harness_local_"))
     runner.run_pipeline(paths, settings, chat=chat)
     store = runner.open_store(paths, settings)
     result = {kind: store.read(kind) for kind in ("unit_status", "flagged_items", "model_units", "chunks_doc")}
@@ -384,10 +384,10 @@ KS = (3, 5, 12)
 
 
 def shortlists(sample, signals):
-    projects = tempfile.mkdtemp(prefix="aiva_recall_")
+    projects = tempfile.mkdtemp(prefix="verifier_recall_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "RECALL", "2026-01-01", "Inputs"))
     settings = runner.make_settings({"require_outline_confirmation": False, "signals": signals})
-    paths = runner.open_run(projects, "RECALL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_recall_local_"))
+    paths = runner.open_run(projects, "RECALL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_recall_local_"))
     runner.run_pipeline(paths, settings, chat=None, stop_after="06")
     store = runner.open_store(paths, settings)
     found = {}
@@ -435,10 +435,10 @@ def recall(samples):
 
 def one_run(sample, chat, live, concurrency):
     """Steps 01 to 08 on a fresh copy of the sample. Returns the accepted links, the call records and the seconds used."""
-    projects = tempfile.mkdtemp(prefix="aiva_trial_")
+    projects = tempfile.mkdtemp(prefix="verifier_trial_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "TRIAL", "2026-01-01", "Inputs"))
     settings = runner.make_settings({"require_outline_confirmation": False, "concurrency_limit": concurrency})
-    paths = runner.open_run(projects, "TRIAL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="aiva_trial_local_"))
+    paths = runner.open_run(projects, "TRIAL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_trial_local_"))
     started = datetime.datetime.now()
     runner.run_pipeline(paths, settings, chat=chat, live=live, stop_after="08")
     store = runner.open_store(paths, settings)
@@ -536,7 +536,7 @@ def probe_office_files(folder):
             document.add_paragraph("Paragraph %d of the probe document." % number)
         document.save(os.path.join(target_folder, "probe.docx"))
     direct = timed(lambda: build(folder))
-    local = tempfile.mkdtemp(prefix="aiva_probe_")
+    local = tempfile.mkdtemp(prefix="verifier_probe_")
     def build_then_copy():
         build(local)
         for name in ("probe.xlsx", "probe.docx"):
@@ -562,7 +562,7 @@ def probe_many_files(folder):
 
 
 def probe_large_copy(folder, size_mb):
-    local = os.path.join(tempfile.mkdtemp(prefix="aiva_probe_"), "large.bin")
+    local = os.path.join(tempfile.mkdtemp(prefix="verifier_probe_"), "large.bin")
     with open(local, "wb") as handle:
         handle.write(os.urandom(1024 * 1024) * int(size_mb))
     works, seconds, detail = timed(lambda: shutil.copyfile(local, os.path.join(folder, "probe_large.bin")) and None)
@@ -592,21 +592,21 @@ def probe_chat(chat, live):
 
 def run_probe(folder, chat=None, live=None, quick=False):
     """Run the probes in `folder`. Returns the report as text; nothing is written beside the code."""
-    work = os.path.join(folder, "_aiva_probe")
+    work = os.path.join(folder, "_verifier_probe")
     os.makedirs(work, exist_ok=True)
     sections = [("P-1 Appending to a file, by file size", probe_append(work, (0.1, 1) if quick else (1, 5, 20))),
                 ("P-2 Writing .xlsx and .docx directly against build-locally-then-copy", probe_office_files(work)),
                 ("P-3 200 small files against one JSON Lines file", probe_many_files(work)),
                 ("P-4 Whole-file copy of a large file", probe_large_copy(work, 6 if quick else 60)),
                 ("P-5 Replace onto an existing file", probe_replace(work))]
-    visible = os.path.join(folder, "aiva_probe_visible.txt")
+    visible = os.path.join(folder, "verifier_probe_visible.txt")
     with open(visible, "w", encoding="utf-8") as handle:
         handle.write("Written at %s. If you can see this file in the Workspace browser right away, tick P-6.\n" % datetime.datetime.now().isoformat(timespec="seconds"))
     download = os.path.join(work, "copied_probe.xlsx")
     digest = hashlib.sha256(open(download, "rb").read()).hexdigest() if os.path.exists(download) else "the probe workbook could not be written"
     sections += [
-        ("P-6 Does a file written by the notebook show at once in the Workspace browser?", ["Look for aiva_probe_visible.txt in the Projects folder. Seen at once: [ ] yes  [ ] no"]),
-        ("P-7 Download and upload", ["Download _aiva_probe/copied_probe.xlsx and upload it unchanged into the same folder.", "Its SHA-256 before download: %s" % digest,
+        ("P-6 Does a file written by the notebook show at once in the Workspace browser?", ["Look for verifier_probe_visible.txt in the Projects folder. Seen at once: [ ] yes  [ ] no"]),
+        ("P-7 Download and upload", ["Download _verifier_probe/copied_probe.xlsx and upload it unchanged into the same folder.", "Its SHA-256 before download: %s" % digest,
                                      "Same SHA-256 after upload: [ ] yes [ ] no. Name the upload got: ________. Was the .xlsx unpacked like a .zip: [ ] yes [ ] no"]),
         ("P-8 Does the token widget accept a string as long as a real token?", ["Paste a real token into the widget, run cell 5, and compare the length it reports with the token's length: [ ] same [ ] cut"]),
         ("P-9 Mode A: does changing the token widget re-run cell 5 by itself while a background run works?", ["Start cell 12 in mode A with the stand-in, paste another token, run cell 13: token age went back to zero by itself: [ ] yes [ ] no"]),
@@ -614,13 +614,13 @@ def run_probe(folder, chat=None, live=None, quick=False):
         ("P-11 For information: widgets seen from inside a running loop", ["dbutils.widgets.get inside a foreground loop saw a changed value: [ ] yes [ ] no"]),
         ("P-12 Optional: does a trivial Spark action from the background thread keep the cluster alive?", ["Cluster stayed up past its auto-termination time during a background run: [ ] yes [ ] no [ ] not tried"]),
         ("P-13 What chat() returns or raises with an empty token", probe_chat(chat, live) if chat else ["chat() was not given to the probe; run it from the notebook after cell 6."]),
-        ("P-14 Which folder on the driver AIVA may build a run in", probe_scratch())]
+        ("P-14 Which folder on the driver the tool may build a run in", probe_scratch())]
 
 def probe_scratch():
     """Where the driver lets this user write. A cluster is shared, so a scratch folder made by
-    one user can refuse another; this says which folder AIVA settled on before a run needs it."""
+    one user can refuse another; this says which folder the tool settled on before a run needs it."""
     try:
-        return ["AIVA would build runs in: %s" % runner.pick_scratch_root()]
+        return ["the tool would build runs in: %s" % runner.pick_scratch_root()]
     except PermissionError as problem:
         return ["No folder on the driver allowed it. %s" % problem]
     handle = io.StringIO()
@@ -830,7 +830,7 @@ if os.path.join(ROOT, "engine") not in sys.path:
     sys.path.insert(0, os.path.join(ROOT, "engine"))
 
 PATTERNS = ("engine/*.py", "engine/pipeline.yaml", "engine/requirements.txt", "engine/skills/*/SKILL.md", "engine/references/**/*",
-            "AIVA_Interface.ipynb", "tools/*.py")
+            "Verifier.ipynb", "tools/*.py")
 
 
 def current():
@@ -873,6 +873,8 @@ def manual_problems():
     import reading
     modules = {"core": core, "reading": reading, "review": review, "runner": runner, "develop": sys.modules[__name__]}
     for module, name in sorted(set(re.findall(r"`(core|reading|review|runner|develop)\.([A-Za-z_]\w*)`", text))):
+        if name == "py":
+            continue                                 # `core.py` names the file, not a function
         if not hasattr(modules[module], name):
             found.append("the manual names `%s.%s`, which does not exist" % (module, name))
     sheets = {sheet["name"] for sheet in runner.load_layout()["sheets"]}

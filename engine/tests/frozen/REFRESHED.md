@@ -38,3 +38,14 @@ evidence that the decoded values are the same.
 
 **Why this is the last refresh of its kind.** The field moved because the bytes were not a fact
 about the content. Now they are, so a rebuild can no longer move it.
+
+## 22 September 2026 - the tool lost its old name
+
+**What moved.** Two fields. `locator` on the units of the one web-exported methodology (D_dosing):
+the synthetic root element the tolerant HTML parser wraps a page in was renamed, so `/aiva-root[1]/...`
+became `/document-root[1]/...`. And `code.not_composed_reason` on eleven function units across the
+samples: a sentence such as *"it calls volume_discount(), which AIVA cannot evaluate"* now says *the
+tool* instead. No R source, no value, no reference, no record count.
+
+**Why.** The tool is now sector- and brand-agnostic; nothing it produces names it. Both fields were
+checked one by one before this refresh, and nothing else differs.

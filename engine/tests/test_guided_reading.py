@@ -5,7 +5,7 @@ may never change what it SAYS. These tests hold that line from four directions.
 
   1. the corpus    every way an answer can be wrong is refused for the right reason
   2. the property  for ANY valid answer, on random shapes, the content account still closes
-  3. the order     the analyst beats AIVA beats what code proved beats the model beats a guess
+  3. the order     the analyst beats the tool beats what code proved beats the model beats a guess
   4. the fallback  a refused, failed or absent answer leaves the built-in reading untouched
 """
 import random
@@ -116,10 +116,10 @@ class TheOrderOfPrecedence(unittest.TestCase):
         families, _, _ = core.overlay_from_answer(answer, rules, {"statementbody"})
         self.assertEqual(families, {}, "what the analyst wrote in Inputs/tag_rules.yaml wins")
 
-    def test_the_model_never_overrides_a_tag_aiva_ships(self):
+    def test_the_model_never_overrides_a_tag_verifier_ships(self):
         rules = {"shipped_tags": ["para"], "family_of": {}}
         families, _, _ = core.overlay_from_answer({"families": {"para": "heading"}}, rules, set())
-        self.assertEqual(families, {}, "a schema AIVA already knows is read exactly as before")
+        self.assertEqual(families, {}, "a schema the tool already knows is read exactly as before")
 
     def test_the_model_never_overrides_a_table_whose_rows_were_counted(self):
         rules = {"shipped_tags": [], "family_of": {}}
@@ -136,7 +136,7 @@ class TheOrderOfPrecedence(unittest.TestCase):
 
 
 class WhenThereIsNoAnswer(unittest.TestCase):
-    """R3: the worst case of a guided reading is the reading AIVA does without one."""
+    """R3: the worst case of a guided reading is the reading the tool does without one."""
 
     def baseline(self):
         return helpers.chunks_of("s.xml", SHAPE)[0]

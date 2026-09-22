@@ -1549,7 +1549,7 @@
       "1"
      ]
     ],
-    "not_composed_reason": "it calls volume_discount(), which AIVA cannot evaluate",
+    "not_composed_reason": "it calls volume_discount(), which the tool cannot evaluate",
     "numbers": [
      {
       "as_written": "1",
@@ -1982,7 +1982,7 @@
     "exported": null,
     "expression": null,
     "formals": [],
-    "not_composed_reason": "it calls volume_discount(), which AIVA cannot evaluate",
+    "not_composed_reason": "it calls volume_discount(), which the tool cannot evaluate",
     "numbers": [
      {
       "as_written": "1",
@@ -2501,7 +2501,7 @@
       ""
      ]
     ],
-    "not_composed_reason": "it calls paste0(), which AIVA cannot evaluate",
+    "not_composed_reason": "it calls paste0(), which the tool cannot evaluate",
     "numbers": [
      {
       "as_written": "2",

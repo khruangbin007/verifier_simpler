@@ -1,4 +1,4 @@
-# bridge_patterns.yaml - generic words AIVA uses to recognise where a document ties a short
+# bridge_patterns.yaml - generic words the tool uses to recognise where a document ties a short
 # name to a longer phrase. Reviewer 3 owns this file. Rule R9: no word of any field of business.
 definition_verbs: [denotes, represents, stands for, is defined as, means]
 symbol_headers: [symbol, variable, notation, parameter, name, term, abbreviation, column, field]

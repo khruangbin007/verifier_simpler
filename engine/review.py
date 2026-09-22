@@ -1,4 +1,43 @@
-"""OVERVIEW PLACEHOLDER: review"""
+"""
+Verifier 0.0.2 - review.py - what corresponds to what, and what differs. For Reviewer 3
+(mapping) and Reviewer 4 (checks).
+
+WHAT THIS FILE DOES
+  Mapping. Every unit becomes a node of one graph. Candidate passages for each unit are found by
+  deterministic signals (fields, the bridge vocabulary, the graph itself) and shown to the model,
+  which chooses among them and quotes them; a quotation that is not word for word in the passage,
+  or a reference that was not shown, is refused, so no link rests on the model's say-so. Every
+  link is a ledger record with the hash of the one before it. What each piece of code does is
+  asked in plain words for the column LLM Interpretation, outside the accounting.
+  Checks. Formulas are compared as expression trees, symbolically and then numerically with a
+  counterexample when they differ; values in stored data are compared with values stated in the
+  methodology and the documentation; stated rules are checked against the code that should carry
+  them; roxygen blocks and help pages against the functions they describe. Every unit ends with
+  exactly one status, every status that is not clean becomes a flagged item, and the four-part
+  coverage identity is checked on every run so that nothing can fall between the parts.
+
+WHAT IT TAKES IN AND PRODUCES
+  In: the units of all three corners, the references, a chat() for the judged and checked steps.
+  Out: graph_ledger, candidates, search_records, interpretations, math_checks, value_checks,
+  rule_checks, package_doc_checks, unit_status, flagged_items and coverage records.
+
+WHICH SHEETS SHOW ITS RESULTS
+  Mapping_Canon_Model, Mapping_Model_Doc and Mapping_Canon_Doc (the links, with refs, relations
+  and how each was established); Flagged_Items; and the coverage identity on Model_Package_Info.
+
+DESIGN RULES ENFORCED HERE
+  R1  a status is a plain observation; a flagged item is a question for a person, never a grade
+  R3  every answer is validated by code; a quotation must be verbatim; nothing is repaired
+  R4  the graph ledger is a hash chain and is only ever appended to
+  R5  the same inputs and the same recorded answers give the same graph version
+  R7  a formula is compared by the tool's own tree code, never by evaluating text
+  R8  every flagged item cites the units it rests on, and every citation resolves
+
+HOW TO SANITY-CHECK IT
+  Run tests/test_mapping.py and tests/test_checks.py. Run the harness (cell 5, APPENDIX =
+  "harness"): every seeded difference in a sample should end flagged in an expected category, and
+  the clean baseline should flag none of the units listed as clean.
+"""
 
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 import hashlib
@@ -14,7 +53,7 @@ import core
 import reading
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva3_mapping
+# ---------------------------------------------------------------- from verifier3_mapping
 LEDGER_VOLATILE = ("created_at", "run_id")
 CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model": "the package"}
 
@@ -938,7 +977,7 @@ _NOT_SHOWN = re.compile(r"\b(%s)\b" % "|".join(("sev" "er(e|ity)", "crit" "ical"
                         "mater" "ial(ity)?", "(high|medium|low)[- ](risk|priority|impact|rating)", "non-?compl" "ian(t|ce)", "breach")), re.I)
 
 def shown_ai_text(text):
-    """Text written by the model passes the same plain-language filter as AIVA's own wording:
+    """Text written by the model passes the same plain-language filter as the tool's own wording:
     if it rates seriousness or uses a policy term, a fixed sentence is shown instead and the
     full text stays in the audit records."""
     text = core.normalise_text(str(text or ""))[:300]
@@ -1118,13 +1157,13 @@ def second_opinions(ctx, follow_ups, sources, world):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva4_checks
+# ---------------------------------------------------------------- from verifier4_checks
 SKILL_VERSIONS = {"check-mathematics": "0.0.1", "check-values": "0.0.1", "check-rules": "0.0.1",
                   "check-package-docs": "0.0.1", "account-coverage": "0.0.1"}
 
-class AivaDefect(Exception):
+class EngineFault(Exception):
     """The run contradicts itself (the coverage identity does not hold). This is a defect in
-    AIVA, not in the model under review, and the message says which part failed."""
+    the tool, not in the model under review, and the message says which part failed."""
 
 # ---------------------------------------------------------------- the one rule for comparing values
 VALUE_RULE_TEXT = (
@@ -1162,10 +1201,10 @@ def number_of(text):
 
 # ---------------------------------------------------------------- expression tree -> SymPy, node by node
 class NotEvaluable(Exception):
-    """The formula uses an operation AIVA cannot evaluate. The message names it."""
+    """The formula uses an operation the tool cannot evaluate. The message names it."""
 
 def to_sympy(expr):
-    """One explicit table from AIVA's tree to SymPy objects. Numbers become exact rationals.
+    """One explicit table from the tool's tree to SymPy objects. Numbers become exact rationals.
     No string is ever handed to SymPy's parser. Enforces: R7"""
     import sympy
     args = [to_sympy(arg) for arg in expr.args] if expr.op not in ("num", "sym") else []
@@ -1206,7 +1245,7 @@ def symbolic_step(code_tree, stated_tree, settings):
     except Exception:                                   # SymPy could not handle it: the numeric step decides
         return "not shown equal"
 
-# ---------------------------------------------------------------- AIVA's own numeric evaluator
+# ---------------------------------------------------------------- the tool's own numeric evaluator
 def evaluate(expr, values):
     """The value of a tree at one point. Returns None where the point is outside the domain
     of a function used (such a point is not valid and is not counted). Enforces: R7"""
@@ -1641,7 +1680,7 @@ def check_mathematics(ctx):
 
 # ---------------------------------------------------------------- tables: reconciliation cell by cell
 def quote(text, citation=""):
-    """Input text is always shown visibly quoted, with its citation (same form as in aiva5)."""
+    """Input text is always shown visibly quoted, with its citation (same form as in verifier5)."""
     inner = core.normalise_text(text or "").replace("\u201c", '"').replace("\u201d", '"')
     return "\u201c%s\u201d%s" % (inner, " (%s)" % citation if citation else "")
 
@@ -2058,7 +2097,7 @@ def check_package_docs(ctx):
 NEXT_STEPS = {
     core.CAT_CODE_DIFFERS: "Compare the code with the cited passage, starting from the inputs shown under What was observed.",
     core.CAT_CODE_NOT_TRACED: "Decide whether this code implements a part of the methodology; if so, name the passage.",
-    core.CAT_MATH_UNDECIDED: "Compare the formula in the code with the cited passage by hand; AIVA could not decide it.",
+    core.CAT_MATH_UNDECIDED: "Compare the formula in the code with the cited passage by hand; the tool could not decide it.",
     core.CAT_VALUE_DIFFERS: "Compare the listed rows of the package table with the cited table of the methodology.",
     core.CAT_NUMBER_NOT_TRACED: "Find where the methodology states this number, or confirm that it needs no statement.",
     core.CAT_DATA_NOT_TRACED: "Decide which table of the methodology this stored object corresponds to, if any.",
@@ -2068,8 +2107,8 @@ NEXT_STEPS = {
     core.CAT_DOC_NOT_TRACED: "Decide which passage of the methodology this statement of the documentation rests on, if any.",
     core.CAT_DOC_VS_CANON: "Compare the statement in the documentation with the cited passage of the methodology.",
     core.CAT_DOC_VS_CODE: "Compare the statement in the documentation with the cited unit of the package.",
-    core.CAT_NOT_READ: "Review this item by hand; AIVA could not read or assess it.",
-    core.CAT_AI_UNUSABLE: "Review this unit by hand, or run AIVA again; the AI's answer could not be used.",
+    core.CAT_NOT_READ: "Review this item by hand; the tool could not read or assess it.",
+    core.CAT_AI_UNUSABLE: "Review this unit by hand, or run the tool again; the AI's answer could not be used.",
     core.CAT_AI_DISAGREE: "Read both quotations and decide whether the unit and the passage state the same thing."}
 
 STATUS_RULES = (      # applied top to bottom; the first rule that fits decides. The manual's table is generated from this list.
@@ -2375,21 +2414,21 @@ def build_items(raised, world, run_label):
 
 def check_identity(units, doc, statuses, items, world, package_info):
     """The four-part identity of plan 2.9 (part 4 is completed by the workbook builder). Any
-    violation stops the run and says that this is a defect in AIVA. Enforces: R2"""
-    defect = "%s This is a defect in AIVA, not in the model under review."
+    violation stops the run and says that this is a defect in the tool. Enforces: R2"""
+    defect = "%s This is a defect in the tool, not in the model under review."
     expected = [u["ref"] for u in units] + [c["ref"] for c in doc]
     if sorted(s["unit_ref"] for s in statuses) != sorted(expected):
-        raise AivaDefect(defect % "Part 1 of the coverage identity does not hold: not every unit has exactly one status record.")
+        raise EngineFault(defect % "Part 1 of the coverage identity does not hold: not every unit has exactly one status record.")
     named = {ref for item in items for ref in item.unit_refs}
     not_clean = {s["unit_ref"] for s in statuses if not s["clean"]}
     if not_clean != (named & set(expected)) or any(not set(item.unit_refs) & set(world["by_ref"]) for item in items):
-        raise AivaDefect(defect % "Part 2 of the coverage identity does not hold: units that are not clean and flagged items do not match (%s)."
+        raise EngineFault(defect % "Part 2 of the coverage identity does not hold: units that are not clean and flagged items do not match (%s)."
                          % ", ".join(sorted(not_clean ^ (named & set(expected)))[:5]))
     for entry in (package_info[0]["files"] if package_info else []):
         members = [u for u in units if u["file"] == entry["file"]]
         covered = {n for u in members if u.get("lines") for n in range(u["lines"][0], u["lines"][1] + 1)}
         if not members or set(entry.get("nonblank_lines", [])) - covered:
-            raise AivaDefect(defect % ("Part 3 of the coverage identity does not hold: %s is not fully covered by units." % entry["file"]))
+            raise EngineFault(defect % ("Part 3 of the coverage identity does not hold: %s is not fully covered by units." % entry["file"]))
 
 def account_coverage(ctx):
     """Step 15, account-coverage: one status per unit by the ordered rules, the cells of
@@ -2425,7 +2464,7 @@ def account_coverage(ctx):
         if unread or chunk["kind"] == "Figure" or chunk.get("not_read_reason"):
             reason = chunk["equation"]["not_readable_reason"] if unread else chunk.get("not_read_reason") or "the content of a figure cannot be read"
             raised[(chunk["ref"], core.CAT_NOT_READ)] = {"checks": [], "lines": [
-                "This %s of the methodology could not be read (%s), so nothing can be checked against it by AIVA." % (chunk["kind"].lower(), reason)]}
+                "This %s of the methodology could not be read (%s), so nothing can be checked against it by the tool." % (chunk["kind"].lower(), reason)]}
     items = build_items(raised, world, ctx.options["run"]["run_id"].replace("Run_", ""))
     ids_by_unit = {}
     for item in items:

@@ -1,4 +1,4 @@
-"""Tests of aiva1_documents: reading methodology and documentation files of every supported form."""
+"""Tests of verifier1_documents: reading methodology and documentation files of every supported form."""
 import io
 import textwrap
 import unittest
@@ -166,7 +166,7 @@ class UnfamiliarSchema(unittest.TestCase):
         self.assertIn("because it", said, "each one says why it was read that way")
 
     def test_one_row_of_another_width_does_not_empty_the_table(self):
-        """The real Table 2 came out EMPTY. An earlier table had taught AIVA that <tablecell> is a
+        """The real Table 2 came out EMPTY. An earlier table had taught the tool that <tablecell> is a
         cell; then one row of a different width made the shape test turn Table 2 down, so it was
         read with <tablecell> alone - the blank spacers - and every word in it was lost."""
         chunks, _ = self.chunks()

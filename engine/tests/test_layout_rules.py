@@ -23,7 +23,7 @@ def engine_source(name):
 
 
 def own_words(text):
-    """A cell's text without its visibly quoted parts: the lint applies to AIVA's own words."""
+    """A cell's text without its visibly quoted parts: the lint applies to the tool's own words."""
     return re.sub(r"\u201c.*?\u201d", "", text, flags=re.S)
 
 
@@ -76,7 +76,7 @@ class LineBudgetsAndStyle(unittest.TestCase):
 
 
 class StaticWordingLint(unittest.TestCase):
-    """No banned word in anything the engine ships. The one assignment in aiva0 that has to
+    """No banned word in anything the engine ships. The one assignment in verifier0 that has to
     name the words is the allow-list."""
 
     def lintable_files(self):

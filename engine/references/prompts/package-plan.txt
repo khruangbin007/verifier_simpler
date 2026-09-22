@@ -4,7 +4,7 @@ THE READER'S PROCEDURE
 1. Unpack the package - a tarball, a ZIP, or a source folder put in unpacked - refusing any member that breaks the limits; where it is not an R package, say so. 2. Work out which reader each member gets from where it lies and what it is; where the built-in tests give a member none, ask which existing reader should take it and apply the answer. 3. Parse R source into functions, objects and formula statements. 4. Decode stored data into tables of values. 5. Read help pages and vignettes. 6. Tie each roxygen block to what it documents. 7. Number every unit in a fixed order.
 
 QUALITY RULES THE READER WORKS UNDER
-- Every non-blank line of every member that holds text lies inside a unit, is refused with a reason, or is carried by a unit that says it could not be read. A member AIVA cannot read as text is counted as one piece of its own.
+- Every non-blank line of every member that holds text lies inside a unit, is refused with a reason, or is carried by a unit that says it could not be read. A member the tool cannot read as text is counted as one piece of its own.
 - A reader chosen for a member changes only which existing reader takes it. It never changes how that reader works.
 - Where a member's first lines show assignments and calls it is R code, wherever in the package it lies.
 

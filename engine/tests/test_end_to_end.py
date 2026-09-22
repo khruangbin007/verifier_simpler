@@ -159,7 +159,7 @@ class HumanRoundTrip(unittest.TestCase):
                          "the returned workbook is recorded by its fingerprint; its bytes are not copied")
         self.assertTrue(core.verify_chain(self.store.read("determinations"))[0])
 
-    def test_a_person_may_use_the_words_that_aiva_itself_never_uses(self):
+    def test_a_person_may_use_the_words_that_verifier_itself_never_uses(self):
         """Rating and classifying are for people: what a reviewer types is kept and shown exactly as typed."""
         import openpyxl
         rationale = "This is a " + "maj" + "or " + "find" + "ing under our policy; to be corrected."

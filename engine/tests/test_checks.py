@@ -1,4 +1,4 @@
-"""Tests of aiva4_checks: the value rule, formula comparison, tables, rules, statuses and the identity."""
+"""Tests of verifier4_checks: the value rule, formula comparison, tables, rules, statuses and the identity."""
 import unittest
 
 import yaml
@@ -93,7 +93,7 @@ class FormulaComparison(unittest.TestCase):
         points = review.sample_points([tree.args[1]], ["rate"], SETTINGS, {"rate": [0.85, 1.1, 2.75]})
         self.assertEqual({p["rate"] for p in points}, {0.85, 1.1, 2.75})
 
-    def test_an_operation_aiva_cannot_evaluate_is_never_guessed(self):
+    def test_an_operation_verifier_cannot_evaluate_is_never_guessed(self):
         tree = core.Expr("call", name="sum_over", args=(core.Expr("sym", name="x"),))
         with self.assertRaises(review.NotEvaluable):
             review.evaluate(tree, {"x": 1.0})
@@ -208,12 +208,12 @@ class SeededSample(unittest.TestCase):
         world = {"by_ref": {r["ref"]: r for r in units + doc + self.store.read("chunks_canon")}}
         info = self.store.read("package_info")
         review.check_identity(units, doc, statuses, items, world, info)
-        with self.assertRaisesRegex(review.AivaDefect, "Part 1"):
+        with self.assertRaisesRegex(review.EngineFault, "Part 1"):
             review.check_identity(units, doc, statuses[1:], items, world, info)
-        with self.assertRaisesRegex(review.AivaDefect, "Part 2"):
+        with self.assertRaisesRegex(review.EngineFault, "Part 2"):
             table = self.ref_of(core.KIND_TABLE, "lgd_floors")
             review.check_identity(units, doc, statuses, [i for i in items if table not in i.unit_refs], world, info)
-        with self.assertRaisesRegex(review.AivaDefect, "Part 3"):
+        with self.assertRaisesRegex(review.EngineFault, "Part 3"):
             review.check_identity([u for u in units if u["file"] != "R/utils.R"], doc, [s for s in statuses if self.units.get(s["unit_ref"], {}).get("file") != "R/utils.R"], items, world, info)
 
     def test_every_status_was_decided_by_a_rule_of_the_ordered_list(self):

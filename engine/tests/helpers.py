@@ -19,7 +19,7 @@ TIME_FIELDS = ("created_at", "started_at", "finished_at", "seconds", "recorded_a
 
 
 def scratch():
-    return tempfile.mkdtemp(prefix="aiva_test_")
+    return tempfile.mkdtemp(prefix="verifier_test_")
 
 
 def copy_sample(sample, projects_dir, model_id="SAMPLE", project_date="2026-09-18"):

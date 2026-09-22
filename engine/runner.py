@@ -1,4 +1,41 @@
-"""OVERVIEW PLACEHOLDER: runner"""
+"""
+Verifier 0.0.2 - runner.py - the run: its folder, its record, the model calls, the workbook and
+the report. For Reviewer 5.
+
+WHAT THIS FILE DOES
+  Where a run lives (Run_<date>_<time> under the project, the two deliverables in it, the record
+  of three files in _audit/ beside them, scratch space on the driver). The store that writes that
+  record and syncs it whole. The wrapper around chat(): recording every exchange, retrying,
+  pausing for a fresh token or for a person, replaying recorded answers so that a run can be
+  reproduced without a model. pipeline.yaml read and refused if it names a function this engine
+  does not offer. Each step run in order, a step that cannot finish written down and the run going
+  on. After every step: Output.xlsx rebuilt (never over an edited copy that has not been read in)
+  and Validation_Report.docx rebuilt. The determinations a person writes into the yellow columns
+  read back by item id, appended, never overwritten. And the verification of an evidence pack:
+  fingerprints of the inputs, the engine files that produced it, the content hashes, both hash
+  chains, and that no token was ever written into the folder.
+
+WHAT IT TAKES IN AND PRODUCES
+  In: a Projects folder, a model id, the widgets' values, a chat(), the live token.
+  Out: the run folder; every record; Output.xlsx; Validation_Report.docx; the verification.
+
+WHICH SHEETS SHOW ITS RESULTS
+  All of them: this file writes the workbook. The run manifest is manifest.json in _audit/.
+
+DESIGN RULES ENFORCED HERE
+  R2  a step that fails is written down and the run goes on; a pause is a pause, not a failure
+  R4  the determinations are a hash chain; an evidence pack verifies from its own three files
+  R5  a run replays from its recorded answers; the release manifest pins the code that ran
+  R6  inputs are never touched; an edited workbook is never overwritten before it is read in
+  R8  no setting can hold the token, and no token is ever written to the run folder
+  R11 only the functions in STEP_FUNCTIONS can be named by pipeline.yaml
+  R12 build on local disk, copy whole files, keep the file count small, sync after every step
+
+HOW TO SANITY-CHECK IT
+  Run tests/test_runner.py, tests/test_end_to_end.py and tests/test_run_goes_on.py. Run cells 3
+  to 5 on a sample project with the stand-in, then read the verification cell 5 prints: every
+  line should say Confirmed.
+"""
 
 from dataclasses import dataclass, field, replace
 import concurrent.futures
@@ -23,7 +60,7 @@ import reading
 import review
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva5_run_report
+# ---------------------------------------------------------------- from verifier5_run_report
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 REFERENCES_DIR = os.path.join(ENGINE_DIR, "references")
 
@@ -55,7 +92,7 @@ def make_settings(overrides=None):
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
     for name, value in (overrides or {}).items():
         if name not in DEFAULT_SETTINGS:
-            raise ValueError("'%s' is not a setting AIVA knows" % name)
+            raise ValueError("'%s' is not a setting the tool knows" % name)
         settings[name] = value
     return settings
 
@@ -109,7 +146,7 @@ def new_run_id(project_dir, now=None):
     raise ValueError("Too many runs were started in the same minute; please wait a minute.")
 
 def pick_scratch_root(preferred=""):
-    """The first folder on the driver AIVA can actually write in, tried in order.
+    """The first folder on the driver the tool can actually write in, tried in order.
 
     A run is built on the driver's own disk and copied whole into the Workspace afterwards
     (R12), so this folder is needed before anything else can happen. A cluster is shared, and
@@ -119,11 +156,11 @@ def pick_scratch_root(preferred=""):
     user = re.sub(r"[^A-Za-z0-9_.-]", "_", getpass.getuser() or "user")
     refused = []
     for root in ([preferred] if preferred else []) + [
-            os.path.join(tempfile.gettempdir(), "aiva_scratch_" + user),
-            os.path.join("/local_disk0", "aiva_scratch_" + user)]:
+            os.path.join(tempfile.gettempdir(), "verifier_scratch_" + user),
+            os.path.join("/local_disk0", "verifier_scratch_" + user)]:
         try:
             os.makedirs(root, exist_ok=True)
-            probe = os.path.join(root, ".aiva_write_test")
+            probe = os.path.join(root, ".verifier_write_test")
             with open(probe, "w") as handle:
                 handle.write("x")
             os.remove(probe)
@@ -131,7 +168,7 @@ def pick_scratch_root(preferred=""):
         except OSError as problem:
             refused.append("%s (%s)" % (root, problem.strerror or problem))
     raise PermissionError(
-        "AIVA builds each run on the driver's own disk and copies the finished files into the "
+        "the tool builds each run on the driver's own disk and copies the finished files into the "
         "Workspace, so it needs one folder it may write in. These were refused: %s. Put a "
         "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
         "cluster." % "; ".join(refused))
@@ -329,7 +366,7 @@ def classify_failure(text):
     return "other"
 
 class ChatOutcome(tuple):
-    """What one call to chat() came to. It unpacks as the three values the rest of AIVA has
+    """What one call to chat() came to. It unpacks as the three values the rest of the tool has
     always read - (answer text or None, failure class or "", what was seen with tokens
     removed) - and carries the gateway's own record of the call as .meta, so that adding
     metadata did not change a single existing call site."""
@@ -344,7 +381,7 @@ class ChatOutcome(tuple):
     seen = property(lambda self: self[2])
 
 # Fields of the gateway's reply that are worth keeping in the audit record. The reply also
-# echoes the prompts back (query, defaultprompt, source) and those are dropped: AIVA already
+# echoes the prompts back (query, defaultprompt, source) and those are dropped: the tool already
 # stores the prompts it sent, and an echo would double the size of every call record.
 META_FIELDS = ("chat_id", "thread_id", "prompt_id", "datetime", "user_id", "intent")
 RESPONSE_META_FIELDS = ("id", "model", "created", "system_fingerprint", "service_tier")
@@ -396,7 +433,7 @@ def summarise_response(response, live):
 def accepts_history(chat):
     """Whether the analyst's chat() takes the third `history` argument. The real gateway cell
     has the signature chat(SystemPrompt, MainPrompt, history=[]); the stand-in and the older
-    cell take two arguments. AIVA works with either and never depends on which."""
+    cell take two arguments. The tool works with either and never depends on which."""
     try:
         parameters = inspect.signature(chat).parameters
     except (TypeError, ValueError):
@@ -413,7 +450,7 @@ def call_chat(chat, system_prompt, main_prompt, live):
     model was cut off in the middle of) into one shape. Returns a ChatOutcome, which unpacks
     as (answer, failure, seen).
 
-    History is always sent empty. Every question AIVA asks is self-contained and is asked in
+    History is always sent empty. Every question the tool asks is self-contained and is asked in
     its own call, so nothing the model said about an earlier unit may colour the next one;
     an empty history is also what makes a question repeatable. Enforces: R5"""
     try:
@@ -693,13 +730,13 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
 
 def step_failure(step, problem, work_dir):
     """What the analyst is told when a step could not finish, and where the details are kept for
-    whoever maintains AIVA. The run goes on: the steps after this one work with what there is, and
+    whoever maintains the tool. The run goes on: the steps after this one work with what there is, and
     each says what it could not do. The details go to the run's work folder, not to the evidence
-    pack, because they are about AIVA and not about the model under review. Enforces: R2"""
+    pack, because they are about the tool and not about the model under review. Enforces: R2"""
     with open(os.path.join(work_dir, "step_%s_did_not_finish.txt" % step["id"]), "w", encoding="utf-8") as handle:
         handle.write("".join(traceback.format_exception(type(problem), problem, problem.__traceback__)))
-    return ("Step %s (%s) could not finish, because of a fault inside AIVA (%s). The steps after it ran on what there "
-            "was, and say what they could not do. The details are in the run's work folder, for whoever maintains AIVA."
+    return ("Step %s (%s) could not finish, because of a fault inside the tool (%s). The steps after it ran on what there "
+            "was, and say what they could not do. The details are in the run's work folder, for whoever maintains the tool."
             % (step["id"], step["name"], type(problem).__name__))
 
 def record_step(store, step, result, seconds):
@@ -783,7 +820,7 @@ def previous_run_inputs(paths):
 # ---------------------------------------------------------------- Output.xlsx
 CELL_WITHHELD = "This text could not be shown in plain words; the technical text is in the audit records."
 CUT_NOTE = " ... (cut here; the full text is in the audit files)"
-PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\baiva\d_\w+|"
+PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
 COVERAGE_ROWS = (("model", "Model units (one row each on Mapping_Model_to_Canon_and_Doc)"),
                  ("doc", "Documentation units (one row each on Mapping_Doc_to_Canon_and_Model)"),
@@ -792,12 +829,12 @@ NEEDS_ATTENTION_MEANS = ("Needs attention = units whose status is not clean; eac
 
 def quoted(text, citation=""):
     """Text taken from an input or from the AI is always shown visibly quoted, with its
-    citation. The wording rules apply to AIVA's own words, not to quotations. Enforces: R1"""
+    citation. The wording rules apply to the tool's own words, not to quotations. Enforces: R1"""
     inner = (text or "").replace("\u201c", '"').replace("\u201d", '"')
     return "\u201c%s\u201d%s" % (inner, " (%s)" % citation if citation else "")
 
 def plain_cell(value, input_text, store):
-    """The last gate before a cell is written. AIVA's own words must be free of Python
+    """The last gate before a cell is written. the tool's own words must be free of Python
     traces and of words the wording rule rejects; otherwise the text goes to run_log.txt
     and the cell gets one fixed, plain sentence. Enforces: R1, R10"""
     if value is None or value == "":
@@ -917,7 +954,7 @@ def unit_expression(unit):
 
 def rows_model_units(units, interpretations=()):
     """The rows of Chunks_Model. What the AI said a piece of code does is shown as a quotation
-    (in \u201c \u201d), because the words are the model's and not AIVA's own. Enforces: R10"""
+    (in \u201c \u201d), because the words are the model's and not the tool's own. Enforces: R10"""
     rows, said = [], {record["unit_ref"]: record for record in interpretations}
     for unit in units:
         code, told = unit.get("code") or {}, said.get(unit["ref"], {})
@@ -948,7 +985,7 @@ def link_columns(unit_ref, prefix, corner_letter, links, searches, texts):
 
 def rows_mapping(store, corner):
     """One row per model unit (corner "model") or per documentation unit (corner "doc").
-    The words in the assessment cells were written by aiva3 and aiva4; this only lays out."""
+    The words in the assessment cells were written by verifier3 and verifier4; this only lays out."""
     units = store.read("model_units") if corner == "model" else store.read("chunks_doc")
     texts = {r["ref"]: r["text"] for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
     links, searches = {}, {}
@@ -1040,9 +1077,9 @@ def check_written_totals(rows, store):
         same = counted["total"] == written["total"] and all(
             counted["by_status"].get(s, 0) == written[s] for s in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES)
         if not same:
-            raise review.AivaDefect(
+            raise review.EngineFault(
                 "Part 4 of the coverage identity does not hold: the totals counted for the %s corner differ "
-                "from the rows written to the workbook. This is a defect in AIVA, not in the model under review." % corner)
+                "from the rows written to the workbook. This is a defect in the tool, not in the model under review." % corner)
 
 def load_layout():
     """The workbook layout from references/workbook_layout.yaml."""
@@ -1097,7 +1134,7 @@ def build_workbook(store, paths, settings, progress, target):
     for sheet_layout in layout["sheets"]:
         sheet = workbook.create_sheet(sheet_layout["name"])
         write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
-    workbook.properties.title = "AIVA Output"
+    workbook.properties.title = "the tool Output"
     workbook.properties.description = core.canonical_json(run_identity(store, paths))
     workbook.save(target)
     return rows
@@ -1160,7 +1197,7 @@ def progress_text(store, waiting_message):
 def rebuild_outputs(store, paths, settings, waiting_message):
     """Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy
     them whole into the run folder. The guard: a workbook in the run folder that differs from the last
-    one AIVA wrote is a reviewer's work in progress and is never overwritten before it has
+    one the tool wrote is a reviewer's work in progress and is never overwritten before it has
     been read in. Afterwards the run folder holds exactly the two files. Enforces: R6, R12"""
     work = os.path.join(store.local_dir, "work")
     os.makedirs(work, exist_ok=True)
@@ -1272,7 +1309,7 @@ def record_determinations(ctx):
         if not same:
             records.append(core.Determination(item_id, decision, values["reviewer"], values["role"], values["rationale"], now,
                                                 settings["reviewer_id"], digest))
-    for path in uploads:                                 # tidy the run folder back to exactly the two files AIVA writes
+    for path in uploads:                                 # tidy the run folder back to exactly the two files the tool writes
         if os.path.basename(path) != "Output.xlsx":
             os.remove(path)
     chained = core.chain_records(core.chain_head(ctx.read("determinations")), [core.to_plain(r) for r in records])
@@ -1290,7 +1327,7 @@ def build_report_file(store, paths, settings, target):
     items, latest = store.read("flagged_items"), latest_determinations(store)
     decided = {k: v for k, v in latest.items() if v["decision"] != core.DECISION_WITHDRAWN}
     info = (store.read("package_info") or [{}])[0]
-    document.add_heading("AIVA validation report", level=1)
+    document.add_heading("the tool validation report", level=1)
     open_count = sum(1 for item in items if item["item_id"] not in decided)
     document.add_paragraph("Every flagged item has a recorded determination." if items and not open_count
                            else "%d of %d flagged items are still open." % (open_count, len(items)))
@@ -1304,7 +1341,7 @@ def build_report_file(store, paths, settings, target):
     docx_table(document, ("Input file", "SHA-256", "Bytes"), [(e["file"], e["sha256"], e["bytes"]) for e in manifest.get("inputs", [])])
     for change in manifest.get("changes_since_previous_run", []):
         document.add_paragraph("Changed since run %s: %s" % (manifest.get("previous_run", ""), change))
-    document.add_heading("2. What AIVA did and did not assess", level=2)
+    document.add_heading("2. What the tool did and did not assess", level=2)
     document.add_paragraph(REPORT_SCOPE)
     limits = [(s["unit_ref"], s["reason_shown"]) for s in store.read("unit_status") if s["status"] == core.ST_NOT_ASSESSED]
     limits += [("Repair", "%s: %s" % (r["file"], r["kind"])) for r in store.read("read_repairs")][:40]

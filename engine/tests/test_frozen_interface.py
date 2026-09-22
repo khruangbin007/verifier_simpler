@@ -1,5 +1,5 @@
 """test_frozen_interface.py - the 0.0.2 reading rebuild is allowed to change HOW a file is
-sliced. It is not allowed to change the SHAPE of what comes out, and on inputs AIVA already
+sliced. It is not allowed to change the SHAPE of what comes out, and on inputs the tool already
 reads well it must not change the content either.
 
 This test freezes the three unit record kinds that feed Chunks_Canon, Chunks_Doc and
@@ -15,7 +15,7 @@ Two guarantees, and they are different:
   * CONTENT. On the four samples that existed at 0.0.1 every frozen field holds its frozen
     value. These samples raise no reading doubt, so no question is ever asked about them and
     the guided reading must come out where the built-in rules come out. If a phase moves a
-    value here, it has changed a file AIVA already read correctly, and the gold files, the
+    value here, it has changed a file the tool already read correctly, and the gold files, the
     harness numbers and the recall figures downstream would all move with it.
 
 Refreshing the snapshot is not a way to make this test pass. It is a deliberate act with its

@@ -1,4 +1,4 @@
-"""Tests of aiva3_mapping: the ledger, the deterministic search signals, questions and validators."""
+"""Tests of verifier3_mapping: the ledger, the deterministic search signals, questions and validators."""
 import math
 import unittest
 
@@ -248,12 +248,12 @@ class InterpretingTheCode(unittest.TestCase):
         self.assertEqual(runner.rows_model_units(units)[0]["llm_interpretation"], "", "before the step has run the column is empty")
 
     def test_a_model_that_speaks_of_an_error_in_the_code_does_not_get_its_cell_withheld(self):
-        """Code that calls stop() will be described with the very word AIVA never uses of its own
+        """Code that calls stop() will be described with the very word the tool never uses of its own
         results. The words are the model's, shown as a quotation, so the wording gate lets them by."""
         row = runner.rows_model_units([self.units[self.records[0]["unit_ref"]]],
                                    [dict(self.records[0], interpretation="It stops with an error when the zone is unknown.", note="")])[0]
         self.assertEqual(runner.plain_cell(row["llm_interpretation"], False, self.store), row["llm_interpretation"])
-        self.assertEqual(runner.plain_cell("It stops with an error.", False, self.store), runner.CELL_WITHHELD, "AIVA's own words are still held to the rule")
+        self.assertEqual(runner.plain_cell("It stops with an error.", False, self.store), runner.CELL_WITHHELD, "the tool's own words are still held to the rule")
 
     def test_an_interpretation_is_outside_the_accounting(self):
         """It is an aid to reading: no status, no flagged item, no part in the coverage identity."""

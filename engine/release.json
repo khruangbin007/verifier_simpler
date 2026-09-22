@@ -1,0 +1,41 @@
+{
+ "engine_version": "0.0.2",
+ "files": {
+  "Verifier.ipynb": "d00059d166dcac04f75f878bec0acfdf1fc93621f3ec3268b834d62181f350ac",
+  "engine/core.py": "eb55fd1a24518949fbc3f927b371efe511a819d9b7e1b8fb10075d33661491b5",
+  "engine/develop.py": "a92119e469758387c2f12a8421d763f5844390fbb4705e83b095e3a3b9ae2c19",
+  "engine/pipeline.yaml": "849d0b853145ffc762c07be87302d37854d302dcf8dff4b2d7dcd50beaef2db0",
+  "engine/reading.py": "7ef7378809e7ef506997d4c0bdf6ac1336fba1e2602821a76235a073735ad5d0",
+  "engine/references/bridge_patterns.yaml": "689fa931b70379302e729c66eef5495e863feef57a1b41a30c7b7e7b518f0afa",
+  "engine/references/prompts/align-symbols.txt": "73069dd59ae8dae812bce69bc0ddc61ec3d9e5c6f7ecd085c08d810fed9755bb",
+  "engine/references/prompts/check-rule.txt": "916a20e3f894e931c22779e6a17d34bead6587a45880b03de9e5a2bdf1df14cc",
+  "engine/references/prompts/interpret-code.txt": "b5a143824d05e651a53274344ef1fc0cb8de714fd826e02bfbd1c5aaa1d90ba3",
+  "engine/references/prompts/judge-doc-to-canon.txt": "4fdc283b5afe82e9d397406273458c6b850ee90f06f9f7cbcc3fa22e2b922fd6",
+  "engine/references/prompts/judge-doc-to-model.txt": "4806004cf4fd4f50a2cd2e679c670dde0c84ab72855b043b85ff94bb7621a369",
+  "engine/references/prompts/judge-unit-to-canon.txt": "e36b68a1b6c0cec153f5c6a255d8c1e795b06c32410bf6db2bd1166813ae8dbc",
+  "engine/references/prompts/judge-unit-to-doc.txt": "34052949a1202190379ecd8593aabbe518e1ab735b090c940d9c4d24f122f6bb",
+  "engine/references/prompts/map-table-columns.txt": "3a7dc0f48d7ee2d6d3224f889915779533b2cb1c15551d273e12b1589ce095da",
+  "engine/references/prompts/package-plan.txt": "ef0f9a7659ae386c802fef95b2c65a6ede2fe9d7b9e7ecdcb7e4fa81b884ead5",
+  "engine/references/prompts/read-formula-from-prose.txt": "7ad1361e6c291135ba455575e9c7575820dcc5a59494fbd58d91c439b5da404e",
+  "engine/references/prompts/second-opinion.txt": "aecaa16e083d8ee30cd9bf94ef7bbb75b2424a573affff19628e654c0da761ed",
+  "engine/references/prompts/slice-rules.txt": "45113f1825bbd6ad6bc7c0ce41badf107fe1c06dea5df2362b3941275ebdda2f",
+  "engine/references/r_function_map.yaml": "fc3bf840949a4f1901fd8c960d1520f6fbb23de091eb95496d057c13f3cbe2a9",
+  "engine/references/stopwords.txt": "7afcfc00561d6f405fc1fd26b9045329121d80f0dfbe02d3815063c5339f967b",
+  "engine/references/tag_rules.yaml": "688ed6e20baad9614602e278db0e6e32496fd5e82428e5a75bc9b23e38969d7f",
+  "engine/references/workbook_layout.yaml": "8518d09e31fd1cd213fb692b05646af5681288f83585e843b46c61a186cb0170",
+  "engine/requirements.txt": "6fd73b13258eebd2c89ec36d892380a95e78025f0c7d0f259cf608e32fdc18da",
+  "engine/review.py": "e669d69dc0a9786d7d0350beeefa1d42edf8971eaf04e42e8e988ada0f581206",
+  "engine/runner.py": "81d5297499142cd04afc1e41b147de615e9b25823adfeac8fe3855be824102e7"
+ },
+ "requirements": [
+  "PyYAML>=6.0",
+  "openpyxl>=3.1",
+  "python-docx>=1.1",
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "sympy>=1.12",
+  "rdata>=1.0",
+  "pdfplumber>=0.10",
+  "pypdf>=4.0"
+ ]
+}

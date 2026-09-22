@@ -1951,7 +1951,7 @@
       ""
      ]
     ],
-    "not_composed_reason": "it has steps that AIVA cannot follow in a straight line",
+    "not_composed_reason": "it has steps that the tool cannot follow in a straight line",
     "numbers": [],
     "plumbing": false,
     "plumbing_reason": "",
@@ -5313,7 +5313,7 @@
       ""
      ]
     ],
-    "not_composed_reason": "it calls invisible(), which AIVA cannot evaluate",
+    "not_composed_reason": "it calls invisible(), which the tool cannot evaluate",
     "numbers": [],
     "plumbing": true,
     "plumbing_reason": "no arithmetic and no number other than the trivial ones: it only checks, converts or passes values on",
@@ -5364,7 +5364,7 @@
       ""
      ]
     ],
-    "not_composed_reason": "it calls is.null(), which AIVA cannot evaluate",
+    "not_composed_reason": "it calls is.null(), which the tool cannot evaluate",
     "numbers": [],
     "plumbing": true,
     "plumbing_reason": "no arithmetic and no number other than the trivial ones: it only checks, converts or passes values on",
@@ -6016,7 +6016,7 @@
     "exported": null,
     "expression": null,
     "formals": [],
-    "not_composed_reason": "it calls capital_k(), which AIVA cannot evaluate",
+    "not_composed_reason": "it calls capital_k(), which the tool cannot evaluate",
     "numbers": [
      {
       "as_written": "0.01",

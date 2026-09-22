@@ -1,5 +1,5 @@
 # equivalence_corpus.yaml - 50 pairs that are equivalent and 50 that differ by one seeded change (plan, Phase 8).
-# The hard requirement: no differing pair is ever reported as agreeing. Both sides are in AIVA's linear notation.
+# The hard requirement: no differing pair is ever reported as agreeing. Both sides are in the tool's linear notation.
 pairs:
   - {name: "product commutes", expect: equivalent, code: "y = a*b", stated: "y = b*a"}
   - {name: "sum commutes", expect: equivalent, code: "y = a+b", stated: "y = b+a"}

@@ -5,7 +5,7 @@
 #   3 accepted a planted control passage | 4 contradicted itself
 #
 # As with slice-rules, no answer here can put a word into a unit or take one out. It chooses
-# which reader AIVA already has takes a file. The one thing it must not be able to do is leave
+# which reader the tool already has takes a file. The one thing it must not be able to do is leave
 # a member unread, and there is no reader that means skip.
 answers:
   - {name: "a clean answer", expected: accepted,

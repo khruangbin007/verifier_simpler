@@ -171,7 +171,7 @@ class TokenRefresh(unittest.TestCase):
         self.assertIn("503", seen)
 
     def test_a_scratch_folder_that_refuses_is_passed_over_for_one_that_does_not(self):
-        """On a shared cluster /tmp/aiva_scratch may already belong to another user and refuse
+        """On a shared cluster /tmp/verifier_scratch may already belong to another user and refuse
         this one. Refusal is tested here with a file standing where the folder should be,
         which refuses every user alike, including root."""
         refuses = os.path.join(helpers.scratch(), "refuses")

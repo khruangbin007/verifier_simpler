@@ -681,7 +681,7 @@ D_HTML = """<html xmlns:m="http://schemas.microsoft.com/office/2004/12/omml"><he
 """
 
 def mhtml_file(page, images):
-    boundary = "----=_NextPart_AIVA_SAMPLE"
+    boundary = "----=_NextPart_the tool_SAMPLE"
     parts = ["MIME-Version: 1.0\nContent-Type: multipart/related; boundary=\"%s\"\n" % boundary,
              "--%s\nContent-Location: file:///C:/method.htm\nContent-Transfer-Encoding: 8bit\nContent-Type: text/html; charset=\"utf-8\"\n\n%s" % (boundary, page)]
     import base64
@@ -741,7 +741,7 @@ BUILDERS = {"A_minimal": build_a_minimal, "F_capital": build_f_capital, "F_capit
 
 
 # ================================================================== the hard reading samples (plan 0.0.2, R6)
-# G, H and I exist to be READ badly by the rules AIVA ships, and to say so out loud where they
+# G, H and I exist to be READ badly by the rules the tool ships, and to say so out loud where they
 # are. Each stresses one corner: G an XML schema whose tags are named nothing the rules know,
 # H a PDF laid out in two columns with running headers and footnotes, I a Word file whose
 # headings are bold paragraphs and whose words hide in text boxes and tracked changes. Every
@@ -1011,7 +1011,7 @@ W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 def bold_paragraph(document, text):
     """A heading made of nothing but bold: no outline level, no heading style, no number. This
-    is how a great many real documents mark a section, and AIVA cannot see it as a heading from
+    is how a great many real documents mark a section, and the tool cannot see it as a heading from
     the style, only from the way the paragraph is set."""
     paragraph = document.add_paragraph()
     run_in = paragraph.add_run(text)

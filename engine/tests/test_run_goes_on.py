@@ -76,7 +76,7 @@ class AStepThatFailsDoesNotStopTheRun(unittest.TestCase):
             self.assertIn("KeyError", handle.read())
         in_pack = glob.glob(os.path.join(self.paths.run_dir, "**", "step_*_did_not_finish.txt"), recursive=True)
         self.assertEqual([path for path in in_pack if not path.startswith(self.paths.local_dir)], [],
-                         "a fault of AIVA's is not evidence about the model under review")
+                         "a fault of the tool's is not evidence about the model under review")
 
 
 class APauseIsNotAFailure(unittest.TestCase):

@@ -1,4 +1,53 @@
-"""OVERVIEW PLACEHOLDER: reading"""
+"""
+Verifier 0.0.2 - reading.py - reading the methodology, the model documentation and the model
+package into units. For Reviewer 1 (documents) and Reviewer 2 (the package).
+
+WHAT THIS FILE DOES
+  Documents. Every file of Inputs/1_Methodology and Inputs/3_Model_Documentation becomes citable
+  units - paragraphs, tables, figures and equations - each with its place in the outline (level,
+  heading chain, numbering as written), a content hash, and a locator. Whatever the format, the
+  path is the same: bytes -> format from the content -> repairs, each recorded -> blocks in
+  reading order -> levels -> units. Word footnotes are read; page furniture is dropped and
+  named; a heading nothing sits below becomes a unit so its words are not lost. Where the
+  built-in rules cannot tell what a file's tags are for, and guided reading is on, one question
+  about the file's SHAPE is asked first and the answer applied beneath everything the rules
+  already know. It also holds the one parser for written formulas and the converters from
+  Office Math, MathML and a LaTeX subset into the tool's linear notation.
+  The package. The tarball (or ZIP, or source folder) becomes units: functions, formula
+  statements and top-level objects from R source parsed by the tool's own tokenizer and parser
+  into expression trees; stored data decoded into tables of values; help pages, vignettes and
+  roxygen blocks tied to what they document. Where the built-in tests give a member no reader,
+  one question chooses which existing reader takes it; there is no reader that means skip.
+  Every file read keeps a content account: every piece of it ends in a named class or is
+  reported, and nothing a unit shows comes from anywhere but the file or a named transform.
+
+WHAT IT TAKES IN AND PRODUCES
+  In: the input files of three corners; tag_rules.yaml and a project's override; the notation
+  in r_function_map.yaml; a chat() where guided reading is on.
+  Out: chunks_canon, chunks_doc, model_units, parameter_tables, package_info, read_repairs,
+  outline, content_accounts, shape_digests and info_rows records.
+
+WHICH SHEETS SHOW ITS RESULTS
+  Chunks_Canon, Chunks_Doc and Chunks_Model, one row per unit; the text columns of the mapping
+  sheets; and on Model_Package_Info what each file was read as, what was left out and why, the
+  content account of every file, and how a file the rules were unsure of was read.
+
+DESIGN RULES ENFORCED HERE
+  R2  nothing is dropped in silence: a figure, an unreadable file, a refused format is a unit
+  R4  every unit carries a content hash a citation can be checked against
+  R5  reading order only; no clocks, no random choices
+  R6  inputs are opened for reading only
+  R7  no input text is executed; formulas and R code are parsed, never evaluated
+  R9  no domain concept: tags, numbering schemes and phrases live in tag_rules.yaml
+  R13 the content account of every file, and a model that chooses but never writes
+
+HOW TO SANITY-CHECK IT
+  Run tests/test_documents.py, tests/test_package.py, tests/test_guided_reading.py and
+  tests/test_hard_reading_samples.py. Run cell 3 on a sample project and open Output.xlsx: on
+  Chunks_Canon every table sits in one cell, every figure and equation has its own row, and Level
+  and Section follow the document's own outline; on Model_Package_Info every file's content
+  account is closed.
+"""
 
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -21,9 +70,9 @@ import yaml
 import core
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva1_documents
+# ---------------------------------------------------------------- from verifier1_documents
 class NotReadable(Exception):
-    """A formula or a file that AIVA cannot read. The message is a plain reason for the analyst."""
+    """A formula or a file that the tool cannot read. The message is a plain reason for the analyst."""
 
 # ---------------------------------------------------------------- the linear-notation parser
 SUPERSCRIPTS = {"\u207b\u00b9": "^-1", "\u00b2": "^2", "\u00b3": "^3", "\u00b9": "^1"}
@@ -35,7 +84,7 @@ _TOKEN_RE = re.compile(
     r"|(?P<sign><=|>=|[-+*/^(),=<>\u221a]))")
 
 def load_notation(references_dir):
-    """The names AIVA reads as functions in a written formula, from r_function_map.yaml."""
+    """The names the tool reads as functions in a written formula, from r_function_map.yaml."""
     with open(os.path.join(references_dir, "r_function_map.yaml"), encoding="utf-8") as handle:
         return yaml.safe_load(handle)["notation"]
 
@@ -49,7 +98,7 @@ def tokenize_formula(text):
     while position < len(text):
         match = _TOKEN_RE.match(text, position)
         if not match or match.end() == position:
-            raise NotReadable("it contains '%s', which AIVA does not read in a formula" % text[position:position + 12].strip())
+            raise NotReadable("it contains '%s', which the tool does not read in a formula" % text[position:position + 12].strip())
         if match.group("number"):
             value = Decimal(match.group("number"))
             tokens.append(("number", core.plain_decimal(value / 100 if match.group("percent") else value)))
@@ -143,7 +192,7 @@ class FormulaReader:
             base = core.Expr("pow", args=(base, self.unary()))
         if self.term_follows() and not self.implicit_product:
             raise NotReadable("two terms stand side by side without a sign between them, which could "
-                              "mean a product or something else; AIVA does not guess")
+                              "mean a product or something else; the tool does not guess")
         return base
 
     def minus_one_follows(self):
@@ -173,12 +222,12 @@ class FormulaReader:
         if skip:
             inverse = self.notation.get("inverse", {}).get(function)
             if not inverse:
-                raise NotReadable("the inverse of '%s' is not a function AIVA knows" % text)
+                raise NotReadable("the inverse of '%s' is not a function the tool knows" % text)
             self.position += skip
             function = inverse
         if self.peek() == ("sign", "("):
             if not function:
-                raise NotReadable("'%s(' could be a product or a function; AIVA does not guess" % text)
+                raise NotReadable("'%s(' could be a product or a function; the tool does not guess" % text)
             self.take()
             arguments = [self.statement()]
             while self.peek() == ("sign", ","):
@@ -189,7 +238,7 @@ class FormulaReader:
         return core.Expr("sym", name=core.normalise_symbol(text))
 
 def parse_formula(text, notation, implicit_product=False):
-    """Read a formula written in linear notation into AIVA's expression tree. Raises NotReadable
+    """Read a formula written in linear notation into the tool's expression tree. Raises NotReadable
     with a plain reason; it never guesses and never executes anything. Enforces: R7"""
     tokens = tokenize_formula(text)
     if not tokens:
@@ -364,7 +413,7 @@ def latex_to_linear(source):
             elif word in LATEX_WORDS:
                 output.append(LATEX_WORDS[word])
             else:
-                raise NotReadable("it uses the LaTeX command '\\%s', which AIVA does not read" % word)
+                raise NotReadable("it uses the LaTeX command '\\%s', which the tool does not read" % word)
         elif char == "^":
             inner, position = latex_group(source, position + 1)
             output.append("^(%s)" % latex_to_linear(inner))
@@ -383,7 +432,7 @@ def latex_to_linear(source):
 XML_ENTITIES = ("amp", "lt", "gt", "quot", "apos")
 
 def repair_markup(text, file_name, repairs):
-    """The repairs AIVA makes before strict parsing. Each one is recorded with its position, its
+    """The repairs the tool makes before strict parsing. Each one is recorded with its position, its
     kind, and the text before and after, so that a reviewer can see exactly what was changed."""
     def record(kind, position, before, after):
         repairs.append({"file": file_name, "position": position, "kind": kind,
@@ -421,8 +470,8 @@ def repair_markup(text, file_name, repairs):
     if roots > 1:
         declaration = re.match(r"\s*<\?xml[^>]*\?>", text)
         start = declaration.end() if declaration else 0
-        text = text[:start] + "<aiva-root>" + text[start:] + "</aiva-root>"
-        record("several top elements wrapped in one", start, "%d top elements" % roots, "<aiva-root>")
+        text = text[:start] + "<document-root>" + text[start:] + "</document-root>"
+        record("several top elements wrapped in one", start, "%d top elements" % roots, "<document-root>")
     return text
 
 VOID_TAGS = ("img", "br", "hr", "meta", "link", "input", "col", "area", "base", "wbr")
@@ -434,11 +483,11 @@ class TolerantReader(html.parser.HTMLParser):
     events of the standard library's HTML parser. It forgives what real exports contain: tags
     never closed, tags closed in the wrong order, attributes without quotes. Equation markup
     that Word's web export hides inside conditional comments is read too. (This is the one
-    place where AIVA subclasses: the standard parser offers no other way to receive events.)"""
+    place where the tool subclasses: the standard parser offers no other way to receive events.)"""
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.builder, self.open_tags = ElementTree.TreeBuilder(), []
-        self.builder.start("aiva-root", {})
+        self.builder.start("document-root", {})
 
     def handle_starttag(self, tag, attrs):
         """Open an element, first closing what HTML closes implicitly."""
@@ -473,9 +522,9 @@ class TolerantReader(html.parser.HTMLParser):
         """Keep equation markup that Word's web export hides in conditional comments; drop other comments."""
         preserved = re.match(r"\[if[^\]]*msEquation[^\]]*\]>(.*)<!\[endif\]", data, re.S)
         if preserved and "omath" in preserved.group(1).lower():
-            self.builder.start("aiva-preserved-equation", {})
+            self.builder.start("verifier-preserved-equation", {})
             self.feed_inner(preserved.group(1))
-            self.builder.end("aiva-preserved-equation")
+            self.builder.end("verifier-preserved-equation")
 
     def feed_inner(self, markup):
         """Read preserved equation markup found inside a comment into the tree being built."""
@@ -502,7 +551,7 @@ class TolerantReader(html.parser.HTMLParser):
         self.close()
         while self.open_tags:
             self.builder.end(self.open_tags.pop())
-        self.builder.end("aiva-root")
+        self.builder.end("document-root")
         return self.builder.close()
 
 def parse_markup(text, file_name, repairs, tolerant_only=False):
@@ -554,7 +603,7 @@ def element_text(element, rules, skip=("figure", "equation", "ignore", "caption"
     A child that is a block of its own - a list item inside a table cell, say - is separated by
     a space rather than run straight onto what came before it. Without that, two items of a
     list in one cell arrive as one word that the document does not contain ("renewable twice" +
-    "no fine" giving "twiceno"), which is text AIVA made up. Enforces: R13"""
+    "no fine" giving "twiceno"), which is text the tool made up. Enforces: R13"""
     pieces = [element.text or ""]
     for child in element:
         if rules["family_of"].get(core.local_name(child.tag)) not in skip:
@@ -609,7 +658,7 @@ def walk_element(element, path, depth, state):
     name = core.local_name(element.tag)
     family = state.family(name)
     here = "%s/%s" % (path, name)
-    if name == "aiva-preserved-equation":
+    if name == "verifier-preserved-equation":
         state.blocks.append(equation_block(element, here, state))
         state.skip_next_image = True                     # the picture that follows shows the same equation
         return
@@ -668,7 +717,7 @@ def walk_mixed(element, here, depth, state, own_kind=None, numbering="", marker=
     block_families = ("heading", "container", "list_container", "paragraph", "list_item", "table",
                       "figure", "equation", "caption", None)
     children = [c for c in element if core.local_name(c.tag) and
-                (state.family(core.local_name(c.tag)) in block_families or core.local_name(c.tag) == "aiva-preserved-equation")]
+                (state.family(core.local_name(c.tag)) in block_families or core.local_name(c.tag) == "verifier-preserved-equation")]
     inline_only = [c for c in children if state.family(core.local_name(c.tag)) is None and not len(c)
                    and own_kind]
     children = [c for c in children if c not in inline_only]
@@ -1169,7 +1218,7 @@ def states_something_checkable(block, rules):
 
 KIND_OF_BLOCK = {"paragraph": "Paragraph", "list_item": "Paragraph", "table": "Table", "figure": "Figure",
                  "equation": "Equation"}
-NOTES_HEADING = "Notes"                 # the heading AIVA puts above a Word file's footnotes and endnotes
+NOTES_HEADING = "Notes"                 # the heading the tool puts above a Word file's footnotes and endnotes
 LIST_MARKER = "- "                      # how an item of a bulleted list is shown; a numbered one shows its number
 
 def fold_lists(blocks):
@@ -1418,12 +1467,12 @@ def read_documentation(ctx):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva2_package
+# ---------------------------------------------------------------- from verifier2_package
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
-PARSER_NAME = "AIVA R reader 0.0.1"
+PARSER_NAME = "the tool R reader 0.0.1"
 
 class NotParsed(Exception):
-    """One R expression that AIVA's reader could not read. The message is a plain reason."""
+    """One R expression that the tool's reader could not read. The message is a plain reason."""
 
 # ---------------------------------------------------------------- safe unpacking and inventory
 ARCHIVE_NAMES = (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".zip")
@@ -1557,7 +1606,7 @@ def tokenize_r(source):
         match = _R_TOKEN.match(source, position)
         column = position - line_start
         if not match:
-            raise NotParsed("line %d holds the character '%s', which AIVA's R reader does not know"
+            raise NotParsed("line %d holds the character '%s', which the tool's R reader does not know"
                             % (line, source[position]))
         kind, text = match.lastgroup, match.group(0)
         if kind == "dashes":
@@ -1973,9 +2022,9 @@ def code_facts(node, skip_inner_functions=True):
 SIGN_TO_OP = {"+": "add", "-": "sub", "*": "mul", "/": "div", "^": "pow"}
 
 def to_expr(node, function_map, known):
-    """One R expression to AIVA's neutral formula tree, through r_function_map.yaml. `known`
+    """One R expression to the tool's neutral formula tree, through r_function_map.yaml. `known`
     holds local variables already assigned in the same function: they are substituted, so a
-    change three lines above the return still reaches the comparison. Anything AIVA cannot
+    change three lines above the return still reaches the comparison. Anything the tool cannot
     evaluate raises CannotConvert; nothing is guessed and nothing is run. Enforces: R7"""
     kind = node.kind
     if kind == "num":
@@ -2003,7 +2052,7 @@ def to_expr(node, function_map, known):
         return core.Expr("sym", name="%s$%s" % (node.args[0].value, node.args[-1].value))   # table[rows, "column"]
     if kind == "call":
         return call_to_expr(node, function_map, known)
-    raise CannotConvert("it uses '%s', which AIVA cannot turn into a formula" % unparse(node)[:40])
+    raise CannotConvert("it uses '%s', which the tool cannot turn into a formula" % unparse(node)[:40])
 
 def call_to_expr(node, function_map, known):
     """A call in R to the neutral expression tree, through r_function_map.yaml; anything else cannot be converted."""
@@ -2012,14 +2061,14 @@ def call_to_expr(node, function_map, known):
         return to_expr(node.args[1], function_map, known)
     entry = function_map["r_functions"].get(name)
     if entry is None:
-        raise CannotConvert("it calls %s(), which AIVA cannot evaluate" % (name or "a computed function"))
+        raise CannotConvert("it calls %s(), which the tool cannot evaluate" % (name or "a computed function"))
     expected = entry.get("arguments", [])
     placed, extra = {}, []
     for argument_name, argument in zip(node.names, node.args[1:]):
         if argument_name == "na.rm" or argument.kind == "missing":
             continue
         if argument_name in entry.get("only_defaults", []) or (argument_name and argument_name not in expected):
-            raise CannotConvert("it calls %s() with '%s', which AIVA does not evaluate" % (name, argument_name))
+            raise CannotConvert("it calls %s() with '%s', which the tool does not evaluate" % (name, argument_name))
         if argument_name:
             placed[expected.index(argument_name)] = argument
         else:
@@ -2029,7 +2078,7 @@ def call_to_expr(node, function_map, known):
         ordered.append(placed[position] if position in placed else extra.pop(0))
     enough = len(expected) - entry.get("optional", 0) <= len(ordered) <= len(expected)
     if not entry.get("variadic") and not enough:
-        raise CannotConvert("it calls %s() with %d argument(s) where AIVA knows it with %d"
+        raise CannotConvert("it calls %s() with %d argument(s) where the tool knows it with %d"
                             % (name, len(ordered), len(expected)))
     return core.Expr("call", name=entry["neutral"], args=tuple(to_expr(arg, function_map, known) for arg in ordered))
 
@@ -2045,7 +2094,7 @@ def is_guard(node, function_map):
 
 def compose_function(function_node, function_map):
     """The value a straight-line function returns, as one formula in its arguments: local
-    assignments are substituted in order. Branches that assign, loops and anything AIVA
+    assignments are substituted in order. Branches that assign, loops and anything the tool
     cannot evaluate raise CannotConvert ("the function could not be composed")."""
     body = function_node.args[-1]
     statements = body.args if body.kind == "block" else (body,)
@@ -2061,9 +2110,9 @@ def compose_function(function_node, function_map):
         elif is_guard(statement, function_map):
             continue
         else:
-            raise CannotConvert("it has steps that AIVA cannot follow in a straight line")
+            raise CannotConvert("it has steps that the tool cannot follow in a straight line")
     if result is None:
-        raise CannotConvert("it returns nothing that AIVA can follow")
+        raise CannotConvert("it returns nothing that the tool can follow")
     return result, known
 
 # ---------------------------------------------------------------- units from R source
@@ -2186,7 +2235,7 @@ def units_from_r_source(path, source, context, line_offset=0):
         if isinstance(result, tuple):
             _, first, last, reason = result
             units.append(draft(core.KIND_NOT_READ, path, (first, last), "", "\n".join(source_lines[first - 1:last]),
-                               read_problem="AIVA's R reader could not read this expression: %s" % reason))
+                               read_problem="the tool's R reader could not read this expression: %s" % reason))
         else:
             units.extend(statement_units(result, path, source_lines, context, in_tests))
     units.extend(roxygen_units(path, source_lines, parsed, context))
@@ -2551,14 +2600,14 @@ def data_reads(function_node, formals, data_names, data_files):
 DATA_EXTENSIONS = (".rda", ".rdata", ".rds")
 
 def is_data_file(path):
-    """Does this path name a stored-data file that AIVA decodes?"""
+    """Does this path name a stored-data file that the tool decodes?"""
     lowered = path.lower()
     if lowered.endswith(DATA_EXTENSIONS):
         return True
     return lowered.endswith((".csv", ".tsv")) and lowered.split("/")[0] in ("data", "inst")
 
 def is_parsed_r_file(path):
-    """Is this an R source file in a folder whose code AIVA parses?"""
+    """Is this an R source file in a folder whose code the tool parses?"""
     return path.lower().endswith(".r") and path.lower().split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo")
 
 def built_in_reader(path, data):
@@ -2605,11 +2654,11 @@ def file_units(path, data, context, facts, reader=""):
         return units
     if lowered.startswith("src/"):
         return [draft(core.KIND_COMPILED, path, None, os.path.basename(path), "",
-                      read_problem="Compiled code is not read by AIVA; it needs a manual review.")]
+                      read_problem="Compiled code is not read by the tool; it needs a manual review.")]
     text = core.decode_text(data) if b"\x00" not in data[:4096] else None
     if text is None:
         return [draft(core.KIND_NOT_READ, path, None, os.path.basename(path), "",
-                      read_problem="A binary file of a kind AIVA does not know; it needs a manual review.")]
+                      read_problem="A binary file of a kind the tool does not know; it needs a manual review.")]
     if is_parsed_r_file(path):
         return units_from_r_source(path, text, context)
     if lowered.endswith(".rd") and lowered.startswith("man/"):
@@ -2684,7 +2733,7 @@ def package_rows(description, namespace, units, facts, refused):
 def package_plan(ctx, files, placed, package_name):
     """Ask which existing reader should take each member the built-in tests leave unplaced.
 
-    The answer chooses among readers AIVA already has. It never reaches the R tokenizer, the
+    The answer chooses among readers the tool already has. It never reaches the R tokenizer, the
     parser, the expression trees or the decoder of stored data: a model's reading of code is an
     assertion about the code, not a parse of it. A file sent to a reader that cannot make sense
     of it becomes a unit saying so, exactly as today, and there is no answer that leaves a
@@ -2708,7 +2757,7 @@ def package_plan(ctx, files, placed, package_name):
     return readers, [digest], notes
 
 def safe_text(data):
-    """A member as text, or None where it holds bytes AIVA cannot decode."""
+    """A member as text, or None where it holds bytes the tool cannot decode."""
     return core.decode_text(data) if b"\x00" not in data[:4096] else None
 
 def read_package(ctx):
@@ -2770,10 +2819,10 @@ def read_package(ctx):
     messages = ["%d units read from %d files of the package." % (len(units), len(files))]
     r_files = sum(1 for path in files if path.lower().endswith(".r"))
     if "DESCRIPTION" not in files or r_files * 10 < len(files):
-        # AIVA's reader of code reads R and nothing else. A model in Python, SAS or MATLAB comes
+        # the tool's reader of code reads R and nothing else. A model in Python, SAS or MATLAB comes
         # through as files of running text, fully accounted for and impossible to check - so the
         # analyst is told plainly, rather than left to wonder why nothing was linked. Enforces: R2
-        note = ("This does not look like an R package (%s). AIVA reads the code of R packages only: files in any "
+        note = ("This does not look like an R package (%s). The tool reads the code of R packages only: files in any "
                 "other language are kept as running text and nothing in them can be linked or checked."
                 % ("it has no DESCRIPTION file" if "DESCRIPTION" not in files else "%d of its %d files are R code" % (r_files, len(files))))
         messages.append(note)

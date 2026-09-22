@@ -1,4 +1,47 @@
-"""OVERVIEW PLACEHOLDER: core"""
+"""
+Verifier 0.0.2 - core.py - what every other module stands on. For every reviewer.
+
+WHAT THIS FILE DOES
+  Three layers, in one file because each is small and all three are needed before a single
+  document is read.
+  The contracts: every record kind a run writes (a chunk, a model unit, a link, a check, a
+  flagged item), the vocabulary of statuses and categories, the words the tool never uses, the
+  hash chain that makes a ledger tamper-evident, and the step context every step is handed.
+  The reading floor: the machinery for asking a model a question (a prompt in its parts, a
+  token estimate, a budget, strict parsing of an answer that is never repaired), the baseline
+  decisions about a document's shape (which tag is what, which shape is a table, what level a
+  heading sits at, which lines are page furniture), the content account that proves nothing was
+  lost or added when a file was read, and the shape digest and validators that let a model help
+  slice a file it has never seen - by choosing among options code has already checked, never
+  by writing text.
+  The front door: what a file IS, from its content; which files of an Inputs folder are documents
+  at all; how a spreadsheet, Markdown, delimited rows, RTF or LaTeX become markup the walker
+  already reads; and the plain words a format the tool does not read is refused in.
+
+WHAT IT TAKES IN AND PRODUCES
+  In: bytes and file names; prompt templates; tag rules; the model's replies as text.
+  Out: record objects; a format name; text; prompts and budgets; parsed answers or refusals; the
+  content account of a file; the digest of a file's shape and the overlay an answer becomes.
+
+WHICH SHEETS SHOW ITS RESULTS
+  None directly. Everything here reaches Output.xlsx through reading.py and review.py; the
+  content account and what was not read reach Model_Package_Info.
+
+DESIGN RULES ENFORCED HERE
+  R1  no rating and no policy word: the banned list lives here and every sheet is linted
+  R2  a file that cannot be read is named, never a silence
+  R3  a reply is parsed strictly, never repaired; a refused answer leaves the built-in reading
+  R4  every ledger record carries the hash of the one before it
+  R6  the format comes from the content, never from the name alone
+  R7  nothing in a file is executed; a reply is data
+  R13 reading conserves content: every piece of a file ends in a named class, and a model can
+      choose how a file is sliced but never lose or add a word
+
+HOW TO SANITY-CHECK IT
+  Run tests/test_core.py, tests/test_reading_floor.py and tests/test_formats.py. Feed a file
+  the tool does not read (a slide deck, a legacy .doc) to cell 3 and check that Model_Package_Info
+  names it with a next step and that its content account says so.
+"""
 
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -15,7 +58,7 @@ import unicodedata
 import zipfile
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva0_shared
+# ---------------------------------------------------------------- from verifier0_shared
 ENGINE_VERSION = "0.0.2"
 GENESIS_HASH = "0" * 64
 
@@ -65,7 +108,7 @@ CATEGORIES = (CAT_CODE_DIFFERS, CAT_CODE_NOT_TRACED, CAT_MATH_UNDECIDED, CAT_VAL
 UNDECIDED_REASONS = (
     "the equation is an image", "the equation could not be read",
     "symbols could not be aligned", "the function could not be composed",
-    "it uses operations AIVA cannot evaluate", "too few valid sample points")
+    "it uses operations the tool cannot evaluate", "too few valid sample points")
 REJECTION_REASONS = (
     "it could not be read", "it named a passage that was not shown",
     "it quoted words that are not in the text", "it accepted a planted control passage",
@@ -90,7 +133,7 @@ BANNED_WORDING_PATTERNS = (
 _BANNED_RE = re.compile("|".join(BANNED_WORDING_PATTERNS), re.IGNORECASE)
 
 def has_banned_wording(text):
-    """Return the first word in `text` that AIVA's own wording may not use, or "". Enforces: R1"""
+    """Return the first word in `text` that the tool's own wording may not use, or "". Enforces: R1"""
     found = _BANNED_RE.search(text or "")
     return found.group(0) if found else ""
 
@@ -102,7 +145,7 @@ class TableData:
 
 @dataclass(frozen=True)
 class EquationData:
-    """An equation as found: its source form, whether AIVA could read it, and its tree."""
+    """An equation as found: its source form, whether the tool could read it, and its tree."""
     source_form: str = ""; linear: str = ""; readable: bool = False
     not_readable_reason: str = ""; expression: Optional[dict] = None; image_sha256: str = ""
 
@@ -174,7 +217,7 @@ class Candidate:
 
 @dataclass(frozen=True)
 class FlaggedItem:
-    """Something AIVA could not line up, raised for a person. It carries no rating."""
+    """Something the tool could not line up, raised for a person. It carries no rating."""
     item_id: str; category: str; concerns: str; unit_refs: tuple; item: str; observed: str
     methodology_says: str = ""; code_does: str = ""; documentation_says: str = ""
     suggested_next_step: str = ""; evidence_path: tuple = (); from_checks: tuple = ()
@@ -373,7 +416,7 @@ def normalise_symbol(symbol):
 # ---------------------------------------------------------------- the expression tree
 @dataclass(frozen=True)
 class Expr:
-    """AIVA's neutral tree for a formula. op is one of: num, sym, add, sub, mul, div,
+    """the tool's neutral tree for a formula. op is one of: num, sym, add, sub, mul, div,
     pow, neg, call, cmp, piecewise, eq. `name` is a symbol, a neutral function name
     (call) or a comparison sign (cmp); `value` is a decimal text (num)."""
     op: str; name: Optional[str] = None; value: Optional[str] = None; args: tuple = ()
@@ -404,7 +447,7 @@ def expr_symbols(expr):
 _INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
 
 def expr_to_text(expr, parent_rank=0):
-    """The tree in AIVA's linear notation, the form shown to analysts and to the AI."""
+    """The tree in the tool's linear notation, the form shown to analysts and to the AI."""
     if expr.op == "num":
         return expr.value
     if expr.op == "sym":
@@ -429,8 +472,8 @@ def expr_to_text(expr, parent_rank=0):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva0r_reading
-# ---------------------------------------------------------------- prompt machinery (from aiva3_mapping)
+# ---------------------------------------------------------------- from verifier0r_reading
+# ---------------------------------------------------------------- prompt machinery (from verifier3_mapping)
 
 def load_prompt(references_dir, question_type):
     """A prompt template: its version line, its SYSTEM part and its MAIN part with slots."""
@@ -463,7 +506,7 @@ def cut_text(text, limit, keep_words=()):
     piece = text[start:start + limit]
     return ("[... cut ...] " if start else "") + piece + (" [... cut ...]" if start + limit < len(text) else "")
 
-# ---------------------------------------------------------------- answer machinery (from aiva3_mapping)
+# ---------------------------------------------------------------- answer machinery (from verifier3_mapping)
 def last_json_object(text):
     """The last balanced {...} object in a text, or None. Braces inside strings are skipped."""
     end = text.rfind("}")
@@ -490,7 +533,7 @@ def strict_json(text):
         return dict(pairs)
     return json.loads(text, object_pairs_hook=no_repeats)
 
-# ---------------------------------------------------------------- element helpers (from aiva1_documents)
+# ---------------------------------------------------------------- element helpers (from verifier1_documents)
 def local_name(tag):
     """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
     if not isinstance(tag, str):
@@ -511,7 +554,7 @@ def child_named(element, name):
             return child
     return None
 
-# ---------------------------------------------------------------- baseline slicing (from aiva1_documents)
+# ---------------------------------------------------------------- baseline slicing (from verifier1_documents)
 def attribute_text(element, names, digits_too=False):
     """The first of the named attributes that holds text worth reading, with its name. A bare
     number is no heading, so it is passed over unless digits_too."""
@@ -525,7 +568,7 @@ BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_i
 
 def written_numbering(element, rules):
     """The numbering an element carries in an attribute, exactly as the document wrote it
-    (num="36." gives "36."): more faithful than any count AIVA could make, skipped numbers included."""
+    (num="36." gives "36."): more faithful than any count the tool could make, skipped numbers included."""
     return attribute_text(element, rules["numbering_attributes"], digits_too=True)[0]
 
 def table_rows(element, rules):
@@ -568,7 +611,7 @@ def discover_table_shape(element, rules, is_table):
 
 def discover_families(root, rules, report):
     """Work out a family for each tag this document uses that the rules do not name, from the
-    way the tag behaves here. The rules always win, so a schema AIVA already knows is read
+    way the tag behaves here. The rules always win, so a schema the tool already knows is read
     exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
     table; an element carrying its own heading in an attribute; one holding other blocks (a
     container); one holding text (a paragraph). Every decision is recorded with its reason in
@@ -710,17 +753,17 @@ ATOM_CLASSES = ("in unit text", "relocated", "rewritten", "declared drop", "not 
 
 # An atom found in one of these places is not expected word for word in a unit, and why.
 # "rewritten" is the class R1 added to the plan's four: an equation is not lost and not carried
-# either - it is READ into AIVA's linear notation, which is a third thing and is named as one.
+# either - it is READ into the tool's linear notation, which is a third thing and is named as one.
 EXPLAINED_BY_PLACE = {
-    "equation": ("rewritten", "read into AIVA's linear notation; what it was read from is named in the unit's equation"),
+    "equation": ("rewritten", "read into the tool's linear notation; what it was read from is named in the unit's equation"),
     "attribute": ("declared drop", "an attribute the rules do not read: an identifier, a style, a namespace or a file name"),
     "style or script": ("declared drop", "the content of a style or script element, which is not what the document says"),
-    "page without a text layer": ("not read", "a page that carries no text layer, which AIVA cannot count without reading the picture"),
+    "page without a text layer": ("not read", "a page that carries no text layer, which the tool cannot count without reading the picture"),
     "tracked change": ("declared drop", "an unaccepted deletion, which is not what the document says: it is what somebody proposed the document should stop saying"),
     "header": ("declared drop", "the running header of a page, which the page carries because it is a page"),
     "footer": ("declared drop", "the running footer of a page, which the page carries because it is a page"),
     "comment": ("declared drop", "a comment somebody left on the document, which is not what the document says"),
-    "whole file not read": ("not read", "a file in a format AIVA does not read, named with its reason and a next step"),
+    "whole file not read": ("not read", "a file in a format the tool does not read, named with its reason and a next step"),
 }
 
 # Below this many bytes a file may honestly hold no text; above it, a reader that found none at
@@ -766,7 +809,7 @@ MARKUP_METADATA = ("style", "script")
 def atoms_of_markup(root, file_name, rules=None):
     """Every text node and every tail under every element, and every attribute value, each with
     the place it was found in. Place matters to the account: text inside an equation is read
-    into AIVA's linear notation rather than kept word for word, an attribute the rules do not
+    into the tool's linear notation rather than kept word for word, an attribute the rules do not
     read is metadata about the document rather than something the document says, and the
     content of a style or script element is not prose at all. Naming the place is what lets
     each of those be explained by a rule instead of counted as a loss."""
@@ -824,7 +867,7 @@ def atoms_of_docx(archive, parse, file_name):
 def atoms_of_pdf(document, file_name):
     """Every word the text layer of every page yields. A page with no text layer is counted as
     one atom with no text, so that a scanned page is visible in the account as a page that
-    carries something AIVA cannot count rather than as a page that carries nothing."""
+    carries something the tool cannot count rather than as a page that carries nothing."""
     found = []
     for number, page in enumerate(document.pages, start=1):
         text = page.extract_text() or ""
@@ -842,10 +885,10 @@ def atoms_of_plain_text(text, file_name):
 # Enforces: R13
 DECLARED_MARKS = (
     ("list marker", "the mark that shows an item of a folded list: '-', or the number the document gave it"),
-    ("reconstructed numbering", "a heading number Word produces automatically and does not store, counted back by AIVA and marked as reconstructed"),
-    ("linear form of an equation", "an equation written out in AIVA's linear notation; the markup it was read from is kept in the equation's source form"),
+    ("reconstructed numbering", "a heading number Word produces automatically and does not store, counted back by the tool and marked as reconstructed"),
+    ("linear form of an equation", "an equation written out in the tool's linear notation; the markup it was read from is kept in the equation's source form"),
     ("words read from a picture", "what OCR made of a picture, shown to help a person and never evidence"),
-    ("the heading above a Word file's notes", "footnotes and endnotes are parts of their own and are read after the body, under a heading AIVA gives them"),
+    ("the heading above a Word file's notes", "footnotes and endnotes are parts of their own and are read after the body, under a heading the tool gives them"),
 )
 DECLARED_RELOCATIONS = (
     ("heading chain", "a heading is not a unit of its own: its text is carried by every unit below it"),
@@ -880,9 +923,9 @@ def kept_and_relocated(chunks):
 
 
 def marks_of_rendering(chunks):
-    """Marks every reader makes, whatever the format: the form AIVA renders a table, a figure or
+    """Marks every reader makes, whatever the format: the form the tool renders a table, a figure or
     an equation in; the markup an equation was read from, whose tags are not words the document
-    says; a number a document did not write that AIVA counted back; and the place label AIVA
+    says; a number a document did not write that the tool counted back; and the place label the tool
     gives a paragraph of a PDF ("p.4 2") so that a person can find it again. Enforces: R13"""
     found = []
     for chunk in chunks:
@@ -956,7 +999,7 @@ def account_lines(found):
         lines.append("The file is %d KB and yielded no text at all, and no reader said it could not read it: "
                      "it has probably not been opened. Check the file itself." % max(1, found["file_bytes"] // 1024))
     if found.get("held as text only"):
-        lines.append("%d of the lines inside a unit are held only as running text, in files AIVA could not read as "
+        lines.append("%d of the lines inside a unit are held only as running text, in files the tool could not read as "
                      "code, data or a help page: they are kept, and nothing in them can be linked or checked."
                      % found["held as text only"])
     if found["closed"]:
@@ -973,7 +1016,7 @@ def account_lines(found):
 def account_of_package(files, units, refused, is_text_file):
     """The content account of a package tarball. The atom of a package is a line: every
     non-blank line of every member that holds text has to lie inside a unit, be refused with a
-    reason, or be named as not read. A member AIVA cannot read as text (a compiled object, a
+    reason, or be named as not read. A member the tool cannot read as text (a compiled object, a
     picture, stored data in a binary form) is counted as one atom of its own, because its lines
     cannot be counted without reading it. Extends the line coverage that read-package already
     kept for parsed R files to every member of the tarball. Enforces: R13"""
@@ -1069,8 +1112,8 @@ def markup_digest(root, rules, file_name):
     sits, what it sits inside and what sits inside it, how often it carries text of its own, how
     long that text runs, what attributes it has, how often it is the first child, and three
     short samples. A tag the rules already name is marked as known, so that a proposal can be
-    told from a repetition of what AIVA already does. Enforces: R7"""
-    # What AIVA ships or the analyst wrote is KNOWN and is not the model's business. What
+    told from a repetition of what the tool already does. Enforces: R7"""
+    # What the tool ships or the analyst wrote is KNOWN and is not the model's business. What
     # discovery worked out on the spot is a GUESS, and saying which is which is the whole point:
     # a proposal is wanted exactly where code guessed, and nowhere else.
     settled = set(rules.get("shipped_tags") or ()) | set(rules.get("analyst_tags") or ())
@@ -1086,7 +1129,7 @@ def markup_digest(root, rules, file_name):
                                 "with_text": 0, "text_lengths": [], "attributes": set(), "first_child": 0,
                                 "samples": [], "known_as": "", "guessed_as": ""}
             family = families.get(name) or ""
-            # Settled: what AIVA ships, what the analyst wrote, and what discovery PROVED by
+            # Settled: what the tool ships, what the analyst wrote, and what discovery PROVED by
             # counting the rows. A guess is only what discovery's fallback net produced, and a
             # guess is the only thing a proposal is wanted about.
             if name in settled or family in PROVEN_BY_SHAPE:
@@ -1192,12 +1235,12 @@ def overlay_from_answer(answer, rules, analyst_tags, discovered=None):
     """The answer as an overlay on the tag rules, in the one order that matters:
 
         what the ANALYST wrote in Inputs/tag_rules.yaml   wins over
-        what AIVA SHIPS                                   wins over
+        what the tool SHIPS                                   wins over
         what discovery PROVED by counting the shape       wins over
         what the MODEL proposes                           wins over
         what discovery GUESSED with its fallback net
 
-    So the model never overrides a person, never overrides a schema AIVA already knows, and
+    So the model never overrides a person, never overrides a schema the tool already knows, and
     never overrides a table whose rows were counted. It speaks where code only guessed, which
     is exactly where the reading was weak. Returns (families to apply, levels, why)."""
     shipped, discovered = set(rules.get("shipped_tags") or ()), discovered or {}
@@ -1312,7 +1355,7 @@ def package_plan_question(digest, prompt, settings):
 
 def validate_package_plan(question, answer, rejected):
     """A reader for every member left unplaced, each named from the fixed list, and for no other
-    member. There is no reader that means "skip": a member AIVA cannot make sense of becomes a
+    member. There is no reader that means "skip": a member the tool cannot make sense of becomes a
     unit that says so, never a gap. Enforces: R3, R13"""
     unplaced = set(question["unplaced"])
     readers = answer.get("readers")
@@ -1332,7 +1375,7 @@ def validate_package_plan(question, answer, rejected):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from aiva1f_formats
+# ---------------------------------------------------------------- from verifier1f_formats
 # ---------------------------------------------------------------- what a file is
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")
@@ -1340,16 +1383,16 @@ MARKDOWN_NAMES = (".md", ".markdown", ".mdown", ".mkd")
 DELIMITED_NAMES = (".csv", ".tsv", ".tab")
 LATEX_NAMES = (".tex", ".ltx")
 
-# A format AIVA does not read, what it is in plain words, and what to do about it.
+# A format the tool does not read, what it is in plain words, and what to do about it.
 NOT_READ = {
-    "pptx": "a slide deck, which AIVA does not read; save it as PDF and put the PDF in its place",
-    "odf": "an OpenDocument file, which AIVA does not read; save it as .docx and put that in its place",
-    "epub": "an e-book, which AIVA does not read; save it as PDF and put the PDF in its place",
+    "pptx": "a slide deck, which the tool does not read; save it as PDF and put the PDF in its place",
+    "odf": "an OpenDocument file, which the tool does not read; save it as .docx and put that in its place",
+    "epub": "an e-book, which the tool does not read; save it as PDF and put the PDF in its place",
     "zip": "an archive of other files; unpack it into the folder so that each file is read on its own",
     "gzip": "a compressed file; unpack it into the folder so that the file inside it is read",
-    "ole": "in an old Microsoft Office format (.doc, .xls or .ppt), which AIVA does not read; "
+    "ole": "in an old Microsoft Office format (.doc, .xls or .ppt), which the tool does not read; "
            "save it as .docx, .xlsx or PDF and put that in its place",
-    "image": "a picture, and AIVA does not read words from a picture on its own; if it holds text, "
+    "image": "a picture, and the tool does not read words from a picture on its own; if it holds text, "
              "save it as a PDF with a text layer",
     "binary": "binary data rather than a document",
 }
@@ -1460,7 +1503,7 @@ def input_files(folder):
                 found.append(os.path.join(root, name))
     return sorted(found, key=lambda path: os.path.relpath(path, folder).lower()), sorted(skipped)
 
-# ---------------------------------------------------------------- formats AIVA reads by converting them
+# ---------------------------------------------------------------- formats the tool reads by converting them
 # Each converter returns (markup, words): the markup is what the walker reads, and the words are
 # the file with its syntax taken away by a rule named here, which is what the content account
 # counts. The two are made by DIFFERENT code - the markup by reading the structure, the words by
@@ -1689,7 +1732,7 @@ def reason_for(problem):
     if isinstance(problem, IsADirectoryError):
         return "it is a folder, not a file"
     if isinstance(problem, PermissionError):
-        return "AIVA is not allowed to open it; check who may read the file"
+        return "the tool is not allowed to open it; check who may read the file"
     if "password" in said or "encrypt" in said or "decrypt" in said or "pdfminer" in name.lower():
         return "it is protected by a password; save an unprotected copy and put that in its place"
     if isinstance(problem, zipfile.BadZipFile) or name in ("ReadError", "CompressionError", "HeaderError", "EOFError"):
@@ -1699,7 +1742,7 @@ def reason_for(problem):
 # ---------------------------------------------------------------- the three Inputs folders of a project
 INPUT_FOLDERS = (
     ("methodology", "1_Methodology", "Put the canonical methodology here: XML (also inside a .txt), .mhtml, .docx, "
-     ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything AIVA cannot read is named."),
+     ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything the tool cannot read is named."),
     ("package", "2_Model_Package", "Put the R package here: its tarball (.tar.gz), a .zip of it, or its source folder."),
     ("documentation", "3_Model_Documentation", "Put the model documentation here (.docx is preferred; .pdf, .mhtml, "
      "XML, Markdown, .csv, .xlsx, .rtf and .tex are read too). Folders are read too, in name order."))

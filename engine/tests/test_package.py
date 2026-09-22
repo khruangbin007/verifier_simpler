@@ -1,4 +1,4 @@
-"""Tests of aiva2_package: safe unpacking, the R reader, documentation units and stored data."""
+"""Tests of verifier2_package: safe unpacking, the R reader, documentation units and stored data."""
 import io
 import tarfile
 import unittest

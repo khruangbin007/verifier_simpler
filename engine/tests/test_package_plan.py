@@ -5,7 +5,7 @@ rest of it reaches nothing, while the account still says every line lies inside 
 The question asked here picks WHICH EXISTING READER takes such a member. It never reaches the R
 tokenizer, the parser, the expression trees or the decoder of stored data, because a model's
 reading of code is an assertion about the code and not a parse of it. And there is no reader
-that means skip: a member AIVA cannot make sense of becomes a unit that says so.
+that means skip: a member the tool cannot make sense of becomes a unit that says so.
 """
 import os
 import unittest
@@ -126,7 +126,7 @@ class WhatThePlanRecovers(unittest.TestCase):
         for mode in ("off", "rules"):
             units, _ = read(mode)
             self.assertTrue([unit for unit in units if unit["file"] == "tools/build.notes"],
-                            "a file AIVA cannot make sense of is named, never dropped (%s)" % mode)
+                            "a file the tool cannot make sense of is named, never dropped (%s)" % mode)
 
     def test_nothing_is_asked_when_every_member_is_placed(self):
         spent = []
