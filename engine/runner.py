@@ -1637,7 +1637,10 @@ def verify_evidence_pack(paths, settings, live=None):
     content hash is computed again from the input files and compared with the record."""
     store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
     def line(what, good, detail=""):
-        rows.append((what, "Confirmed" if good else "Not confirmed", detail))
+        """good is True, False, or None for a check the run has not reached yet - which is not a failure
+        and must not read as one. Found on a real run that stopped after step 06: the coverage line said
+        Not confirmed, as if the pack had been tampered with."""
+        rows.append((what, "Confirmed" if good else "Not reached yet" if good is None else "Not confirmed", detail))
     manifest = (store.read("run_manifest") or [{}])[0]
     changed = [e["file"] for e in manifest.get("inputs", []) if not os.path.exists(os.path.join(paths.inputs_dir, e["file"]))
                or file_sha256(os.path.join(paths.inputs_dir, e["file"])) != e["sha256"]]
@@ -1661,8 +1664,10 @@ def verify_evidence_pack(paths, settings, live=None):
     named = {ref for item in items for ref in item["unit_refs"]}
     not_clean = {s["unit_ref"] for s in statuses if not s["clean"]}
     expected = {r["ref"] for kind in ("model_units", "chunks_doc") for r in store.read(kind)}
+    reached = any(r["step_id"] == "15" for r in store.read("step_records"))
     line("Every unit has one status; units that are not clean and flagged items match",
-         {s["unit_ref"] for s in statuses} == expected and len(statuses) == len(expected) and not_clean == named & expected)
+         None if not reached else ({s["unit_ref"] for s in statuses} == expected and len(statuses) == len(expected) and not_clean == named & expected),
+         "" if reached else "the run has not reached step 15, where each unit gets its status")
     known = expected | {r["ref"] for r in store.read("chunks_canon")}
     line("Every citation on Flagged_Items resolves to a unit", all(ref in known for ref in named))
     identity = run_identity(store, paths)

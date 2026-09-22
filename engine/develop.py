@@ -787,8 +787,9 @@ def append_history(found, samples, label, stamp):
 # ---------------------------------------------------------------- from tools/count_lines.py
 # A budget keeps a module reviewable. core.py and runner.py also hold data that was once in
 # engine/references: the prompts (about 250 lines) and the workbook layout (about 140), so their
-# budgets are raised by that much and no more. reading.py and review.py absorbed less and did not need it.
-BUDGETS = {"core.py": 2250, "reading.py": 3000, "review.py": 2600, "runner.py": 1750, "develop.py": 1800}
+# budgets are raised by that much and no more. reading.py rose by 100 for the SVG reader (text in any
+# nesting, HTML in foreignObject, pictures inside SVGs, charts read in place where the XML refers to them).
+BUDGETS = {"core.py": 2250, "reading.py": 3100, "review.py": 2600, "runner.py": 1750, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 

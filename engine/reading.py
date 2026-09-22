@@ -748,6 +748,9 @@ class WalkState:
     digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
     guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     folder: str = ""                               # where the file being read stands, so a picture beside it can be found
+    svgs: dict = field(default_factory=dict)       # the corner's SVG files, by lower-case name and by name without .svg
+    consumed: set = field(default_factory=set)     # SVGs already read in place by a document of the corner (shared by the corner)
+    file_name: str = ""
     lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
 
     def __post_init__(self):
@@ -770,6 +773,21 @@ def walk_element(element, path, depth, state):
         state.skip_next_image = True                     # the picture that follows shows the same equation
         return
     if family == "ignore" or not name:
+        return
+    linked, named_by = (svg_reference(element, state), element) if state.svgs else (None, None)
+    if not linked and state.svgs and state.family(name) == "figure":
+        # a figure may name its picture one level down: <chart><file>Chart2.svg</file></chart>
+        linked, named_by = next(((found, below) for below in element.iter() if below is not element
+                                 for found in [svg_reference(below, state)] if found), (None, None))
+    if linked:                                           # a chart or table drawn as an SVG beside the document: read it here, in place
+        if named_by is not None and len(named_by) == 0 and (named_by.text or "").strip():
+            state.dropped.append(named_by.text)          # the file name written as text is a reference, not what the document says
+        caption = next((core.normalise_text(element_text(n, state.rules, skip=())) for n in element.iter()
+                        if state.rules["family_of"].get(core.local_name(n.tag)) == "caption"), "") or element.get("alt") or element.get("title") or ""
+        with open(linked, "rb") as handle:
+            state.blocks.extend(svg_blocks(handle.read(), os.path.basename(linked), here, state, caption))
+        state.consumed.add(linked)
+        state.notes.append("%s: read in place, where %s refers to it." % (os.path.basename(linked), state.file_name or "the document"))
         return
     if family is None:                                   # discovery names every tag it reaches; this is the net under it
         family = "container" if len(element) else "paragraph"
@@ -958,35 +976,62 @@ def figure_block(element, here, state):
     caption = next((core.normalise_text(element_text(n, state.rules, skip=())) for n in element.iter()
                     if state.rules["family_of"].get(core.local_name(n.tag)) == "caption"), "")
     fingerprint = state.images.get(source) or state.images.get(source.replace("cid:", "")) or ""
-    beside = svg_beside(source, state)
-    if beside is not None:                           # the picture is an SVG in the same folder: its own text is the figure's
-        markup, words, _ = core.svg_to_markup(beside, source)
-        own_caption, labels = words.split("\n", 1)[0], words.split("\n", 1)[1] if "\n" in words else ""
-        # the document's caption is what the document says; the SVG's own title is used only where
-        # the document gives none, and is counted only then, so no word is counted twice
-        state.atoms.extend(core.atoms_of_plain_text(labels if caption else words, os.path.basename(source)))
-        state.notes.append("%s: read by the text of the SVG file beside the document." % source)
-        blocks = walk_svg_markup(parse_markup(markup, source, [], False), here, state)
-        if blocks:
-            for block in blocks:
-                block["caption"] = caption or own_caption
-                block["source"], block["image_sha256"] = source, fingerprint or core.sha256_bytes(beside)
-            return blocks
     return new_block("figure", label or caption or source, here, caption=caption, image_sha256=fingerprint,
                      source=source)
 
-def svg_beside(source, state):
-    """The bytes of an SVG a figure refers to, when the file stands beside the document being
-    read; otherwise None. Only a plain file name or a relative path inside the document's own
-    folder is followed: a path that climbs out, a URL, or a name that is not there gives None."""
-    name = (source or "").replace("cid:", "").strip()
-    if not name.lower().endswith(".svg") or not getattr(state, "folder", "") or "://" in name or name.startswith(("/", "\\")):
-        return None
-    path = os.path.normpath(os.path.join(state.folder, name))
-    if not path.startswith(os.path.normpath(state.folder) + os.sep) or not os.path.isfile(path):
-        return None
-    with open(path, "rb") as handle:
-        return handle.read()
+LINK_ATTRIBUTE = re.compile(r"src|href|ref|file|data|path|url|image|graphic", re.I)
+
+def svg_reference(element, state):
+    """The SVG of this corner an element refers to, or None. A reference is either an attribute
+    whose name says it links (src, href, xlink:href, fileref, data, a tool's own graphic= or
+    image=), or an element's whole text when it names a file ending in .svg. A plain name is
+    matched to a file of the corner in any case, and without .svg only when it came from a link
+    attribute; a path is followed only if it stays inside the document's folder. Found on review:
+    matching any short text without .svg took the heading <title>Floors</title> for floors.svg and
+    replaced the heading with the chart. Enforces: R6"""
+    values = [value for key, value in element.attrib.items() if LINK_ATTRIBUTE.search(core.local_name(key))]
+    text = (element.text or "").strip() if len(element) == 0 else ""
+    if text.lower().endswith(".svg") and len(text) < 200:
+        values.append(text)
+    for value in values:
+        written = (value or "").strip().replace("\\", "/").split("?")[0].split("#")[0]
+        if not written or ".." in written.split("/") or "://" in written or written.startswith("/"):
+            continue
+        if "/" in written and state.folder:
+            resolved = os.path.normpath(os.path.join(state.folder, written)).lower()
+            found = next((path for path in state.svgs.values() if os.path.normpath(path).lower() == resolved), None)
+            if found:
+                return found
+        name = os.path.basename(written).lower()
+        for key in ((name,) if name.endswith(".svg") else (name, name + ".svg")):
+            if key in state.svgs:
+                return state.svgs[key]
+    return None
+
+def svg_blocks(data, name, here, state, caption=""):
+    """The units of one SVG, read by the text it holds: a table where its text stands in a grid, a
+    figure of its labels otherwise. Where it holds no text, a picture stored inside it is read by
+    OCR when that is installed; and a figure that still gives no words says why, instead of standing
+    empty. The words counted are the SVG's own, so the content account closes. Enforces: R2, R13"""
+    import xml.etree.ElementTree as ElementTree
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return [not_read_block(name, "the SVG file is damaged and could not be opened")]
+    markup, words, _ = core.svg_to_markup(data, name)
+    own_caption, labels = (words.split("\n", 1) + [""])[:2]
+    state.atoms.extend(core.atoms_of_plain_text(labels if caption else words, name))
+    blocks = walk_svg_markup(parse_markup(markup, name, [], False), here, state)
+    for block in blocks:
+        block["caption"] = caption or own_caption
+        block["source"], block["image_sha256"] = name, core.sha256_bytes(data)
+        if block["type"] == "figure" and not block["text"].strip():
+            seen = "".join(read_picture(picture, state) for picture in core.svg_embedded_pictures(root)).strip()
+            if seen:
+                block["text"] = seen                     # words read from a picture: shown, never evidence
+            else:
+                block["not_read_reason"] = "the picture gave no words: %s" % core.svg_why_no_text(root)
+    return blocks
 
 def walk_svg_markup(root, here, state):
     """The blocks the SVG's markup gives: a table block, or one figure block carrying the
@@ -1519,6 +1564,9 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
     if found in core.NOT_READ:                    # said in plain words, with a next step; never decoded as text
         state.atoms = [core.atom("whole file not read", file_name, "")]
         return found, [not_read_block(file_name, "the file is " + core.NOT_READ[found])]
+    if found == "svg":                               # read by the text it holds, as a table or a figure
+        state.atoms = []
+        return found, svg_blocks(data, file_name, file_name, state)
     if found in core.CONVERTED:                   # read through markup the walker already reads
         markup, words, how = core.converted(found, data, file_name)
         state.atoms = core.atoms_of_plain_text(words, file_name)
@@ -1546,10 +1594,23 @@ def read_corner(ctx, corner, input_key, label):
     root = (options["inputs"].get("roots") or {}).get(input_key)
     for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
         info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
-    for path in options["inputs"][input_key]:
+    paths = options["inputs"][input_key]
+    svgs = {}                                        # every SVG of the corner, by name and by name without .svg
+    for path in paths:
+        if path.lower().endswith(".svg"):
+            svgs.setdefault(os.path.basename(path).lower(), path)
+            svgs.setdefault(os.path.splitext(os.path.basename(path))[0].lower(), path)
+    consumed = set()
+    # documents first, pictures last: a chart an XML refers to is read in place, where the XML puts it,
+    # and is not read a second time on its own; one nothing refers to is still read, on its own
+    for path in [p for p in paths if not p.lower().endswith(".svg")] + [p for p in paths if p.lower().endswith(".svg")]:
         file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
+        if path in consumed:
+            info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
+            continue
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
         state.ask, state.settings = ctx.ask, ctx.settings
+        state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
         try:
             found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
         except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
@@ -2971,7 +3032,11 @@ def read_package(ctx):
             "rows": package_rows(description, namespace, units, facts, refused)}
     messages = ["%d units read from %d files of the package." % (len(units), len(files))]
     r_files = sum(1 for path in files if path.lower().endswith(".r"))
-    if "DESCRIPTION" not in files or r_files * 10 < len(files):
+    other_code = sum(1 for path in files if path.lower().endswith((".py", ".sas", ".m", ".jl", ".scala", ".java", ".cpp", ".c")))
+    is_r_package = ("DESCRIPTION" in files and "Package:" in core.decode_text(files["DESCRIPTION"])) or (r_files and r_files >= other_code)
+    if not is_r_package:                             # a DESCRIPTION naming the package, or more R than any other code
+        # Found on a real run: an R package that keeps its code in one file beside many help pages
+        # was called "not an R package" because R files were under a tenth of all its files.
         # the tool's reader of code reads R and nothing else. A model in Python, SAS or MATLAB comes
         # through as files of running text, fully accounted for and impossible to check - so the
         # analyst is told plainly, rather than left to wonder why nothing was linked. Enforces: R2

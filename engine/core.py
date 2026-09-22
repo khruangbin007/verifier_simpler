@@ -1974,32 +1974,70 @@ def latex_to_markup(text):
 SVG_NS = "http://www.w3.org/2000/svg"
 
 def svg_texts(root):
-    """Every piece of text an SVG draws, with where it is drawn: (x, y, text). A <text> may hold
-    <tspan> children with positions of their own; a tspan without a position inherits its
-    parent's. Positions are read as numbers; a transform on the element is not applied, so a
-    rotated or shifted group keeps the order it was written in."""
+    """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
+    a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
+    <a> inside it is read with it); and a <foreignObject>, where drawing tools put HTML - divs and
+    paragraphs - instead of SVG text. A transform is not applied, so a moved group keeps the order
+    it was written in."""
     found = []
     def number(value, fallback=0.0):
         try:
             return float(re.split(r"[ ,]", (value or "").strip())[0])
         except (ValueError, IndexError):
             return fallback
-    for text in root.iter():
-        if local_name(text.tag) != "text":
-            continue
-        x, y = number(text.get("x")), number(text.get("y"))
-        spans = [span for span in text.iter() if local_name(span.tag) == "tspan"]
-        own = normalise_text((text.text or "") + "".join(span.tail or "" for span in text))
-        if own and not spans:
-            found.append((x, y, own))
-            continue
-        if own:
-            found.append((x, y, own))
-        for span in spans:
-            words = normalise_text("".join(span.itertext()))
+    for node in root.iter():
+        name = local_name(node.tag)
+        if name == "text":
+            x, y = number(node.get("x")), number(node.get("y"))
+            placed = [span for span in node.iter() if local_name(span.tag) == "tspan" and (span.get("x") or span.get("y") or span.get("dy"))]
+            if not placed:
+                words = normalise_text("".join(node.itertext()))
+                if words:
+                    found.append((x, y, words))
+                continue
+            lead = normalise_text(node.text or "")
+            if lead:
+                found.append((x, y, lead))
+            line_y = y
+            for span in placed:
+                line_y = number(span.get("y"), line_y + number(span.get("dy"), 0.0))
+                words = normalise_text("".join(span.itertext()))
+                if words:
+                    found.append((number(span.get("x"), x), line_y, words))
+        elif name == "foreignobject":                    # local_name lower-cases: foreignObject
+            words = normalise_text(" ".join(part for part in node.itertext() if part.strip()))
             if words:
-                found.append((number(span.get("x"), x), number(span.get("y"), y), words))
+                found.append((number(node.get("x")), number(node.get("y")), words))
     return found
+
+def svg_embedded_pictures(root):
+    """The raster pictures an SVG carries inside itself as data: URIs - what a chart exported as an
+    image and wrapped in SVG looks like. Their words can only be read by OCR."""
+    import base64
+    pictures = []
+    for node in root.iter():
+        if local_name(node.tag) != "image":
+            continue
+        link = next((value for key, value in node.attrib.items() if local_name(key) == "href"), "")
+        found = re.match(r"data:image/(png|jpe?g|gif|bmp|webp);base64,(.*)", link.strip(), re.S)
+        if found:
+            try:
+                pictures.append(base64.b64decode(re.sub(r"\s", "", found.group(2))))
+            except (ValueError, TypeError):
+                continue
+    return pictures
+
+def svg_why_no_text(root):
+    """Why an SVG gave no text, in words an analyst can act on. Enforces: R2"""
+    if svg_embedded_pictures(root):
+        return "the chart is a picture stored inside the SVG, so its words can only be read by OCR"
+    glyphs = sum(1 for node in root.iter() if local_name(node.tag) == "use"
+                 and any("glyph" in (value or "").lower() for key, value in node.attrib.items() if local_name(key) == "href"))
+    shapes = sum(1 for node in root.iter() if local_name(node.tag) in ("path", "use"))
+    if glyphs or shapes > 40:
+        return ("its letters are drawn as shapes rather than stored as text, so they cannot be read as text; "
+                "export the chart with its text kept as text, or add its data as a table in the methodology")
+    return "it holds no text"
 
 def svg_rows(texts, tolerance=None):
     """Texts grouped into rows by their y position, each row sorted by x. The tolerance is a
