@@ -1,7 +1,7 @@
 MIME-Version: 1.0
-Content-Type: multipart/related; boundary="----=_NextPart_AIVA_SAMPLE"
+Content-Type: multipart/related; boundary="----=_NextPart_the tool_SAMPLE"
 
-------=_NextPart_AIVA_SAMPLE
+------=_NextPart_the tool_SAMPLE
 Content-Location: file:///C:/method.htm
 Content-Transfer-Encoding: 8bit
 Content-Type: text/html; charset="utf-8"
@@ -22,18 +22,18 @@ Content-Type: text/html; charset="utf-8"
 <p>The adjusted dose is rounded to 10 milligrams.
 </body></html>
 
-------=_NextPart_AIVA_SAMPLE
+------=_NextPart_the tool_SAMPLE
 Content-Location: image001.png
 Content-Transfer-Encoding: base64
 Content-Type: image/png
 
 iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggmltYWdlMDAxLnBuZw==
 
-------=_NextPart_AIVA_SAMPLE
+------=_NextPart_the tool_SAMPLE
 Content-Location: image002.png
 Content-Transfer-Encoding: base64
 Content-Type: image/png
 
 iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggmltYWdlMDAyLnBuZw==
 
-------=_NextPart_AIVA_SAMPLE--
+------=_NextPart_the tool_SAMPLE--

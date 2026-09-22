@@ -1,0 +1,40 @@
+measure,date,sample,chat,numbers
+harness,2026-09-18,F_capital,stand-in,mutants=3 flagged_as_expected=1 flagged_otherwise=0 not_flagged=2 false_flags=1 gold_clean_units=36
+harness,2026-09-18,F_capital,stand-in,mutants=56 flagged_as_expected=44 flagged_otherwise=1 not_flagged=11 false_flags=1 gold_clean_units=36
+harness,2026-09-18,F_capital,stand-in,mutants=56 flagged_as_expected=54 flagged_otherwise=1 not_flagged=1 false_flags=0 gold_clean_units=36
+harness,2026-09-18,D_dosing,stand-in,mutants=16 flagged_as_expected=14 flagged_otherwise=0 not_flagged=2 false_flags=0 gold_clean_units=9
+harness,2026-09-18,D_dosing,stand-in,mutants=16 flagged_as_expected=15 flagged_otherwise=0 not_flagged=1 false_flags=0 gold_clean_units=9
+harness,2026-09-18,D_dosing,stand-in,mutants=16 flagged_as_expected=15 flagged_otherwise=0 not_flagged=1 false_flags=0 gold_clean_units=9
+harness,2026-09-18,D_dosing,stand-in,mutants=16 flagged_as_expected=15 flagged_otherwise=0 not_flagged=1 false_flags=0 gold_clean_units=9
+harness,2026-09-18,A_minimal,stand-in,mutants=49 flagged_as_expected=45 flagged_otherwise=1 not_flagged=3 false_flags=0 gold_clean_units=26
+harness,2026-09-18,A_minimal,stand-in,mutants=49 flagged_as_expected=46 flagged_otherwise=1 not_flagged=2 false_flags=0 gold_clean_units=26
+harness,2026-09-18,F_capital,stand-in,mutants=56 flagged_as_expected=54 flagged_otherwise=1 not_flagged=1 false_flags=0 gold_clean_units=36
+reading,2026-09-19,G_schema,stand-in,mode=off phrases=8 gold=8 levels=0 wanted=4 chained=5 units=17 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,G_schema,stand-in,mode=rules phrases=8 gold=8 levels=4 wanted=4 chained=14 units=14 calls=1 tokens=1399 lost=0 added=0
+reading,2026-09-19,H_twocolumn,stand-in,mode=off phrases=7 gold=7 levels=2 wanted=3 chained=20 units=21 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,H_twocolumn,stand-in,mode=rules phrases=7 gold=7 levels=2 wanted=3 chained=20 units=21 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,I_wordtraps,stand-in,mode=off phrases=7 gold=8 levels=3 wanted=3 chained=20 units=20 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,I_wordtraps,stand-in,mode=rules phrases=7 gold=8 levels=3 wanted=3 chained=20 units=20 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,A_minimal,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=41 units=41 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,A_minimal,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=41 units=41 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,D_dosing,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=14 units=14 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,D_dosing,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=14 units=14 calls=1 tokens=1603 lost=0 added=0
+reading,2026-09-19,F_capital,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,F_capital,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=1 tokens=1906 lost=0 added=0
+reading,2026-09-19,F_capital_known,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-19,F_capital_known,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=1 tokens=1906 lost=0 added=0
+reading,2026-09-21,G_schema,stand-in,mode=off phrases=8 gold=8 levels=0 wanted=4 chained=5 units=17 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,G_schema,stand-in,mode=rules phrases=8 gold=8 levels=4 wanted=4 chained=14 units=14 calls=1 tokens=1399 lost=0 added=0
+reading,2026-09-21,H_twocolumn,stand-in,mode=off phrases=7 gold=7 levels=3 wanted=3 chained=20 units=21 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,H_twocolumn,stand-in,mode=rules phrases=7 gold=7 levels=3 wanted=3 chained=20 units=21 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,I_wordtraps,stand-in,mode=off phrases=7 gold=8 levels=3 wanted=3 chained=20 units=20 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,I_wordtraps,stand-in,mode=rules phrases=7 gold=8 levels=3 wanted=3 chained=20 units=20 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,A_minimal,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=41 units=41 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,A_minimal,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=41 units=41 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,D_dosing,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=14 units=14 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,D_dosing,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=14 units=14 calls=1 tokens=1603 lost=0 added=0
+reading,2026-09-21,F_capital,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,F_capital,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=1 tokens=1906 lost=0 added=0
+reading,2026-09-21,F_capital_known,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=0 tokens=0 lost=0 added=0
+reading,2026-09-21,F_capital_known,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=1 tokens=1906 lost=0 added=0
+harness,2026-09-22,A_minimal,stand-in,false_flags=0 flagged_as_expected=2 flagged_otherwise=0 gold_clean_units=26 mutants=2 not_flagged=0

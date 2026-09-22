@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<document>
+  <section num="1."><title>Base pay</title>
+    <para>A courier is paid a base rate of nine units for every hour of the shift.</para>
+    <para>A shift shorter than two hours is paid as two hours.</para>
+  </section>
+  <section num="2."><title>Distance pay</title>
+    <para>Distance pay is the kilometres ridden times the distance rate for the zone.</para>
+    <para>The distance rate is zero point four units a kilometre in the outer zone.</para>
+    <para>Distance pay for one shift is capped at forty units.</para>
+  </section>
+  <section num="3."><title>Night premium</title>
+    <para>A shift beginning after ten at night earns a premium of one quarter of the base pay.</para>
+  </section>
+</document>

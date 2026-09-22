@@ -1,4 +1,4 @@
-# tag_rules.yaml - which tag belongs to which family when AIVA reads XML or HTML.
+# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
 # Reviewer 1 owns this file. A project can override any part of it with Inputs/tag_rules.yaml
 # (same layout; a family given there replaces the family given here).
 # Tag names are compared in lower case and without their namespace prefix.
@@ -7,7 +7,7 @@
 families:
   heading:        [h1, h2, h3, h4, h5, h6, title, heading, head-line, sectiontitle]
   container:      [html, body, div, section, sect, sect1, sect2, sect3, sect4, sect5, chapter, part,
-                   article, document, doc, annex, appendix, subsection, subsubsection, main, aiva-root]
+                   article, document, doc, annex, appendix, subsection, subsubsection, main, document-root]
   paragraph:      [p, para, paragraph, text, blockquote, pre, dd, dt]
   list_container: [ul, ol, list, itemizedlist, orderedlist, dl]
   list_item:      [li, item, listitem]

@@ -1,44 +1,69 @@
-"""The manual, the skills and the release manifest must agree with the code (plan, Phases 11 and 12)."""
+"""The one manual, the release manifest and the notebook must agree with the code.
+
+There is one manual, docs/Manual.md, written by hand and checked by develop.manual_problems: every
+function, sheet, setting, design rule, step and notebook cell it names must exist, and every
+setting and rule must be explained. There is one release manifest, engine/release.json, and a run
+records exactly the engine files it used. The notebook is built from develop.py and never edited.
+"""
+import json
 import os
 import unittest
 
 import helpers
-import build_manual
-import check_docs
-import make_release_manifest
+import develop
+import runner
 
 
 class ManualAndCode(unittest.TestCase):
-    def test_check_docs_reports_nothing(self):
-        self.assertEqual(check_docs.problems(), [])
+    def test_the_manual_and_the_code_agree(self):
+        self.assertTrue(os.path.exists(develop.MANUAL), "docs/Manual.md is the one manual and must exist")
+        self.assertEqual(develop.manual_problems(), [])
 
-    def test_the_built_manual_is_the_one_the_sources_give(self):
-        with open(os.path.join(helpers.ROOT_DIR, "docs", "AIVA_User_Manual.md"), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), build_manual.assemble(), "run python tools/build_manual.py")
-        self.assertTrue(os.path.exists(os.path.join(helpers.ROOT_DIR, "docs", "AIVA_User_Manual.docx")))
+    def test_the_manual_is_the_only_file_in_docs(self):
+        self.assertEqual(sorted(os.listdir(os.path.dirname(develop.MANUAL))), ["Manual.md"])
 
     def test_a_name_that_does_not_exist_is_reported(self):
-        engine, tests = check_docs.engine_names(), check_docs.test_names()
-        self.assertIs(check_docs.reference_exists("aiva3_mapping.judge_links", engine, tests, set()), True)
-        self.assertIs(check_docs.reference_exists("aiva3_mapping.no_such_function", engine, tests, set()), False)
-        self.assertIs(check_docs.reference_exists("cell 19", engine, tests, set()), False)
-        self.assertIs(check_docs.reference_exists("test_aiva4_checks.ValueRule.test_the_table_of_the_rule", engine, tests, set()), True)
-        self.assertIsNone(check_docs.reference_exists("rho_a", engine, tests, set()))
+        """The check is only worth having if it catches a wrong name."""
+        with open(develop.MANUAL, encoding="utf-8") as handle:
+            text = handle.read()
+        folder = helpers.scratch()
+        fake = os.path.join(folder, "Manual.md")
+        with open(fake, "w", encoding="utf-8") as handle:
+            handle.write(text + "\nSee `runner.no_such_function` for details.\n")
+        real = develop.MANUAL
+        develop.MANUAL = fake
+        try:
+            self.assertTrue(any("runner.no_such_function" in problem for problem in develop.manual_problems()))
+        finally:
+            develop.MANUAL = real
 
 
 class Release(unittest.TestCase):
     def test_the_release_manifest_matches_the_files(self):
-        self.assertEqual(make_release_manifest.main(["--check"]), 0, "run python tools/make_release_manifest.py as the last step of a change")
-
+        self.assertEqual(develop.release(["--check"]), 0, "run python engine/develop.py release as the last step of a change")
 
     def test_every_run_names_exactly_the_engine_files_that_produced_it(self):
-        import json
-        import aiva5_run_report as run
         paths, settings, _ = helpers.run_sample("A_minimal", stop_after="01")
-        recorded = run.open_store(paths, settings).read("run_manifest")[0]["engine_files"]
-        with open(os.path.join(helpers.ROOT_DIR, "docs", "release_manifest.json"), encoding="utf-8") as handle:
+        recorded = runner.open_store(paths, settings).read("run_manifest")[0]["engine_files"]
+        with open(develop.RELEASE_FILE, encoding="utf-8") as handle:
             released = {name: digest for name, digest in json.load(handle)["files"].items() if name.startswith("engine/")}
         self.assertEqual(recorded, released)
+
+
+class Notebook(unittest.TestCase):
+    def test_the_notebook_is_the_one_develop_builds(self):
+        built = develop.build_notebook(os.path.join(helpers.scratch(), "Verifier.ipynb"))
+        with open(built, encoding="utf-8") as fresh, open(develop.NOTEBOOK, encoding="utf-8") as committed:
+            self.assertEqual(committed.read(), fresh.read(), "run python engine/develop.py notebook")
+
+    def test_five_cells_that_each_parse_and_say_which_they_are(self):
+        import ast
+        with open(develop.NOTEBOOK, encoding="utf-8") as handle:
+            cells = ["".join(cell["source"]) for cell in json.load(handle)["cells"]]
+        self.assertEqual(len(cells), 5)
+        for number, source in enumerate(cells, start=1):
+            ast.parse(source)
+            self.assertIn("Cell %d of 5" % number, source.split("\n")[0])
 
 
 if __name__ == "__main__":

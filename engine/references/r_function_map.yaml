@@ -1,8 +1,8 @@
-# r_function_map.yaml - how names in R code and in written formulas map to AIVA's neutral
+# r_function_map.yaml - how names in R code and in written formulas map to the tool's neutral
 # function names. Reviewers 1, 2 and 4 read this file.
 #
-# notation: names that AIVA reads as a FUNCTION when a written formula shows name( ... ).
-#   Any other name followed by "(" could be a product or a function; AIVA does not guess and
+# notation: names that the tool reads as a FUNCTION when a written formula shows name( ... ).
+#   Any other name followed by "(" could be a product or a function; the tool does not guess and
 #   marks the formula "could not be read".
 notation:
   functions:
@@ -20,7 +20,7 @@ notation:
     piecewise: piecewise
   inverse:                      # name^-1( ... ) is read as the inverse function
     normal_cdf: normal_inverse
-# r_functions: R function -> neutral name, with the argument order AIVA relies on and the
+# r_functions: R function -> neutral name, with the argument order the tool relies on and the
 #   domain in which the neutral function can be evaluated (used to draw valid sample points).
 r_functions:
   pnorm:  {neutral: normal_cdf,     arguments: [q],      only_defaults: [mean, sd, lower.tail, log.p]}
