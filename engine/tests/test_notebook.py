@@ -105,6 +105,57 @@ class NotebookCells(unittest.TestCase):
         self.assertIn("develop.run(ACTIVE_CHAT, LIVE", source)
         self.assertNotIn('agentic_reading"] =', source)
 
+    def test_cell_4_in_the_background_with_an_old_token_runs_to_the_person(self):
+        """The default mode, A: the run works in a background thread. Found in use: a token older
+        than token_lifetime_minutes made the worker wait, silently, for a fresh one before its first
+        call - though the token still worked - so no link, status or flagged item ever appeared.
+        Age alone no longer blocks; only a call the gateway refuses does. And an error inside the
+        worker is shown by cell 4 instead of dying with the thread."""
+        cells = self.cells()
+        projects = helpers.scratch()
+        values = {"model_id": "NBBG", "projects_dir": projects, "llm_token": "tok-OLD-BUT-GOOD", "llm_endpoint": "https://x",
+                  "reviewer_id": "analyst.two", "project": "", "run": "", "jfrog_index_url": "",
+                  "concurrency_limit": "4", "token_cap": "40000", "scratch_dir": ""}
+        space = {"dbutils": FakeDbutils(values), "__name__": "notebook"}
+
+        def run_cell(number, replace=None):
+            source = cells[number - 1]
+            for old, new in (replace or {}).items():
+                source = source.replace(old, new)
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                exec(compile(source, "cell %d" % number, "exec"), space)
+            return printed.getvalue()
+
+        previous = os.getcwd()
+        os.chdir(helpers.ROOT_DIR)
+        try:
+            run_cell(1, {"HOME = notebook_folder()": "HOME = %r" % helpers.ROOT_DIR})
+            run_cell(2, {"USE_STANDIN = False": "USE_STANDIN = True"})
+            run_cell(3)
+            project_dir = os.path.join(projects, "NBBG", sorted(os.listdir(os.path.join(projects, "NBBG")))[0])
+            shutil.rmtree(os.path.join(project_dir, "Inputs"))
+            shutil.copytree(os.path.join(helpers.SAMPLES_DIR, "A_minimal", "Inputs"), os.path.join(project_dir, "Inputs"))
+            run_cell(3)
+            space["LIVE"].set_at -= 3600                 # the token was pasted an hour ago, and still works
+            run_cell(4)
+            space["WORKER"].join(timeout=300)
+            self.assertFalse(space["WORKER"].is_alive(), "the background run should finish, not wait for a fresh token")
+            self.assertEqual(space["RESULT"].get("state"), "waiting for a person", space["RESULT"])
+            shown = run_cell(4)
+            self.assertIn("not working at the moment", shown)
+            self.assertNotIn("WAITING FOR A FRESH TOKEN", shown)
+            store = space["runner"].open_store(space["PATHS"], space["SETTINGS"])
+            self.assertTrue(store.read_calls(), "the model steps made their calls")
+            self.assertTrue(store.read("unit_status"), "statuses were given")
+        finally:
+            os.chdir(previous)
+
+    def test_an_error_inside_the_background_run_is_shown_by_cell_4(self):
+        source = self.cells()[3]
+        self.assertIn('RESULT.update(state="failed"', source)
+        self.assertIn("THE RUN STOPPED WITH A PROBLEM", source)
+
     def test_the_cells_run_from_setup_to_verification_with_the_stand_in(self):
         cells = self.cells()
         self.assertEqual(len(cells), 5)

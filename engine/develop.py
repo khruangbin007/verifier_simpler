@@ -1106,15 +1106,28 @@ FOREGROUND_MINUTES = 12
 import threading
 
 def keep_alive():
-    try:
-        spark.range(1).count()                        # a trivial Spark action, so that the cluster does not shut down mid-run
-    except Exception:
-        pass
+    """A trivial Spark action so the cluster does not shut down mid-run - in its own thread, so that
+    a slow or stuck Spark call can never hold the review up."""
+    def touch():
+        try:
+            spark.range(1).count()
+        except Exception:
+            pass
+    threading.Thread(target=touch, daemon=True).start()
 
 def work():
-    settings = dict(SETTINGS, foreground_minutes=FOREGROUND_MINUTES if MODE == "C" else 0.0, token_wait="stop" if MODE == "C" else "wait")
-    RESULT.update(runner.run_pipeline(PATHS, runner.make_settings({k: v for k, v in settings.items() if v != runner.DEFAULT_SETTINGS.get(k)}),
-                                      chat=ACTIVE_CHAT, live=LIVE, state=STATE, keep_alive=keep_alive))
+    """The run itself. Whatever goes wrong is written into RESULT, where cell 4 shows it: a thread
+    that dies otherwise dies in silence, and the run just looks idle."""
+    import traceback
+    try:
+        settings = dict(SETTINGS, foreground_minutes=FOREGROUND_MINUTES if MODE == "C" else 0.0, token_wait="stop" if MODE == "C" else "wait")
+        RESULT.update(runner.run_pipeline(PATHS, runner.make_settings({k: v for k, v in settings.items() if v != runner.DEFAULT_SETTINGS.get(k)}),
+                                          chat=ACTIVE_CHAT, live=LIVE, state=STATE, keep_alive=keep_alive))
+    except Exception as problem:
+        RESULT.update(state="failed", message="The run stopped: %s: %s" % (type(problem).__name__, problem),
+                      details=traceback.format_exc())
+
+RESULT = globals().get("RESULT") or {}
 
 if "PATHS" not in globals() or PATHS is None:
     PATHS = open_current()
@@ -1141,8 +1154,18 @@ else:
         print("  step %s %-22s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted(record["counts"].items()))))
     for label, value in runner.call_statistics(store):
         print("  %-52s %s" % (label, value))
-    print("Token pasted %.1f minutes ago.%s" % (LIVE.token_age_minutes(), " WAITING FOR A FRESH TOKEN: paste it into widget 02 and run cell 1." if STATE.waiting_for_token else ""))
-    print("Background run is", "working" if "WORKER" in globals() and WORKER.is_alive() else "not working at the moment", "| When it says it waits for a person, go to cell 5.")
+    print("Token pasted %.1f minutes ago." % LIVE.token_age_minutes())
+    if STATE.waiting_for_token:
+        print("WAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and run cell 1; the run goes on by itself.")
+    alive = "WORKER" in globals() and WORKER.is_alive()
+    if RESULT.get("state") == "failed":
+        print("THE RUN STOPPED WITH A PROBLEM:", RESULT["message"])
+        print(RESULT.get("details", "")[-1500:])
+        print("Fix what it says, then set STATE aside (del STATE) and run this cell again; finished steps are not repeated.")
+    elif alive:
+        print("The run is working in the background. Run this cell again to see progress.")
+    else:
+        print("The run is not working at the moment:", RESULT.get("message", "no message yet"), "| When it waits for a person, go to cell 5.")
 '''
 
 CELL_5 = r'''# ===== Cell 5 of 5 - finish: read your determinations back, verify the evidence pack =====

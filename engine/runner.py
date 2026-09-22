@@ -501,8 +501,11 @@ def wait_until_allowed(state, live, settings, sleep):
         if state.deadline and time.time() > state.deadline:
             raise RunPaused("The time box of this foreground run is over. Paste a fresh token "
                             "and run the cell again; no call will be repeated.")
-        too_old = live.set_at and live.token_age_minutes() >= settings["token_lifetime_minutes"]
-        needs_token = state.failed_generation == live.generation or too_old
+        # Only a call the gateway actually refused for authentication makes the run wait for a fresh
+        # token. A token's age alone never does: a run once sat waiting, silently, with a token that
+        # still worked, because it was older than token_lifetime_minutes. Age is shown in cell 4 as a
+        # hint and nothing more.
+        needs_token = state.failed_generation == live.generation
         state.waiting_for_token = bool(needs_token)
         if not needs_token and not state.control.get("pause"):
             return
@@ -1079,9 +1082,14 @@ def rows_mapping(store, corner):
 def rows_coverage(model_rows, doc_rows, store):
     """Counted from the rows actually written: the second, independent route of the
     coverage identity (part 4). Enforces: R2"""
-    rows = []
+    rows, counted = [], bool(store.read("coverage"))
     for corner, label in COVERAGE_ROWS[:2]:
         written = model_rows if corner == "model" else doc_rows
+        if not counted:                              # empty, never zero: nothing has been counted yet
+            rows.append({"corner": label, "total": len(written), "how_to_read":
+                         "Not counted yet: statuses are given by the step account-coverage, after the model has "
+                         "judged the links. Until then these columns stay empty; cell 4 shows how far the run is."})
+            continue
         row = {"corner": label, "total": len(written), "how_to_read": NEEDS_ATTENTION_MEANS}
         for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES:
             row[status] = sum(1 for r in written if r["status"] == status)
