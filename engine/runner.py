@@ -1396,29 +1396,87 @@ def assessment_of(store):
         found[unit["ref"]] = row
     return found
 
-def rows_coverage(model_rows, doc_rows, store):
-    """Counted from the rows actually written: the second, independent route of the
-    coverage identity (part 4). Enforces: R2"""
-    rows, counted = [], bool(store.read("coverage"))
-    for corner, label in COVERAGE_ROWS[:2]:
-        written = model_rows if corner == "model" else doc_rows
-        if not counted:                              # empty, never zero: nothing has been counted yet
-            rows.append({"corner": label, "total": len(written), "how_to_read":
-                         "Not counted yet: statuses are given by the step account-coverage, after the model has "
-                         "judged the links. Until then these columns stay empty; cell 4 shows how far the run is."})
-            continue
-        row = {"corner": label, "total": len(written), "how_to_read": NEEDS_ATTENTION_MEANS}
-        for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES:
-            row[status] = sum(1 for r in written if r["status"] == status)
-        row["needs_attention"] = sum(row[status] for status in core.NOT_CLEAN_STATUSES)
-        rows.append(row)
+def coverage_rows(store, map_rows, model_rows, doc_rows):
+    """Mapping_Coverage, counted from the map itself. One row per final output: how many steps it takes,
+    how deep, what it rests on - arguments, columns of the data, stored tables, files, hard-coded numbers -
+    how many of its steps are linked to the methodology, what its checks said, and what is flagged. Then
+    one row per corner, each read the way that corner needs: of the model units, how many a final output
+    reaches; of the methodology, how many a step implements; of the documentation, how many describe
+    something in the map. The counts come from the rows written, so the sheet and the map agree.
+    Enforces: R2, R10"""
+    statuses = {r["unit_ref"]: r for r in store.read("unit_status")}
+    items_of = {}
+    for item in store.read("flagged_items"):
+        for ref in item["unit_refs"]:
+            items_of.setdefault(ref, []).append(item)
+    checks = [(r["unit_ref"], str(r.get("outcome") or "")) for kind in ("math_checks", "value_checks", "rule_checks", "package_doc_checks")
+              for r in store.read(kind)]
+    branches = {}
+    for row in map_rows:
+        branches.setdefault(row["map_id"].split(".")[0], []).append(row)
     canon = store.read("chunks_canon")
-    pointed = {e["target"] for e in store.read("graph_ledger")
-               if e.get("record_type") == "edge" and e["kind"] == "corresponds" and e["relation"] in core.LINKING_RELATIONS}
-    count = sum(1 for c in canon if c["ref"] in pointed)
-    rows.append({"corner": COVERAGE_ROWS[2][1], "total": len(canon), "how_to_read":
-                 "%d of %d passages are pointed to by at least one link. The others are listed in the "
-                 "report, for information only." % (count, len(canon))})
+    steps = [row for row in map_rows if not row["map_id"].startswith(("90", "91", "92"))]   # a branch is not a step of the map
+    linked_canon = {line.split(" ")[0] for row in steps for line in row["methodology"].split("\n") if line}
+    linked_doc = {line.split(" ")[0] for row in steps for line in row["documentation"].split("\n") if line}
+    on_map = {row["model_ref"] for row in steps if row["model_ref"]} | {ref.strip() for row in steps for ref in row["related"].split(",") if ref.strip()}
+
+    def about(units, rows_shown, counts_what, how_to_read, extra=None):
+        found = [outcome for ref, outcome in checks if ref in units]
+        by_category = {}
+        for ref in units:
+            for item in items_of.get(ref, []):
+                by_category[item["category"]] = by_category.get(item["category"], 0) + 1
+        by_status = {}
+        for ref in units:
+            if ref in statuses:
+                by_status[statuses[ref]["status"]] = by_status.get(statuses[ref]["status"], 0) + 1
+        row = {"counts_what": counts_what, "how_to_read": how_to_read,
+               "checks_agree": sum(o.startswith("agrees") for o in found), "checks_differ": sum(o.startswith("differs") for o in found),
+               "checks_undecided": sum(not o.startswith(("agrees", "differs")) for o in found),
+               "needs_attention": sum(n for status, n in by_status.items() if status in core.NOT_CLEAN_STATUSES),
+               "items": sum(by_category.values()), "items_by_category": "\n".join("%s: %d" % pair for pair in sorted(by_category.items())),
+               "statuses": "\n".join("%s: %d" % pair for pair in sorted(by_status.items()))}
+        role = lambda start: sum(1 for r in rows_shown if r["role"].startswith(start))
+        row.update({"in_arguments": role("Raw input: argument"), "in_columns": role("Raw input: column"),
+                    "in_tables": role("Raw input: stored data"), "in_files": role("Raw input: file"), "in_numbers": role("Raw input: hard-coded")})
+        row.update(extra or {})
+        return row
+
+    rows = []
+    for branch_id in sorted(branch for branch in branches if branch.isdigit() and branch not in ("90", "91", "92")):
+        shown = [r for r in branches[branch_id] if not r["step"].startswith("see ")]
+        top = branches[branch_id][0]
+        units = {r["model_ref"] for r in shown if r["model_ref"]}
+        linked = sum(1 for r in shown if r["methodology"])
+        rows.append(about(units, shown, "steps of the map under %s %s" % (branch_id, top["function"]),
+                          "A step is a value, a column or a call on the way to this final output. Covered = steps linked to a "
+                          "methodology passage; the rest may still be right, and are for a person to read.",
+                          {"row": "%s %s (final output)" % (branch_id, top["function"]), "total": len(shown), "covered": linked,
+                           "not_covered": len(shown) - linked, "depth": max(r["level"] for r in shown)}))
+    model_units = {r["ref"] for r in model_rows}
+    rows.append(about(model_units, [], "units of the model package",
+                      "Covered = units a final output reaches: a step of the map, or the roxygen, help page, test or statement "
+                      "belonging to one; not covered = branch 90 of the map, the units no final output reaches: dead code, a "
+                      "second way in, or a function only the tests call.",
+                      {"row": "Model units (one row each on Chunks_Model)", "total": len(model_units),
+                       "covered": len(model_units & on_map), "not_covered": len(model_units - on_map)}))
+    rows.append(about({c["ref"] for c in canon}, [], "passages of the methodology",
+                      "Covered = passages a step of the map is linked to; not covered = branch 91 of the map, passages that state "
+                      "a number, formula or rule that no step implements. The rest state nothing to implement.",
+                      {"row": "Methodology passages", "total": len(canon), "covered": len({c["ref"] for c in canon} & linked_canon),
+                       "not_covered": len(branches.get("91", [])) - 1 if branches.get("91") else 0}))
+    doc_refs = {r["ref"] for r in doc_rows}
+    rows.append(about(doc_refs, [], "passages of the model documentation",
+                      "Covered = passages a step of the map is linked to; not covered = branch 92 of the map, passages that "
+                      "describe nothing in the map and name none of the model's concepts.",
+                      {"row": "Documentation passages", "total": len(doc_refs), "covered": len(doc_refs & linked_doc),
+                       "not_covered": len(branches.get("92", [])) - 1 if branches.get("92") else 0}))
+    if not store.read("coverage"):
+        for row in rows:
+            row["how_to_read"] = ("Not counted yet: statuses and checks are given by the step account-coverage, after the model has "
+                                  "judged the links. Until then these columns stay empty; cell 4 shows how far the run is.")
+            for key in ("checks_agree", "checks_differ", "checks_undecided", "needs_attention", "items", "items_by_category", "statuses"):
+                row[key] = ""
     return rows
 
 def latest_determinations(store):
@@ -1444,6 +1502,7 @@ def rows_flagged(store):
 
 def sheet_rows(store, paths, settings, progress):
     """The rows of all eight sheets, by sheet name."""
+    mapped = implementation_map(store, settings)
     assessed = assessment_of(store)
     def with_assessment(rows):
         for row in rows:
@@ -1457,18 +1516,19 @@ def sheet_rows(store, paths, settings, progress):
             "Chunks_Canon": rows_chunks(store.read("chunks_canon"), scope_of(store), concept_names_by_ref(store)),
             "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
             "Concepts": rows_concepts(store),
-            "Model_Implementation_Map": implementation_map(store, settings),
-            "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
+            "Model_Implementation_Map": mapped,
+            "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows), "Flagged_Items": rows_flagged(store)}
 
 def check_written_totals(rows, store):
     """Identity part 4: what account-coverage counted must equal what the workbook holds."""
     coverage = store.read("coverage")
     if not coverage:
         return
-    for position, corner in enumerate(("model", "doc")):
-        counted, written = coverage[0][corner], rows["Mapping_Coverage"][position]
-        same = counted["total"] == written["total"] and all(
-            counted["by_status"].get(s, 0) == written[s] for s in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES)
+    for corner, sheet in (("model", "Chunks_Model"), ("doc", "Chunks_Doc")):
+        counted, written = coverage[0][corner], rows[sheet]
+        same = counted["total"] == len(written) and all(
+            counted["by_status"].get(status, 0) == sum(1 for row in written if row.get("status") == status)
+            for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES)
         if not same:
             raise review.EngineFault(
                 "Part 4 of the coverage identity does not hold: the totals counted for the %s corner differ "
@@ -1577,19 +1637,25 @@ sheets:
   - {header: Final output (your decision), group: reviewer_input, field: final_output, width: 16, input_text: true}
 - name: Mapping_Coverage
   columns:
-  - {header: Corner, group: identity, field: corner, width: 30}
-  - {header: Units in total, group: identity, field: total, width: 12}
-  - {header: Traced to methodology, group: assessments, field: Traced to methodology, width: 14}
-  - {header: Supporting code (justified), group: assessments, field: Supporting code (justified), width: 14}
-  - {header: Unit test, group: assessments, field: Unit test, width: 12}
-  - {header: Narrative - nothing to check, group: assessments, field: Narrative - nothing to check, width: 14}
-  - {header: Not in scope (a person's decision), group: assessments, field: Not in scope (a person's decision), width: 14}
-  - {header: Traced - differences flagged, group: assessments, field: Traced - differences flagged, width: 14}
-  - {header: Traced - check undecided, group: assessments, field: Traced - check undecided, width: 14}
-  - {header: Not traced - for review, group: assessments, field: Not traced - for review, width: 14}
-  - {header: Not assessed - for manual review, group: assessments, field: Not assessed - for manual review, width: 14}
+  - {header: What is counted, group: identity, field: row, width: 40}
+  - {header: Each row counts, group: identity, field: counts_what, width: 34}
+  - {header: In total, group: assessments, field: total, width: 10}
+  - {header: Covered, group: assessments, field: covered, width: 10}
+  - {header: Not covered, group: assessments, field: not_covered, width: 12}
+  - {header: 'Rests on: arguments', group: assessments, field: in_arguments, width: 12}
+  - {header: 'Rests on: columns of the data', group: assessments, field: in_columns, width: 14}
+  - {header: 'Rests on: stored tables', group: assessments, field: in_tables, width: 12}
+  - {header: 'Rests on: files', group: assessments, field: in_files, width: 10}
+  - {header: 'Rests on: hard-coded numbers', group: assessments, field: in_numbers, width: 14}
+  - {header: Deepest level, group: assessments, field: depth, width: 10}
+  - {header: Checks agreeing, group: assessments, field: checks_agree, width: 12}
+  - {header: Checks differing, group: assessments, field: checks_differ, width: 12}
+  - {header: Checks undecided, group: assessments, field: checks_undecided, width: 12}
   - {header: Needs attention, group: assessments, field: needs_attention, width: 12}
-  - {header: How to read this row, group: identity, field: how_to_read, width: 70}
+  - {header: Flagged items, group: assessments, field: items, width: 10}
+  - {header: Flagged items by category, group: assessments, field: items_by_category, width: 40}
+  - {header: Statuses, group: assessments, field: statuses, width: 40}
+  - {header: How to read this row, group: assessments, field: how_to_read, width: 70}
 - name: Flagged_Items
   columns:
   - {header: Item id, group: identity, field: item_id, width: 30}
@@ -1888,10 +1954,10 @@ def build_report_file(store, paths, settings, target):
     limits += [("Repair", "%s: %s" % (r["file"], r["kind"])) for r in store.read("read_repairs")][:40]
     docx_table(document, ("Unit or file", "Limit of this run"), limits or [("None", "Nothing was left unread or unassessed")])
     document.add_heading("3. Coverage", level=2)
-    coverage = (store.read("coverage") or [{}])[0]
-    rows = [(label, coverage.get(corner, {}).get("total", ""), coverage.get(corner, {}).get("needs_attention", "for information only"))
-            for corner, label in COVERAGE_ROWS]
-    docx_table(document, ("Corner", "Units", "Needs attention"), rows)
+    counted = coverage_rows(store, implementation_map(store, settings), rows_model_units(store.read("model_units")),
+                            rows_chunks(store.read("chunks_doc")))
+    docx_table(document, ("What is counted", "In total", "Covered", "Not covered", "Needs attention"),
+               [(row["row"], row["total"], row["covered"], row["not_covered"], row["needs_attention"]) for row in counted])
     document.add_paragraph(NEEDS_ATTENTION_MEANS)
     document.add_heading("4. Flagged items by concern and category", level=2)
     counts = {}

@@ -312,22 +312,15 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 
 **Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets, one of the model to the methodology and the documentation, the other of the documentation to the methodology and the model, held one row per model unit and one row per documentation unit: what each was linked to, what was searched for it, its checks, its status and its flagged items. The Model Implementation Map now shows the model unit in its place in the computation, so those two sheets are gone and nothing they held is lost. A model unit's links, what was searched for it, its checks and its status are on its row of `Model_Implementation_Map` — on its first row, where it appears more than once, and in branch 90 for the units no final output reaches — and its status and flagged items are also on `Chunks_Model`, beside the unit itself. A documentation unit's links, what was searched, its checks, its status and its flagged items are on `Chunks_Doc`, beside the passage.
 
-**Mapping_Coverage**
+**Mapping_Coverage**, read off the map. One row for each final output: how many steps it takes and how deep they run, what it rests on — arguments, columns of the data given, stored tables, files, hard-coded numbers — how many of its steps are linked to a methodology passage (*Covered*) and how many are not, what its checks said (agreeing, differing, undecided), how many of its units need attention, and its flagged items with a count by category. Then one row for each corner, each read the way that corner needs:
 
-| Column | Colour group | What it shows |
+| Row | Covered | Not covered |
 |---|---|---|
-| Corner | identity |  |
-| Units in total | identity |  |
-| Traced to methodology | assessments |  |
-| Supporting code (justified) | assessments |  |
-| Unit test | assessments | Which test block calls the function. For information only; it never raises an item. |
-| Narrative - nothing to check | assessments |  |
-| Traced - differences flagged | assessments |  |
-| Traced - check undecided | assessments |  |
-| Not traced - for review | assessments |  |
-| Not assessed - for manual review | assessments |  |
-| Needs attention | assessments |  |
-| How to read this row | identity |  |
+| Model units | units a final output reaches: a step of the map, or the roxygen, help page, test or statement belonging to one | branch 90 of the map: dead code, a second way in, a function only the tests call |
+| Methodology passages | passages a step of the map is linked to | branch 91: passages stating a number, formula or rule that no step implements. The rest state nothing to implement |
+| Documentation passages | passages a step of the map is linked to | branch 92: passages describing nothing in the map and naming none of the model's concepts |
+
+Every number on this sheet is counted from the rows written to the map and to the Chunks sheets, so the sheet and the map always agree. The coverage identity is checked separately, by counting the statuses on `Chunks_Model` and `Chunks_Doc` against what the step account-coverage counted.
 
 **Flagged_Items**
 
