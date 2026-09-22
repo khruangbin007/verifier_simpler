@@ -641,12 +641,25 @@ def search_one(source_ref, representation, corner, world, settings):
               "note": "" if candidates else "Nothing in %s shares a word, a symbol, a number or a citation with this unit." % CORNER_NAMES[corner]}
     return candidates, record
 
+def excluded_refs(ctx):
+    """The units a person marked "to not use" when confirming the outline: the latest decision
+    per unit, from the scope_decisions records. Such a unit is not searched, not linked, not
+    checked and not a target, and ends with the status Not in scope. Enforces: R1, R2"""
+    latest = {}
+    for record in ctx.read("scope_decisions"):
+        latest[record["unit_ref"]] = record["decision"]
+    return {ref for ref, decision in latest.items() if decision == core.SCOPE_WORDS[1]}
+
+def in_scope(records, excluded):
+    return [r for r in records if r["ref"] not in excluded]
+
 def build_world(ctx, search_pass):
     """Everything the search needs, built once per step: representations of all units and
     chunks, one BM25 index per corner, the bridge vocabulary, anchors and the walk."""
     settings, lists = ctx.settings, load_word_lists(ctx.options["references_dir"])
     trivial = set(settings["trivial_numbers"])
-    canon, doc, units = ctx.read("chunks_canon"), ctx.read("chunks_doc"), ctx.read("model_units")
+    excluded = excluded_refs(ctx)
+    canon, doc, units = (in_scope(ctx.read(kind), excluded) for kind in ("chunks_canon", "chunks_doc", "model_units"))
     tables = {t["unit_ref"]: t for t in ctx.read("parameter_tables")}
     by_ref = {u["ref"]: u for u in units}
     documented_by = {u["roxygen"]["documents_ref"]: u for u in units if u.get("roxygen") and u["roxygen"]["documents_ref"]}
@@ -1041,7 +1054,7 @@ def interpret_code(ctx):
     Accepted answers fill the column "LLM Interpretation" of Chunks_Model. An interpretation
     is an aid to reading and nothing more: it gives no status, raises no flagged item and takes
     no part in the coverage identity, and a question that fails leaves a plain note. Enforces: R3"""
-    units = ctx.read("model_units")
+    units = [u for u in ctx.read("model_units") if u["ref"] not in excluded_refs(ctx)]
     if not ctx.settings.get("interpret_code", True):
         return core.StepResult(messages=["Interpreting the code is switched off (setting interpret_code)."])
     outline, described = package_outline(units, (ctx.read("package_info") or [{}])[0])
@@ -1479,9 +1492,10 @@ def compare_formulas(prepared, settings, data_values):
 CODE_RELATIONS = ("Implements", "Partly implements", "Differs from")
 PROSE_FORMULA_PHRASES = ("product of", "sum of", "multiplied by", "divided by", "ratio of", "square root of", " times the ")
 
-def load_world(ctx):
+def load_world(ctx, everything=False):
     """Units, chunks, the graph and the latest link of every linked pair, read once per step."""
-    units, canon, doc = ctx.read("model_units"), ctx.read("chunks_canon"), ctx.read("chunks_doc")
+    excluded = set() if everything else excluded_refs(ctx)
+    units, canon, doc = (in_scope(ctx.read(kind), excluded) for kind in ("model_units", "chunks_canon", "chunks_doc"))
     ledger = ctx.read("graph_ledger")
     world = {"units": units, "canon": canon, "doc": doc, "ledger": ledger, "graph": load_graph(ledger),
              "by_ref": {record["ref"]: record for record in units + canon + doc}, "links": {}, "children": {},
@@ -2477,7 +2491,15 @@ def account_coverage(ctx):
         cells = model_cells(record, world, facts) if corner == "model" else doc_cells(record, world, facts, duplicates)
         statuses.append({"unit_ref": record["ref"], "corner": corner, "status": outcome[0], "clean": outcome[0] in core.CLEAN_STATUSES,
                          "decided_by_rule": outcome[1], "reason_shown": outcome[2], "item_ids": ids_by_unit.get(record["ref"], []), "cells": cells})
-    check_identity(world["units"], world["doc"], statuses, items, world, ctx.read("package_info"))
+    excluded = excluded_refs(ctx)
+    for kind, corner in (("model_units", "model"), ("chunks_doc", "doc")):
+        for record in ctx.read(kind):
+            if record["ref"] in excluded:
+                statuses.append({"unit_ref": record["ref"], "corner": corner, "status": core.ST_EXCLUDED, "clean": True,
+                                 "decided_by_rule": "excluded by a person", "reason_shown": "marked to not use when the outline was confirmed",
+                                 "item_ids": [], "cells": {}})
+    all_units, all_doc = ctx.read("model_units"), ctx.read("chunks_doc")
+    check_identity(all_units, all_doc, statuses, items, world, ctx.read("package_info"))
     coverage = {}
     for corner in ("model", "doc"):
         mine = [s for s in statuses if s["corner"] == corner]

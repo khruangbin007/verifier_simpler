@@ -641,6 +641,7 @@ class WalkState:
     references_dir: str = ""
     digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
     guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
+    folder: str = ""                               # where the file being read stands, so a picture beside it can be found
     lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
 
     def __post_init__(self):
@@ -705,7 +706,8 @@ def walk_element(element, path, depth, state):
         if state.skip_next_image:
             state.skip_next_image = False
             return
-        state.blocks.append(figure_block(element, here, state))
+        found = figure_block(element, here, state)
+        state.blocks.extend(found if isinstance(found, list) else [found])   # an SVG beside the document may give a table
     elif family == "equation":
         state.blocks.append(equation_block(element, here, state))
     elif family == "caption" and state.blocks and state.blocks[-1]["type"] in ("figure", "table", "equation"):
@@ -850,8 +852,51 @@ def figure_block(element, here, state):
     caption = next((core.normalise_text(element_text(n, state.rules, skip=())) for n in element.iter()
                     if state.rules["family_of"].get(core.local_name(n.tag)) == "caption"), "")
     fingerprint = state.images.get(source) or state.images.get(source.replace("cid:", "")) or ""
+    beside = svg_beside(source, state)
+    if beside is not None:                           # the picture is an SVG in the same folder: its own text is the figure's
+        markup, words, _ = core.svg_to_markup(beside, source)
+        own_caption, labels = words.split("\n", 1)[0], words.split("\n", 1)[1] if "\n" in words else ""
+        # the document's caption is what the document says; the SVG's own title is used only where
+        # the document gives none, and is counted only then, so no word is counted twice
+        state.atoms.extend(core.atoms_of_plain_text(labels if caption else words, os.path.basename(source)))
+        state.notes.append("%s: read by the text of the SVG file beside the document." % source)
+        blocks = walk_svg_markup(parse_markup(markup, source, [], False), here, state)
+        if blocks:
+            for block in blocks:
+                block["caption"] = caption or own_caption
+                block["source"], block["image_sha256"] = source, fingerprint or core.sha256_bytes(beside)
+            return blocks
     return new_block("figure", label or caption or source, here, caption=caption, image_sha256=fingerprint,
                      source=source)
+
+def svg_beside(source, state):
+    """The bytes of an SVG a figure refers to, when the file stands beside the document being
+    read; otherwise None. Only a plain file name or a relative path inside the document's own
+    folder is followed: a path that climbs out, a URL, or a name that is not there gives None."""
+    name = (source or "").replace("cid:", "").strip()
+    if not name.lower().endswith(".svg") or not getattr(state, "folder", "") or "://" in name or name.startswith(("/", "\\")):
+        return None
+    path = os.path.normpath(os.path.join(state.folder, name))
+    if not path.startswith(os.path.normpath(state.folder) + os.sep) or not os.path.isfile(path):
+        return None
+    with open(path, "rb") as handle:
+        return handle.read()
+
+def walk_svg_markup(root, here, state):
+    """The blocks the SVG's markup gives: a table block, or one figure block carrying the
+    picture's labels as its text."""
+    blocks = []
+    for node in root:
+        family = state.rules["family_of"].get(core.local_name(node.tag))
+        if family == "table":
+            block = table_block(node, here, state)
+            if block is not None:
+                blocks.append(block)
+        elif family == "figure":
+            blocks.append(new_block("figure", node.get("alt") or "", here,
+                                    caption=next((core.normalise_text("".join(c.itertext())) for c in node if core.local_name(c.tag) == "caption"), "")))
+    return blocks
+
 
 def equation_block(element, here, state):
     """An equation element: MathML or Office Math is converted; LaTeX or linear text is read as
@@ -1363,6 +1408,7 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
         return "too large", [not_read_block(file_name, "the file is larger than the size limit for one input file")]
     with open(path, "rb") as handle:
         data = handle.read()
+    state.folder = os.path.dirname(os.path.abspath(path))
     found = core.detect_format(data, file_name)
     if found in core.NOT_READ:                    # said in plain words, with a next step; never decoded as text
         state.atoms = [core.atom("whole file not read", file_name, "")]

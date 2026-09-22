@@ -929,11 +929,17 @@ def widget(name, default, label):
     except Exception:
         w.text(name, default, label)
         return default
-widget("llm_endpoint", "", "01 LLM endpoint"); widget("llm_token", "", "02 LLM token"); widget("llm_user_id", "", "03 LLM user id")
+widget("llm_endpoint", "", "01 LLM endpoint"); widget("llm_token", "", "02 LLM token")
+widget("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)")
 widget("model_id", "", "04 Model ID"); widget("project", "", "05 Project date (empty = new project today)"); widget("run", "", "06 Run (empty = new run)")
 widget("projects_dir", os.path.join(HOME, "Projects"), "07 Projects folder"); widget("jfrog_index_url", "", "08 Package index URL")
 widget("concurrency_limit", "4", "09 Concurrency limit"); widget("token_cap", "40000", "10 Token cap")
-widget("reviewer_id", "", "11 Reviewer id"); widget("reviewer_role", "", "12 Reviewer role"); widget("scratch_dir", "", "13 Scratch folder (usually empty)")
+widget("scratch_dir", "", "11 Scratch folder (usually empty)")
+for old_widget in ("llm_user_id", "reviewer_role"):      # widgets of an earlier notebook, no longer used
+    try:
+        w.remove(old_widget)
+    except Exception:
+        pass
 
 # --- packages: installed only if one is missing, pinned to what the runtime already has, and Python
 # is restarted only if the runtime's own packages still import together afterwards
@@ -981,10 +987,25 @@ else:
     import runner
     if "LIVE" not in globals():
         LIVE = runner.LiveValues()
-    LIVE.update(w.get("llm_endpoint"), w.get("llm_token"), w.get("llm_user_id"))
+    LIVE.update(w.get("llm_endpoint"), w.get("llm_token"), w.get("reviewer_id"))
     def live(name):
         """Read an endpoint, token or user id at the moment chat() is CALLED, so a fresh token pasted mid-run is used."""
         return LIVE.get(name)
+
+    def current_settings():
+        return runner.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
+                                     "reviewer_id": w.get("reviewer_id")})
+
+    def open_current():
+        """The run the widgets name, opened; or None with a message when the project has no inputs yet. Used
+        by cells 3, 4 and 5, so that a cell run before cell 3 - or after Python restarted - says what to do."""
+        _, missing = runner.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
+        if missing:
+            print("\n".join(missing)); print("Put the files in, then run cell 3.")
+            return None
+        if globals().get("PATHS") is not None and PATHS.model_id == w.get("model_id") and (not w.get("project") or PATHS.project_date == w.get("project")) and (not w.get("run") or PATHS.run_id == w.get("run")):
+            return PATHS                               # keep working on the run this session opened
+        return runner.open_run(w.get("projects_dir"), w.get("model_id"), w.get("project"), w.get("run"), scratch_root=w.get("scratch_dir"))
     print("Folder:", HOME, "| Python", sys.version.split()[0], "| engine", runner.core.ENGINE_VERSION)
     for name in REQUIRED + ("pdfplumber", "pypdf"):
         try:
@@ -1004,14 +1025,31 @@ USE_STANDIN = False
 
 import requests
 
-def chat(system_prompt, main_prompt):
-    response = requests.post(live("llm_endpoint"),
-                             headers={"Authorization": "Bearer " + live("llm_token"), "SP_SSO_UID": live("llm_user_id"),
-                                      "Content-Type": "application/json"},
-                             json={"messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": main_prompt}]},
-                             timeout=120)
+def chat(SystemPrompt, MainPrompt, history=[]):
+    payload = {
+        "app": "sparkair",
+        "enable_streaming": False,
+        "flow_name": "general_chat",
+        "history": history,
+        "optionalParameter": {
+            "maxtoken": 250000,
+            "contextlength": 250000,
+            "Temperature": 0.01,           # low: the same question gives the same answer
+            "Top_k": 1,
+            "Penalty": 1.1,
+            "DefaultPrompt": SystemPrompt,
+        },
+        "query": MainPrompt,
+        "select_all": False,
+    }
+    headers = {
+        "Authorization": f'Bearer {live("llm_token")}',
+        "SP_SSO_UID": live("reviewer_id"),
+        "Content-Type": "application/json",
+    }
+    response = requests.post(live("llm_endpoint"), json=payload, headers=headers, timeout=180)
     response.raise_for_status()
-    return {"answer": response.json()["choices"][0]["message"]["content"]}
+    return response.json()          # the engine reads the reply from "answer", or from an OpenAI-shaped "choices"
 
 if USE_STANDIN:
     import standin_chat
@@ -1029,22 +1067,9 @@ else:
 CELL_3 = r'''# ===== Cell 3 of 5 - read the inputs (no model involved) =====
 # Makes the project folder if it is new, tells you what to put where, reads every input file, and shows
 # the outline of the methodology for you to check before any model call is spent.
-def current_settings():
-    return runner.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
-                                 "reviewer_id": w.get("reviewer_id"), "reviewer_role": w.get("reviewer_role")})
-
-def current_paths():
-    if "PATHS" in globals() and PATHS.model_id == w.get("model_id") and (not w.get("project") or PATHS.project_date == w.get("project")) and (not w.get("run") or PATHS.run_id == w.get("run")):
-        return PATHS                                   # keep working on the run this session opened
-    return runner.open_run(w.get("projects_dir"), w.get("model_id"), w.get("project"), w.get("run"), scratch_root=w.get("scratch_dir"))
-
-project_dir, missing = runner.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
-print("Project folder:", project_dir)
-if missing:
-    print("\n".join(missing)); print("Put the files in, then run this cell again.")
-else:
+PATHS = open_current()
+if PATHS is not None:
     SETTINGS = current_settings()
-    PATHS = current_paths()
     RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=None, live=LIVE, stop_after="06")
     print(RESULT["message"])
     store = runner.open_store(PATHS, SETTINGS)
@@ -1056,8 +1081,9 @@ else:
             if message.startswith(("Read as:", "Not read:")) or "left out" in message or "R package" in message:
                 print("  " + message)
     print("\nRun folder:", PATHS.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, and Model_Package_Info what was not.")
-    print("If the outline is right, go to cell 4. If not, fix the input (or add Inputs/tag_rules.yaml) and run this cell again.")
+    print("Open Output.xlsx there. The three Chunks sheets show everything that was read; Model_Package_Info what was not.")
+    print("To leave a unit out of the review, write 'to not use' in its yellow 'Use in review' cell and save the workbook back")
+    print("into the run folder before cell 4. If the outline is right, go to cell 4; if not, fix the input and run this cell again.")
 '''
 
 CELL_4 = r'''# ===== Cell 4 of 5 - confirm the outline, then run the model steps and the checks =====
@@ -1080,8 +1106,13 @@ def work():
     RESULT.update(runner.run_pipeline(PATHS, runner.make_settings({k: v for k, v in settings.items() if v != runner.DEFAULT_SETTINGS.get(k)}),
                                       chat=ACTIVE_CHAT, live=LIVE, state=STATE, keep_alive=keep_alive))
 
-store = runner.open_store(PATHS, SETTINGS)
-if "STATE" not in globals():
+if "PATHS" not in globals() or PATHS is None:
+    PATHS = open_current()
+    SETTINGS = current_settings() if PATHS is not None else None
+if PATHS is None:
+    print("Cell 3 has not read the inputs yet. Run cell 3 first.")
+elif "STATE" not in globals():
+    store = runner.open_store(PATHS, SETTINGS)
     if not OUTLINE_CONFIRMED:
         print("Check the outline in cell 3 first, then set OUTLINE_CONFIRMED = True.")
     else:
@@ -1093,6 +1124,7 @@ if "STATE" not in globals():
             WORKER = threading.Thread(target=work, name="verifier-run", daemon=True); WORKER.start()
             print("The run works in the background. Run this cell again to see where it stands; paste a fresh token into widget 02 whenever it asks.")
 else:
+    store = runner.open_store(PATHS, SETTINGS)
     STATE.control["pause"], STATE.control["stop"] = PAUSE, STOP
     print(runner.progress_text(store, RESULT.get("message", "")))
     for record in store.read("step_records"):
@@ -1125,7 +1157,10 @@ if APPENDIX:
         develop.harness(["A_minimal", "--limit", "10"])
     elif APPENDIX == "sign-off":
         print(develop.run(ACTIVE_CHAT, LIVE, label="the real model"))
+elif "PATHS" not in globals() or PATHS is None:
+    print("Cell 3 has not read the inputs yet. Run cells 3 and 4 first.")
 else:
+    SETTINGS = current_settings()
     RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE, determinations=True)
     print(RESULT["message"])
     store = runner.open_store(PATHS, SETTINGS)

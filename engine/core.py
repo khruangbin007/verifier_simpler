@@ -82,7 +82,9 @@ ST_TRACED, ST_SUPPORTING = "Traced to methodology", "Supporting code (justified)
 ST_UNIT_TEST, ST_NARRATIVE = "Unit test", "Narrative - nothing to check"
 ST_DIFFERS, ST_UNDECIDED = "Traced - differences flagged", "Traced - check undecided"
 ST_NOT_TRACED, ST_NOT_ASSESSED = "Not traced - for review", "Not assessed - for manual review"
-CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE)
+ST_EXCLUDED = "Not in scope (a person's decision)"
+SCOPE_WORDS = ("to use", "to not use")             # what a person writes beside a unit when confirming the outline
+CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
 NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
 
 ITEM_OPEN = "Open"
@@ -1405,7 +1407,7 @@ NOT_READ = {
 }
 
 # The name a format goes by in what the analyst reads.
-FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "mhtml": "web archive", "html": "web page",
+FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "svg": "SVG picture", "mhtml": "web archive", "html": "web page",
                 "xml": "XML", "markdown": "Markdown", "delimited": "delimited rows", "rtf": "RTF",
                 "latex": "LaTeX", "text": "plain text"}
 
@@ -1460,7 +1462,11 @@ def detect_format(data, file_name=""):
     if lowered.startswith((b"mime-version:", b"from:", b"content-type:")) or b"multipart/related" in lowered[:1024]:
         return "mhtml"
     if lowered.startswith(b"<"):
-        return "html" if re.match(rb"<(!doctype\s+html|html)\b", lowered) else "xml"
+        if re.match(rb"<(!doctype\s+html|html)\b", lowered):
+            return "html"
+        if re.search(rb"<svg[\s>]", lowered[:4096]) and not re.search(rb"<(body|para|section|document|p)\b", lowered[:4096]):
+            return "svg"
+        return "xml"
     sample = decode_text(data[:16384])
     if name.endswith(LATEX_NAMES) and re.search(r"\\[a-zA-Z]+", sample) or re.search(r"\\documentclass|\\begin\{document\}", sample):
         return "latex"
@@ -1720,8 +1726,83 @@ def latex_to_markup(text):
             cursor = found.end()
     return "<document>%s</document>" % "".join(out)
 
+
+SVG_NS = "http://www.w3.org/2000/svg"
+
+def svg_texts(root):
+    """Every piece of text an SVG draws, with where it is drawn: (x, y, text). A <text> may hold
+    <tspan> children with positions of their own; a tspan without a position inherits its
+    parent's. Positions are read as numbers; a transform on the element is not applied, so a
+    rotated or shifted group keeps the order it was written in."""
+    found = []
+    def number(value, fallback=0.0):
+        try:
+            return float(re.split(r"[ ,]", (value or "").strip())[0])
+        except (ValueError, IndexError):
+            return fallback
+    for text in root.iter():
+        if local_name(text.tag) != "text":
+            continue
+        x, y = number(text.get("x")), number(text.get("y"))
+        spans = [span for span in text.iter() if local_name(span.tag) == "tspan"]
+        own = normalise_text((text.text or "") + "".join(span.tail or "" for span in text))
+        if own and not spans:
+            found.append((x, y, own))
+            continue
+        if own:
+            found.append((x, y, own))
+        for span in spans:
+            words = normalise_text("".join(span.itertext()))
+            if words:
+                found.append((number(span.get("x"), x), number(span.get("y"), y), words))
+    return found
+
+def svg_rows(texts, tolerance=None):
+    """Texts grouped into rows by their y position, each row sorted by x. The tolerance is a
+    share of the median line height, so a chart's labels and a table's cells both group."""
+    if not texts:
+        return []
+    ys = sorted({round(y, 1) for _, y, _ in texts})
+    gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0.5]
+    tolerance = tolerance or (max(2.0, sorted(gaps)[len(gaps) // 2] * 0.4) if gaps else 2.0)
+    rows, current, last_y = [], [], None
+    for x, y, words in sorted(texts, key=lambda t: (t[1], t[0])):
+        if last_y is not None and y - last_y > tolerance:
+            rows.append(sorted(current))
+            current = []
+        current.append((x, y, words))
+        last_y = y
+    if current:
+        rows.append(sorted(current))
+    return [[words for _, _, words in row] for row in rows]
+
+def svg_to_markup(data, file_name):
+    """An SVG as markup the walker reads: its <title> and <desc> as the caption; its text, where
+    it stands in a grid of at least two rows of the same width, as a table with the first row
+    as the header; otherwise as a figure whose words are the labels of the picture in reading
+    order. An SVG holds text as text, so nothing is read from a picture by guesswork: every
+    word comes from a <text> element. Enforces: R7, R13"""
+    import xml.etree.ElementTree as ElementTree
+    root = ElementTree.fromstring(data)
+    caption = " ".join(normalise_text("".join(node.itertext())) for node in root
+                       if local_name(node.tag) in ("title", "desc") and normalise_text("".join(node.itertext())))
+    rows = svg_rows(svg_texts(root))
+    widths = {len(row) for row in rows}
+    words = [caption] + [" ".join(row) for row in rows]
+    if len(rows) >= 2 and len(widths) == 1 and widths.pop() >= 2:
+        body = "".join("<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
+                       for number, row in enumerate(rows))
+        markup = "<document><table><caption>%s</caption>%s</table></document>" % (escape(caption or os.path.basename(file_name)), body)
+        return markup, "\n".join(words), "a picture whose text stands in a grid, read as a table"
+    labels = " ".join(" ".join(row) for row in rows)
+    # no src: this markup IS the picture, so it must not send the reader looking for itself beside itself
+    markup = "<document><figure alt=\"%s\"><caption>%s</caption></figure></document>" % (escape(labels), escape(caption))
+    return markup, "\n".join(words), "a picture, read by its own text: %d label(s)" % sum(len(row) for row in rows)
+
 def converted(found, data, file_name):
     """A file in a format read by converting it: (markup, words, what was done, in plain words)."""
+    if found == "svg":
+        return svg_to_markup(data, file_name)
     if found == "xlsx":
         markup, words = spreadsheet_to_markup(data)
         return markup, words, "read sheet by sheet, each sheet a heading over a table of its stored values"
@@ -1737,7 +1818,7 @@ def converted(found, data, file_name):
     return ("<document>%s</document>" % "".join(element("p", part.strip()) for part in re.split(r"\n\s*\n", plain) if part.strip()),
             plain, "read as RTF: its control words, font tables and pictures left out")
 
-CONVERTED = ("xlsx", "markdown", "delimited", "latex", "rtf")
+CONVERTED = ("xlsx", "markdown", "delimited", "latex", "rtf", "svg")
 
 def reason_for(problem):
     """Why a reader failed on a file, in words an analyst can act on. Enforces: R2"""

@@ -83,7 +83,7 @@ DEFAULT_SETTINGS = {
     "relative_tolerance": 1e-9, "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
+    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
     "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
 
 def make_settings(overrides=None):
@@ -216,9 +216,10 @@ class LiveValues:
             self.values = {"llm_endpoint": llm_endpoint, "llm_token": llm_token, "llm_user_id": llm_user_id}
 
     def get(self, name):
-        """One live value, read at the moment chat() is called."""
+        """One of the three values, read now. The user id is one value under two names: the widget is
+        called reviewer_id, because the same id records who made a decision and is sent to the LLM."""
         with self.lock:
-            return self.values.get(name, "")
+            return self.values.get("llm_user_id" if name == "reviewer_id" else name, "")
 
     def token_age_minutes(self):
         """Minutes since the current token was pasted."""
@@ -653,13 +654,58 @@ def update_manifest(store, changes):
     store.append("run_manifest", [manifest])
     return manifest
 
+def read_scope_column(path, known_refs):
+    """The "Use in review" cell of every row of the three Chunks sheets, by unit reference and
+    never by row position. Returns {ref: "to use" | "to not use"} for the cells that hold one of
+    the two words; anything else written there is ignored and said so."""
+    import openpyxl
+    found, ignored = {}, []
+    book = openpyxl.load_workbook(path, read_only=True)
+    for name in ("Chunks_Canon", "Chunks_Doc", "Chunks_Model"):
+        if name not in book.sheetnames:
+            continue
+        rows = list(book[name].iter_rows(values_only=True))
+        if not rows:
+            continue
+        header = [str(cell or "") for cell in rows[0]]
+        if "Use in review" not in header or "Ref" not in header:
+            continue
+        at_ref, at_scope = header.index("Ref"), header.index("Use in review")
+        for row in rows[1:]:
+            ref, word = str(row[at_ref] or "").strip(), str(row[at_scope] or "").strip().lower()
+            if not word or ref not in known_refs:
+                continue
+            if word in core.SCOPE_WORDS:
+                found[ref] = word
+            else:
+                ignored.append("%s: '%s' is not one of %s and was ignored" % (ref, word, " / ".join(core.SCOPE_WORDS)))
+    return found, ignored
+
 def confirm_outline(paths, settings, reviewer):
-    """Record that a person has checked the outline of the methodology (notebook cell 4)."""
+    """Record that a person has checked the outline of the methodology (notebook cell 4), and
+    read back what they wrote in the "Use in review" column of the three Chunks sheets: a unit
+    marked "to not use" is left out of the search, the links and the checks, and ends with the
+    status Not in scope. The decisions are a hash chain, like the determinations."""
     store = open_store(paths, settings)
-    update_manifest(store, {"outline_confirmed_by": reviewer or "not named",
-                            "outline_confirmed_at": datetime.datetime.now().isoformat(timespec="seconds")})
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    known = {r["ref"] for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
+    decisions, ignored, workbook = {}, [], os.path.join(paths.outputs_dir, "Output.xlsx")
+    if os.path.exists(workbook):
+        try:
+            decisions, ignored = read_scope_column(workbook, known)
+        except Exception as problem:                 # a workbook that cannot be opened is said, never a stopped cell (R2)
+            ignored.append("Output.xlsx could not be opened (%s); no scope decisions were read" % type(problem).__name__)
+    records = [{"unit_ref": ref, "decision": word, "recorded_at": now, "reviewer_id": reviewer or "not named"}
+               for ref, word in sorted(decisions.items())]
+    chained = core.chain_records(core.chain_head(store.read("scope_decisions")), records)
+    if chained:
+        store.append("scope_decisions", chained)
+    update_manifest(store, {"outline_confirmed_by": reviewer or "not named", "outline_confirmed_at": now})
     store.sync()
-    return "Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name")
+    out = sum(1 for word in decisions.values() if word == core.SCOPE_WORDS[1])
+    said = ["Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name"),
+            "Scope: %d unit(s) marked to not use%s." % (out, "; they will not be searched, linked or checked" if out else "")]
+    return "\n".join(said + ignored)
 
 def human_step_open(step, store, settings, determinations):
     """Is this human step still waiting for its person?"""
@@ -939,11 +985,18 @@ def chunk_note(chunk):
         notes.append("Heading numbering was reconstructed by counting")
     return "; ".join(notes)
 
-def rows_chunks(chunks):
+def scope_of(store):
+    """The latest scope decision per unit, as the yellow column shows it back."""
+    latest = {}
+    for record in store.read("scope_decisions"):
+        latest[record["unit_ref"]] = record["decision"]
+    return latest
+
+def rows_chunks(chunks, scope=None):
     """The rows of Chunks_Canon and Chunks_Doc."""
-    rows = []
+    rows, scope = [], scope or {}
     for chunk in chunks:
-        rows.append({"ref": chunk["ref"], "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
+        rows.append({"ref": chunk["ref"], "scope": scope.get(chunk["ref"], ""), "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
                      "para_no": chunk.get("para_label") or chunk["para_no"],
                      "kind": chunk["kind"], "text": chunk["text"],
                      "source_file": chunk["source_file"], "refs_out": "; ".join(chunk["refs_out"]),
@@ -963,14 +1016,14 @@ def unit_expression(unit):
                                                " x ".join(str(d) for d in data.get("dims", [])))
     return ""
 
-def rows_model_units(units, interpretations=()):
+def rows_model_units(units, interpretations=(), scope=None):
     """The rows of Chunks_Model. What the AI said a piece of code does is shown as a quotation
     (in \u201c \u201d), because the words are the model's and not the tool's own. Enforces: R10"""
-    rows, said = [], {record["unit_ref"]: record for record in interpretations}
+    rows, said, scope = [], {record["unit_ref"]: record for record in interpretations}, scope or {}
     for unit in units:
         code, told = unit.get("code") or {}, said.get(unit["ref"], {})
         lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else ""
-        rows.append({"ref": unit["ref"], "kind": unit["kind"], "file": unit["file"], "lines": lines,
+        rows.append({"ref": unit["ref"], "scope": scope.get(unit["ref"], ""), "kind": unit["kind"], "file": unit["file"], "lines": lines,
                      "name": unit["name"], "inside": unit["inside"], "text": unit["text"],
                      "expression": unit_expression(unit), "exported": code.get("exported"),
                      "numbers": "; ".join(n["as_written"] for n in code.get("numbers", [])),
@@ -1072,9 +1125,9 @@ def sheet_rows(store, paths, settings, progress):
         for name, text in row.pop("cells").items():
             row[name] = text
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Canon": rows_chunks(store.read("chunks_canon")),
-            "Chunks_Doc": rows_chunks(store.read("chunks_doc")),
-            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations")),
+            "Chunks_Canon": rows_chunks(store.read("chunks_canon"), scope_of(store)),
+            "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store)),
+            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store)),
             "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
             "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
 
@@ -1123,11 +1176,13 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
-    if sheet_layout["name"] == "Flagged_Items" and rows:
-        decision_column = get_column_letter([c["field"] for c in columns].index("decision") + 1)
-        choice = DataValidation(type="list", formula1='"%s"' % ",".join(core.DECISION_WORDS), allow_blank=True)
-        sheet.add_data_validation(choice)
-        choice.add("%s2:%s%d" % (decision_column, decision_column, len(rows) + 1))
+    fields = [c["field"] for c in columns]
+    for field, words in (("decision", core.DECISION_WORDS), ("scope", core.SCOPE_WORDS)):
+        if field in fields and rows:                 # the drop-downs: Decision on Flagged_Items, Use in review on the Chunks sheets
+            letter = get_column_letter(fields.index(field) + 1)
+            choice = DataValidation(type="list", formula1='"%s"' % ",".join(words), allow_blank=True)
+            sheet.add_data_validation(choice)
+            choice.add("%s2:%s%d" % (letter, letter, len(rows) + 1))
     if settings["protect_sheets"]:
         sheet.protection.sheet = True
         sheet.protection.autoFilter = False          # False = not locked: filtering stays possible

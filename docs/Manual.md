@@ -173,12 +173,12 @@ The notebook is `Verifier.ipynb`. It has five cells, each run in order the first
 | Cell | What it does | When to run it again |
 |---|---|---|
 | **cell 1** | Makes the widgets, installs the packages if any is missing (pinned to what the cluster already has), loads the engine, and reads the endpoint, token and user id from the widgets. | After anything restarts Python, and after pasting a fresh token. |
-| **cell 2** | Your `chat()`. Paste your organisation's function, or set `USE_STANDIN = True` to try the notebook without a model. Ends with a one-word self-test. | After changing `chat()`. |
+| **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `live()` each time it is called. Set `USE_STANDIN = True` to try the notebook without a model. Ends with a one-word self-test. | After changing `chat()`. |
 | **cell 3** | Makes the project folder if it is new and says what to put where. Reads every input file, with no model involved, and shows the outline of the methodology and what each file was read as. | After adding or changing an input, or adding `Inputs/tag_rules.yaml`. |
 | **cell 4** | The first time: records that you confirmed the outline and starts the model steps and the checks in the background. Every time after: shows where the run stands. `PAUSE` and `STOP` at the top do what they say. | To see progress; to pause or stop. |
 | **cell 5** | After the run waits for a person: reads your determinations back from `Output.xlsx` and verifies the evidence pack. `APPENDIX` at the top runs a maintainer's check instead. | After every round of determinations. |
 
-**The widgets.** Endpoint, token and user id for the model gateway (01 to 03); the model id (04); an existing project date and run to resume, or empty for new (05, 06); the Projects folder (07); the package index (08); concurrency and token cap (09, 10); your id and role, which go into the record beside every determination (11, 12); a scratch folder, normally empty (13).
+**The widgets.** Endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the id recorded beside every decision you make; the model id (04); an existing project date and run to resume, or empty for new (05, 06); the Projects folder (07); the package index (08); concurrency and token cap (09, 10); a scratch folder, normally empty (11).
 
 **The token.** It is read at the moment `chat()` is called, never stored. When it runs out mid-run, cell 4 says the run is waiting for a fresh one: paste it into widget 02, run cell 1, and the run goes on. No question is repeated.
 
@@ -190,11 +190,13 @@ Three folders under `Inputs/`:
 
 | Folder | What | Formats |
 |---|---|---|
-| `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv`/`.tsv`, `.xlsx`, `.rtf`, `.tex` |
+| `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv`/`.tsv`, `.xlsx`, `.rtf`, `.tex`, `.svg` |
 | `2_Model_Package` | the model | an R package as a `.tar.gz`, a `.zip` of it, or its source folder |
 | `3_Model_Documentation` | the model documentation | as for the methodology; `.docx` preferred |
 
 Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.db` and a saved web page's support folder are left out and listed. A format the tool does not read — a slide deck, an old `.doc`, a picture on its own — becomes one row on `Model_Package_Info` saying so and what to save it as instead. Nothing is decoded as text that is not text.
+
+**SVG pictures.** An SVG holds its text as text, so the tool reads a chart or a table drawn as a picture without guessing: every word comes from the picture's own `<text>` elements. Text that stands in a grid of at least two rows of the same width becomes a table, with the first row as its header; anything else becomes a figure whose words are the picture's labels in reading order. Where the methodology's XML refers to a picture beside it — `<figure src="floors.svg">` — that figure takes the picture's table or labels as its own, under the caption the XML gives. Only a picture in the same folder as the document, or a folder inside it, is followed; a missing picture or a path that leaves the folder stays a plain figure.
 
 **Optional.** `Inputs/glossary.xlsx` names the project's own terms, so that the search for corresponding passages knows that two words mean one thing. `Inputs/tag_rules.yaml` tells the reader what the tags of an unfamiliar XML schema are for, and always wins over what the tool would work out.
 
@@ -403,9 +405,13 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Role | reviewer input |  |
 | Rationale | reviewer input |  |
 
-## 8. Confirming the outline
+## 8. Confirming the outline, and choosing what is in scope
 
-The reading steps run before any model call is spent, and cell 3 shows the outline of the methodology as it was read: every heading at its depth. Check it against the document's own table of contents. Where the tool read a file whose shape it did not know, `Model_Package_Info` says which tag was read as what and why, and what the built-in rules would have done instead. Read those rows before confirming. Then set `OUTLINE_CONFIRMED = True` at the top of cell 4 and run it; the confirmation is recorded with your id.
+The reading steps run before any model call is spent, and cell 3 shows the outline of the methodology as it was read: every heading at its depth. Check it against the document's own table of contents. Where the tool read a file whose shape it did not know, `Model_Package_Info` says which tag was read as what and why, and what the built-in rules would have done instead. Read those rows before confirming.
+
+**Choosing what is in scope.** Each of the three sheets `Chunks_Canon`, `Chunks_Doc` and `Chunks_Model` has a yellow column, **Use in review**, with a drop-down of two words: *to use* and *to not use*. An empty cell means *to use*. Mark *to not use* on anything that should not be reviewed — a cover page, a table of contents, a disclaimer, a helper file of the package — then save the workbook back into the run folder under its own name. When cell 4 is run it reads that column back, by unit reference and never by row position, and records each decision with your id in a hash chain. A unit marked *to not use* is not searched, not linked, not a link target, not interpreted and not checked; it ends with the status **Not in scope (a person's decision)**, which counts as clean and raises no flagged item, and it is still listed, so that what was left out stays visible. Anything else written in the column is ignored and cell 4 says so.
+
+Then set `OUTLINE_CONFIRMED = True` at the top of cell 4 and run it; the confirmation is recorded with your id.
 
 ## 9. Working through `Flagged_Items`
 

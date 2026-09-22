@@ -335,5 +335,51 @@ class Finding10TextHeldOnlyAsTextIsCounted(unittest.TestCase):
         self.assertTrue(any("held only as running text" in row for row in rows), rows)
 
 
+class SvgPicturesAreReadByTheirOwnText(unittest.TestCase):
+    """An SVG holds its text as text, so a chart's labels and a table drawn as a picture are read
+    without guesswork: every word comes from a <text> element. Where a methodology's XML refers
+    to an SVG beside it, the figure takes the picture's content as its own."""
+
+    CHART = (b'<svg xmlns="http://www.w3.org/2000/svg"><title>Figure 2</title>'
+             b'<text x="150" y="20">Discount rate against number of parcels</text><text x="5" y="30">10%</text><text x="5" y="170">0%</text></svg>')
+    TABLE = (b'<svg xmlns="http://www.w3.org/2000/svg"><desc>Floors by segment</desc>'
+             b'<text x="10" y="20">Segment</text><text x="120" y="20">Floor</text>'
+             b'<text x="10" y="40">Retail</text><text x="120" y="40">0.15</text>'
+             b'<text x="10" y="60">Corporate</text><text x="120" y="60"><tspan>0.25</tspan></text></svg>')
+
+    def test_an_svg_is_told_from_xml_by_its_root(self):
+        self.assertEqual(core.detect_format(self.CHART, "chart.svg"), "svg")
+        self.assertEqual(core.detect_format(b'<?xml version="1.0"?><doc><para>x</para></doc>', "m.txt"), "xml")
+
+    def test_text_standing_in_a_grid_is_a_table_and_labels_are_a_figure(self):
+        chunks, _, account = read("floors.svg", self.TABLE)
+        self.assertEqual([chunk["kind"] for chunk in chunks], ["Table"])
+        self.assertEqual(chunks[0]["table"]["rows"], [["Retail", "0.15"], ["Corporate", "0.25"]])
+        self.assertTrue(account["closed"])
+        chunks, _, account = read("chart.svg", self.CHART)
+        self.assertEqual([chunk["kind"] for chunk in chunks], ["Figure"])
+        self.assertIn("Discount rate against number of parcels", chunks[0]["text"])
+        self.assertTrue(account["closed"])
+
+    def test_a_figure_in_the_xml_takes_the_svg_beside_it(self):
+        folder = helpers.scratch()
+        with open(os.path.join(folder, "floors.svg"), "wb") as handle:
+            handle.write(self.TABLE)
+        with open(os.path.join(folder, "method.txt"), "w", encoding="utf-8") as handle:
+            handle.write('<doc><section num="1."><title>Floors</title><para>See Table 3.</para>'
+                         '<figure src="floors.svg"><caption>Table 3. Floors by segment</caption></figure>'
+                         '<figure src="missing.svg"><caption>Figure 9. Not there</caption></figure>'
+                         '<figure src="../floors.svg"><caption>Figure 10. Outside</caption></figure></section></doc>')
+        result = reading.read_methodology(helpers.context_for({"methodology": [os.path.join(folder, "method.txt")]}))
+        units = [core.to_plain(unit) for unit in result.records["chunks_canon"]]
+        table = [unit for unit in units if unit["kind"] == "Table"][0]
+        self.assertEqual(table["caption"], "Table 3. Floors by segment", "the document's own caption wins")
+        self.assertEqual(table["table"]["rows"], [["Retail", "0.15"], ["Corporate", "0.25"]])
+        figures = [unit for unit in units if unit["kind"] == "Figure"]
+        self.assertEqual(sorted(unit["caption"] for unit in figures), ["Figure 10. Outside", "Figure 9. Not there"],
+                         "a missing picture and a path that climbs out stay plain figures")
+        self.assertTrue(result.records["content_accounts"][0]["closed"])
+
+
 if __name__ == "__main__":
     unittest.main()
