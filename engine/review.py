@@ -861,6 +861,189 @@ def judge_concepts(ctx):
                             % (len(concepts), len(guessed))])
 
 
+# ---------------------------------------------------------------- the skill map-implementation: the implementation map's agents
+# Code traced the data flow (step 05a); these agents work only where it stopped. The Tracer is given one
+# gap on the path from a final output and a fixed list of actions; each turn it chooses one, code carries
+# it out on the records and shows what it found, and every link it declares must copy the code word for
+# word and use only names that code holds. Each turn is a question of its own, recorded, so a run replays
+# without a model. The Namer gives each step a plain name, outside the accounting. The Auditor is code.
+# The model chooses; code executes. Enforces: R3, R4, R5
+MAP_ACTIONS = ("open_unit", "statements_setting", "callers_of", "return_of", "columns_of", "declare_edge", "declare_input", "done", "give_up")
+INPUT_KINDS = ("argument", "stored data", "file", "hard-coded number", "from outside")
+NAMED_KINDS = {"statement": ("value", "column", "return"), "function": ("return",)}
+
+class MapTools:
+    """What the Tracer can ask to see, answered by code from the traced flow and the units."""
+    def __init__(self, flow, units):
+        self.nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+        self.units = {u["ref"]: u for u in units}
+        self.functions = {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
+        self.tables = {r["name"]: r for r in self.nodes.values() if r["kind"] == "stored data"}
+
+    def label(self, node_id):
+        return self.nodes.get(node_id, {}).get("name", node_id)
+
+    def sources(self, record):
+        return ", ".join(self.label(s) for s in record["from"]) or "nothing the tool could see"
+
+    def show(self, action, args):
+        if action == "open_unit":
+            return core.cut_text(self.units[args["ref"]]["text"], 3000)
+        if action == "statements_setting":
+            found = [r for r in self.nodes.values() if r["name"] == args["name"] and r["kind"] in ("value", "column")
+                     and (r.get("function") == args["function"] or args["function"] in r.get("created_in", []))]
+            return "\n".join("line %d: %s  (computed from: %s)" % (r["line"], r["code"], self.sources(r)) for r in found) or \
+                "No statement of %s sets %s that the tool could see." % (args["function"], args["name"])
+        if action == "callers_of":
+            calls = [r for r in self.nodes.values() if r["kind"] == "call" and r["callee"] == args["function"]]
+            return "\n".join("in %s, line %d: %s  (%s)" % (r["function"], r["line"], r["code"], "; ".join(
+                "%s = %s" % (formal, ", ".join(self.label(s) for s in given)) for formal, given in r["bindings"].items())) for r in calls) or \
+                "Nothing in the package calls %s." % args["function"]
+        if action == "return_of":
+            record = self.nodes.get("%s:return" % args["function"])
+            return "%s returns what is computed from: %s" % (args["function"], self.sources(record)) if record else "The tool could not read %s." % args["function"]
+        if action == "columns_of":
+            return "%s has the columns: %s" % (args["table"], ", ".join(self.tables[args["table"]].get("columns") or []))
+        return "Recorded."
+
+def trace_question(state, tools, settings):
+    """One turn of the Tracer: the gap, what the tool knows of its function, the names it may use, and
+    every action taken so far with what it showed."""
+    gap, function = state["gap"], state["gap"]["function"]
+    known = [r for r in tools.nodes.values() if r.get("function") == function and r["kind"] in ("value", "argument", "return")]
+    listing = "\n".join("  %s (%s): computed from %s" % (r["name"], r["kind"], tools.sources(r)) for r in known)
+    place = ("function %s (%s), line %d: %s\ncode at this place: %s\n\nTHE WHOLE FUNCTION\n%s\n\n"
+             "WHAT THE TOOL KNOWS OF THIS FUNCTION\n%s\n\nTHE PACKAGE\nfunctions: %s\nstored tables: %s") % (
+        function, gap["function_ref"], gap["line"], gap["why"], gap["code"], tools.functions[function]["text"], listing or "  nothing",
+        ", ".join("%s (%s)" % (name, unit["ref"]) for name, unit in sorted(tools.functions.items())), ", ".join(sorted(tools.tables)) or "none")
+    history = "\n".join("%d. %s %s\n   the tool showed: %s" % (number, hop["action"], json.dumps(hop["args"], sort_keys=True), hop["shown"])
+                        for number, hop in enumerate(state["hops"], start=1)) or "Nothing yet: this is the first action."
+    texts = [tools.functions[function]["text"]] + [tools.units[ref]["text"] for ref in state["opened"]]
+    # a block needs its label: the assembler drops a block without one, which sent the model a question with no gap in it
+    return narrow_question("trace-gap", gap["function_ref"], [("THE PLACE THE TOOL COULD NOT FOLLOW", place), ("WHAT HAPPENED SO FAR", history)], settings,
+                           more={"texts": texts, "refs": sorted(tools.units), "functions": sorted(tools.functions),
+                                 "tables": sorted(tools.tables), "taken": [[hop["action"], hop["args"]] for hop in state["hops"]]})
+
+def validate_trace(question, answer):
+    """One action of the Tracer. It must be one of the list, with the arguments that action takes; every
+    unit, function and table must be the package's; a quote must be in the code shown word for word and
+    must hold every name the action declares, so no link rests on a name the model made up; and no
+    action may be taken twice. Enforces: R3"""
+    action, args = answer.get("action"), answer.get("args")
+    if action not in MAP_ACTIONS or not isinstance(args, dict):
+        raise Rejected(core.REJECTION_REASONS[0])
+    if [action, args] in question["taken"]:
+        raise Rejected(core.REJECTION_REASONS[5])
+    text = lambda key: args.get(key) if isinstance(args.get(key), str) and args.get(key).strip() else None
+    if action == "open_unit" and args.get("ref") not in question["refs"]:
+        raise Rejected(core.REJECTION_REASONS[1])
+    if action in ("statements_setting", "callers_of", "return_of") and args.get("function") not in question["functions"]:
+        raise Rejected(core.REJECTION_REASONS[1])
+    if action == "statements_setting" and not text("name"):
+        raise Rejected(core.REJECTION_REASONS[0])
+    if action == "columns_of" and args.get("table") not in question["tables"]:
+        raise Rejected(core.REJECTION_REASONS[1])
+    if action in ("declare_edge", "declare_input"):
+        names = [args.get("value")] + list(args.get("from") or []) if action == "declare_edge" else [args.get("name")]
+        if not text("quote") or not all(isinstance(n, str) and n.strip() for n in names) or \
+           (action == "declare_edge" and not args.get("from")) or (action == "declare_input" and args.get("kind") not in INPUT_KINDS):
+            raise Rejected(core.REJECTION_REASONS[0])
+        squash = lambda words: re.sub(r"\s+", " ", words).strip()
+        if not any(squash(args["quote"]) in squash(code) for code in question["texts"]):
+            raise Rejected(core.REJECTION_REASONS[2])
+        if not all(re.search(r"(?<![\w.$])%s(?![\w.])" % re.escape(n.strip()), args["quote"]) for n in names):
+            raise Rejected(core.REJECTION_REASONS[1])
+    if action in ("done", "give_up") and not text("because"):
+        raise Rejected(core.REJECTION_REASONS[0])
+
+def name_question(batch, settings):
+    lines = "\n".join("[S%d] %s, in %s: %s" % (number, record["name"], record.get("function") or ", ".join(record.get("created_in") or []) or "the data",
+                                                record.get("code") or "") for number, record in enumerate(batch, start=1))
+    return narrow_question("name-steps", batch[0]["node"], [("THE STEPS", lines)], settings,
+                           more={"step_ids": ["S%d" % n for n in range(1, len(batch) + 1)], "nodes": [r["node"] for r in batch]})
+
+def validate_names(question, answer):
+    """Every step shown named once, in one short line of plain words and nothing else. Enforces: R1, R3"""
+    names = answer.get("names")
+    if not isinstance(names, dict) or set(names) != set(question["step_ids"]):
+        raise Rejected(core.REJECTION_REASONS[1] if isinstance(names, dict) else core.REJECTION_REASONS[0])
+    for name in names.values():
+        if not isinstance(name, str) or not name.strip() or "\n" in name or len(name.split()) > 12 or core.has_banned_wording(name):
+            raise Rejected(core.REJECTION_REASONS[0])
+
+def map_implementation(ctx):
+    """Step 07d, map-implementation, the skill: the Tracer resolves the gaps on the path from each final
+    output, turn by turn, within map_hops_max turns a gap and map_calls_max questions in all; the Namer
+    names each step; the Auditor, code alone, says what is traced, what is open and what no output
+    reaches. Without a model the gaps stay named and the steps unnamed. Enforces: R2, R3, R4, R5"""
+    flow, units, settings = ctx.read("dataflow"), ctx.read("model_units"), ctx.settings
+    if not flow:
+        return core.StepResult(messages=["No data flow was traced, so there is nothing to map."])
+    decided = {}
+    for record in ctx.read("output_decisions"):
+        decided[record["function"]] = record["decision"]
+    outputs, _, not_reached = reading.decided_outputs(flow, {name: word for name, word in decided.items() if word})
+    reached = set()
+    for output in outputs:
+        reached |= reading.walk_dataflow(flow, output)[2]
+    tools, gaps = MapTools(flow, units), [g for g in flow if g["record_type"] == "gap"]
+    states = [{"gap": g, "hops": [], "edges": [], "inputs": [], "status": "", "opened": []} for g in gaps if g["function"] in reached]
+    budget, asked = int(settings["map_calls_max"]), 0
+    use_ai = ctx.ask is not None and settings["map_with_ai"]
+    for _ in range(int(settings["map_hops_max"]) if use_ai else 0):
+        turn = [state for state in states if not state["status"]][:max(0, budget - asked)]
+        if not turn:
+            break
+        questions = [trace_question(state, tools, settings) for state in turn]
+        asked += len(questions)
+        answers = ctx.ask([q for q in questions if not q["too_large"]])
+        for question, state in zip(questions, turn):
+            final = answers.get(question["question_id"])
+            if final is None or final["outcome"] != "accepted":
+                state["status"] = "the AI's answer could not be used: %s" % (final or {}).get("outcome", "not asked, the question was too large").split(": ", 1)[-1]
+                continue
+            action, args = final["answer"]["action"], final["answer"]["args"]
+            shown = tools.show(action, args)
+            state["hops"].append({"action": action, "args": args, "shown": core.cut_text(shown, 600), "question_id": question["question_id"]})
+            if action == "open_unit" and args["ref"] not in state["opened"]:
+                state["opened"].append(args["ref"])
+            elif action == "declare_edge":
+                state["edges"].append({"value": args["value"], "from": list(args["from"]), "quote": args["quote"]})
+            elif action == "declare_input":
+                state["inputs"].append({"name": args["name"], "kind": args["kind"], "quote": args["quote"]})
+            elif action == "done":
+                state["status"] = "traced: %s" % args["because"]
+            elif action == "give_up":
+                state["status"] = "the code cannot tell: %s" % args["because"]
+    for state in states:
+        state["status"] = state["status"] or ("not asked: no model" if not use_ai else "stopped at the limit of %d turns" % int(settings["map_hops_max"])
+                                              if len(state["hops"]) >= int(settings["map_hops_max"]) else "stopped at the limit of %d questions" % budget)
+    kinds = NAMED_KINDS.get(settings["map_granularity"], NAMED_KINDS["statement"])
+    steps = [r for r in flow if r["record_type"] == "node" and r["kind"] in kinds and
+             (r.get("function") in reached or set(r.get("created_in") or []) & reached)]
+    names = []
+    if use_ai and steps:
+        batches = [steps[start:start + 20] for start in range(0, len(steps), 20)][:max(0, budget - asked)]
+        questions = [name_question(batch, settings) for batch in batches]
+        answers = ctx.ask([q for q in questions if not q["too_large"]])
+        for question in questions:
+            final = answers.get(question["question_id"])
+            if final is not None and final["outcome"] == "accepted":
+                for step_id, node in zip(question["step_ids"], question["nodes"]):
+                    names.append({"node": node, "name": final["answer"]["names"][step_id].strip(), "question_id": question["question_id"]})
+    traced = [s for s in states if s["status"].startswith("traced")]
+    audit = {"final_outputs": outputs, "functions reached": sorted(reached), "not reached": not_reached,
+             "gaps": len(gaps), "gaps on the path": len(states), "gaps traced": len(traced),
+             "gaps open": [{"function": s["gap"]["function"], "line": s["gap"]["line"], "status": s["status"]} for s in states if s not in traced],
+             "gaps not reached": [{"function": g["function"], "line": g["line"], "why": g["why"]} for g in gaps if g["function"] not in reached],
+             "loops": sorted({loop for output in outputs for loop in reading.walk_dataflow(flow, output)[1]}),
+             "steps": len(steps), "steps named": len(names), "questions": asked + (len(names) and len({n["question_id"] for n in names}))}
+    traces = [{"gap": s["gap"], "hops": s["hops"], "edges": s["edges"], "inputs": s["inputs"], "status": s["status"]} for s in states]
+    return core.StepResult({"map_traces": traces, "step_names": names, "map_audit": [audit]},
+                           {"gaps on the path": len(states), "gaps traced": len(traced), "steps named": len(names)},
+                           ["Final outputs %s: %d gaps on the path, %d traced by the AI; %d of %d steps named; %d gaps in functions no output reaches."
+                            % (", ".join(outputs), len(states), len(traced), len(names), len(steps), len(audit["gaps not reached"]))])
+
 # ---------------------------------------------------------------- step 05: build-graph
 def structural_edges(units, provenance):
     """Edges the readers established: contains, calls, tested_by, documents, generated_from,
@@ -1365,6 +1548,10 @@ def validate_answer(question, text):
             core.validate_package_plan(question, answer, Rejected)
         elif question["question_type"] == "match-concepts":
             validate_concepts(question, answer)
+        elif question["question_type"] == "trace-gap":
+            validate_trace(question, answer)
+        elif question["question_type"] == "name-steps":
+            validate_names(question, answer)
         elif question["question_type"] in JUDGE_RELATIONS:
             validate_judge(question, answer)
         else:

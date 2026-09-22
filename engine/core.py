@@ -115,7 +115,7 @@ UNDECIDED_REASONS = (
 REJECTION_REASONS = (
     "it could not be read", "it named a passage that was not shown",
     "it quoted words that are not in the text", "it accepted a planted control passage",
-    "it contradicted itself")
+    "it contradicted itself", "it repeated an action it had already taken")
 
 KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL = "Function", "Formula statement", "Top-level statement"
 KIND_TEST, KIND_TABLE, KIND_OBJECT = "Test block", "Parameter table", "Parameter object"
@@ -529,6 +529,44 @@ Rules on your answer:
 - every words must appear in that passage word for word (upper and lower case may differ);
 - name a concept only where the passage means that same thing; where in doubt, leave it out;
 - give an empty list for a passage that names none of them.
+''',
+    'trace-gap': r'''VERSION 1
+=== SYSTEM ===
+You trace how an R package computes its values, one step at a time. You are given one place in its code that the tool could not follow by reading it, what the tool already knows about that function, and a list of actions. Each turn you choose exactly one action; the tool carries it out and shows you what it found. Once you know what the value at that place is computed from, you declare it, copying the code that shows it word for word. You never use a name that is not in the code, never write code of your own, and you stop when the place is traced or when the code cannot tell. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: trace-gap
+[[UNIT]]
+THE ACTIONS
+open_unit {"ref": "M-0012"}: shows the code of a unit of the package
+statements_setting {"function": "f", "name": "x"}: shows the statements of f that set x, and what each is computed from
+callers_of {"function": "f"}: shows every call of f in the package, with what each call gives each parameter
+return_of {"function": "f"}: shows what f returns is computed from
+columns_of {"table": "t"}: shows the columns of a stored table
+declare_edge {"value": "x", "from": ["a", "b"], "quote": "code copied word for word"}: records that x is computed from a and b; the quote must be code of the function at this place, or of a unit you opened, and must contain x and every name in from
+declare_input {"name": "x", "kind": "argument", "quote": "code copied word for word"}: records that x comes from outside the computation; kind is one of argument, stored data, file, hard-coded number, from outside
+done {"because": "a few words"}: the place is traced
+give_up {"because": "a few words"}: the code cannot tell
+[[ABOUT]]
+ANSWER FORMAT
+{"action": "declare_edge", "args": {"value": "total", "from": ["price", "count"], "quote": "total <- price * count"}}
+Rules on your answer:
+- exactly one action from the list above, with its arguments;
+- every ref, function, table and name must be one the tool has shown you;
+- a quote must be copied from the code word for word;
+- never repeat an action you have already taken;
+- end with done once you have declared what the value is computed from, or with give_up.
+''',
+    'name-steps': r'''VERSION 1
+=== SYSTEM ===
+You give each step of an R package's computation a short plain name, so that a reader who does not read code can follow what the package computes. Each step comes with the code that computes it. A name says what the value is, in a few ordinary words, from the code alone. You never add anything the code does not show. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: name-steps
+[[UNIT]]
+ANSWER FORMAT
+{"names": {"S1": "facilities with their factor scores", "S2": "the throughput score"}}
+Rules on your answer:
+- give every step shown above exactly one name, and no step that was not shown;
+- a name is one line of at most twelve words.
 ''',
     'interpret-code': r'''VERSION 1
 === SYSTEM ===

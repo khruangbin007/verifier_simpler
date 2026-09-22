@@ -224,6 +224,39 @@ def slice_rules(main_prompt, misbehave=False):
     return {"families": families, "levels": levels, "why": why}
 
 
+def trace_gap(main_prompt, misbehave=False):
+    """The Tracer as a careful model plays it: where the place sets a value, declare what it is computed
+    from - the names the tool knows, and the stored tables, that the code at the place uses - copying that
+    code; once declared, done. Where it sets no value, look at the callers first, then give up with a
+    reason. Misbehaving, it invents an action, which the validator has to refuse."""
+    if misbehave:
+        return {"action": "guess_the_answer", "args": {}}
+    code = re.search(r"^code at this place: (.*)$", main_prompt, re.M).group(1)
+    function = re.search(r"^function (\S+) \(", main_prompt, re.M).group(1)
+    history = re.search(r"WHAT HAPPENED SO FAR\n<<<\n(.*?)\n>>>", main_prompt, re.S).group(1)   # the history alone, not the answer format after it
+    if "declare_edge" in history or "declare_input" in history:
+        return {"action": "done", "args": {"because": "what the value is computed from is declared"}}
+    known = re.findall(r"^  (\S+) \((?:value|argument)\)", main_prompt, re.M)
+    tables = [t.strip() for t in re.search(r"^stored tables: (.*)$", main_prompt, re.M).group(1).split(",")]
+    assigned = re.match(r"\s*([A-Za-z_.][\w.]*)\s*<-", code)
+    if assigned:
+        inner = set(re.findall(r"function\(([^)]*)\)", code)[0].replace(" ", "").split(",")) if "function(" in code else set()
+        sources = [n for n in known + tables if n != assigned.group(1) and n not in inner and re.search(r"(?<![\w.$])%s(?![\w.])" % re.escape(n), code)]
+        if sources:
+            return {"action": "declare_edge", "args": {"value": assigned.group(1), "from": sorted(set(sources)), "quote": code}}
+    if "callers_of" not in history:
+        return {"action": "callers_of", "args": {"function": function}}
+    return {"action": "give_up", "args": {"because": "what it works on is built at run time"}}
+
+
+def name_steps(main_prompt):
+    """A plain name for every step, from its name and where it is set."""
+    names = {}
+    for step, name, where in re.findall(r"^\[(S\d+)\] (.+?), in ([^:]+):", main_prompt, re.M):
+        names[step] = " ".join(("%s, set in %s" % (name.replace("_", " "), where)).split()[:12])
+    return {"names": names}
+
+
 def match_concepts(main_prompt, misbehave=False):
     """What a careful reader would answer: for each passage, each listed concept whose name the passage
     writes in other words it can see - an acronym-like name spelled by the initials of words in a row,
@@ -325,6 +358,10 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(align_symbols(main_prompt))
     if question_type == "read-formula-from-prose":
         return json.dumps(read_formula_from_prose(main_prompt))
+    if question_type == "trace-gap":
+        return json.dumps(trace_gap(main_prompt, misbehave and bucket == 3))
+    if question_type == "name-steps":
+        return json.dumps(name_steps(main_prompt))
     if question_type == "match-concepts":
         return json.dumps(match_concepts(main_prompt, misbehave and bucket == 3))
     if question_type == "package-plan":

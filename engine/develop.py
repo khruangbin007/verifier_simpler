@@ -793,7 +793,8 @@ def append_history(found, samples, label, stamp):
 # review.py rose by 350 for concepts: extracting them, joining their forms, the two questions about
 # them and the search signal that puts them first.
 # runner.py rose by 100 for the implementation map's sheet and the final outputs a person decides there.
-BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 2950, "runner.py": 1900, "develop.py": 1800}
+# review.py rose by 300 more for the skill map-implementation: the Tracer's tools, turns and validator, and the Namer.
+BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 3250, "runner.py": 1900, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 

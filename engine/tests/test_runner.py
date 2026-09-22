@@ -351,8 +351,8 @@ class RunnerAndWorkbook(unittest.TestCase):
         runner.confirm_outline(self.paths, self.settings, "reviewer-1")
         second = runner.run_pipeline(self.paths, self.settings, chat=standin_chat.chat)
         self.assertNotIn("prepare-run", second["steps_run"], "a finished step was repeated")
-        self.assertEqual(second["steps_run"][:4], ["interpret-code", "judge-concepts", "find-candidates", "judge-links"],
-                         "after the person: the model's concepts, then the search that puts them first, then the judge")
+        self.assertEqual(second["steps_run"][:5], ["interpret-code", "judge-concepts", "find-candidates", "map-implementation", "judge-links"],
+                         "after the person: the model's concepts, the search that puts them first, the map's agents, then the judge")
 
     def test_pipeline_refuses_an_unknown_function_and_an_unversioned_step(self):
         """pipeline.yaml is the one place a step is named, versioned and mapped to its function.

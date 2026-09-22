@@ -7,6 +7,7 @@ import unittest
 import helpers
 import core
 import reading
+import review
 import runner
 import build_samples
 
@@ -281,6 +282,94 @@ class FinalOutputs(unittest.TestCase):
         outputs, how, _ = reading.decided_outputs(records, {})
         self.assertEqual(outputs, ["f", "g"])
         self.assertIn("no final output was proposed or decided", how["f"])
+
+
+class MapAgents(unittest.TestCase):
+    """Stage 4, the skill map-implementation: the Tracer works only on the gaps on the path from a final
+    output, one action a turn from a fixed list, every link copying the code; the Namer names the steps;
+    the Auditor is code. Each turn is a question of its own, so a run replays without a model."""
+
+    @classmethod
+    def setUpClass(cls):
+        import standin_chat
+        cls.paths, cls.settings, _ = helpers.run_sample("J_pipeline", chat=standin_chat.chat_well_behaved, stop_after="07d")
+        cls.store = runner.open_store(cls.paths, cls.settings)
+
+    def custom_run(self, trace_answer, **settings):
+        """J_pipeline to step 07d with a chat that answers trace-gap as given and everything else as the stand-in."""
+        import json
+        import standin_chat
+        def chat(system_prompt, main_prompt, history=()):
+            if "QUESTION TYPE: trace-gap" in main_prompt:
+                return {"answer": json.dumps(trace_answer(main_prompt))}
+            return standin_chat.chat_well_behaved(system_prompt, main_prompt)
+        paths, run_settings, _ = helpers.run_sample("J_pipeline", chat=chat, settings=settings, stop_after="07d")
+        store = runner.open_store(paths, run_settings)
+        return store.read("map_traces"), store.read("map_audit")[0], store.read("step_names")
+
+    def test_the_tracer_resolves_the_gap_on_the_path_and_dead_code_costs_no_call(self):
+        traces, audit = self.store.read("map_traces"), self.store.read("map_audit")[0]
+        self.assertEqual([t["gap"]["function"] for t in traces], ["adjust_score"], "only the gap a final output reaches")
+        trace = traces[0]
+        self.assertTrue(trace["status"].startswith("traced"))
+        self.assertEqual([(e["value"], sorted(e["from"])) for e in trace["edges"]], [("steps", ["adjustment_table", "adjustments"])])
+        unit = next(u for u in self.store.read("model_units") if u["ref"] == trace["gap"]["function_ref"])
+        self.assertIn(trace["edges"][0]["quote"], unit["text"], "the link copies the code word for word")
+        self.assertEqual([g["function"] for g in audit["gaps not reached"]], ["combine_results"])
+
+    def test_every_step_on_the_path_gets_a_plain_name(self):
+        audit, names = self.store.read("map_audit")[0], self.store.read("step_names")
+        self.assertEqual(len(names), audit["steps"])
+        for record in names:
+            self.assertLessEqual(len(record["name"].split()), 12)
+            self.assertEqual(core.has_banned_wording(record["name"]), "")
+
+    def test_each_bad_action_is_refused_with_its_reason(self):
+        flow, units = self.store.read("dataflow"), self.store.read("model_units")
+        gap = next(g for g in flow if g["record_type"] == "gap" and g["function"] == "adjust_score")
+        taken = {"action": "callers_of", "args": {"function": "adjust_score"}, "shown": "", "question_id": ""}
+        question = review.trace_question({"gap": gap, "hops": [taken], "edges": [], "inputs": [], "status": "", "opened": []},
+                                         review.MapTools(flow, units), self.settings)
+        good = "steps <- purrr::map_dbl(adjustments, function(name) adjustment_table$points[adjustment_table$adjustment == name])"
+        cases = [({"action": "guess", "args": {}}, 0), ({"action": "open_unit", "args": "M-0001"}, 0),
+                 ({"action": "open_unit", "args": {"ref": "M-9999"}}, 1), ({"action": "return_of", "args": {"function": "invented"}}, 1),
+                 ({"action": "columns_of", "args": {"table": "invented_table"}}, 1),
+                 ({"action": "declare_edge", "args": {"value": "steps", "from": ["adjustments"], "quote": "steps <- adjustments * 2"}}, 2),
+                 ({"action": "declare_edge", "args": {"value": "steps", "from": ["rating_scale"], "quote": good}}, 1),
+                 ({"action": "declare_edge", "args": {"value": "steps", "from": [], "quote": good}}, 0),
+                 ({"action": "declare_input", "args": {"name": "adjustments", "kind": "a guess", "quote": good}}, 0),
+                 ({"action": "callers_of", "args": {"function": "adjust_score"}}, 5), ({"action": "done", "args": {}}, 0)]
+        import json
+        for answer, reason in cases:
+            self.assertEqual(review.validate_answer(question, json.dumps(answer))[0], "rejected: " + core.REJECTION_REASONS[reason], answer)
+        accepted = {"action": "declare_edge", "args": {"value": "steps", "from": ["adjustment_table", "adjustments"], "quote": good}}
+        self.assertEqual(review.validate_answer(question, json.dumps(accepted))[0], "accepted")
+
+    def test_a_run_replays_from_its_record(self):
+        replayed = runner.replay_chat(self.store.read_calls())
+        paths, settings, _ = helpers.run_sample("J_pipeline", chat=replayed, stop_after="07d")
+        again = runner.open_store(paths, settings)
+        keep = lambda traces: [(t["gap"]["function"], t["status"], [(h["action"], h["args"]) for h in t["hops"]], t["edges"]) for t in traces]
+        self.assertEqual(keep(again.read("map_traces")), keep(self.store.read("map_traces")))
+        self.assertEqual([(n["node"], n["name"]) for n in again.read("step_names")], [(n["node"], n["name"]) for n in self.store.read("step_names")])
+
+    def test_the_turn_limit_ends_a_trace_that_never_ends(self):
+        counter = iter(range(1000))
+        traces, audit, _ = self.custom_run(lambda prompt: {"action": "statements_setting", "args": {"function": "adjust_score", "name": "x%d" % next(counter)}},
+                                           map_hops_max=3)
+        self.assertEqual(traces[0]["status"], "stopped at the limit of 3 turns")
+        self.assertEqual(len(traces[0]["hops"]), 3)
+        self.assertEqual(audit["gaps traced"], 0)
+
+    def test_a_refused_answer_ends_the_trace_and_the_gap_stays_open(self):
+        traces, audit, _ = self.custom_run(lambda prompt: {"action": "guess_the_answer", "args": {}})
+        self.assertEqual(traces[0]["status"], "the AI's answer could not be used: " + core.REJECTION_REASONS[0])
+        self.assertEqual([g["function"] for g in audit["gaps open"]], ["adjust_score"])
+
+    def test_without_the_model_the_gaps_stay_named_and_nothing_is_asked(self):
+        traces, audit, names = self.custom_run(lambda prompt: {}, map_with_ai=False)
+        self.assertEqual(traces[0]["status"], "not asked: no model")
+        self.assertEqual((audit["questions"], names), (0, []))
 
 
 if __name__ == "__main__":

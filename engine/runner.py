@@ -84,7 +84,8 @@ DEFAULT_SETTINGS = {
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
     "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
-    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True}
+    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
+    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -620,7 +621,7 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-concepts", "judge-links",
+CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-concepts", "map-implementation", "judge-links",
               "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
@@ -1826,6 +1827,7 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "reading.trace_dataflow": reading.trace_dataflow,
     "review.extract_concepts": review.extract_concepts,
     "review.judge_concepts": review.judge_concepts,
+    "review.map_implementation": review.map_implementation,
     "review.find_candidates": review.find_candidates,
     "review.judge_links": review.judge_links, "review.interpret_code": review.interpret_code,
     "review.check_mathematics": review.check_mathematics,

@@ -50,6 +50,10 @@ steps:
     version: "0.0.2"
     carried_out_by: review.find_candidates
     with: {pass: 1}
+  - id: "07d"
+    name: map-implementation
+    version: "0.0.1"
+    carried_out_by: review.map_implementation
   - id: "08"
     name: judge-links
     version: "0.0.1"
