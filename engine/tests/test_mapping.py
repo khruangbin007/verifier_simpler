@@ -158,16 +158,6 @@ class QuestionsAndValidators(unittest.TestCase):
             self.assertEqual(outcome, expected, case["name"])
             self.assertEqual(answer is not None, expected == "accepted", case["name"])
 
-    def test_narrow_answers_are_validated_too(self):
-        question = review.narrow_question("align-symbols", "M-0001", [("CODE SYMBOLS", "base, rate"), ("EQUATION SYMBOLS", "B, R")],
-                                           SETTINGS, more={"code_symbols": ["base", "rate"], "equation_symbols": ["B", "R"]})
-        good = '{"alignment": [{"code": "base", "equation": "B"}, {"code": "rate", "equation": "R"}], "cannot_align": false}'
-        twice = '{"alignment": [{"code": "base", "equation": "B"}, {"code": "rate", "equation": "B"}], "cannot_align": false}'
-        unseen = '{"alignment": [{"code": "base", "equation": "Z"}], "cannot_align": false}'
-        self.assertEqual(review.validate_answer(question, good)[0], "accepted")
-        self.assertEqual(review.validate_answer(question, twice)[0], "rejected: " + core.REJECTION_REASONS[4])
-        self.assertEqual(review.validate_answer(question, unseen)[0], "rejected: " + core.REJECTION_REASONS[1])
-
     def test_decoys_share_no_anchor_with_the_unit_and_are_chosen_by_hash(self):
         pool = {"C-1": {"text": "x" * 50}, "C-2": {"text": "y" * 50}, "C-3": {"text": "z" * 50}, "C-4": {"text": "short"}}
         anchors = {"M-1": [("number", "0.5")], "C-1": [("number", "0.5")], "C-2": [("number", "9")], "C-3": []}

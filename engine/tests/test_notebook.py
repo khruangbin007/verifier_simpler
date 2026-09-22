@@ -72,7 +72,7 @@ class NotebookCells(unittest.TestCase):
         returned nothing because the engine keeps the id as llm_user_id, so every request would
         have gone out with an empty SP_SSO_UID. This sends one request to a recorder."""
         from unittest import mock
-        import runner
+        import verifier as runner
         source = self.cells()[1]
         live_values = runner.LiveValues()
         live_values.update("https://gateway.example/chat", "tok-FIRST", "mel_lorenzo")
@@ -141,13 +141,13 @@ class NotebookCells(unittest.TestCase):
             run_cell(4)
             space["WORKER"].join(timeout=300)
             self.assertFalse(space["WORKER"].is_alive(), "the background run should finish, not wait for a fresh token")
-            self.assertEqual(space["RESULT"].get("state"), "waiting for a person", space["RESULT"])
+            self.assertEqual(space["RESULT"].get("state"), "finished", space["RESULT"])
             shown = run_cell(4)
             self.assertIn("not working at the moment", shown)
             self.assertNotIn("WAITING FOR A FRESH TOKEN", shown)
-            store = space["runner"].open_store(space["PATHS"], space["SETTINGS"])
+            store = space["verifier"].open_store(space["PATHS"], space["SETTINGS"])
             self.assertTrue(store.read_calls(), "the model steps made their calls")
-            self.assertTrue(store.read("unit_status"), "statuses were given")
+            self.assertTrue(store.read("graph_ledger"), "the links were recorded")
         finally:
             os.chdir(previous)
 
@@ -192,7 +192,7 @@ class NotebookCells(unittest.TestCase):
             self.assertIn("Outline of the methodology", shown)
             self.assertIn("Final outputs code proposes:", shown)
             self.assertIn("Read as:", shown)
-            self.assertIn("Stopped after step 06", space["RESULT"]["message"])
+            self.assertIn("Waiting for a person", space["RESULT"]["message"], "cell 3 stops at the outline for a person")
             import openpyxl
             book_path = os.path.join(space["PATHS"].run_dir, "Output.xlsx")
             book = openpyxl.load_workbook(book_path)
@@ -202,11 +202,9 @@ class NotebookCells(unittest.TestCase):
             shown = run_cell(4, {'MODE = "A"': 'MODE = "C"'})
             self.assertIn("confirmed by analyst.one", shown)
             self.assertIn("Final outputs:", shown)
-            self.assertIn("Waiting for a person", shown)
-            self.assertIn("account-coverage", run_cell(4, {'MODE = "A"': 'MODE = "C"'}), "a second run of cell 4 shows the status")
+            self.assertIn("link-units", run_cell(4, {'MODE = "A"': 'MODE = "C"'}), "a second run of cell 4 shows the status")
             shown = run_cell(5)
-            self.assertIn("No edited workbook of this run was found", shown)
-            store = space["runner"].open_store(space["PATHS"], space["SETTINGS"])
+            store = space["verifier"].open_store(space["PATHS"], space["SETTINGS"])
             self.assertIn("Verifying the evidence pack", shown)
             self.assertNotIn("differs", shown.lower().split("verifying the evidence pack")[1])
             for line in shown.split("\n"):

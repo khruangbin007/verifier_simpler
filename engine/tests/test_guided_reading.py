@@ -67,7 +67,7 @@ class TheDigestShowsShapeAndNotTheDocument(unittest.TestCase):
 
 class TheBadAnswerCorpus(unittest.TestCase):
     def test_every_answer_in_the_corpus_is_handled_as_the_corpus_says(self):
-        import core
+        import verifier as core
         question, _, _ = a_question()
         question["tags_shown"] = ["rules", "ruleblock", "blockcaption", "statementbody"]
         question["holds_other_tags"] = {"rules": True, "ruleblock": True, "blockcaption": False, "statementbody": False}

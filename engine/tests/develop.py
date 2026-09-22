@@ -53,13 +53,13 @@ import warnings
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENGINE = os.path.join(ROOT, "engine")
+ENGINE = ROOT if os.path.basename(ROOT) == "engine" else os.path.join(ROOT, "engine")
 TESTS = os.path.join(ENGINE, "tests")
 SAMPLES = os.path.join(TESTS, "sample_projects")
 HISTORY = os.path.join(TESTS, "history.csv")
 RELEASE_FILE = os.path.join(ENGINE, "release.json")
-MANUAL = os.path.join(ROOT, "docs", "Manual.md")
-NOTEBOOK = os.path.join(ROOT, "Verifier.ipynb")
+MANUAL = os.path.join(os.path.dirname(ENGINE), "docs", "Manual.md")
+NOTEBOOK = os.path.join(os.path.dirname(ENGINE), "Verifier.ipynb")
 for folder in (ENGINE, TESTS):
     if folder not in sys.path:
         sys.path.insert(0, folder)
@@ -795,7 +795,7 @@ def append_history(found, samples, label, stamp):
 # runner.py rose by 100 for the implementation map's sheet and the final outputs a person decides there,
 # and by 250 more for the map itself: the tree, its IDs and groups, and its three branches.
 # review.py rose by 300 more for the skill map-implementation: the Tracer's tools, turns and validator, and the Namer.
-BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 3250, "runner.py": 2150, "develop.py": 1800}
+BUDGETS = {"verifier.py": 9000}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -1041,7 +1041,7 @@ def manual_problems():
     modules = {"core": core, "reading": reading, "review": review, "runner": runner, "develop": sys.modules[__name__]}
     for module, name in sorted(set(re.findall(r"`(core|reading|review|runner|develop)\.([A-Za-z_]\w*)`", text))):
         if name == "py":
-            continue                                 # `core.py` names the file, not a function
+            continue                                 # `verifier.py` names the file, not a function
         if not hasattr(modules[module], name):
             found.append("the manual names `%s.%s`, which does not exist" % (module, name))
     sheets = {sheet["name"] for sheet in runner.load_layout()["sheets"]}
@@ -1064,7 +1064,7 @@ def manual_problems():
     # a file the manual names by its path in the repository, or a test file by its name, must exist:
     # a restructure that moves or renames a file otherwise leaves the manual pointing at nothing
     for path in sorted(set(re.findall(r"`((?:engine|docs|tools|evaluation)/[\w./*-]+)`", text))):
-        if not glob.glob(os.path.join(ROOT, path)):
+        if not glob.glob(os.path.join(os.path.dirname(ENGINE), path)):
             found.append("the manual names `%s`, which is not in the repository" % path)
     for name in sorted(set(re.findall(r"`(test_\w+\.py)`", text))):
         if not os.path.exists(os.path.join(TESTS, name)):
@@ -1165,27 +1165,27 @@ else:
             sys.path.insert(0, folder)
     import verifier
     if "LIVE" not in globals():
-        LIVE = runner.LiveValues()
+        LIVE = verifier.LiveValues()
     LIVE.update(w.get("llm_endpoint"), w.get("llm_token"), w.get("reviewer_id"))
     def live(name):
         """Read an endpoint, token or user id at the moment chat() is CALLED, so a fresh token pasted mid-run is used."""
         return LIVE.get(name)
 
     def current_settings():
-        return runner.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
+        return verifier.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
                                      "reviewer_id": w.get("reviewer_id"), "concept_subject": w.get("concept_subject").strip()})
 
     def open_current():
         """The run the widgets name, opened; or None with a message when the project has no inputs yet. Used
         by cells 3, 4 and 5, so that a cell run before cell 3 - or after Python restarted - says what to do."""
-        _, missing = runner.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
+        _, missing = verifier.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
         if missing:
             print("\n".join(missing)); print("Put the files in, then run cell 3.")
             return None
         if globals().get("PATHS") is not None and PATHS.model_id == w.get("model_id") and (not w.get("project") or PATHS.project_date == w.get("project")) and (not w.get("run") or PATHS.run_id == w.get("run")):
             return PATHS                               # keep working on the run this session opened
-        return runner.open_run(w.get("projects_dir"), w.get("model_id"), w.get("project"), w.get("run"), scratch_root=w.get("scratch_dir"))
-    print("Folder:", HOME, "| Python", sys.version.split()[0], "| engine", runner.core.ENGINE_VERSION)
+        return verifier.open_run(w.get("projects_dir"), w.get("model_id"), w.get("project"), w.get("run"), scratch_root=w.get("scratch_dir"))
+    print("Folder:", HOME, "| Python", sys.version.split()[0], "| engine", verifier.ENGINE_VERSION)
     for name in REQUIRED + ("pdfplumber", "pypdf"):
         try:
             print("  %-11s %s" % (name, getattr(importlib.import_module(name), "__version__", "installed")))
@@ -1249,9 +1249,9 @@ CELL_3 = r'''# ===== Cell 3 of 5 - read the inputs (no model involved) =====
 PATHS = open_current()
 if PATHS is not None:
     SETTINGS = current_settings()
-    RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=None, live=LIVE, stop_after="06")
+    RESULT = verifier.run_pipeline(PATHS, SETTINGS, chat=None, live=LIVE, stop_after="06")
     print(RESULT["message"])
-    store = runner.open_store(PATHS, SETTINGS)
+    store = verifier.open_store(PATHS, SETTINGS)
     for outline in store.read("outline"):
         if outline["corner"] == "canon":
             print("\nOutline of the methodology as it was read (first 60 lines):\n" + "\n".join(outline["lines"][:60]))
@@ -1261,9 +1261,9 @@ if PATHS is not None:
                 print("  " + message)
     flow = store.read("dataflow")
     if flow:
-        outputs, how, _ = runner.reading.decided_outputs(flow, {})
+        outputs, how, _ = verifier.decided_outputs(flow, {})
         print("\nFinal outputs code proposes: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
-    concepts, _ = runner.review.latest_concepts(store.read)
+    concepts, _ = verifier.latest_concepts(store.read)
     print("\nConcepts found by code: %d (sheet Concepts). The model refines them after you confirm the outline." % len(concepts))
     print("Run folder:", PATHS.run_dir)
     print("Open Output.xlsx there. The three Chunks sheets show everything that was read; Model_Package_Info what was not.")
@@ -1295,7 +1295,7 @@ def work():
     import traceback
     try:
         settings = dict(SETTINGS, foreground_minutes=FOREGROUND_MINUTES if MODE == "C" else 0.0, token_wait="stop" if MODE == "C" else "wait")
-        RESULT.update(runner.run_pipeline(PATHS, runner.make_settings({k: v for k, v in settings.items() if v != runner.DEFAULT_SETTINGS.get(k)}),
+        RESULT.update(verifier.run_pipeline(PATHS, verifier.make_settings({k: v for k, v in settings.items() if v != verifier.DEFAULT_SETTINGS.get(k)}),
                                           chat=ACTIVE_CHAT, live=LIVE, state=STATE, keep_alive=keep_alive))
     except Exception as problem:
         RESULT.update(state="failed", message="The run stopped: %s: %s" % (type(problem).__name__, problem),
@@ -1309,24 +1309,24 @@ if "PATHS" not in globals() or PATHS is None:
 if PATHS is None:
     print("Cell 3 has not read the inputs yet. Run cell 3 first.")
 elif "STATE" not in globals():
-    store = runner.open_store(PATHS, SETTINGS)
+    store = verifier.open_store(PATHS, SETTINGS)
     if not OUTLINE_CONFIRMED:
         print("Check the outline in cell 3 first, then set OUTLINE_CONFIRMED = True.")
     else:
-        print(runner.confirm_outline(PATHS, SETTINGS, w.get("reviewer_id")))
-        STATE = runner.AskState()
+        print(verifier.confirm_outline(PATHS, SETTINGS, w.get("reviewer_id")))
+        STATE = verifier.AskState()
         if MODE == "C":
             work(); print(RESULT["message"])
         else:
             WORKER = threading.Thread(target=work, name="verifier-run", daemon=True); WORKER.start()
             print("The run works in the background. Run this cell again to see where it stands; paste a fresh token into widget 02 whenever it asks.")
 else:
-    store = runner.open_store(PATHS, SETTINGS)
+    store = verifier.open_store(PATHS, SETTINGS)
     STATE.control["pause"], STATE.control["stop"] = PAUSE, STOP
-    print(runner.progress_text(store, RESULT.get("message", "")))
+    print(verifier.progress_text(store, RESULT.get("message", "")))
     for record in store.read("step_records"):
         print("  step %s %-22s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted(record["counts"].items()))))
-    for label, value in runner.call_statistics(store):
+    for label, value in verifier.call_statistics(store):
         print("  %-52s %s" % (label, value))
     print("Token pasted %.1f minutes ago." % LIVE.token_age_minutes())
     if STATE.waiting_for_token:
@@ -1342,9 +1342,10 @@ else:
         print("The run is not working at the moment:", RESULT.get("message", "no message yet"), "| When it waits for a person, go to cell 5.")
 '''
 
-CELL_5 = r'''# ===== Cell 5 of 5 - finish: read your determinations back, verify the evidence pack =====
-# After the run waits for a person: download Output.xlsx from the run folder, fill the yellow columns on
-# Flagged_Items, put it back in the run folder, and run this cell. Run it again after every round of edits.
+CELL_5 = r'''# ===== Cell 5 of 5 - finish: verify the evidence pack =====
+# Run this when the run has finished, to check the run folder against its own record: the inputs are the
+# files that were read, the engine is the one that produced it, re-reading gives the same content, the
+# graph chain verifies, and no access token was written anywhere in the folder.
 # APPENDIX runs a maintainer's check instead: "probe" (a new cluster), "sanity" (the sample projects with the
 # stand-in), "harness" (seeded differences), "sign-off" (guided reading against your real chat()), or
 # "map-sign-off" (the implementation map's agents against your real chat()).
@@ -1358,8 +1359,8 @@ if APPENDIX:
         import datetime, shutil, tempfile
         demo = tempfile.mkdtemp(prefix="verifier_sanity_")
         shutil.copytree(os.path.join(HOME, "engine", "tests", "sample_projects", "A_minimal", "Inputs"), os.path.join(demo, "SANITY", datetime.date.today().isoformat(), "Inputs"))
-        demo_paths = runner.open_run(demo, "SANITY")
-        print(runner.run_pipeline(demo_paths, runner.make_settings({"require_outline_confirmation": False}), chat=standin_chat.chat)["message"])
+        demo_paths = verifier.open_run(demo, "SANITY")
+        print(verifier.run_pipeline(demo_paths, verifier.make_settings({"require_outline_confirmation": False}), chat=standin_chat.chat)["message"])
         print("Open", os.path.join(demo_paths.run_dir, "Output.xlsx"))
     elif APPENDIX == "harness":
         develop.harness(["A_minimal", "--limit", "10"])
@@ -1371,14 +1372,10 @@ elif "PATHS" not in globals() or PATHS is None:
     print("Cell 3 has not read the inputs yet. Run cells 3 and 4 first.")
 else:
     SETTINGS = current_settings()
-    RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE, determinations=True)
+    RESULT = verifier.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE)
     print(RESULT["message"])
-    store = runner.open_store(PATHS, SETTINGS)
-    last = [r for r in store.read("step_records") if r["name"] == "record-determinations"][-1:]
-    for message in (last[0]["messages"] if last else []):
-        print("  " + message)
     print("\nVerifying the evidence pack:")
-    for what, verdict, detail in runner.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
+    for what, verdict, detail in verifier.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
         print("  %-34s %-10s %s" % (what, verdict, detail))
     print("\nRun folder:", PATHS.run_dir, "- Output.xlsx and Validation_Report.docx are the deliverables; _audit/ holds the record.")
 '''

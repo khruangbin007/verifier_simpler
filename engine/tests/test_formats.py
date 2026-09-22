@@ -147,14 +147,14 @@ class Finding2bTheAccountNoLongerClosesOverNothing(unittest.TestCase):
     while everything was lost."""
 
     def test_a_large_file_that_yields_no_text_and_says_nothing_opens_the_account(self):
-        import core as reading
+        import verifier as reading
         found = core.account("empty.docx", [], [], file_bytes=40000)
         self.assertTrue(found["vacuous"])
         self.assertFalse(found["closed"])
         self.assertTrue(any("probably not been opened" in line for line in core.account_lines(found)))
 
     def test_a_file_refused_by_name_is_not_called_vacuous(self):
-        import core as reading
+        import verifier as reading
         atoms = [core.atom("whole file not read", "deck.pptx", "")]
         found = core.account("deck.pptx", atoms, [{"kind": "Paragraph", "text": "", "not_read_reason": "a slide deck"}],
                                 file_bytes=40000)
@@ -162,7 +162,7 @@ class Finding2bTheAccountNoLongerClosesOverNothing(unittest.TestCase):
         self.assertTrue(found["closed"])
 
     def test_a_small_empty_file_is_simply_empty(self):
-        import core as reading
+        import verifier as reading
         self.assertFalse(core.account("tiny.txt", [], [], file_bytes=12)["vacuous"])
 
 

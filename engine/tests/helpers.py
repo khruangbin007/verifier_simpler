@@ -44,8 +44,8 @@ def audit_snapshot(store, kinds):
 
 def context_for(inputs, settings=None, read=None, ask=None):
     """A step context for calling one step function directly, outside the runner."""
-    import core
-    import runner
+    import verifier as core
+    import verifier as runner
     options = {"inputs": dict({"methodology": [], "documentation": [], "package": [], "glossary": None, "tag_rules": None}, **inputs),
                "run": {"model_id": "TEST", "project_date": "2026-01-01", "run_id": "Run_2026-01-01_0000"}}
     provenance = core.Provenance("Run_2026-01-01_0000", "00", "test", "0.0.1")
@@ -55,8 +55,8 @@ def context_for(inputs, settings=None, read=None, ask=None):
 def chunks_of(file_name, data, corner="methodology", chat=None, settings=None):
     """Read one document given as bytes or text; returns (chunks as plain dictionaries, the whole
     step result). With a chat, the reading step may ask about the file's shape."""
-    import core
-    import reading
+    import verifier as core
+    import verifier as reading
     folder = scratch()
     path = os.path.join(folder, file_name)
     with open(path, "wb") as handle:
@@ -69,8 +69,8 @@ def chunks_of(file_name, data, corner="methodology", chat=None, settings=None):
 
 def units_of(files):
     """Read a package given as {path inside the package: text or bytes}; returns (units, the whole step result)."""
-    import core
-    import reading
+    import verifier as core
+    import verifier as reading
     import build_samples
     folder = scratch()
     path = os.path.join(folder, "pkg_0.1.tar.gz")
@@ -82,7 +82,7 @@ def units_of(files):
 
 def run_sample(sample, chat=None, settings=None, stop_after=""):
     """Copy a sample into a fresh project and run the pipeline on it. Returns (paths, settings, result)."""
-    import runner
+    import verifier as runner
     import standin_chat
     projects = scratch()
     copy_sample(sample, projects, "SAMPLE", "2026-09-18")
@@ -94,13 +94,13 @@ def run_sample(sample, chat=None, settings=None, stop_after=""):
 
 def banned_wording(text):
     """The banned-word check, so a test can assert on one line of plain words."""
-    import core
+    import verifier as core
     return core.has_banned_wording(text)
 
 
 def accounts_of_sample(sample, stop_after="04"):
     """The content accounts a sample project produces, for tests that measure the ledger."""
-    import runner
+    import verifier as runner
     import standin_chat
     projects = scratch()
     copy_sample(sample, projects, "LEDGER", "2026-09-18")
@@ -111,14 +111,14 @@ def accounts_of_sample(sample, stop_after="04"):
 
 
 def made_settings(more):
-    import runner
+    import verifier as runner
     return runner.make_settings(dict(more or {}))
 
 
 def asker(chat):
     """A one-shot ask() for calling a reading step outside the runner: it asks, validates and
     hands back the record, without a store behind it."""
-    import review
+    import verifier as review
 
     def ask(questions):
         found = {}

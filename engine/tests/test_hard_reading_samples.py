@@ -47,8 +47,8 @@ def gold_of(sample):
 
 def reading_of(sample, mode="off"):
     """Steps 01 to 04 of a hard sample: its units, and the content accounts of its files."""
-    import core
-    import runner
+    import verifier as core
+    import verifier as runner
     import standin_chat
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "HARD", "2026-09-18")

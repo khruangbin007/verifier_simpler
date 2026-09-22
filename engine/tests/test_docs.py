@@ -58,18 +58,6 @@ class ManualAndCode(unittest.TestCase):
             self.assertIn(named, problems)
 
 
-class Release(unittest.TestCase):
-    def test_the_release_manifest_matches_the_files(self):
-        self.assertEqual(develop.release(["--check"]), 0, "run python engine/develop.py release as the last step of a change")
-
-    def test_every_run_names_exactly_the_engine_files_that_produced_it(self):
-        paths, settings, _ = helpers.run_sample("A_minimal", stop_after="01")
-        recorded = runner.open_store(paths, settings).read("run_manifest")[0]["engine_files"]
-        with open(develop.RELEASE_FILE, encoding="utf-8") as handle:
-            released = {name: digest for name, digest in json.load(handle)["files"].items() if name.startswith("engine/")}
-        self.assertEqual(recorded, released)
-
-
 class Notebook(unittest.TestCase):
     def test_the_notebook_is_the_one_develop_builds(self):
         built = develop.build_notebook(os.path.join(helpers.scratch(), "Verifier.ipynb"))

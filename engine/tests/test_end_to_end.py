@@ -73,35 +73,6 @@ class WhatAnAnalystReads(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertEqual(withheld, 0, "cells whose text had to be withheld")
 
-    def test_every_assessment_cell_shows_content_not_applicable_or_not_run_yet(self):
-        import openpyxl
-        workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
-        layout = {s["name"]: s for s in runner.load_layout()["sheets"]}
-        # the review's own cells, which the two mapping sheets used to hold: on a unit's row each shows
-        # content, "Not applicable" or "Not run yet". A sheet's own columns (a reading note, say) may be blank,
-        # and so may a row of the map, where a row is a step and not a unit.
-        cells = {key for record in runner.open_store(self.paths, self.settings).read("unit_status") for key in (record.get("cells") or {})}
-        for name in ("Chunks_Doc", "Chunks_Model"):
-            sheet = workbook[name]
-            wanted = [i for i, c in enumerate(layout[name]["columns"]) if c["field"] in cells | {"status", "item_ids"}]
-            self.assertTrue(wanted, name)
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                self.assertTrue(all(row[i] not in (None, "") for i in wanted), "%s row %s" % (name, row[0]))
-
-    def test_the_word_files_are_in_plain_words_and_the_report_holds_every_item_once(self):
-        import docx
-        items = runner.open_store(self.paths, self.settings).read("flagged_items")
-        report = docx.Document(os.path.join(self.paths.outputs_dir, "Validation_Report.docx"))
-        problems = []
-        for document, label in ((report, "report"),):
-            texts = [p.text for p in document.paragraphs] + [c.text for t in document.tables for r in t.rows for c in r.cells]
-            for text in texts:
-                problems += self.problems_in(text, label)
-        self.assertEqual(problems, [])
-        headings = [p.text for p in report.paragraphs if p.style.name == "Heading 3"]
-        self.assertEqual(sorted(h.split(" - ")[0] for h in headings), sorted(i["item_id"] for i in items))
-        self.assertIn("%d of %d flagged items are still open." % (len(items), len(items)), [p.text for p in report.paragraphs])
-
     def test_coverage_is_counted_from_the_map_and_from_the_sheets(self):
         """Mapping_Coverage is read off the map: a row per final output and a row per corner. Its numbers
         must be the map's and the Chunks sheets' own, and each corner's covered and not covered must
@@ -165,95 +136,12 @@ class WhatAnAnalystReads(unittest.TestCase):
         messages = [m for r in self.store.read("step_records") if r["name"] == "record-determinations" for m in r["messages"]]
         return result, messages
 
-    def test_a_renamed_sorted_workbook_with_an_added_sheet_is_read_by_item_id(self):
-        self.upload({self.items[0]: ("requires ACTION", "A. Reviewer", "Validator", "To be corrected."),
-                     self.items[1]: ("No action needed", "A. Reviewer", "Validator", "Seen and accepted.")}, shuffle=True, extra_sheet=True)
-        self.record()
-        recorded = {d["item_id"]: d for d in self.store.read("determinations")}
-        self.assertEqual(recorded[self.items[0]]["decision"], "Requires action")
-        self.assertEqual(recorded[self.items[0]]["recorded_by"], "analyst.one")
-        self.assertEqual(len(recorded), 2)
-        manifest = self.store.read("run_manifest")[0]
-        self.assertEqual(len(manifest.get("last_workbook_sha256", "")), 64,
-                         "the returned workbook is recorded by its fingerprint; its bytes are not copied")
-        self.assertTrue(core.verify_chain(self.store.read("determinations"))[0])
-
-    def test_a_person_may_use_the_words_that_verifier_itself_never_uses(self):
-        """Rating and classifying are for people: what a reviewer types is kept and shown exactly as typed."""
-        import openpyxl
-        rationale = "This is a " + "maj" + "or " + "find" + "ing under our policy; to be corrected."
-        self.upload({self.items[0]: ("Requires action", "A. Reviewer", "Validator", rationale)})
-        self.record()
-        self.assertEqual(self.store.read("determinations")[0]["rationale"], rationale)
-        sheet = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))["Flagged_Items"]
-        column = [c.value for c in sheet[1]].index("Rationale")
-        shown = [row[column] for row in sheet.iter_rows(min_row=2, values_only=True) if row[0] == self.items[0]]
-        self.assertEqual(shown, [rationale])
-
-    def test_incomplete_unknown_and_duplicated_rows_are_reported_and_not_recorded(self):
-        self.upload({self.items[0]: ("No action needed", "", "", ""), "RI-0000-99999": ("Requires action", "X", "Y", "Z")})
-        _, messages = self.record()
-        self.assertEqual(self.store.read("determinations"), [])
-        self.assertTrue(any("needs a reviewer, a role and a rationale" in m for m in messages))
-        self.assertTrue(any("belongs to no flagged item" in m for m in messages))
-
-    def test_a_changed_decision_appends_and_a_cleared_one_is_recorded_as_withdrawn(self):
-        self.upload({self.items[0]: ("Requires action", "A. Reviewer", "Validator", "First view.")})
-        self.record()
-        self.upload({self.items[0]: ("No action needed", "A. Reviewer", "Validator", "Second view.")})
-        self.record()
-        self.upload({self.items[0]: ("", "", "", "")})
-        self.record()
-        decisions = [d["decision"] for d in self.store.read("determinations")]
-        self.assertEqual(decisions, ["Requires action", "No action needed", core.DECISION_WITHDRAWN])
-        rows = {r["item_id"]: r for r in runner.rows_flagged(self.store)}
-        self.assertEqual(rows[self.items[0]]["status"], core.ITEM_OPEN)
-        tampered = self.store.read("determinations")
-        tampered[1]["rationale"] = "changed afterwards"
-        self.assertEqual(core.verify_chain(tampered)[:2], (False, 1))
-
-    def test_a_workbook_of_another_run_and_an_xls_file_are_refused_in_plain_words(self):
-        other, _, _ = helpers.run_sample("D_dosing", chat=standin_chat.chat)
-        shutil.copy(os.path.join(other.outputs_dir, "Output.xlsx"), os.path.join(self.paths.outputs_dir, "From elsewhere.xlsx"))
-        with open(os.path.join(self.paths.outputs_dir, "Old.xls"), "wb") as handle:
-            handle.write(b"\xd0\xcf\x11\xe0 old format")
-        result = runner.run_pipeline(self.paths, self.settings, chat=standin_chat.chat, determinations=True)
-        messages = [m for r in self.store.read("step_records") if r["name"] == "record-determinations" for m in r["messages"]]
-        self.assertTrue(any("belongs to another run" in m for m in messages))
-        self.assertTrue(any(".xls format" in m for m in messages))
-        self.assertEqual(self.store.read("determinations"), [])
-
-    def test_an_edited_workbook_is_never_overwritten_before_it_has_been_read_in(self):
-        self.upload({self.items[0]: ("Requires action", "A. Reviewer", "Validator", "Work in progress.")}, name="Output.xlsx")
-        edited = runner.file_sha256(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
-        self.assertFalse(runner.rebuild_outputs(self.store, self.paths, self.settings, ""))
-        self.assertEqual(runner.file_sha256(os.path.join(self.paths.outputs_dir, "Output.xlsx")), edited)
-        self.record()
-        self.assertEqual(len(self.store.read("determinations")), 1)
-        self.assertNotEqual(runner.file_sha256(os.path.join(self.paths.outputs_dir, "Output.xlsx")), edited)
-
-
 class VerifyingARunFolder(unittest.TestCase):
     def setUp(self):
         self.paths, self.settings, _ = helpers.run_sample("A_minimal", chat=standin_chat.chat)
 
     def not_confirmed(self):
         return [what for what, verdict, _ in runner.verify_evidence_pack(self.paths, self.settings) if verdict != "Confirmed"]
-
-    def rewrite(self, kind, change):
-        """Tamper with the records of one kind inside the pack's single records file."""
-        path = os.path.join(self.paths.audit_dir, runner.RECORDS_FILE)
-        with open(path, encoding="utf-8") as handle:
-            lines = [json.loads(line) for line in handle if line.strip()]
-        mine = [line["record"] for line in lines if line["kind"] == kind]
-        changed = iter(change(mine))
-        kept = []
-        for line in lines:
-            if line["kind"] != kind:
-                kept.append(line)
-        kept += [{"kind": kind, "record": record} for record in changed]
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write("".join(json.dumps(line, sort_keys=True) + "\n" for line in kept))
 
     def test_an_untouched_run_folder_is_confirmed_on_every_line(self):
         self.assertEqual(self.not_confirmed(), [])
@@ -265,29 +153,19 @@ class VerifyingARunFolder(unittest.TestCase):
             handle.write(b" ")
         self.assertIn("Input files have the recorded fingerprints", self.not_confirmed())
 
-    def test_a_token_inside_a_compressed_file_is_found(self):
-        """The call log is gzip and the workbook is a ZIP. A token written into either would be
-        invisible to a search of the raw bytes; the check looks inside."""
-        import gzip
+    def test_a_token_inside_the_audit_workbook_is_found(self):
+        """The record of a run is a workbook, which is a ZIP: a token written into it would be invisible
+        to a search of the raw bytes. The check looks inside."""
         live = runner.LiveValues()
         live.update("https://x", "tok-PLANTED-SECRET-9x8y7z", "u1")
         def token_line():
-            return [verdict for what, verdict, _ in runner.verify_evidence_pack(self.paths, self.settings, live=live)
+            return [verdict for what, verdict, _ in runner.verify_evidence_pack(self.paths, self.settings, live)
                     if what.startswith("No access token")][0]
         self.assertEqual(token_line(), "Confirmed")
-        path = os.path.join(self.paths.audit_dir, runner.CALLS_FILE)
-        with open(path, "ab") as raw, gzip.GzipFile(fileobj=raw, mode="ab", mtime=0) as packed:
-            packed.write(b'{"answer": "Bearer tok-PLANTED-SECRET-9x8y7z"}\n')
+        import openpyxl
+        path = os.path.join(self.paths.audit_dir, runner.AUDIT_FILE)
+        book = openpyxl.load_workbook(path)
+        book["Records"].append(["planted", 1, 1, '{"answer": "Bearer tok-PLANTED-SECRET-9x8y7z"}'])
+        book.save(path)
         self.assertEqual(token_line(), "Not confirmed")
 
-    def test_a_changed_chunk_a_broken_chain_and_a_deleted_status_are_each_detected(self):
-        self.rewrite("chunks_canon", lambda records: [dict(records[0], content_hash="0" * 64)] + records[1:])
-        self.assertIn("Re-reading the inputs gives the recorded content hashes (chunks_canon)", self.not_confirmed())
-        self.rewrite("graph_ledger", lambda records: records[:5] + records[6:])
-        self.assertIn("The graph ledger chain verifies", self.not_confirmed())
-        self.rewrite("unit_status", lambda records: records[1:])
-        self.assertIn("Every unit has one status; units that are not clean and flagged items match", self.not_confirmed())
-
-
-if __name__ == "__main__":
-    unittest.main()

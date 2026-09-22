@@ -656,6 +656,20 @@ Rules on your answer:
 - there is no reader that means skip, ignore or leave unread. A file you cannot make sense of is given "prose", and the reader will say plainly that it could not read it;
 - every key of why, if you give any, must also be a path marked NOT PLACED.
 ''',
+    'second-opinion': r'''VERSION 1
+=== SYSTEM ===
+You look for differences between one item and lettered passages. Reply with JSON only. Use only the letters shown. Quote exact words; do not paraphrase inside quotation fields. Naming no difference is a valid and common answer. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: second-opinion
+TASK: Identify any difference between what the unit does or states and what the passages state.
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"differences":[{"letter":"A","quote_from_passage":"exact words","quote_from_unit":"exact words","what_differs":"one plain sentence"}]}
+If there is no difference, return {"differences":[]}.
+''',
     'slice-rules': r'''VERSION 2
 === SYSTEM ===
 THE READER'S PROCEDURE
@@ -7318,7 +7332,8 @@ class LiveValues:
 
 # ---------------------------------------------------------------- the audit store
 AUDIT_OBJECTS = ("run_manifest", "package_info", "coverage")
-RECORDS_FILE, CALLS_FILE, MANIFEST_FILE = "records.jsonl", "calls.jsonl.gz", "manifest.json"
+AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, in the run folder's _audit
+CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
 
 def copy_whole(source, target):
     """Copy one whole file: to a temporary name, then replace; a plain copy if the file
@@ -7334,118 +7349,126 @@ def copy_whole(source, target):
 
 @dataclass
 class AuditStore:
-    """The record of a run, in three files. Everything is read and written on local disk and
-    sync() copies whatever changed, whole, into _audit/ in the run folder.
+    """The record of a run, as one workbook a person can open: _audit/Audit_Log.xlsx.
 
-        records.jsonl    every record of every kind, one per line, each as {"kind", "record"},
-                         in the order written and never rewritten
-        calls.jsonl.gz   every exchange with the model, gzip, one record per line
-        manifest.json    the run manifest, the coverage account and the package description,
-                         each rewritten whole under its own key
+        Run            the run's manifest and account, one line per entry
+        Steps          every step that ran, with its version, what it counted and what it said
+        Records        every record of every kind, in the order written, each as its own JSON
+        Model_Calls    every exchange with the model: the question, the answer and the outcome
 
-    Three files, so that an evidence pack can be checked, copied and archived without anyone
-    having to know which of thirty file names mattered. Enforces: R4, R5, R12"""
+    Records are held in memory while a cell runs and the workbook is written whole at each
+    sync, beside and then swapped in, so a reader never sees it half written. Text longer than
+    a cell holds is written in numbered parts and joined again when read, so nothing is cut.
+    Enforces: R4, R5, R12"""
     local_dir: str; remote_dir: str
-    synced: dict = field(default_factory=dict)
-    cache: list = field(default_factory=list)      # records.jsonl as read, so a read does not re-parse the file
-    cached_size: int = 0                            # bytes of records.jsonl already parsed into the cache
+    rows: list = field(default_factory=list)       # {"kind", "record"}, in the order written
+    calls: list = field(default_factory=list)
+    account: dict = field(default_factory=dict)    # the manifest and the other single-object kinds
+    loaded: bool = False
 
-    def path(self, name):
-        return os.path.join(self.local_dir, name)
-
-    def records(self):
-        """Every complete line of records.jsonl, parsed once: only the bytes written since the
-        last read are parsed, and only up to the last line break. A line that is still being
-        written by the run's own thread (cell 4 reads while it writes) is left for the next
-        read rather than raising. The file only ever grows, so a shorter file means a fresh run
-        of the same folder and the cache starts again."""
-        target = self.path(RECORDS_FILE)
-        size = os.path.getsize(target) if os.path.exists(target) else 0
-        if size < self.cached_size:
-            self.cache, self.cached_size = [], 0
-        if size > self.cached_size:
-            with open(target, "rb") as handle:
-                handle.seek(self.cached_size)
-                new = handle.read(size - self.cached_size)
-            complete = new.rfind(b"\n") + 1
-            if complete:
-                self.cache.extend(json.loads(line) for line in new[:complete].decode("utf-8").split("\n") if line.strip())
-                self.cached_size += complete
-        return self.cache
-
-    def manifest(self):
-        target = self.path(MANIFEST_FILE)
-        if not os.path.exists(target):
-            return {}
-        with open(target, encoding="utf-8") as handle:
-            return json.load(handle)
+    def target(self):
+        return os.path.join(self.remote_dir, AUDIT_FILE)
 
     def read(self, kind):
         """Every record of one kind, in the order written."""
+        self.restore()
         if kind == "llm_calls":
-            return self.read_calls()
+            return list(self.calls)
         if kind in AUDIT_OBJECTS:
-            found = self.manifest().get(kind)
+            found = self.account.get(kind)
             return [found] if found is not None else []
-        return [line["record"] for line in self.records() if line["kind"] == kind]
+        return [row["record"] for row in self.rows if row["kind"] == kind]
 
     def append(self, kind, records):
-        """Append records of one kind; the three single-object kinds are rewritten whole."""
+        """Add records of one kind; the single-object kinds are replaced whole."""
+        self.restore()
         if kind in AUDIT_OBJECTS:
-            whole = self.manifest()
-            whole[kind] = to_plain(records[-1])
-            partial = self.path(MANIFEST_FILE + ".writing")   # written beside, then swapped in: a reader in
-            with open(partial, "w", encoding="utf-8") as handle:  # the other thread never sees a half-written file
-                handle.write(json.dumps(whole, sort_keys=True, indent=1, ensure_ascii=False))
-            os.replace(partial, self.path(MANIFEST_FILE))
+            self.account[kind] = to_plain(records[-1])
             return
-        with open(self.path(RECORDS_FILE), "a", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(canonical_json({"kind": kind, "record": to_plain(record)}) + "\n")
+        self.rows += [{"kind": kind, "record": to_plain(record)} for record in records]
 
     def append_calls(self, records):
-        """Call records go to one gzip file. Its header carries no time stamp, so the same records
-        always give the same bytes; gzip members are appended, and read back as one stream."""
-        with open(self.path(CALLS_FILE), "ab") as raw:
-            with gzip.GzipFile(filename="", mode="ab", fileobj=raw, mtime=0) as handle:
-                for record in records:
-                    handle.write((canonical_json(record) + "\n").encode("utf-8"))
+        self.restore()
+        self.calls += [to_plain(record) for record in records]
 
     def read_calls(self):
-        """Every call record of the run, in the order written."""
-        target = self.path(CALLS_FILE)
-        if not os.path.exists(target):
-            return []
-        with gzip.open(target, "rt", encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
+        return self.read("llm_calls")
 
     def sync(self):
-        """Copy each of the three files that changed since the last sync, whole. Returns what was copied."""
-        copied = []
-        for name in (RECORDS_FILE, CALLS_FILE, MANIFEST_FILE):
-            source = self.path(name)
-            if not os.path.exists(source):
-                continue
-            stamp = (os.path.getsize(source), os.stat(source).st_mtime_ns)
-            if self.synced.get(name) == stamp:
-                continue
-            copy_whole(source, os.path.join(self.remote_dir, name))
-            self.synced[name] = stamp
-            copied.append(name)
-        return copied
+        """Write the whole workbook, beside and then swapped in. Returns what was written."""
+        import openpyxl
+        os.makedirs(self.remote_dir, exist_ok=True)
+        book = openpyxl.Workbook()
+        book.remove(book.active)
+        run = book.create_sheet("Run")
+        run.append(["Entry", "Value"])
+        for key in sorted(self.account):
+            for line, part in parts_of(canonical_json(self.account[key])):
+                run.append([key if line == 1 else "%s (part %d)" % (key, line), part])
+        steps = book.create_sheet("Steps")
+        steps.append(["Step", "Name", "Version", "Seconds", "What it counted", "What it said"])
+        for record in self.read("step_records"):
+            steps.append([record.get("step_id", ""), record.get("step", ""), record.get("step_version", ""),
+                          record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
+                          "\n".join(record.get("messages") or [])[:CELL_LIMIT]])
+        records = book.create_sheet("Records")
+        records.append(["Kind", "Number", "Part", "Record (JSON)"])
+        for number, row in enumerate(self.rows, start=1):
+            for part_number, part in parts_of(canonical_json(row["record"])):
+                records.append([row["kind"], number, part_number, part])
+        calls = book.create_sheet("Model_Calls")
+        calls.append(["Number", "Question", "Step", "Question type", "Attempt", "Outcome", "Part", "Exchange (JSON)"])
+        for number, record in enumerate(self.calls, start=1):    # a question asked twice has two records: each its own number
+            for part_number, part in parts_of(canonical_json(record)):
+                calls.append([number, record.get("question_id", ""), record.get("step", ""), record.get("question_type", ""),
+                              record.get("attempt", ""), record.get("outcome", ""), part_number, part])
+        for sheet in book.worksheets:
+            sheet.freeze_panes = "A2"
+        partial = os.path.join(self.local_dir, AUDIT_FILE + ".writing")
+        os.makedirs(self.local_dir, exist_ok=True)
+        book.save(partial)
+        copy_whole(partial, self.target())
+        os.remove(partial)
+        return [AUDIT_FILE]
 
     def restore(self):
-        """On resume: copy the run folder's three files back to local disk first."""
-        if os.path.isdir(self.remote_dir) and not os.path.exists(self.path(MANIFEST_FILE)):
-            for name in (RECORDS_FILE, CALLS_FILE, MANIFEST_FILE):
-                if os.path.exists(os.path.join(self.remote_dir, name)):
-                    copy_whole(os.path.join(self.remote_dir, name), self.path(name))
+        """On resume: read the workbook of the run folder back, once."""
+        if self.loaded:
+            return
+        self.loaded = True
+        if not os.path.exists(self.target()):
+            return
+        import openpyxl
+        book = openpyxl.load_workbook(self.target(), read_only=True)
+        joined = {}
+        for row in book["Records"].iter_rows(min_row=2, values_only=True):
+            kind, number, _, part = row[0], row[1], row[2], row[3] or ""
+            joined.setdefault((kind, number), []).append(part)
+        self.rows = [{"kind": kind, "record": json.loads("".join(parts))}
+                     for (kind, number), parts in sorted(joined.items(), key=lambda pair: pair[0][1])]
+        whole = {}
+        for row in book["Model_Calls"].iter_rows(min_row=2, values_only=True):
+            whole.setdefault(row[0], []).append((row[6] or 1, row[7] or ""))
+        self.calls = [json.loads("".join(part for _, part in sorted(parts))) for _, parts in sorted(whole.items())]
+        entries = {}
+        for row in book["Run"].iter_rows(min_row=2, values_only=True):
+            key = re.sub(r" \(part \d+\)$", "", str(row[0] or ""))
+            entries.setdefault(key, []).append(row[1] or "")
+        self.account = {key: json.loads("".join(parts)) for key, parts in entries.items() if key}
+
+def parts_of(text):
+    """One long text as numbered parts, each short enough for a cell."""
+    return [(number + 1, text[at:at + CELL_LIMIT]) for number, at in enumerate(range(0, max(len(text), 1), CELL_LIMIT))]
+
+OPEN_STORES = {}                         # one store per run folder: two of them would overwrite each other's records
 
 def open_store(paths, settings):
-    """The audit store of a run, restored from the run folder when local scratch is empty."""
-    store = AuditStore(paths.local_dir, paths.audit_dir)
-    store.restore()
-    return store
+    """The audit store of a run, read back from the run folder's workbook when there is one. The same
+    store is returned for the same run folder, so everything a run records goes into one account."""
+    key = (paths.local_dir, paths.audit_dir)
+    if key not in OPEN_STORES:
+        OPEN_STORES[key] = AuditStore(paths.local_dir, paths.audit_dir)
+    return OPEN_STORES[key]
 
 # ---------------------------------------------------------------- the wrapper around chat()
 AUTH_WORDS = ("401", "403", "unauthor", "expired", "forbidden", "invalid token", "authentication", "credential")
@@ -7704,14 +7727,10 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-concepts", "map-implementation", "judge-links",
-              "check-mathematics", "check-values", "check-rules")
-REPEATABLE_STEPS = ("record-determinations", "build-report")
+CHAT_STEPS = ("read-inputs", "read-with-ai", "link-units")   # the consolidated steps that may ask the model
 HUMAN_MESSAGES = {
     "confirm-outline": "Waiting for a person: check Level and Section (heading chain) on Chunks_Canon "
-                       "against the methodology's own outline, then run cell 4 to confirm.",
-    "await-determinations": "Waiting for a person: download Output.xlsx from the run folder, fill the four "
-                            "yellow columns on Flagged_Items, put it back in the run folder and run cell 5."}
+                       "against the methodology's own outline, then run cell 4 to confirm."}
 
 def load_pipeline(engine_dir=ENGINE_DIR):
     """Read pipeline.yaml and refuse anything that is not a known step carried out by a known
@@ -7756,14 +7775,12 @@ def confirm_outline(paths, settings, reviewer):
         said.append("Final outputs: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
     return "\n".join(said)
 
-def human_step_open(step, store, settings, determinations):
-    """Is this human step still waiting for its person?"""
-    if step["name"] == "confirm-outline":
-        manifest = (store.read("run_manifest") or [{}])[0]
-        return settings["require_outline_confirmation"] and not manifest.get("outline_confirmed_by")
-    return not determinations and not store.read("determinations")
+def human_step_open(step, store, settings):
+    """Is this human step still waiting for its person? The only one is confirming the outline."""
+    manifest = (store.read("run_manifest") or [{}])[0]
+    return settings["require_outline_confirmation"] and not manifest.get("outline_confirmed_by")
 
-def run_pipeline(paths, settings, chat=None, live=None, determinations=False, stop_after="",
+def run_pipeline(paths, settings, chat=None, live=None, stop_after="",
                  state=None, keep_alive=None, sleep=time.sleep):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
     the run continues at the first step without one. A human step stops the run and says
@@ -7773,19 +7790,13 @@ def run_pipeline(paths, settings, chat=None, live=None, determinations=False, st
     live = live or LiveValues()
     done = {record["step_id"] for record in store.read("step_records")}
     steps_run = []
-    if determinations and "15" not in done:
-        return {"state": "not ready", "steps_run": [], "message":
-                "Determinations can be recorded once the run has reached its flagged items."}
     for step in pipeline["steps"]:
         if stop_after and step["id"] > stop_after:
             break
-        if step["name"] in REPEATABLE_STEPS:
-            if not determinations:
-                continue                     # these two run each time the determinations cell is run
-        elif step["id"] in done:
+        if step["id"] in done:
             continue
         if step.get("human"):
-            if human_step_open(step, store, settings, determinations):
+            if human_step_open(step, store, settings):
                 rebuild_outputs(store, paths, settings, HUMAN_MESSAGES[step["name"]])
                 return {"state": "waiting for a person", "message": HUMAN_MESSAGES[step["name"]], "steps_run": steps_run}
             record_step(store, step, StepResult(), 0.0)
@@ -8013,11 +8024,6 @@ def rows_package_info(store, paths, settings, progress):
     for name in sorted(repairs):
         kinds = sorted(set(repairs[name]))
         add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
-    add("How values are compared", "The value-comparison rule", VALUE_RULE_TEXT)
-    add("How values are compared", "Numbers treated as trivial", ", ".join(settings["trivial_numbers"]))
-    add("How formulas are compared", "Sample points and seed",
-        "%d points, seed %d, relative tolerance %s" % (settings["numeric_points"], settings["numeric_seed"],
-                                                       plain_number(settings["relative_tolerance"], 3)))
     for label, value in call_statistics(store):
         add("AI calls", label, value)
     return rows
@@ -8354,79 +8360,46 @@ def assessment_of(store):
 
 def coverage_rows(store, map_rows, model_rows, doc_rows, settings=None):
     """Mapping_Coverage, counted from the map and from what the map does not reach. One row per final
-    output: how many values it takes, how deep, what it rests on by kind, how many of its steps are linked
-    to the methodology, what its checks said, what needs attention and what is flagged. Then one row per
-    corner, each read the way that corner needs. Enforces: R2, R10"""
-    statuses = {r["unit_ref"]: r for r in store.read("unit_status")}
-    items_of = {}
-    for item in store.read("flagged_items"):
-        for ref in item["unit_refs"]:
-            items_of.setdefault(ref, []).append(item)
-    checks = [(r["unit_ref"], str(r.get("outcome") or "")) for kind in ("math_checks", "value_checks", "rule_checks", "package_doc_checks")
-              for r in store.read(kind)]
+    output: how many values it takes, how deep, and what it rests on by kind. Then one row per corner,
+    each read the way that corner needs: of the model units, how many a final output reaches; of the
+    methodology and the documentation, how many a unit on the map is linked to. Enforces: R2, R10"""
     missing = not_on_the_map(store, map_rows, settings) if store.read("dataflow") else {
-        "model_units": [], "methodology": [], "documentation": [], "on_map": set(), "linked": set(), "final_outputs": []}
+        "model_units": [], "methodology": [], "documentation": [], "on_map": set(), "linked": set(),
+        "linked_units": set(), "final_outputs": []}
     branches = {}
     for row in map_rows:
         branches.setdefault(row["map_id"].split(".")[0], []).append(row)
-
-    def about(units, rows_shown, counts_what, how_to_read, extra=None):
-        found = [outcome for ref, outcome in checks if ref in units]
-        by_category, by_status = {}, {}
-        for ref in units:
-            for item in items_of.get(ref, []):
-                by_category[item["category"]] = by_category.get(item["category"], 0) + 1
-            if ref in statuses:
-                by_status[statuses[ref]["status"]] = by_status.get(statuses[ref]["status"], 0) + 1
-        role = lambda start: sum(1 for r in rows_shown if r["role"].startswith(start))
-        row = {"counts_what": counts_what, "how_to_read": how_to_read,
-               "checks_agree": sum(o.startswith("agrees") for o in found), "checks_differ": sum(o.startswith("differs") for o in found),
-               "checks_undecided": sum(not o.startswith(("agrees", "differs")) for o in found),
-               "needs_attention": sum(n for status, n in by_status.items() if status in NOT_CLEAN_STATUSES),
-               "items": sum(by_category.values()), "items_by_category": "\n".join("%s: %d" % pair for pair in sorted(by_category.items())),
-               "statuses": "\n".join("%s: %d" % pair for pair in sorted(by_status.items())),
-               "in_arguments": role("Raw input: argument"), "in_columns": role("Raw input: column"),
-               "in_tables": role("Raw input: stored data"), "in_files": role("Raw input: file"), "in_numbers": role("Raw input: hard-coded")}
-        row.update(extra or {})
-        return row
-
     rows = []
     for position, output in enumerate(missing["final_outputs"], start=1):
         shown = branches.get("%02d" % position, [])
         if not shown:
             continue
-        units = {row["ov_ref"] for row in shown if row["ov_ref"]}
-        linked = sum(1 for row in shown if row["ov_ref"] in missing["linked_units"])
-        rows.append(about(units, shown, "values the model computes on the way to %s" % output,
-                          "A row of the map is one variable, computed by one function from the arguments beneath it. Covered = "
-                          "values whose unit a methodology passage is linked to; the rest may still be right, and are for a person to read.",
-                          {"row": "%02d %s (final output)" % (position, output), "total": len(shown), "covered": linked,
-                           "not_covered": len(shown) - linked, "depth": max(row["level"] for row in shown)}))
-    model_units = {r["ref"] for r in model_rows}
-    rows.append(about(model_units, [], "units of the model package",
-                      "Covered = units a final output reaches: a step of the map, or the roxygen, help page, test or statement belonging "
-                      "to one; not covered = the units no final output reaches, which the map does not show: dead code, a second way in, "
-                      "or a function only the tests call.",
-                      {"row": "Model units (one row each on Chunks_Model)", "total": len(model_units),
-                       "covered": len(model_units) - len(missing["model_units"]), "not_covered": len(missing["model_units"])}))
-    canon = store.read("chunks_canon")
-    rows.append(about({c["ref"] for c in canon}, [], "passages of the methodology",
-                      "Covered = passages a unit on the map is linked to; not covered = passages that state a number, formula or rule "
-                      "that no step implements. The rest state nothing to implement.",
-                      {"row": "Methodology passages", "total": len(canon),
-                       "covered": len({c["ref"] for c in canon} & missing["linked"]), "not_covered": len(missing["methodology"])}))
-    doc_refs = {r["ref"] for r in doc_rows}
-    rows.append(about(doc_refs, [], "passages of the model documentation",
-                      "Covered = passages a unit on the map is linked to; not covered = passages describing nothing in the map and "
-                      "naming none of the model's concepts.",
-                      {"row": "Documentation passages", "total": len(doc_refs),
-                       "covered": len(doc_refs & missing["linked"]), "not_covered": len(missing["documentation"])}))
-    if not store.read("coverage"):
-        for row in rows:
-            row["how_to_read"] = ("Not counted yet: statuses and checks are given by the step account-coverage, after the model has "
-                                  "judged the links. Until then these columns stay empty; cell 4 shows how far the run is.")
-            for key in ("checks_agree", "checks_differ", "checks_undecided", "needs_attention", "items", "items_by_category", "statuses"):
-                row[key] = ""
+        role = lambda start: sum(1 for row in shown if row["role"].startswith(start))
+        rows.append({"row": "%02d %s (final output)" % (position, output), "counts_what": "values computed on the way to %s" % output,
+                     "total": len(shown), "covered": sum(1 for row in shown if row["ov_ref"] in missing["linked_units"]),
+                     "not_covered": sum(1 for row in shown if row["ov_ref"] not in missing["linked_units"]),
+                     "depth": max(row["level"] for row in shown), "in_arguments": role("Raw input: argument"),
+                     "in_columns": role("Raw input: column"), "in_tables": role("Raw input: stored data"),
+                     "in_files": role("Raw input: file"), "in_numbers": role("Raw input: hard-coded"),
+                     "how_to_read": "A row of the map is one variable, computed by one function from the arguments beneath it. "
+                                    "Covered = variables whose unit a methodology passage is linked to."})
+    model_units = {row["ref"] for row in model_rows}
+    canon, doc_refs = store.read("chunks_canon"), {row["ref"] for row in doc_rows}
+    for label, counts_what, total, covered, not_covered, how in (
+            ("Model units (one row each on Chunks_Model)", "units of the model package", len(model_units),
+             len(model_units) - len(missing["model_units"]), len(missing["model_units"]),
+             "Covered = units a final output reaches: a row of the map, or the roxygen, help page, test or statement "
+             "belonging to one; not covered = the units no final output reaches, which the map does not show."),
+            ("Methodology passages", "passages of the methodology", len(canon),
+             len({c["ref"] for c in canon} & missing["linked"]), len(missing["methodology"]),
+             "Covered = passages a unit on the map is linked to; not covered = passages that state a number, formula or "
+             "rule that no step implements. The rest state nothing to implement."),
+            ("Documentation passages", "passages of the model documentation", len(doc_refs),
+             len(doc_refs & missing["linked"]), len(missing["documentation"]),
+             "Covered = passages a unit on the map is linked to; not covered = passages describing nothing in the map "
+             "and naming none of the model's concepts.")):
+        rows.append({"row": label, "counts_what": counts_what, "total": total, "covered": covered,
+                     "not_covered": not_covered, "how_to_read": how})
     return rows
 
 def sheet_rows(store, paths, settings, progress):
@@ -8446,28 +8419,24 @@ def sheet_rows(store, paths, settings, progress):
             "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
             "Concepts": rows_concepts(store),
             "Model_Implementation_Map": mapped,
-            "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows, settings), "Flagged_Items": rows_flagged(store)}
+            "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows, settings)}
 
 def check_written_totals(rows, store):
-    """Identity part 4: what account-coverage counted must equal what the workbook holds."""
-    coverage = store.read("coverage")
-    if not coverage:
-        return
-    for corner, sheet in (("model", "Chunks_Model"), ("doc", "Chunks_Doc")):
-        counted, written = coverage[0][corner], rows[sheet]
-        same = counted["total"] == len(written) and all(
-            counted["by_status"].get(status, 0) == sum(1 for row in written if row.get("status") == status)
-            for status in CLEAN_STATUSES + NOT_CLEAN_STATUSES)
-        if not same:
+    """The identity of the workbook: every unit read is one row of its sheet, and no row is anything
+    else. Raised as a fault of the tool, never as a remark about the model. Enforces: R2"""
+    for kind, sheet in (("model_units", "Chunks_Model"), ("chunks_doc", "Chunks_Doc"), ("chunks_canon", "Chunks_Canon")):
+        read = [record["ref"] for record in store.read(kind)]
+        written = [row["ref"] for row in rows[sheet]]
+        if sorted(read) != sorted(written) or len(set(written)) != len(written):
             raise EngineFault(
-                "Part 4 of the coverage identity does not hold: the totals counted for the %s corner differ "
-                "from the rows written to the workbook. This is a defect in the tool, not in the model under review." % corner)
+                "The workbook does not hold exactly what was read: %d unit(s) read for %s and %d row(s) written. "
+                "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
 
 # ---------------------------------------------------------------- the workbook layout
 # Every sheet of Output.xlsx in order, and every column of each: its header, its colour group, the
 # field of the row it shows, its width, and whether it is typed by a person (input_text). One line
 # per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
-WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, reviewer_input: FFFF00}
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7}
 sheets:
 - name: Model_Package_Info
   columns:
@@ -8505,13 +8474,6 @@ sheets:
   - {header: Relation (model), group: documentation, field: model_relation, width: 22}
   - {header: How established (model), group: documentation, field: model_how, width: 50}
   - {header: What was searched / why not mapped, group: methodology, field: searched, width: 40}
-  - {header: Value check, group: assessments, field: value_check, width: 50}
-  - {header: Math check, group: assessments, field: math_check, width: 50}
-  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
-  - {header: Parameter note (AI), group: assessments, field: parameter_note_ai, width: 44}
-  - {header: Documentation quality notes, group: assessments, field: quality_notes, width: 40}
-  - {header: Overall status, group: assessments, field: status, width: 26}
-  - {header: Flagged item(s), group: assessments, field: item_ids, width: 16}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Chunks_Model
   columns:
@@ -8527,8 +8489,6 @@ sheets:
   - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
   - {header: Numbers used, group: code_text, field: numbers, width: 20}
   - {header: Exported, group: identity, field: exported, width: 10}
-  - {header: Overall status, group: assessments, field: status, width: 26}
-  - {header: Flagged item(s), group: assessments, field: item_ids, width: 16}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Concepts
   columns:
@@ -8575,32 +8535,7 @@ sheets:
   - {header: 'Rests on: files', group: assessments, field: in_files, width: 10}
   - {header: 'Rests on: hard-coded numbers', group: assessments, field: in_numbers, width: 14}
   - {header: Deepest level, group: assessments, field: depth, width: 10}
-  - {header: Checks agreeing, group: assessments, field: checks_agree, width: 12}
-  - {header: Checks differing, group: assessments, field: checks_differ, width: 12}
-  - {header: Checks undecided, group: assessments, field: checks_undecided, width: 12}
-  - {header: Needs attention, group: assessments, field: needs_attention, width: 12}
-  - {header: Flagged items, group: assessments, field: items, width: 10}
-  - {header: Flagged items by category, group: assessments, field: items_by_category, width: 40}
-  - {header: Statuses, group: assessments, field: statuses, width: 40}
   - {header: How to read this row, group: assessments, field: how_to_read, width: 70}
-- name: Flagged_Items
-  columns:
-  - {header: Item id, group: identity, field: item_id, width: 30}
-  - {header: Concerns, group: identity, field: concerns, width: 22}
-  - {header: Category, group: identity, field: category, width: 34}
-  - {header: Unit ref(s), group: identity, field: unit_refs, width: 14}
-  - {header: Item, group: assessments, field: item, width: 44}
-  - {header: What was observed, group: assessments, field: observed, width: 70}
-  - {header: Methodology says, group: methodology, field: methodology_says, width: 50}
-  - {header: Code does, group: code_text, field: code_does, width: 50}
-  - {header: Documentation says, group: documentation, field: documentation_says, width: 50}
-  - {header: Suggested next step, group: assessments, field: suggested_next_step, width: 44}
-  - {header: Status, group: assessments, field: status, width: 18}
-  - {header: Last decision recorded, group: assessments, field: last_decision_recorded, width: 22}
-  - {header: Decision, group: reviewer_input, field: decision, width: 20, input_text: true}
-  - {header: Reviewer, group: reviewer_input, field: reviewer, width: 20, input_text: true}
-  - {header: Role, group: reviewer_input, field: role, width: 20, input_text: true}
-  - {header: Rationale, group: reviewer_input, field: rationale, width: 60, input_text: true}
 '''
 
 def load_layout():
@@ -8794,18 +8729,9 @@ def verify_evidence_pack(paths, settings, live=None):
         line("Re-reading the inputs gives the recorded content hashes (%s)" % kind, not differing, ", ".join(differing[:5]))
     ledger_ok, position, _ = verify_chain(store.read("graph_ledger"), LEDGER_VOLATILE)
     line("The graph ledger chain verifies", ledger_ok, "" if ledger_ok else "record %d no longer verifies" % (position + 1))
-    decisions_ok, position, _ = verify_chain(store.read("determinations"))
-    line("The determinations chain verifies", decisions_ok, "" if decisions_ok else "record %d no longer verifies" % (position + 1))
-    statuses, items = store.read("unit_status"), store.read("flagged_items")
-    named = {ref for item in items for ref in item["unit_refs"]}
-    not_clean = {s["unit_ref"] for s in statuses if not s["clean"]}
-    expected = {r["ref"] for kind in ("model_units", "chunks_doc") for r in store.read(kind)}
-    reached = any(r["step_id"] == "15" for r in store.read("step_records"))
-    line("Every unit has one status; units that are not clean and flagged items match",
-         None if not reached else ({s["unit_ref"] for s in statuses} == expected and len(statuses) == len(expected) and not_clean == named & expected),
-         "" if reached else "the run has not reached step 15, where each unit gets its status")
-    known = expected | {r["ref"] for r in store.read("chunks_canon")}
-    line("Every citation on Flagged_Items resolves to a unit", all(ref in known for ref in named))
+    written = {kind: len(store.read(kind)) for kind in ("chunks_canon", "chunks_doc", "model_units")}
+    line("Every unit read is in the record", all(written.values()),
+         ", ".join("%s: %d" % pair for pair in sorted(written.items())))
     identity = run_identity(store, paths)
     try:
         import openpyxl
@@ -8823,14 +8749,19 @@ def verify_evidence_pack(paths, settings, live=None):
 
 def combine(ctx, *parts):
     """One step that carries out several: each part in order, everything they record kept, their counts
-    and their messages side by side. Consolidating the pipeline changed no work, only how much of it one
-    step is. Enforces: R2"""
+    and their messages side by side. A later part reads what the earlier ones have just recorded, as it
+    would if each were still a step of its own - the records of a step reach the store only when the step
+    ends. Enforces: R2"""
     records, counts, messages = {}, {}, []
     for part in parts:
-        found = part(ctx)
+        stored = ctx.read
+        so_far = {kind: [to_plain(row) for row in rows] for kind, rows in records.items()}   # as the store would hand them back
+        reading = dataclasses.replace(ctx, read=lambda kind, stored=stored, so_far=so_far: list(stored(kind)) + so_far.get(kind, []))
+        found = part(reading)
         for kind, rows in (found.records or {}).items():
             records.setdefault(kind, []).extend(rows)
-        counts.update(found.counts or {})
+        for name, value in (found.counts or {}).items():     # two parts that count the same thing add up
+            counts[name] = counts.get(name, 0) + value if isinstance(value, (int, float)) and isinstance(counts.get(name, 0), (int, float)) else value
         messages += found.messages or []
     return StepResult(records, counts, messages)
 
@@ -8852,15 +8783,9 @@ def read_with_ai(ctx):
 def link_units(ctx):
     """Step 06, link-units: two passes of search and judgement - candidates by code, then the model's
     judgement on each, twice, so that a link found in the first pass can carry the second. Enforces: R3"""
-    first = dataclasses.replace(ctx, search_pass=1)
-    second = dataclasses.replace(ctx, search_pass=2)
-    return combine(ctx, lambda _: combine(first, find_candidates, judge_links),
-                   lambda _: combine(second, find_candidates, judge_links))
-
-def check_units(ctx):
-    """Step 07, check-units: the four checks by code - the formulas, the values, the stated rules, and
-    the package's own documentation against its code. Enforces: R4"""
-    return combine(ctx, check_mathematics, check_values, check_rules, check_package_docs)
+    each = lambda number: (lambda inner: combine(dataclasses.replace(inner, options=dict(inner.options, **{"pass": number})),
+                                                 find_candidates, judge_links))
+    return combine(ctx, each(1), each(2))
 
 STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
     "read_methodology": read_methodology,
@@ -8872,11 +8797,10 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "judge_concepts": judge_concepts,
     "map_implementation": map_implementation,
     "find_candidates": find_candidates,
-    "judge_links": judge_links, "interpret_code": interpret_code,
-    "check_mathematics": check_mathematics,
-    "check_values": check_values,
-    "check_rules": check_rules,
-    "check_package_docs": check_package_docs,
-    "account_coverage": account_coverage,
+    "judge_links": judge_links,
+    "interpret_code": interpret_code,
     "prepare_run": prepare_run,
-    "record_determinations": record_determinations}
+    "read_inputs": read_inputs,
+    "build_map": build_map,
+    "read_with_ai": read_with_ai,
+    "link_units": link_units}
