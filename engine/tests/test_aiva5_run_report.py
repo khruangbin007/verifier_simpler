@@ -313,7 +313,7 @@ class RunnerAndWorkbook(unittest.TestCase):
 
     def test_run_stops_at_the_human_step_and_resumes_after_confirmation(self):
         self.assertEqual(self.first["state"], "waiting for a person")
-        self.assertIn("cell 10", self.first["message"])
+        self.assertIn("cell 4", self.first["message"])
         self.assertEqual(self.first["steps_run"][-1], "find-candidates")
         runner.confirm_outline(self.paths, self.settings, "reviewer-1")
         second = runner.run_pipeline(self.paths, self.settings, chat=standin_chat.chat)

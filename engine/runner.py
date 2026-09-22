@@ -49,7 +49,7 @@ DEFAULT_SETTINGS = {
     "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
 
 def make_settings(overrides=None):
-    """The settings of a  Only names on the allow-list above exist, so a new setting
+    """The settings of a run. Only names on the allow-list above exist, so a new setting
     can never leak into the manifest by default, and no setting can hold the token.
     Enforces: R8"""
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
@@ -523,7 +523,7 @@ def make_asker(chat, live, store, settings, validate, state=None, sleep=time.sle
     return ask
 
 def replay_chat(call_records):
-    """A chat() that answers from the recorded answers of an earlier  Running the
+    """A chat() that answers from the recorded answers of an earlier run. Running the
     pipeline with it must reproduce the same graph version id, statuses and items, which
     is what reproducibility means for a model that samples its answers. Enforces: R5"""
     recorded = {}
@@ -549,9 +549,9 @@ CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpr
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
     "confirm-outline": "Waiting for a person: check Level and Section (heading chain) on Chunks_Canon "
-                       "against the methodology's own outline, then run cell 10 to confirm.",
+                       "against the methodology's own outline, then run cell 4 to confirm.",
     "await-determinations": "Waiting for a person: download Output.xlsx from Outputs/, fill the four "
-                            "yellow columns on Flagged_Items, upload it into Outputs/ and run cell 14."}
+                            "yellow columns on Flagged_Items, put it back in the run folder and run cell 5."}
 
 def load_pipeline(engine_dir=ENGINE_DIR):
     """Read pipeline.yaml and refuse anything that is not a known step carried out by a known
@@ -582,7 +582,7 @@ def update_manifest(store, changes):
     return manifest
 
 def confirm_outline(paths, settings, reviewer):
-    """Record that a person has checked the outline of the methodology (notebook cell 10)."""
+    """Record that a person has checked the outline of the methodology (notebook cell 4)."""
     store = open_store(paths, settings)
     update_manifest(store, {"outline_confirmed_by": reviewer or "not named",
                             "outline_confirmed_at": datetime.datetime.now().isoformat(timespec="seconds")})
@@ -633,7 +633,7 @@ def run_pipeline(paths, settings, chat=None, live=None, determinations=False, st
             keep_alive()
         if stop_after and step["id"] == stop_after:
             break
-    message = "Every step has " if not stop_after else "Stopped after step %s as asked." % stop_after
+    message = "Every step has run." if not stop_after else "Stopped after step %s as asked." % stop_after
     rebuild_outputs(store, paths, settings, message)
     return {"state": "finished", "message": message, "steps_run": steps_run}
 

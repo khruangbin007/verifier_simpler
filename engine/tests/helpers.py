@@ -9,7 +9,7 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ENGINE_DIR = os.path.dirname(TESTS_DIR)
 ROOT_DIR = os.path.dirname(ENGINE_DIR)
 SAMPLES_DIR = os.path.join(TESTS_DIR, "sample_projects")
-for folder in (ENGINE_DIR, TESTS_DIR, os.path.join(ROOT_DIR, "tools")):
+for folder in (ENGINE_DIR, TESTS_DIR):
     if folder not in sys.path:
         sys.path.insert(0, folder)
 

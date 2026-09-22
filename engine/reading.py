@@ -1459,7 +1459,7 @@ def unpack_zip(zip_path, max_member_bytes):
 def loose_package(paths, root, max_member_bytes):
     """A package put in the folder unpacked - its source folder rather than a built tarball -
     read file by file, under the same size limit. People very often have the one and not the
-    other, and until 0.0.2 a folder here stopped the runner."""
+    other, and until 0.0.2 a folder here stopped the run."""
     files, refused = {}, []
     for path in paths:
         name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
@@ -1976,7 +1976,7 @@ def to_expr(node, function_map, known):
     """One R expression to AIVA's neutral formula tree, through r_function_map.yaml. `known`
     holds local variables already assigned in the same function: they are substituted, so a
     change three lines above the return still reaches the comparison. Anything AIVA cannot
-    evaluate raises CannotConvert; nothing is guessed and nothing is runner. Enforces: R7"""
+    evaluate raises CannotConvert; nothing is guessed and nothing is run. Enforces: R7"""
     kind = node.kind
     if kind == "num":
         return core.Expr("num", value=number_token(node)["value"])
@@ -2712,7 +2712,7 @@ def safe_text(data):
     return core.decode_text(data) if b"\x00" not in data[:4096] else None
 
 def read_package(ctx):
-    """Step 04, read- Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
+    """Step 04, read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
     data, man/, tests/, vignettes/, the rest; by name inside each), so references are stable
     for an unchanged tarball. Enforces: R2, R5"""
     tarballs = ctx.options["inputs"]["package"]
@@ -2767,7 +2767,7 @@ def read_package(ctx):
     info = {"name": description.get("Package", ""), "version": description.get("Version", ""), "parser": PARSER_NAME,
             "tarball": os.path.basename(tarballs[0]), "files": inventory,
             "rows": package_rows(description, namespace, units, facts, refused)}
-    messages = ["%d units read from %d files of the " % (len(units), len(files))]
+    messages = ["%d units read from %d files of the package." % (len(units), len(files))]
     r_files = sum(1 for path in files if path.lower().endswith(".r"))
     if "DESCRIPTION" not in files or r_files * 10 < len(files):
         # AIVA's reader of code reads R and nothing else. A model in Python, SAS or MATLAB comes

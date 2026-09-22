@@ -13,8 +13,8 @@ import tarfile
 import zipfile
 import warnings
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SAMPLES = os.path.join(ROOT, "engine", "tests", "sample_projects")
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SAMPLES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_projects")
 FOLDERS = {"canon": "1_Methodology", "package": "2_Model_Package", "doc": "3_Model_Documentation"}
 
 

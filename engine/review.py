@@ -959,7 +959,7 @@ def package_outline(units, package):
     """The whole package in a few lines, as every interpretation question sees it: its name and
     title, then for each file the functions defined there with their arguments and the first
     line of their documentation, and the stored data. Also returns the documentation block of
-    each unit, by the reference of the unit it reading."""
+    each unit, by the reference of the unit it documents."""
     described = {u["roxygen"]["documents_ref"]: u for u in units if u.get("roxygen") and u["roxygen"].get("documents_ref")}
     title = next((row["value"] for row in package.get("rows", []) if row.get("item") == "Title"), "")
     lines, by_file = ["Package %s %s: %s" % (package.get("name", ""), package.get("version", ""), title)], {}
@@ -1137,7 +1137,7 @@ VALUE_RULE_TEXT = (
 
 def compare_values(stated, other, exact=False):
     """The value rule of plan 2.8. `stated` is the methodology's number and `other` the value
-    compared with it, both as {"value", "decimals", ...} from core.parse_number. `exact`
+    compared with it, both as {"value", "decimals", ...} from shared.parse_number. `exact`
     marks a stored or coded value, which has no written precision of its own.
     Returns (outcome, note): agrees | agrees at stated precision | agrees at the coarser
     precision | differs; the note names the rounding convention when the two differ."""
@@ -2062,12 +2062,12 @@ NEXT_STEPS = {
     core.CAT_VALUE_DIFFERS: "Compare the listed rows of the package table with the cited table of the methodology.",
     core.CAT_NUMBER_NOT_TRACED: "Find where the methodology states this number, or confirm that it needs no statement.",
     core.CAT_DATA_NOT_TRACED: "Decide which table of the methodology this stored object corresponds to, if any.",
-    core.CAT_DATA_NOT_DESCRIBED: "Check whether the stored object and each of its columns should be described in the reading.",
-    core.CAT_PKGDOC_VS_CODE: "Compare the roxygen block or help page with the function it reading.",
+    core.CAT_DATA_NOT_DESCRIBED: "Check whether the stored object and each of its columns should be described in the package.",
+    core.CAT_PKGDOC_VS_CODE: "Compare the roxygen block or help page with the function it documents.",
     core.CAT_PKGDOC_VS_CANON: "Compare the value stated in the package documentation with the cited passage.",
     core.CAT_DOC_NOT_TRACED: "Decide which passage of the methodology this statement of the documentation rests on, if any.",
     core.CAT_DOC_VS_CANON: "Compare the statement in the documentation with the cited passage of the methodology.",
-    core.CAT_DOC_VS_CODE: "Compare the statement in the documentation with the cited unit of the reading.",
+    core.CAT_DOC_VS_CODE: "Compare the statement in the documentation with the cited unit of the package.",
     core.CAT_NOT_READ: "Review this item by hand; AIVA could not read or assess it.",
     core.CAT_AI_UNUSABLE: "Review this unit by hand, or run AIVA again; the AI's answer could not be used.",
     core.CAT_AI_DISAGREE: "Read both quotations and decide whether the unit and the passage state the same thing."}
@@ -2078,7 +2078,7 @@ STATUS_RULES = (      # applied top to bottom; the first rule that fits decides.
     ("model", "package file without code", core.ST_SUPPORTING, "DESCRIPTION, NAMESPACE and other files that hold no code."),
     ("model", "example code in a vignette", core.ST_SUPPORTING, "Code inside a vignette; it illustrates the package and is not part of the model."),
     ("model", "its own checks", core.ST_DIFFERS + " / " + core.ST_UNDECIDED, "A roxygen block or help page whose own deterministic checks differ or are undecided."),
-    ("model", "documents no single object", core.ST_SUPPORTING, "A roxygen block or help page that documents no single object of the reading."),
+    ("model", "documents no single object", core.ST_SUPPORTING, "A roxygen block or help page that documents no single object of the package."),
     ("model", "takes the tracing of what it documents", "the status of the documented object", "A roxygen block or help page whose own checks pass."),
     ("model", "a check or the judge reports a difference", core.ST_DIFFERS, "Linked, and a check, the judge or the second question reports a difference."),
     ("model", "a required check is undecided", core.ST_UNDECIDED, "Linked, and a required check could not be decided."),

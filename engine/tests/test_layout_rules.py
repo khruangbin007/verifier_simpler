@@ -8,12 +8,12 @@ import unittest
 
 import helpers
 import core
-import count_lines
+import develop
 
-BUNDLES = ("core", "core", "core", "reading", "reading", "review", "review", "runner")
+BUNDLES = ("core", "reading", "review", "runner", "develop")
 FORBIDDEN_NAMES = ("eval", "exec", "compile", "__import__")           # called as a bare name
 FORBIDDEN_ATTRIBUTES = ("sympify", "parse_expr", "system", "popen", "lambdify")   # called on any owner
-PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Error|Exception)\b|<class |object at 0x|\bnan\b|\baiva\d_\w+|"
+PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Error|Exception)\b|<class |object at 0x|\bnan\b|"
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
 
 
@@ -28,7 +28,9 @@ def own_words(text):
 
 
 class ImportDirection(unittest.TestCase):
-    def test_a_file_imports_only_the_shared_file_and_lower_numbered_files(self):
+    def test_a_module_imports_only_the_modules_below_it(self):
+        """core imports nothing of the engine; reading imports core; review imports core and reading;
+        runner imports all three; develop imports whatever it measures. One direction, no cycles."""
         for position, name in enumerate(BUNDLES):
             for node in ast.walk(ast.parse(engine_source(name))):
                 imported = []
@@ -37,17 +39,17 @@ class ImportDirection(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom):
                     imported = [node.module or ""]
                 for module in imported:
-                    if module.startswith("aiva"):
+                    if module in BUNDLES:
                         self.assertIn(module, BUNDLES[:position], "%s imports %s" % (name, module))
 
     def test_no_engine_file_imports_tests_or_tools(self):
-        for name in BUNDLES:
+        for name in BUNDLES[:4]:                     # develop.py is about the tool, and may drive the tests' stand-in
             self.assertNotRegex(engine_source(name), r"(?m)^\s*(import|from)\s+(standin_chat|failing_chat|tools)")
 
 
 class LineBudgetsAndStyle(unittest.TestCase):
     def test_every_bundle_is_within_its_budget(self):
-        rows, within = count_lines.report()
+        rows, within = develop.report()
         self.assertTrue(within, [(r["name"], r["total"]) for r in rows if not r["ok"]])
 
     def test_only_the_dataclass_decorator_and_no_execution_of_text(self):
@@ -78,8 +80,7 @@ class StaticWordingLint(unittest.TestCase):
     name the words is the allow-list."""
 
     def lintable_files(self):
-        patterns = ("engine/*.py", "engine/pipeline.yaml", "engine/references/**/*", "engine/skills/**/SKILL.md",
-                    "docs/manual_src/*.md", "AIVA_Interface.ipynb")
+        patterns = ("engine/*.py", "engine/pipeline.yaml", "engine/references/**/*", "docs/*.md", "Verifier.ipynb")
         files = []
         for pattern in patterns:
             files.extend(p for p in glob.glob(os.path.join(helpers.ROOT_DIR, pattern), recursive=True) if os.path.isfile(p))

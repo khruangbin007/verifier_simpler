@@ -1,6 +1,6 @@
 """test_reading_report.py - the sign-off bar has to be able to FAIL, or it is decoration.
 
-`tools/reading_report.py` says whether guided reading has earned the right to be the default.
+`develop.run` says whether guided reading has earned the right to be the default.
 Its four tests are what stands between a measurement and a decision, so each is fed a result
 that should trip it. A bar that passes everything tells the owner nothing.
 """
@@ -10,8 +10,7 @@ import unittest
 
 import helpers
 
-sys.path.insert(0, os.path.join(helpers.ROOT_DIR, "tools"))
-import reading_report
+import develop as reading_report
 
 
 def a_result(**changes):
