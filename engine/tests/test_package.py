@@ -225,66 +225,6 @@ class ImplementationMapSample(unittest.TestCase):
         self.assertEqual([nodes[loop]["callee"] for loop in loops], ["notch_down"])
 
 
-class FinalOutputs(unittest.TestCase):
-    """Stage 3 of the implementation map: code proposes the final outputs; a person decides, in the
-    yellow column of Model_Implementation_Map, read back by function name when the outline is confirmed."""
-
-    def run_to_cell_3(self):
-        import openpyxl
-        projects = helpers.scratch()
-        helpers.copy_sample("J_pipeline", projects, "J", "2026-09-22")
-        settings = runner.make_settings({})
-        paths = runner.open_run(projects, "J", "2026-09-22", scratch_root=helpers.scratch())
-        runner.run_pipeline(paths, settings, stop_after="06")
-        return paths, settings, os.path.join(paths.run_dir, "Output.xlsx"), openpyxl
-
-    def decide(self, path, openpyxl, choices):
-        book = openpyxl.load_workbook(path)
-        sheet = book["Model_Implementation_Map"]
-        header = [cell.value for cell in sheet[1]]
-        at_name, at_word = header.index("Function"), header.index("Final output (your decision)")
-        for row in range(2, sheet.max_row + 1):
-            name = sheet.cell(row=row, column=at_name + 1).value
-            if name in choices:          # .value, not cell(value=None): openpyxl's cell() ignores None, so it cannot empty a cell
-                sheet.cell(row=row, column=at_word + 1).value = choices[name]
-        book.save(path)
-
-    def test_the_sheet_shows_every_function_with_what_code_proposes_and_why(self):
-        """On the tree (stage 5): the final output is the top row, 01, with code's reasons; every other
-        function is a call on its path or a row of branch 90, the functions no final output reaches."""
-        _, _, path, openpyxl = self.run_to_cell_3()
-        rows = list(openpyxl.load_workbook(path, read_only=True)["Model_Implementation_Map"].iter_rows(values_only=True))
-        header, body = rows[0], [dict(zip(rows[0], row)) for row in rows[1:]]
-        self.assertEqual((body[0]["Map ID"], body[0]["Function"], body[0]["Role"]), ("01", "harbour_rating", "Final output"))
-        self.assertIn("called by a test or vignette", body[0]["How established"])
-        unreached = {row["Function"] for row in body if str(row["Map ID"]).startswith("90.")}
-        self.assertEqual(unreached & {"legacy_score", "combine_results", "%||%"}, {"legacy_score", "combine_results", "%||%"})
-        shown = {row["Function"] for row in body if row["Role"] in ("Final output", "Calls a function") or str(row["Map ID"]).startswith("90.")}
-        self.assertTrue({"harbour_rating", "factor_scores", "weighted_score", "adjust_score", "anchor_rating", "cap_rating", "notch_down"} <= shown)
-
-    def test_a_decision_overrides_the_proposal_is_chained_and_an_emptied_cell_withdraws_it(self):
-        paths, settings, path, openpyxl = self.run_to_cell_3()
-        self.decide(path, openpyxl, {"harbour_rating": "no", "legacy_score": "yes", "notch_down": "maybe"})
-        said = runner.confirm_outline(paths, settings, "analyst.one")
-        self.assertIn("Final outputs: legacy_score (your decision).", said)
-        self.assertIn("notch_down: 'maybe' is not one of yes / no and was ignored", said)
-        store = runner.open_store(paths, settings)
-        records = store.read("output_decisions")
-        self.assertEqual({(r["function"], r["decision"], r["reviewer_id"]) for r in records},
-                         {("harbour_rating", "no", "analyst.one"), ("legacy_score", "yes", "analyst.one")})
-        self.assertTrue(core.verify_chain(records)[0], "the decisions are a hash chain, like the determinations")
-        self.decide(path, openpyxl, {"harbour_rating": None, "legacy_score": None})
-        said = runner.confirm_outline(paths, settings, "analyst.one")
-        self.assertIn("Final outputs: harbour_rating (proposed by code", said, "emptied cells give code's proposal back")
-
-    def test_without_a_proposal_or_a_decision_every_function_nothing_calls_stands_in(self):
-        records = [{"record_type": "roots", "proposed": [], "not_reached": [], "why": {"f": "nothing in the package calls it",
-                                                                                          "g": "nothing in the package calls it"}}]
-        outputs, how, _ = reading.decided_outputs(records, {})
-        self.assertEqual(outputs, ["f", "g"])
-        self.assertIn("no final output was proposed or decided", how["f"])
-
-
 class MapAgents(unittest.TestCase):
     """Stage 4, the skill map-implementation: the Tracer works only on the gaps on the path from a final
     output, one action a turn from a fixed list, every link copying the code; the Namer names the steps;
@@ -318,13 +258,6 @@ class MapAgents(unittest.TestCase):
         self.assertIn(trace["edges"][0]["quote"], unit["text"], "the link copies the code word for word")
         self.assertEqual([g["function"] for g in audit["gaps not reached"]], ["combine_results"])
 
-    def test_every_step_on_the_path_gets_a_plain_name(self):
-        audit, names = self.store.read("map_audit")[0], self.store.read("step_names")
-        self.assertEqual(len(names), audit["steps"])
-        for record in names:
-            self.assertLessEqual(len(record["name"].split()), 12)
-            self.assertEqual(core.has_banned_wording(record["name"]), "")
-
     def test_each_bad_action_is_refused_with_its_reason(self):
         flow, units = self.store.read("dataflow"), self.store.read("model_units")
         gap = next(g for g in flow if g["record_type"] == "gap" and g["function"] == "adjust_score")
@@ -352,7 +285,7 @@ class MapAgents(unittest.TestCase):
         again = runner.open_store(paths, settings)
         keep = lambda traces: [(t["gap"]["function"], t["status"], [(h["action"], h["args"]) for h in t["hops"]], t["edges"]) for t in traces]
         self.assertEqual(keep(again.read("map_traces")), keep(self.store.read("map_traces")))
-        self.assertEqual([(n["node"], n["name"]) for n in again.read("step_names")], [(n["node"], n["name"]) for n in self.store.read("step_names")])
+        self.assertEqual([r["status"] for r in again.read("map_traces")], [r["status"] for r in self.store.read("map_traces")])
 
     def test_the_turn_limit_ends_a_trace_that_never_ends(self):
         counter = iter(range(1000))
@@ -374,9 +307,8 @@ class MapAgents(unittest.TestCase):
 
 
 class ImplementationMapSheet(unittest.TestCase):
-    """Stage 5, the sheet: from each final output down to the rawest inputs, IDs that sort back into the
-    tree, repeats as 'see' rows, loops marked, three branches so nothing falls out, and every row traceable
-    to its model unit, the methodology, the documentation, the concepts and the flagged items."""
+    """The sheet: one row per value the model computes, from each final output down to the rawest inputs,
+    numbered so that the Map ID columns filter the tree, and nothing on it that no calculation reaches."""
 
     @classmethod
     def setUpClass(cls):
@@ -385,78 +317,82 @@ class ImplementationMapSheet(unittest.TestCase):
         cls.store = runner.open_store(cls.paths, cls.settings)
         cls.rows = runner.implementation_map(cls.store, cls.settings)
 
-    def test_sorting_the_ids_gives_the_tree_back(self):
-        ids = [row["map_id"] for row in self.rows]
-        self.assertEqual(ids, sorted(ids), "the ID column sorts back into the tree")
-        seen = set()
+    def test_one_row_is_one_variable_computed_by_one_function(self):
         for row in self.rows:
-            parent = row["map_id"].rsplit(".", 1)[0] if "." in row["map_id"] else None
-            self.assertTrue(parent is None or parent in seen, "%s appears before its parent" % row["map_id"])
-            self.assertEqual(row["level"], row["map_id"].count("."), row["map_id"])
-            seen.add(row["map_id"])
+            self.assertTrue(row["output_variable"], row["map_id"])
+            self.assertNotIn(";", row["output_variable"], "never two variables in a row")
+            self.assertFalse(row["output_variable"].endswith("()"), "a function name is not a variable")
+            if row["fn_ref"]:
+                self.assertTrue(row["function_name"], row["map_id"])
+
+    def test_every_argument_is_a_variable_of_a_row_beneath_it(self):
+        by_id = {row["map_id"]: row for row in self.rows}
+        for row in self.rows:
+            children = [other for other in self.rows if other["map_id"].rsplit(".", 1)[0] == row["map_id"] and other["map_id"] != row["map_id"]]
+            named = [name.strip() for name in row["arguments"].split(";") if name.strip()]
+            self.assertEqual(named, [child["output_variable"] for child in children], row["map_id"])
+            self.assertTrue(all(child["map_id"] in by_id for child in children))
+
+    def test_the_map_ids_dissect_into_columns_that_filter_the_tree(self):
+        for row in self.rows:
+            parts = row["map_id"].split(".")
+            self.assertEqual([row["id%d" % n] for n in range(1, len(parts) + 1)], parts, row["map_id"])
+            self.assertEqual([row["id%d" % n] for n in range(len(parts) + 1, runner.MAP_ID_COLUMNS + 1)],
+                             [""] * (runner.MAP_ID_COLUMNS - len(parts)), "a parent leaves the deeper columns empty")
+            self.assertEqual(row["level"], len(parts) - 1)
 
     def test_the_tree_runs_from_the_final_output_to_the_rawest_inputs(self):
         import yaml
         with open(os.path.join(helpers.SAMPLES_DIR, "J_pipeline", "gold_map.yaml"), encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle)["raw_inputs"]
-        top = [row for row in self.rows if row["map_id"] == "01"][0]
-        self.assertEqual((top["function"], top["role"]), ("harbour_rating", "Final output"))
-        leaves = [row for row in self.rows if row["map_id"].startswith("01.") and row["role"].startswith("Raw input")]
-        found = lambda role, name: any(row["role"].startswith(role) and name in (row["variable"], row["step"], row["code"]) for row in leaves)
-        for name in raw["argument"]:
-            self.assertTrue(found("Raw input: argument", name), name)
-        for name in raw["column_of_an_argument"]:
-            self.assertTrue(found("Raw input: column", name), name)
-        for name in raw["stored_data"]:
-            self.assertTrue(any(row["role"] == "Raw input: stored data" and row["step"].endswith(name) for row in leaves), name)
-        self.assertTrue(any(row["role"] == "Raw input: file" and "thresholds.csv" in row["step"] for row in leaves))
-        for number in raw["hard_coded_number"]:
-            self.assertTrue(any(row["role"] == "Raw input: hard-coded number" and row["step"] == "the number %s" % number for row in leaves), number)
+            gold = yaml.safe_load(handle)
+        self.assertEqual(self.rows[0]["output_variable"], "harbour_rating")
+        variables = {row["output_variable"] for row in self.rows}
+        for kind in ("argument", "column_of_an_argument", "stored_data", "hard_coded_number"):
+            for name in gold["raw_inputs"][kind]:
+                self.assertIn(name, variables, kind)
+        self.assertTrue(any("thresholds.csv" in row["output_variable"] for row in self.rows))
 
-    def test_every_see_row_points_at_a_real_step_and_the_recursion_is_a_loop(self):
-        ids = {row["map_id"] for row in self.rows}
-        for row in self.rows:
-            if row["step"].startswith("see "):
-                self.assertIn(row["step"][4:], ids)
-        self.assertEqual([row["function"] for row in self.rows if row["role"].startswith("Loop")], ["notch_down"])
+    def test_nothing_no_calculation_reaches_is_on_the_sheet(self):
+        refs = {row["ov_ref"] for row in self.rows} | {row["fn_ref"] for row in self.rows}
+        missing = runner.not_on_the_map(self.store, self.rows, self.settings)
+        self.assertTrue(set(missing["model_units"]) & {u["ref"] for u in self.store.read("model_units")}, "some units are unreached")
+        self.assertFalse(refs & set(missing["model_units"]), "and none of them is a row of the map")
+        for name in ("combine_results", "legacy_score"):
+            self.assertNotIn(name, {row["function_name"] for row in self.rows})
 
-    def test_every_model_unit_is_on_the_map_and_every_flagged_item_is_real(self):
-        refs = {row["model_ref"] for row in self.rows} | {ref.strip() for row in self.rows for ref in row["related"].split(",")}
-        missing = sorted(u["ref"] for u in self.store.read("model_units") if u["ref"] not in refs)
-        self.assertEqual(missing, [], "every model unit is a row, related to one, or in branch 90")
-        items = {item["item_id"] for item in self.store.read("flagged_items")}
-        shown = [item for row in self.rows for item in row["flagged"].split(", ") if item]
-        self.assertTrue(shown and set(shown) <= items)
+    def test_what_the_map_does_not_reach_is_counted_for_the_coverage(self):
+        missing = runner.not_on_the_map(self.store, self.rows, self.settings)
+        canon = {c["ref"]: c for c in self.store.read("chunks_canon")}
+        doc = {c["ref"]: c for c in self.store.read("chunks_doc")}
+        self.assertEqual([canon[ref]["text"][:30] for ref in missing["methodology"]], ["The rating is lowered by one n"])
+        self.assertEqual([doc[ref]["text"][:30] for ref in missing["documentation"]], ["The package also produces a qu"])
 
-    def test_the_methodology_and_documentation_branches_hold_the_answer_keys_two(self):
-        branch = lambda number: [row for row in self.rows if row["map_id"].startswith(number + ".")]
-        self.assertEqual([row["step"][:30] for row in branch("91")], ["The rating is lowered by one n"], "the stress test, and only it")
-        self.assertEqual([row["step"][:30] for row in branch("92")], ["The package also produces a qu"], "the dashboard, and only it")
-
-    def test_the_rows_group_and_indent_in_excel(self):
+    def test_the_rows_group_and_the_references_link(self):
         import openpyxl
         book = openpyxl.load_workbook(os.path.join(self.paths.run_dir, "Output.xlsx"))
         sheet = book["Model_Implementation_Map"]
         self.assertFalse(sheet.sheet_properties.outlinePr.summaryBelow, "a parent sits above its members")
+        self.assertEqual(sheet.column_dimensions["A"].outline_level, 1, "the Map ID columns fold away")
         header = [cell.value for cell in sheet[1]]
-        deepest = 0
         for number in range(2, sheet.max_row + 1):
             level = int(sheet.cell(row=number, column=header.index("Level") + 1).value or 0)
-            self.assertEqual(sheet.row_dimensions[number].outline_level, min(level, 7), "Excel groups eight levels deep")
-            self.assertEqual(sheet.cell(row=number, column=header.index("Step") + 1).alignment.indent, min(level, 15))
-            deepest = max(deepest, level)
-        self.assertGreater(deepest, 7, "and deeper rows are indented, not lost")
+            self.assertEqual(sheet.row_dimensions[number].outline_level, min(level, 7))
+        links = {cell.value: cell.hyperlink.location for row in sheet.iter_rows(min_row=2) for cell in row if cell.hyperlink}
+        self.assertTrue(links, "a reference links to the row that holds it")
+        model_rows = {row[0].value: number for number, row in enumerate(book["Chunks_Model"].iter_rows(min_row=2), start=2)}
+        concept_rows = {row[0].value: number for number, row in enumerate(book["Concepts"].iter_rows(min_row=2), start=2)}
+        for value, location in links.items():
+            where = model_rows if value.startswith("M-") else concept_rows
+            self.assertEqual(location, "'%s'!A%d" % ("Chunks_Model" if value.startswith("M-") else "Concepts", where[value]), value)
 
     def test_capital_k_enters_each_call_with_that_calls_arguments(self):
         import standin_chat
         paths, settings, _ = helpers.run_sample("F_capital", chat=standin_chat.chat_well_behaved)
         rows = runner.implementation_map(runner.open_store(paths, settings), settings)
-        tree = [row for row in rows if row["map_id"] == "01" or row["map_id"].startswith("01.")]
-        self.assertEqual(tree[0]["function"], "capital_k")
-        calls = {row["function"] for row in tree if row["role"] == "Calls a function"}
-        self.assertTrue({"cond_pd", "floor_pd", "asset_correlation"} <= calls)
-        self.assertTrue(any(row["step"] == "the number 0.999" and "default" in row["how"] for row in tree), "q takes its default there")
-        self.assertFalse([row for row in tree if "open gap" in row["how"]])
+        top = [row for row in rows if row["map_id"] == "01"][0]
+        self.assertEqual((top["output_variable"], top["function_name"]), ("capital_k", "capital_k"))
+        variables = {row["output_variable"] for row in rows}
+        self.assertTrue({"lgd", "segment", "lgd_floors", "0.999"} <= variables, sorted(variables))
 
 
 class MapSignOff(unittest.TestCase):
@@ -470,10 +406,10 @@ class MapSignOff(unittest.TestCase):
         self.assertIn("reported but NOT met", text)
         self.assertIn("map-sign-off", text, "and it says where to run it for real")
 
-    def test_a_model_that_invents_links_or_grades_steps_does_not_meet_the_bar(self):
+    def test_a_model_that_invents_links_does_not_meet_the_bar(self):
         """The rehearsal: a bar that cannot fail is worth nothing. This model declares a link quoting code
-        that is not there and names steps in graded words; the validators refuse both, so nothing it said
-        reaches the map - and the bar must show that the agents did not do their work."""
+        that is not there; the validator refuses it, so nothing it said reaches the map - and the bar must
+        show that the agents did not do their work."""
         import json
         import re
         import standin_chat
@@ -498,21 +434,21 @@ class MapSignOff(unittest.TestCase):
             paths, settings, _ = helpers.run_sample("J_pipeline", chat=standin_chat.chat_well_behaved,
                                                     settings={"map_granularity": granularity})
             rows = runner.implementation_map(runner.open_store(paths, settings), settings)
-            maps[granularity] = [row for row in rows if not row["map_id"].startswith("9")]
-        raw = lambda rows: sorted(row["step"] for row in rows if row["role"].startswith("Raw input"))
+            maps[granularity] = rows
+        raw = lambda rows: {row["output_variable"] for row in rows if row["role"].startswith("Raw input")}
         self.assertEqual(raw(maps["function"]), raw(maps["statement"]), "the same raw inputs, however fine the map")
         self.assertLess(len(maps["function"]), len(maps["statement"]))
         self.assertLess(max(row["level"] for row in maps["function"]), max(row["level"] for row in maps["statement"]))
-        self.assertFalse([row for row in maps["function"] if row["role"] in ("Intermediate value", "Column") and row["code"]],
+        self.assertFalse([row for row in maps["function"] if row["role"] in ("Intermediate value", "Column") and row["level"] > 1],
                          "values and columns fold into the calls")
 
     def test_a_map_that_would_run_away_is_cut_and_says_so(self):
         import standin_chat
         paths, settings, _ = helpers.run_sample("J_pipeline", chat=standin_chat.chat_well_behaved, settings={"map_rows_max": 20})
         rows = runner.implementation_map(runner.open_store(paths, settings), settings)
-        cut = [row for row in rows if row["role"].startswith("Cut at")]
+        cut = [row for row in rows if row["output_variable"] == "the map was cut here"]
         self.assertEqual(len(cut), 1)
-        self.assertIn("map_granularity", cut[0]["how"], "and it says how to ask for a smaller map")
+        self.assertIn("map_granularity", cut[0]["arguments"], "and it says how to ask for a smaller map")
         self.assertLessEqual(len([row for row in rows if not row["map_id"].startswith("9")]), 21)
 
 

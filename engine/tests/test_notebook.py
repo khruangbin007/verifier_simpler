@@ -198,24 +198,15 @@ class NotebookCells(unittest.TestCase):
             book = openpyxl.load_workbook(book_path)
             sheet = book["Chunks_Doc"]
             header = [cell.value for cell in sheet[1]]
-            self.assertIn("Use in review", header, "the yellow scope column is on the Chunks sheets")
-            sheet.cell(row=2, column=header.index("Use in review") + 1, value="to not use")
-            left_out = sheet.cell(row=2, column=header.index("Ref") + 1).value
             book.save(book_path)
             shown = run_cell(4, {'MODE = "A"': 'MODE = "C"'})
             self.assertIn("confirmed by analyst.one", shown)
             self.assertIn("Final outputs:", shown)
-            self.assertIn("1 unit(s) marked to not use", shown)
             self.assertIn("Waiting for a person", shown)
             self.assertIn("account-coverage", run_cell(4, {'MODE = "A"': 'MODE = "C"'}), "a second run of cell 4 shows the status")
             shown = run_cell(5)
             self.assertIn("No edited workbook of this run was found", shown)
             store = space["runner"].open_store(space["PATHS"], space["SETTINGS"])
-            status = [r for r in store.read("unit_status") if r["unit_ref"] == left_out][0]
-            self.assertEqual(status["status"], "Not in scope (a person's decision)")
-            self.assertTrue(status["clean"], "a unit a person left out is clean and raises no item")
-            self.assertFalse([r for r in store.read("graph_ledger") if r["record_type"] == "edge" and left_out in (r.get("source"), r.get("target"))],
-                             "a unit left out is neither linked nor a target")
             self.assertIn("Verifying the evidence pack", shown)
             self.assertNotIn("differs", shown.lower().split("verifying the evidence pack")[1])
             for line in shown.split("\n"):

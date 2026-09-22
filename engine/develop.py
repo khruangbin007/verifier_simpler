@@ -886,7 +886,8 @@ def map_measure(sample="J_pipeline", record=True, chat=None):
     store = runner.open_store(paths, settings)
     flow, mapped = store.read("dataflow"), runner.implementation_map(store, settings)
     canon = {c["ref"]: c for c in store.read("chunks_canon")}
-    branch = lambda number: [row for row in mapped if row["map_id"].startswith(number + ".")]
+    doc = {c["ref"]: c for c in store.read("chunks_doc")}
+    missing = runner.not_on_the_map(store, mapped, settings)
     nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
     roots = next(r for r in flow if r["record_type"] == "roots")
     calls = {(r["function"], r["callee"]) for r in nodes.values() if r["kind"] == "call"}
@@ -926,14 +927,15 @@ def map_measure(sample="J_pipeline", record=True, chat=None):
         "raw inputs: hard-coded numbers": (len(set(raw["hard_coded_number"]) & leaf_names["number"]), len(raw["hard_coded_number"])),
         "gaps named, for the agents": (sum(any(g["function"] == gap["function"] and gap["code"] in g["code"] for g in gaps) for gap in gold["gaps"]),
                                        len(gold["gaps"])),
-        "methodology no step implements": (sum(any(heading in " > ".join(canon[row["methodology"].split(" ")[0]]["heading_chain"]) for row in branch("91"))
+        "methodology no step implements": (sum(any(heading in " > ".join(canon[ref]["heading_chain"]) for ref in missing["methodology"])
                                                for heading in gold["methodology_not_implemented"]), len(gold["methodology_not_implemented"])),
-        "documentation describing nothing in the map": (sum(any(words in row["step"] for row in branch("92")) for words in gold["documentation_describing_nothing"]),
+        "documentation describing nothing in the map": (sum(any(words in doc[ref]["text"] for ref in missing["documentation"])
+                                                            for words in gold["documentation_describing_nothing"]),
                                                         len(gold["documentation_describing_nothing"])),
         "gaps on the path traced by the agents": (sum(1 for t in store.read("map_traces") if t["status"].startswith("traced")),
                                                   len(store.read("map_traces"))),
-        "no more in those two branches than the answer key": (int(len(branch("91")) + len(branch("92")) <= len(gold["methodology_not_implemented"]) +
-                                                                  len(gold["documentation_describing_nothing"])), 1)}
+        "no more in those two counts than the answer key": (int(len(missing["methodology"]) + len(missing["documentation"]) <=
+                                                                 len(gold["methodology_not_implemented"]) + len(gold["documentation_describing_nothing"])), 1)}
     if record:
         remember("map-measure", datetime.date.today().isoformat(), sample, "no model",
                  **{re.sub(r"\W+", "_", part.split(",")[0])[:40]: "%d/%d" % pair for part, pair in found.items()})
@@ -960,33 +962,29 @@ def map_run(sample, chat, live=None, settings=None):
     runner.run_pipeline(paths, run_settings, chat=chat, live=live, stop_after="07d")
     store = runner.open_store(paths, run_settings)
     text = {u["ref"]: u["text"] for u in store.read("model_units")}
-    traces, names = store.read("map_traces"), store.read("step_names")
+    traces = store.read("map_traces")
     unquoted = [(t["gap"]["function"], edge["value"]) for t in traces for edge in t["edges"]
                 if edge["quote"] not in text.get(t["gap"]["function_ref"], "")]
-    unruly = [n["node"] for n in names if len(n["name"].split()) > 12 or core.has_banned_wording(n["name"]) or "\n" in n["name"]]
-    asked = [call for call in store.read_calls() if call["question_type"] in ("trace-gap", "name-steps")]
+    asked = [call for call in store.read_calls() if call["question_type"] == "trace-gap"]
     rows = runner.implementation_map(store, run_settings)
-    return {"traces": traces, "names": len(names), "steps": (store.read("map_audit") or [{}])[0].get("steps", 0),
+    return {"traces": traces, "steps": len(rows),
             "questions": len({call["question_id"] for call in asked}),
             "refused": len({call["question_id"] for call in asked if call["final"] and call["outcome"] != "accepted"}),
-            "unquoted": unquoted, "unruly": unruly,
+            "unquoted": unquoted,
             "open": [(t["gap"]["function"], t["status"]) for t in traces if not t["status"].startswith(("traced", "the code cannot tell"))],
-            "shape": [(row["map_id"], row["role"], row["model_ref"], row["function"], row["variable"])
-                      for row in rows if not row["map_id"].startswith(("91", "92"))]}
+            "shape": [(row["map_id"], row["role"], row["output_variable"], row["ov_ref"], row["function_name"]) for row in rows]}
 
 def map_bar(found, measured):
     """The four tests of the map's sign-off bar, each as (held, what it says)."""
     unquoted = [(sample, pair) for sample, one in found.items() for pair in one["unquoted"]]
-    unruly = [(sample, node) for sample, one in found.items() for node in one["unruly"]]
     moved = [sample for sample, one in found.items() if one["shape"] != one["shape_without_a_model"]]
     refused = [(sample, one["refused"], one["questions"]) for sample, one in found.items() if one["refused"]]
     open_gaps = [(sample, gap) for sample, one in found.items() for gap in one["open"]]
     missing = ["%s: %s of %s" % (part, got, total) for part, (got, total) in measured.items() if got != total]
     return [
         (not missing, "The map holds every part of J_pipeline's answer key" + ("" if not missing else ": %s" % "; ".join(missing))),
-        (not unquoted and not unruly,
-         "Every link the AI declared quotes the code word for word, and every name it gave is one short line of plain words"
-         + ("" if not unquoted and not unruly else ": %s" % "; ".join("%s %s" % pair for pair in unquoted + unruly))),
+        (not unquoted, "Every link the AI declared quotes the code word for word"
+                       + ("" if not unquoted else ": %s" % "; ".join("%s %s" % pair for pair in unquoted))),
         (not moved, "The shape of the map is the same as with no model at all: code decides it"
                     + ("" if not moved else ": moved on %s" % ", ".join(moved))),
         (not refused and not open_gaps,
@@ -996,8 +994,7 @@ def map_bar(found, measured):
 
 def map_report(chat, live=None, samples=MAP_BAR_SAMPLES, label="the real model"):
     """The sign-off bar of the map's agents, run against a chat(). The map is built by code; the agents
-    only close the gaps code names and give each step a plain name, and every link they declare quotes the
-    code. This says whether that holds with the model you use. Returns the report as text."""
+    only close the gaps code names, and every link they declare quotes the code. This says whether that holds with the model you use. Returns the report as text."""
     import standin_chat
     found = {}
     for sample in samples:
@@ -1013,11 +1010,11 @@ def map_report(chat, live=None, samples=MAP_BAR_SAMPLES, label="the real model")
                   "> refused unless they quote the code, the shape of the map comes from code, and a run replays. It is",
                   "> not evidence about how a model traces a gap it has never seen, and the bar below is therefore",
                   "> reported but **not met**. Run it again from cell 5 with APPENDIX = \"map-sign-off\" on Databricks.", ""]
-    lines += ["## Per sample", "", "| Sample | Steps | Named | Questions | Refused | Gaps open | Links not quoted |",
-              "|---|---|---|---|---|---|---|"]
+    lines += ["## Per sample", "", "| Sample | Rows of the map | Questions | Refused | Gaps open | Links not quoted |",
+              "|---|---|---|---|---|---|"]
     for sample, one in found.items():
-        lines.append("| %s | %d | %d | %d | %d | %d | %d |" % (sample, one["steps"], one["names"], one["questions"],
-                                                               one["refused"], len(one["open"]), len(one["unquoted"])))
+        lines.append("| %s | %d | %d | %d | %d | %d |" % (sample, one["steps"], one["questions"], one["refused"],
+                                                          len(one["open"]), len(one["unquoted"])))
     lines += ["", "## The answer key", "", "| Part | Found |", "|---|---|"]
     lines += ["| %s | %d of %d |" % (part, got, total) for part, (got, total) in measured.items()]
     lines += ["", "## The bar", ""]
@@ -1262,14 +1259,12 @@ if PATHS is not None:
                 print("  " + message)
     flow = store.read("dataflow")
     if flow:
-        outputs, how, _ = runner.reading.decided_outputs(flow, runner.output_decisions(store))
+        outputs, how, _ = runner.reading.decided_outputs(flow, {})
         print("\nFinal outputs code proposes: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
-        print("To change them: sheet Model_Implementation_Map, column 'Final output (your decision)' - yes or no - before cell 4.")
     concepts, _ = runner.review.latest_concepts(store.read)
     print("\nConcepts found by code: %d (sheet Concepts). The model refines them after you confirm the outline." % len(concepts))
     print("Run folder:", PATHS.run_dir)
     print("Open Output.xlsx there. The three Chunks sheets show everything that was read; Model_Package_Info what was not.")
-    print("To leave a unit out of the review, write 'to not use' in its yellow 'Use in review' cell and save the workbook back")
     print("into the run folder before cell 4. If the outline is right, go to cell 4; if not, fix the input and run this cell again.")
 '''
 

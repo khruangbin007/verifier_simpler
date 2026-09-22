@@ -83,8 +83,6 @@ ST_UNIT_TEST, ST_NARRATIVE = "Unit test", "Narrative - nothing to check"
 ST_DIFFERS, ST_UNDECIDED = "Traced - differences flagged", "Traced - check undecided"
 ST_NOT_TRACED, ST_NOT_ASSESSED = "Not traced - for review", "Not assessed - for manual review"
 ST_EXCLUDED = "Not in scope (a person's decision)"
-SCOPE_WORDS = ("to use", "to not use")             # what a person writes beside a unit when confirming the outline
-OUTPUT_WORDS = ("yes", "no")                         # what a person writes beside a function: is it a final output of the model?
 CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
 NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
 
@@ -555,18 +553,6 @@ Rules on your answer:
 - a quote must be copied from the code word for word;
 - never repeat an action you have already taken;
 - end with done once you have declared what the value is computed from, or with give_up.
-''',
-    'name-steps': r'''VERSION 1
-=== SYSTEM ===
-You give each step of an R package's computation a short plain name, so that a reader who does not read code can follow what the package computes. Each step comes with the code that computes it. A name says what the value is, in a few ordinary words, from the code alone. You never add anything the code does not show. Reply with JSON only. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: name-steps
-[[UNIT]]
-ANSWER FORMAT
-{"names": {"S1": "facilities with their factor scores", "S2": "the throughput score"}}
-Rules on your answer:
-- give every step shown above exactly one name, and no step that was not shown;
-- a name is one line of at most twelve words.
 ''',
     'interpret-code': r'''VERSION 1
 === SYSTEM ===

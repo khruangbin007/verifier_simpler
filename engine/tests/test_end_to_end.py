@@ -111,25 +111,25 @@ class WhatAnAnalystReads(unittest.TestCase):
         read = lambda name: [dict(zip([c.value for c in workbook[name][1]], [c.value for c in row]))
                              for row in workbook[name].iter_rows(min_row=2)]
         coverage, mapped = read("Mapping_Coverage"), read("Model_Implementation_Map")
+        store = runner.open_store(self.paths, self.settings)
+        missing = runner.not_on_the_map(store, runner.implementation_map(store, self.settings), self.settings)
         branches = {}
         for row in mapped:
-            branches.setdefault(str(row["Map ID"]).split(".")[0], []).append(row)
+            branches.setdefault(str(row["MapID1"]), []).append(row)
         for row in coverage:
             branch = row["What is counted"].split(" ")[0]
             if branch.isdigit():
-                steps = [step for step in branches[branch] if not str(step["Step"]).startswith("see ")]
+                steps = branches[branch]
                 self.assertEqual(row["In total"], len(steps), branch)
                 self.assertEqual(row["Deepest level"], max(step["Level"] for step in steps), branch)
                 self.assertEqual(row["Covered"] + row["Not covered"], len(steps), branch)
         corners = {row["What is counted"]: row for row in coverage}
         model = corners["Model units (one row each on Chunks_Model)"]
         self.assertEqual(model["In total"], len(read("Chunks_Model")))
-        self.assertEqual(model["Covered"] + model["Not covered"], model["In total"], "every model unit is on the map or in branch 90")
-        self.assertEqual(model["Not covered"], len(branches.get("90", [])) - 1)
-        self.assertEqual(corners["Methodology passages"]["In total"], len(read("Chunks_Canon")))
-        self.assertEqual(corners["Methodology passages"]["Not covered"], len(branches.get("91", [])) - 1)
-        self.assertEqual(corners["Documentation passages"]["In total"], len(read("Chunks_Doc")))
-        self.assertEqual(corners["Documentation passages"]["Not covered"], len(branches.get("92", [])) - 1)
+        self.assertEqual(model["Covered"] + model["Not covered"], model["In total"], "every model unit is counted once")
+        self.assertEqual(model["Not covered"], len(missing["model_units"]))
+        self.assertEqual(corners["Methodology passages"]["Not covered"], len(missing["methodology"]))
+        self.assertEqual(corners["Documentation passages"]["Not covered"], len(missing["documentation"]))
 
     def setUp(self):
         self.paths, self.settings, _ = helpers.run_sample("A_minimal", chat=standin_chat.chat, settings={"reviewer_id": "analyst.one"})
