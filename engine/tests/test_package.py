@@ -224,5 +224,64 @@ class ImplementationMapSample(unittest.TestCase):
         self.assertEqual([nodes[loop]["callee"] for loop in loops], ["notch_down"])
 
 
+class FinalOutputs(unittest.TestCase):
+    """Stage 3 of the implementation map: code proposes the final outputs; a person decides, in the
+    yellow column of Model_Implementation_Map, read back by function name when the outline is confirmed."""
+
+    def run_to_cell_3(self):
+        import openpyxl
+        projects = helpers.scratch()
+        helpers.copy_sample("J_pipeline", projects, "J", "2026-09-22")
+        settings = runner.make_settings({})
+        paths = runner.open_run(projects, "J", "2026-09-22", scratch_root=helpers.scratch())
+        runner.run_pipeline(paths, settings, stop_after="06")
+        return paths, settings, os.path.join(paths.run_dir, "Output.xlsx"), openpyxl
+
+    def decide(self, path, openpyxl, choices):
+        book = openpyxl.load_workbook(path)
+        sheet = book["Model_Implementation_Map"]
+        header = [cell.value for cell in sheet[1]]
+        at_name, at_word = header.index("Function"), header.index("Final output (your decision)")
+        for row in range(2, sheet.max_row + 1):
+            name = sheet.cell(row=row, column=at_name + 1).value
+            if name in choices:          # .value, not cell(value=None): openpyxl's cell() ignores None, so it cannot empty a cell
+                sheet.cell(row=row, column=at_word + 1).value = choices[name]
+        book.save(path)
+
+    def test_the_sheet_lists_every_function_with_what_code_proposes_and_why(self):
+        _, _, path, openpyxl = self.run_to_cell_3()
+        rows = list(openpyxl.load_workbook(path, read_only=True)["Model_Implementation_Map"].iter_rows(values_only=True))
+        header, body = rows[0], rows[1:]
+        by_name = {row[header.index("Function")]: dict(zip(header, row)) for row in body}
+        self.assertEqual(len(body), 10, "every package function, once")
+        self.assertEqual(body[0][header.index("Function")], "harbour_rating", "the final outputs come first")
+        self.assertEqual(by_name["harbour_rating"]["Map ID"], "01")
+        self.assertIn("called by a test or vignette", by_name["harbour_rating"]["Why"])
+        self.assertEqual(by_name["legacy_score"]["Role"], "Not reached from any final output")
+        self.assertEqual(by_name["notch_down"]["Called by"], "cap_rating")
+
+    def test_a_decision_overrides_the_proposal_is_chained_and_an_emptied_cell_withdraws_it(self):
+        paths, settings, path, openpyxl = self.run_to_cell_3()
+        self.decide(path, openpyxl, {"harbour_rating": "no", "legacy_score": "yes", "notch_down": "maybe"})
+        said = runner.confirm_outline(paths, settings, "analyst.one")
+        self.assertIn("Final outputs: legacy_score (your decision).", said)
+        self.assertIn("notch_down: 'maybe' is not one of yes / no and was ignored", said)
+        store = runner.open_store(paths, settings)
+        records = store.read("output_decisions")
+        self.assertEqual({(r["function"], r["decision"], r["reviewer_id"]) for r in records},
+                         {("harbour_rating", "no", "analyst.one"), ("legacy_score", "yes", "analyst.one")})
+        self.assertTrue(core.verify_chain(records)[0], "the decisions are a hash chain, like the determinations")
+        self.decide(path, openpyxl, {"harbour_rating": None, "legacy_score": None})
+        said = runner.confirm_outline(paths, settings, "analyst.one")
+        self.assertIn("Final outputs: harbour_rating (proposed by code", said, "emptied cells give code's proposal back")
+
+    def test_without_a_proposal_or_a_decision_every_function_nothing_calls_stands_in(self):
+        records = [{"record_type": "roots", "proposed": [], "not_reached": [], "why": {"f": "nothing in the package calls it",
+                                                                                          "g": "nothing in the package calls it"}}]
+        outputs, how, _ = reading.decided_outputs(records, {})
+        self.assertEqual(outputs, ["f", "g"])
+        self.assertIn("no final output was proposed or decided", how["f"])
+
+
 if __name__ == "__main__":
     unittest.main()

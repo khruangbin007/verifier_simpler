@@ -3409,3 +3409,33 @@ def walk_dataflow(records, function):
             visit(source, frames)
     visit("%s:return" % function, [(function, None)])
     return leaves, loops, reached
+
+def decided_outputs(records, decisions):
+    """The final outputs a run works from, and why each is one: code's proposal, then a person's decisions
+    over it - 'yes' makes any function a final output, 'no' takes one away. Where nothing is left, every
+    function nothing in the package calls stands in, so the map always has a top. Returns (outputs, how,
+    not reached): how says of each output where it came from; not reached are the functions no output
+    reaches, following the calls. Enforces: R1, R2"""
+    roots = next((r for r in records if r["record_type"] == "roots"), {"proposed": [], "not_reached": [], "why": {}})
+    calls = [r for r in records if r["record_type"] == "node" and r["kind"] == "call"]
+    functions = {r["function"] for r in records if r["record_type"] == "node" and r.get("function")} | set(roots["why"])
+    outputs, how = [], {}
+    for name in roots["proposed"]:
+        if decisions.get(name) != "no":
+            outputs.append(name)
+            how[name] = "proposed by code: %s" % roots["why"].get(name, "")
+    for name in sorted(decisions):
+        if decisions[name] == "yes" and name in functions and name not in outputs:
+            outputs.append(name)
+            how[name] = "your decision"
+    if not outputs:
+        outputs = sorted(roots["why"])
+        how = {name: "nothing in the package calls it (no final output was proposed or decided)" for name in outputs}
+    reached, frontier = set(outputs), list(outputs)
+    while frontier:
+        caller = frontier.pop()
+        for call in calls:
+            if call["function"] == caller and call["callee"] not in reached:
+                reached.add(call["callee"])
+                frontier.append(call["callee"])
+    return outputs, how, sorted(functions - reached)

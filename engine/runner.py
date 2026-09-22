@@ -703,11 +703,29 @@ def confirm_outline(paths, settings, reviewer):
     chained = core.chain_records(core.chain_head(store.read("scope_decisions")), records)
     if chained:
         store.append("scope_decisions", chained)
+    flow = store.read("dataflow")
+    functions = {u["name"] for u in store.read("model_units") if u["kind"] == core.KIND_FUNCTION}
+    chosen = {}
+    if flow and os.path.exists(workbook):
+        try:
+            chosen, refused = read_output_column(workbook, functions)
+            ignored += refused
+        except Exception as problem:                 # said, never a stopped cell (R2)
+            ignored.append("Output.xlsx could not be opened (%s); no final-output decisions were read" % type(problem).__name__)
+    earlier = output_decisions(store)
+    changed = [{"function": name, "decision": word, "recorded_at": now, "reviewer_id": reviewer or "not named"}
+               for name, word in sorted(chosen.items()) if earlier.get(name, "") != word]     # an emptied cell withdraws
+    chained = core.chain_records(core.chain_head(store.read("output_decisions")), changed)
+    if chained:
+        store.append("output_decisions", chained)
     update_manifest(store, {"outline_confirmed_by": reviewer or "not named", "outline_confirmed_at": now})
     store.sync()
     out = sum(1 for word in decisions.values() if word == core.SCOPE_WORDS[1])
     said = ["Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name"),
             "Scope: %d unit(s) marked to not use%s." % (out, "; they will not be searched, linked or checked" if out else "")]
+    if flow:
+        outputs, how, _ = reading.decided_outputs(flow, output_decisions(store))
+        said.append("Final outputs: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
     return "\n".join(said + ignored)
 
 def human_step_open(step, store, settings, determinations):
@@ -1015,6 +1033,61 @@ def rows_concepts(store):
                      "established": "\n".join(concept["how"][:12])})
     return rows
 
+def output_decisions(store):
+    """The latest decision a person recorded for each function: yes or no, a final output."""
+    latest = {}
+    for record in store.read("output_decisions"):
+        latest[record["function"]] = record["decision"]
+    return {name: word for name, word in latest.items() if word}   # '' is a withdrawn decision: code's proposal again
+
+def rows_implementation_map(store):
+    """The rows of Model_Implementation_Map. Until the map is built (stage 5 of its plan): one row per
+    package function - the final outputs first, numbered 01, 02 - with what code proposes and why, who
+    calls it and what it calls, and the yellow column where a person decides."""
+    flow = store.read("dataflow")
+    if not flow:
+        return []
+    decided = output_decisions(store)
+    outputs, how, not_reached = reading.decided_outputs(flow, decided)
+    roots = next(r for r in flow if r["record_type"] == "roots")
+    units = {u["name"]: u for u in store.read("model_units") if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
+    calls = [r for r in flow if r["record_type"] == "node" and r["kind"] == "call"]
+    order = outputs + [name for name in sorted(units, key=lambda n: units[n]["ref"]) if name not in outputs]
+    rows = []
+    for name in order:
+        callers = sorted({c["function"] for c in calls if c["callee"] == name and c["function"] != name})
+        callees = sorted({c["callee"] for c in calls if c["function"] == name})
+        rows.append({"map_id": "%02d" % (outputs.index(name) + 1) if name in outputs else "", "function": name,
+                     "model_ref": units[name]["ref"] if name in units else "",
+                     "role": "Final output" if name in outputs else "Not reached from any final output" if name in not_reached else "Called by the model",
+                     "proposed": "yes" if name in roots["proposed"] else "no",
+                     "why": how.get(name) or roots["why"].get(name, "") or ("called by " + ", ".join(callers) if callers else ""),
+                     "calls": ", ".join(callees), "called_by": ", ".join(callers), "final_output": decided.get(name, "")})
+    return rows
+
+def read_output_column(path, functions):
+    """The yellow 'Final output (your decision)' cells of Model_Implementation_Map, by function name and
+    never by row position: {function: yes | no | '' where the cell was left empty}, and plain words for
+    anything else written there. An empty cell is kept so that emptying one withdraws a decision."""
+    import openpyxl
+    found, ignored = {}, []
+    book = openpyxl.load_workbook(path, read_only=True)
+    if "Model_Implementation_Map" not in book.sheetnames:
+        return found, ignored
+    rows = list(book["Model_Implementation_Map"].iter_rows(values_only=True))
+    header = [str(cell or "") for cell in rows[0]] if rows else []
+    if "Function" not in header or "Final output (your decision)" not in header:
+        return found, ignored
+    at_name, at_word = header.index("Function"), header.index("Final output (your decision)")
+    for row in rows[1:]:
+        name, word = str(row[at_name] or "").strip(), str(row[at_word] or "").strip().lower()
+        if name in functions:
+            if word in core.OUTPUT_WORDS or not word:
+                found[name] = word
+            else:
+                ignored.append("%s: '%s' is not one of %s and was ignored" % (name, word, " / ".join(core.OUTPUT_WORDS)))
+    return found, ignored
+
 def scope_of(store):
     """The latest scope decision per unit, as the yellow column shows it back."""
     latest = {}
@@ -1164,6 +1237,7 @@ def sheet_rows(store, paths, settings, progress):
             "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store), concept_names_by_ref(store)),
             "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store), concept_names_by_ref(store)),
             "Concepts": rows_concepts(store),
+            "Model_Implementation_Map": rows_implementation_map(store),
             "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
             "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
 
@@ -1245,6 +1319,17 @@ sheets:
   - {header: Same words in the rest of the model, group: assessments, field: model, width: 30}
   - {header: Candidate synonyms and acronyms (AI guess), group: assessments, field: guessed, width: 40}
   - {header: How established, group: assessments, field: established, width: 60}
+- name: Model_Implementation_Map
+  columns:
+  - {header: Map ID, group: identity, field: map_id, width: 10}
+  - {header: Function, group: identity, field: function, width: 26}
+  - {header: Model ref, group: identity, field: model_ref, width: 10}
+  - {header: Role, group: assessments, field: role, width: 26}
+  - {header: Code proposes it as a final output, group: assessments, field: proposed, width: 14}
+  - {header: Why, group: assessments, field: why, width: 44}
+  - {header: Calls, group: assessments, field: calls, width: 34}
+  - {header: Called by, group: assessments, field: called_by, width: 26}
+  - {header: Final output (your decision), group: reviewer_input, field: final_output, width: 16, input_text: true}
 - name: Mapping_Model_to_Canon_and_Doc
   columns:
   - {header: Model ref, group: identity, field: ref, width: 10}
@@ -1365,7 +1450,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
     fields = [c["field"] for c in columns]
-    for field_name, words in (("decision", core.DECISION_WORDS), ("scope", core.SCOPE_WORDS)):
+    for field_name, words in (("decision", core.DECISION_WORDS), ("scope", core.SCOPE_WORDS), ("final_output", core.OUTPUT_WORDS)):
         if field_name in fields and rows:            # the drop-downs: Decision on Flagged_Items, Use in review on the Chunks sheets
             letter = get_column_letter(fields.index(field_name) + 1)
             choice = DataValidation(type="list", formula1='"%s"' % ",".join(words), allow_blank=True)
@@ -1705,6 +1790,9 @@ def verify_evidence_pack(paths, settings, live=None):
     line("The graph ledger chain verifies", ledger_ok, "" if ledger_ok else "record %d no longer verifies" % (position + 1))
     decisions_ok, position, _ = core.verify_chain(store.read("determinations"))
     line("The determinations chain verifies", decisions_ok, "" if decisions_ok else "record %d no longer verifies" % (position + 1))
+    for kind, what in (("scope_decisions", "Use in review"), ("output_decisions", "final output")):
+        chain_ok, position, _ = core.verify_chain(store.read(kind))
+        line("The chain of %s decisions verifies" % what, chain_ok, "" if chain_ok else "record %d" % position)
     statuses, items = store.read("unit_status"), store.read("flagged_items")
     named = {ref for item in items for ref in item["unit_refs"]}
     not_clean = {s["unit_ref"] for s in statuses if not s["clean"]}

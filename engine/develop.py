@@ -792,7 +792,8 @@ def append_history(found, samples, label, stamp):
 # and by 350 for the data flow of a package, the implementation map's backbone.
 # review.py rose by 350 for concepts: extracting them, joining their forms, the two questions about
 # them and the search signal that puts them first.
-BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 2950, "runner.py": 1800, "develop.py": 1800}
+# runner.py rose by 100 for the implementation map's sheet and the final outputs a person decides there.
+BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 2950, "runner.py": 1900, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -1161,6 +1162,11 @@ if PATHS is not None:
         for message in record["messages"]:
             if message.startswith(("Read as:", "Not read:")) or "left out" in message or "R package" in message:
                 print("  " + message)
+    flow = store.read("dataflow")
+    if flow:
+        outputs, how, _ = runner.reading.decided_outputs(flow, runner.output_decisions(store))
+        print("\nFinal outputs code proposes: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
+        print("To change them: sheet Model_Implementation_Map, column 'Final output (your decision)' - yes or no - before cell 4.")
     concepts, _ = runner.review.latest_concepts(store.read)
     print("\nConcepts found by code: %d (sheet Concepts). The model refines them after you confirm the outline." % len(concepts))
     print("Run folder:", PATHS.run_dir)

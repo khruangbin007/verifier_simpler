@@ -84,6 +84,7 @@ ST_DIFFERS, ST_UNDECIDED = "Traced - differences flagged", "Traced - check undec
 ST_NOT_TRACED, ST_NOT_ASSESSED = "Not traced - for review", "Not assessed - for manual review"
 ST_EXCLUDED = "Not in scope (a person's decision)"
 SCOPE_WORDS = ("to use", "to not use")             # what a person writes beside a unit when confirming the outline
+OUTPUT_WORDS = ("yes", "no")                         # what a person writes beside a function: is it a final output of the model?
 CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
 NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
 

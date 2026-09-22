@@ -190,6 +190,7 @@ class NotebookCells(unittest.TestCase):
             shutil.copytree(os.path.join(helpers.SAMPLES_DIR, "A_minimal", "Inputs"), os.path.join(project_dir, "Inputs"))
             shown = run_cell(3)
             self.assertIn("Outline of the methodology", shown)
+            self.assertIn("Final outputs code proposes:", shown)
             self.assertIn("Read as:", shown)
             self.assertIn("Stopped after step 06", space["RESULT"]["message"])
             import openpyxl
@@ -203,6 +204,7 @@ class NotebookCells(unittest.TestCase):
             book.save(book_path)
             shown = run_cell(4, {'MODE = "A"': 'MODE = "C"'})
             self.assertIn("confirmed by analyst.one", shown)
+            self.assertIn("Final outputs:", shown)
             self.assertIn("1 unit(s) marked to not use", shown)
             self.assertIn("Waiting for a person", shown)
             self.assertIn("account-coverage", run_cell(4, {'MODE = "A"': 'MODE = "C"'}), "a second run of cell 4 shows the status")

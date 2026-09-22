@@ -378,7 +378,7 @@ class RunnerAndWorkbook(unittest.TestCase):
         layout = runner.load_layout()
         workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
         self.assertEqual(workbook.sheetnames, [sheet["name"] for sheet in layout["sheets"]])
-        self.assertEqual(len(workbook.sheetnames), 9)
+        self.assertEqual(len(workbook.sheetnames), 10)
         for sheet_layout in layout["sheets"]:
             sheet = workbook[sheet_layout["name"]]
             self.assertLessEqual(len(sheet.title), 31)
