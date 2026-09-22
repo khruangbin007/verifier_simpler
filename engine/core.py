@@ -82,7 +82,9 @@ ST_TRACED, ST_SUPPORTING = "Traced to methodology", "Supporting code (justified)
 ST_UNIT_TEST, ST_NARRATIVE = "Unit test", "Narrative - nothing to check"
 ST_DIFFERS, ST_UNDECIDED = "Traced - differences flagged", "Traced - check undecided"
 ST_NOT_TRACED, ST_NOT_ASSESSED = "Not traced - for review", "Not assessed - for manual review"
-CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE)
+ST_EXCLUDED = "Not in scope (a person's decision)"
+SCOPE_WORDS = ("to use", "to not use")             # what a person writes beside a unit when confirming the outline
+CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
 NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
 
 ITEM_OPEN = "Open"
@@ -482,10 +484,289 @@ def expr_to_text(expr, parent_rank=0):
 # ---------------------------------------------------------------- from verifier0r_reading
 # ---------------------------------------------------------------- prompt machinery (from verifier3_mapping)
 
-def load_prompt(references_dir, question_type):
+# ---------------------------------------------------------------- the prompts
+# Every question the tool asks, as the model sees it: a version line, the system half, the main half
+# with [[UNIT]] and similar places the question builder fills. The text is exact - a question's id is
+# the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
+# version and asks new questions. Enforces: R3, R5, R9
+PROMPTS = {
+    'align-symbols': r'''VERSION 1
+=== SYSTEM ===
+You match symbols used in code to symbols used in an equation. Reply with JSON only. Use only the symbols shown. Each symbol may be used once.
+=== MAIN ===
+QUESTION TYPE: align-symbols
+TASK: Which symbol of the code stands for which symbol of the equation?
+[[UNIT]]
+[[ABOUT]]
+ANSWER FORMAT
+{"alignment":[{"code":"symbol","equation":"symbol"}],"cannot_align":false}
+If the symbols cannot be matched one to one, return {"alignment":[],"cannot_align":true}.
+''',
+    'check-rule': r'''VERSION 1
+=== SYSTEM ===
+You check whether code applies a rule that a passage states. Reply with JSON only. Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: check-rule
+TASK: Does the code apply the rule as stated?
+[[UNIT]]
+[[ABOUT]]
+ANSWER FORMAT
+{"outcome":"applied","quote_from_passage":"exact words of the rule","quote_from_unit":"exact words of the code that applies it, or empty"}
+Allowed outcomes: applied, applied differently, not applied.
+''',
+    'extract-concepts': r'''VERSION 1
+=== SYSTEM ===
+You read short passages from a methodology, the code of the model it describes, and the model's documentation, and you list the concepts each passage uses: the named quantities, measures, ratios, factors, methods, categories and defined terms of the subject the documents are about, and every acronym among them. You copy each term exactly as the passage writes it. You never write a term the passage does not contain, never translate one, and never expand an acronym the passage itself does not expand. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: extract-concepts
+TASK: For each passage below, list the concepts it uses.
+[[UNIT]]
+ANSWER FORMAT
+{"units": {"C-0001": [{"term": "discounted cash flow", "acronym": "DCF"}, {"term": "unit cost", "acronym": ""}]}}
+Rules on your answer:
+- every key of units must be the reference of a passage shown above;
+- every term must appear word for word in that passage (upper and lower case may differ);
+- an acronym, when you give one, must also appear word for word in that same passage, where it stands for that term;
+- leave out ordinary words, names of people and organisations, dates, page numbers, and headings that name no concept;
+- give an empty list for a passage that uses no concept.
+''',
+    'judge-concepts': r'''VERSION 1
+=== SYSTEM ===
+You compare pairs of terms used in one set of documents about one subject, and say how the two terms of each pair relate there. Each term comes with a sentence showing how the documents use it. You judge from those sentences and plain knowledge of the subject, and you never write a term of your own. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-concepts
+[[UNIT]]
+RELATIONS
+same: the two terms name one concept here - an acronym and what it stands for, two spellings, or two names for one thing
+narrower: the first term is a kind or a part of the second
+broader: the second term is a kind or a part of the first
+related: different concepts that belong together
+different: unrelated
+ANSWER FORMAT
+{"pairs": {"P1": "same", "P2": "related"}}
+Rules on your answer:
+- every key of pairs must be a pair shown above, and every pair shown must be answered;
+- every value must be one of the five relations listed above;
+- say same only where the documents use the two terms for one concept; where in doubt, say related.
+''',
+    'interpret-code': r'''VERSION 1
+=== SYSTEM ===
+You explain what one piece of R code does, in plain words, for a reader who validates models and is not a programmer. You are shown the piece itself and where it sits in the whole package. Say only what the code shows; do not guess at intentions the code does not show. Reply with JSON only. Quote exact characters of the code; do not paraphrase inside the quotation field. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: interpret-code
+TASK: Say what the piece of code does and what it is for within the package, in at most 80 words. Name what it takes in and what it produces. Where it applies a number, a limit or a condition, say so with the number exactly as written. Use what you are told about the package only to say what the piece is for; describe the piece, not the package.
+[[UNIT]]
+[[ABOUT]]
+ANSWER FORMAT
+{"interpretation":"plain words, at most 80 words","quote_from_unit":"exact characters of the piece of code that the interpretation chiefly rests on"}
+''',
+    'judge-doc-to-canon': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-doc-to-canon
+TASK: Which passages of the methodology, if any, does this passage of the documentation correspond to, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"consistent with","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: consistent with, inconsistent with, merely related.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+If the unit states nothing that could be checked (no formula, number, rule or definition), add "states_nothing_checkable": true.
+''',
+    'judge-doc-to-model': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-doc-to-model
+TASK: Which units of the package, if any, does this passage of the documentation describe, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: describes, inconsistent with.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+''',
+    'judge-unit-to-canon': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-unit-to-canon
+TASK: Which passages of the methodology, if any, does this unit of the package correspond to, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"implements","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: implements, partly implements, deviates from, merely related.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+''',
+    'judge-unit-to-doc': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-unit-to-doc
+TASK: Which passages of the documentation, if any, describe this unit of the package, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: describes, consistent with, inconsistent with.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+''',
+    'map-table-columns': r'''VERSION 1
+=== SYSTEM ===
+You match the columns of one table to the columns of lettered tables. Reply with JSON only. Use only the letters and the column names shown.
+=== MAIN ===
+QUESTION TYPE: map-table-columns
+TASK: Which lettered table, if any, states the same values as the package table, which column is which, and which column identifies a row?
+[[UNIT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"table":"A","columns":[{"package":"column name","other":"column name"}],"key":{"package":"column name","other":"column name"}}
+If no table corresponds, return {"table":"NONE","reason":"one plain sentence"}.
+''',
+    'package-plan': r'''VERSION 2
+=== SYSTEM ===
+THE READER'S PROCEDURE
+1. Unpack the package - a tarball, a ZIP, or a source folder put in unpacked - refusing any member that breaks the limits; where it is not an R package, say so. 2. Work out which reader each member gets from where it lies and what it is; where the built-in tests give a member none, ask which existing reader should take it and apply the answer. 3. Parse R source into functions, objects and formula statements. 4. Decode stored data into tables of values. 5. Read help pages and vignettes. 6. Tie each roxygen block to what it documents. 7. Number every unit in a fixed order.
+
+QUALITY RULES THE READER WORKS UNDER
+- Every non-blank line of every member that holds text lies inside a unit, is refused with a reason, or is carried by a unit that says it could not be read. A member the tool cannot read as text is counted as one piece of its own.
+- A reader chosen for a member changes only which existing reader takes it. It never changes how that reader works.
+- Where a member's first lines show assignments and calls it is R code, wherever in the package it lies.
+
+THE READER NEVER
+- Never leave a member of the package out of the account in silence. An open account is written down, and the run goes on.
+- Never write text of your own into an answer about a package. Name only paths you were shown as not placed, and give only readers from the list you were given.
+- Never ask for a member to be skipped: there is no such reader. A file that cannot be made sense of becomes a unit that says so.
+- Never let an answer reach the parsing of R code, the building of expression trees or the decoding of stored data. Reading code is a parse, not an opinion.
+Never execute or evaluate anything from a package. Never import a package to inspect it.
+
+You are given the list of files inside one R package, with how large each is and which reader the built-in tests already give it. For the files those tests leave unplaced you are shown the first few lines. Your task is to say WHICH EXISTING READER should take each unplaced file.
+You choose from a fixed list only. You never write text of your own into an answer: every path you name must be one shown to you as not placed, and every reader you give must be one of the readers listed. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: package-plan
+TASK: Give every file marked NOT PLACED one of the readers below.
+THE FILES IN THE PACKAGE
+[[UNIT]]
+READERS YOU MAY USE
+r-source: R code, to be parsed into functions and objects. Use for a file of R code wherever it lies, including a folder the tests do not expect.
+r-data: stored data to be decoded into a table of values.
+help-page: a written help page for an object (an .Rd page).
+vignette: a longer written piece mixing prose and code.
+table-file: a table of values stored as text, such as comma- or tab-separated rows.
+prose: plain writing with no code and no table in it. Use this when none of the others fits.
+WHAT TO LOOK FOR
+R code usually shows assignments with <- and calls with round brackets. A help page shows braces after a backslash. A vignette opens with a block between two lines of three dashes, or holds fenced code. A table file shows the same separator repeated on every line, with a first line of column names.
+ANSWER FORMAT
+{"readers":{"inst/extra/helpers.R":"r-source","inst/extdata/floors.csv":"table-file"},"why":{"inst/extra/helpers.R":"a short reason in plain words"}}
+Rules on your answer:
+- every key of readers must be a path shown to you above as NOT PLACED;
+- every file marked NOT PLACED must appear in readers: leave none out;
+- every value of readers must be one of the six readers listed above;
+- there is no reader that means skip, ignore or leave unread. A file you cannot make sense of is given "prose", and the reader will say plainly that it could not read it;
+- every key of why, if you give any, must also be a path marked NOT PLACED.
+''',
+    'read-formula-from-prose': r'''VERSION 1
+=== SYSTEM ===
+You read a formula that a paragraph states in words. Reply with JSON only. Use only names that occur in the paragraph. Write the formula with + - * / ^ ( ) and the functions max, min, exp, ln, sqrt.
+=== MAIN ===
+QUESTION TYPE: read-formula-from-prose
+TASK: Write the formula that this paragraph states, as one line of the form name = expression.
+[[UNIT]]
+ANSWER FORMAT
+{"formula":"name = expression","no_formula_stated":false}
+If the paragraph states no formula, return {"formula":"","no_formula_stated":true}.
+''',
+    'second-opinion': r'''VERSION 1
+=== SYSTEM ===
+You look for differences between one item and lettered passages. Reply with JSON only. Use only the letters shown. Quote exact words; do not paraphrase inside quotation fields. Naming no difference is a valid and common answer. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: second-opinion
+TASK: Identify any difference between what the unit does or states and what the passages state.
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"differences":[{"letter":"A","quote_from_passage":"exact words","quote_from_unit":"exact words","what_differs":"one plain sentence"}]}
+If there is no difference, return {"differences":[]}.
+''',
+    'slice-rules': r'''VERSION 2
+=== SYSTEM ===
+THE READER'S PROCEDURE
+1. Detect the format from the content, looking inside a ZIP to tell a Word file from a spreadsheet or a slide deck; refuse a format the tool does not read in plain words with a next step, and never decode binary data as text; convert Markdown, delimited rows, spreadsheets, RTF and LaTeX to markup the walker already reads. 2. Repair what must be repaired and record each repair. 3. Work out what each tag of the file is for; where the built-in rules are unsure, ask what the shape of the file means and apply the answer under everything the rules already know. 4. Read blocks in document order. 5. Infer levels where nesting is flat. 6. Keep each table whole. 7. Read equation markup into linear notation and an expression tree. 8. Hash every chunk.
+
+QUALITY RULES THE READER WORKS UNDER
+- Every smallest piece of text in the file ends in one named class: kept in a unit, kept in a unit's other fields, read into another form, left out under a named rule, or reported as not read. What is in none of them is counted and located on Model_Package_Info.
+- Nothing a unit shows may come from anywhere but the file or a transform named in the code.
+- A heading names the block around it: it usually occurs about as often as that block, holds short text of its own, and opens it. A paragraph holds longer text and does not open the block around it. A tag that holds other tags is a container or a heading, never a paragraph: reading it as a paragraph would make the file say twice what it says once.
+- Where the words of a file are already read correctly and only its shape is in doubt, change the shape and leave the words exactly where they are.
+A table is never split and never merged with its neighbours. A figure or equation that cannot be read is still a chunk. Reading order is stable.
+
+THE READER NEVER
+- Never close the account over a file that yielded nothing and said nothing: a large file with no text and no reason is a file that was not opened.
+- Never leave a piece of the file out of the account in silence. An open account is written down, and the run goes on.
+- Never write text of your own into an answer about a file's shape. Name only tags you were shown, and give only families from the list you were given. There is no way to tell the reader to skip a tag, and no answer may leave a word of the file out of a unit.
+- Never overrule what a person wrote in Inputs/tag_rules.yaml, a schema the tool already ships, or a table whose rows were counted. Speak where the reader guessed, and nowhere else.
+Never execute or evaluate anything from an input. Never skip a block silently. Never keep a document-type declaration.
+
+You are given the SHAPE of one document: a list of the tags it uses and how each behaves, with a few short samples. You never see the document. Your task is to say what each tag is FOR, so that a reader can slice the document into citable units.
+You choose from fixed lists only. You never write text of your own into an answer: every tag you name must be one shown to you, and every family you give must be one of the families listed. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: slice-rules
+TASK: Give each tag a family, and say which tags are headings of the blocks around them.
+THE SHAPE OF THE FILE
+[[UNIT]]
+FAMILIES YOU MAY USE
+heading: names the section around it, and everything below it belongs under it
+container: holds other blocks and little or no text of its own
+paragraph: a statement, a sentence or a run of prose
+list_container: holds items; list_item: one item of such a list
+These five are the whole list. Tables, rows, cells, captions, figures, equations and inline marks are worked out by the reader itself and are not yours to give; where a tag is one of those it is marked ALREADY READ AS and you should leave it alone.
+WHAT TO LOOK FOR
+A heading usually occurs about as often as the container it names, holds short text of its own, and is the FIRST CHILD of that container. A paragraph holds longer text and is not the first child. A container holds other tags and little or no text of its own.
+A tag marked ALREADY READ AS is one the reader already knows for certain; leave it exactly as it is. A tag marked GUESSED AS is one the reader worked out on the spot and is unsure of: that is where your answer is wanted. A tag marked neither is one the reader has nothing at all to say about.
+ANSWER FORMAT
+{"families":{"tagname":"heading","othertag":"paragraph"},"levels":{"tagname":1},"why":{"tagname":"a short reason in plain words"}}
+Rules on your answer:
+- every key of families, levels and why must be a tag shown to you above;
+- every value of families must be one of the five families listed above;
+- a tag shown as holding other tags may only be heading, container or list_container: reading it as a paragraph would say its contents twice;
+- every value of levels must be a whole number from 1 to 9, and levels may name only tags you called heading;
+- "ignore" is not a family you may use, and there is no way to tell the reader to skip a tag;
+- give a family for every tag you are shown, including ones already read.
+''',
+}
+
+def load_prompt(question_type):
     """A prompt template: its version line, its SYSTEM part and its MAIN part with slots."""
-    with open(os.path.join(references_dir, "prompts", question_type + ".txt"), encoding="utf-8") as handle:
-        text = handle.read()
+    text = PROMPTS[question_type]
     version, rest = text.split("\n", 1)
     system, main = rest.split("=== MAIN ===\n", 1)
     return {"version": version.strip(), "system": system.replace("=== SYSTEM ===\n", "").strip(), "main": main.strip()}
@@ -1287,7 +1568,7 @@ def guided_rules(root, file_name, state, discovered):
         return
     digest = markup_digest(root, state.rules, file_name)
     state.digests.append(digest)
-    prompt = load_prompt(state.references_dir, "slice-rules")
+    prompt = load_prompt("slice-rules")
     question = slice_rules_question(digest, state.rules, prompt, state.settings)
     if question["too_large"]:
         state.notes.append("%s: its shape is too large to ask about, so the built-in rules read it." % file_name)
@@ -1405,7 +1686,7 @@ NOT_READ = {
 }
 
 # The name a format goes by in what the analyst reads.
-FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "mhtml": "web archive", "html": "web page",
+FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "svg": "SVG picture", "mhtml": "web archive", "html": "web page",
                 "xml": "XML", "markdown": "Markdown", "delimited": "delimited rows", "rtf": "RTF",
                 "latex": "LaTeX", "text": "plain text"}
 
@@ -1460,7 +1741,11 @@ def detect_format(data, file_name=""):
     if lowered.startswith((b"mime-version:", b"from:", b"content-type:")) or b"multipart/related" in lowered[:1024]:
         return "mhtml"
     if lowered.startswith(b"<"):
-        return "html" if re.match(rb"<(!doctype\s+html|html)\b", lowered) else "xml"
+        if re.match(rb"<(!doctype\s+html|html)\b", lowered):
+            return "html"
+        if re.search(rb"<svg[\s>]", lowered[:4096]) and not re.search(rb"<(body|para|section|document|p)\b", lowered[:4096]):
+            return "svg"
+        return "xml"
     sample = decode_text(data[:16384])
     if name.endswith(LATEX_NAMES) and re.search(r"\\[a-zA-Z]+", sample) or re.search(r"\\documentclass|\\begin\{document\}", sample):
         return "latex"
@@ -1720,8 +2005,121 @@ def latex_to_markup(text):
             cursor = found.end()
     return "<document>%s</document>" % "".join(out)
 
+
+SVG_NS = "http://www.w3.org/2000/svg"
+
+def svg_texts(root):
+    """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
+    a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
+    <a> inside it is read with it); and a <foreignObject>, where drawing tools put HTML - divs and
+    paragraphs - instead of SVG text. A transform is not applied, so a moved group keeps the order
+    it was written in."""
+    found = []
+    def number(value, fallback=0.0):
+        try:
+            return float(re.split(r"[ ,]", (value or "").strip())[0])
+        except (ValueError, IndexError):
+            return fallback
+    for node in root.iter():
+        name = local_name(node.tag)
+        if name == "text":
+            x, y = number(node.get("x")), number(node.get("y"))
+            placed = [span for span in node.iter() if local_name(span.tag) == "tspan" and (span.get("x") or span.get("y") or span.get("dy"))]
+            if not placed:
+                words = normalise_text("".join(node.itertext()))
+                if words:
+                    found.append((x, y, words))
+                continue
+            lead = normalise_text(node.text or "")
+            if lead:
+                found.append((x, y, lead))
+            line_y = y
+            for span in placed:
+                line_y = number(span.get("y"), line_y + number(span.get("dy"), 0.0))
+                words = normalise_text("".join(span.itertext()))
+                if words:
+                    found.append((number(span.get("x"), x), line_y, words))
+        elif name == "foreignobject":                    # local_name lower-cases: foreignObject
+            words = normalise_text(" ".join(part for part in node.itertext() if part.strip()))
+            if words:
+                found.append((number(node.get("x")), number(node.get("y")), words))
+    return found
+
+def svg_embedded_pictures(root):
+    """The raster pictures an SVG carries inside itself as data: URIs - what a chart exported as an
+    image and wrapped in SVG looks like. Their words can only be read by OCR."""
+    import base64
+    pictures = []
+    for node in root.iter():
+        if local_name(node.tag) != "image":
+            continue
+        link = next((value for key, value in node.attrib.items() if local_name(key) == "href"), "")
+        found = re.match(r"data:image/(png|jpe?g|gif|bmp|webp);base64,(.*)", link.strip(), re.S)
+        if found:
+            try:
+                pictures.append(base64.b64decode(re.sub(r"\s", "", found.group(2))))
+            except (ValueError, TypeError):
+                continue
+    return pictures
+
+def svg_why_no_text(root):
+    """Why an SVG gave no text, in words an analyst can act on. Enforces: R2"""
+    if svg_embedded_pictures(root):
+        return "the chart is a picture stored inside the SVG, so its words can only be read by OCR"
+    glyphs = sum(1 for node in root.iter() if local_name(node.tag) == "use"
+                 and any("glyph" in (value or "").lower() for key, value in node.attrib.items() if local_name(key) == "href"))
+    shapes = sum(1 for node in root.iter() if local_name(node.tag) in ("path", "use"))
+    if glyphs or shapes > 40:
+        return ("its letters are drawn as shapes rather than stored as text, so they cannot be read as text; "
+                "export the chart with its text kept as text, or add its data as a table in the methodology")
+    return "it holds no text"
+
+def svg_rows(texts, tolerance=None):
+    """Texts grouped into rows by their y position, each row sorted by x. The tolerance is a
+    share of the median line height, so a chart's labels and a table's cells both group."""
+    if not texts:
+        return []
+    ys = sorted({round(y, 1) for _, y, _ in texts})
+    gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0.5]
+    tolerance = tolerance or (max(2.0, sorted(gaps)[len(gaps) // 2] * 0.4) if gaps else 2.0)
+    rows, current, last_y = [], [], None
+    for x, y, words in sorted(texts, key=lambda t: (t[1], t[0])):
+        if last_y is not None and y - last_y > tolerance:
+            rows.append(sorted(current))
+            current = []
+        current.append((x, y, words))
+        last_y = y
+    if current:
+        rows.append(sorted(current))
+    return [[words for _, _, words in row] for row in rows]
+
+def svg_to_markup(data, file_name):
+    """An SVG as markup the walker reads: its <title> and <desc> as the caption; its text, where
+    it stands in a grid of at least two rows of the same width, as a table with the first row
+    as the header; otherwise as a figure whose words are the labels of the picture in reading
+    order. An SVG holds text as text, so nothing is read from a picture by guesswork: every
+    word comes from a <text> element. Enforces: R7, R13"""
+    import xml.etree.ElementTree as ElementTree
+    root = ElementTree.fromstring(data)
+    caption = " ".join(normalise_text("".join(node.itertext())) for node in root
+                       if local_name(node.tag) in ("title", "desc") and normalise_text("".join(node.itertext())))
+    rows = svg_rows(svg_texts(root))
+    widths = {len(row) for row in rows}
+    words = [caption] + [" ".join(row) for row in rows]
+    if len(rows) >= 2 and len(widths) == 1 and widths.pop() >= 2:
+        body = "".join("<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
+                       for number, row in enumerate(rows))
+        markup = "<document><table><caption>%s</caption>%s</table></document>" % (escape(caption or os.path.basename(file_name)), body)
+        return markup, "\n".join(words), "a picture whose text stands in a grid, read as a table"
+    labels = " ".join(" ".join(row) for row in rows)
+    # no src: this markup IS the picture, so it must not send the reader looking for itself beside itself
+    markup = "<document><figure alt=\"%s\"><caption>%s</caption></figure></document>" % (escape(labels), escape(caption))
+    return markup, "\n".join(words), "a picture, read by its own text: %d label(s)" % sum(len(row) for row in rows)
+
 def converted(found, data, file_name):
     """A file in a format read by converting it: (markup, words, what was done, in plain words)."""
+    if found == "svg":
+        return svg_to_markup(data, file_name)
     if found == "xlsx":
         markup, words = spreadsheet_to_markup(data)
         return markup, words, "read sheet by sheet, each sheet a heading over a table of its stored values"
@@ -1737,7 +2135,7 @@ def converted(found, data, file_name):
     return ("<document>%s</document>" % "".join(element("p", part.strip()) for part in re.split(r"\n\s*\n", plain) if part.strip()),
             plain, "read as RTF: its control words, font tables and pictures left out")
 
-CONVERTED = ("xlsx", "markdown", "delimited", "latex", "rtf")
+CONVERTED = ("xlsx", "markdown", "delimited", "latex", "rtf", "svg")
 
 def reason_for(problem):
     """Why a reader failed on a file, in words an analyst can act on. Enforces: R2"""

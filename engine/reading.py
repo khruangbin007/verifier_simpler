@@ -83,10 +83,118 @@ _TOKEN_RE = re.compile(
     r"|(?P<name>[^\W\d_][\w]*(?:\.[^\W\d_]\w*)*(?:_\{[^{}]+\}|\[[^\[\]]+\])?)"
     r"|(?P<sign><=|>=|[-+*/^(),=<>\u221a]))")
 
-def load_notation(references_dir):
-    """The names the tool reads as functions in a written formula, from r_function_map.yaml."""
-    with open(os.path.join(references_dir, "r_function_map.yaml"), encoding="utf-8") as handle:
-        return yaml.safe_load(handle)["notation"]
+# ---------------------------------------------------------------- reference data of the reader
+# The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
+# schemes, the phrases that make a statement checkable. An analyst's Inputs/tag_rules.yaml is laid
+# over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
+# caller that changes the rules it was given changes only its own copy. Enforces: R9
+TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
+# Reviewer 1 owns this file. A project can override any part of it with Inputs/tag_rules.yaml
+# (same layout; a family given there replaces the family given here).
+# Tag names are compared in lower case and without their namespace prefix.
+# A tag that is in no family is read as a paragraph (or, when it only wraps other blocks,
+# as a container) and is reported on Model_Package_Info, so that it can be added here.
+families:
+  heading:        [h1, h2, h3, h4, h5, h6, title, heading, head-line, sectiontitle]
+  container:      [html, body, div, section, sect, sect1, sect2, sect3, sect4, sect5, chapter, part,
+                   article, document, doc, annex, appendix, subsection, subsubsection, main, document-root]
+  paragraph:      [p, para, paragraph, text, blockquote, pre, dd, dt]
+  list_container: [ul, ol, list, itemizedlist, orderedlist, dl]
+  list_item:      [li, item, listitem]
+  table:          [table, informaltable, tbl]
+  table_part:     [thead, tbody, tfoot, tgroup, colgroup, col]
+  row:            [tr, row]
+  header_cell:    [th]
+  cell:           [td, entry, cell]
+  figure:         [img, image, figure, graphic, mediaobject, svg, object, chart, imagedata]
+  equation:       [math, equation, omath, omathpara, formula, informalequation]
+  caption:        [caption, figcaption, legend]
+  inline:         [a, b, i, u, em, strong, span, font, sub, sup, br, code, tt, small, big, emphasis, xref, o:p]
+  ignore:         [head, script, style, meta, link, toc, index, nav, xml]
+# Attributes that hold the numbering of a heading as written ("3.1").
+numbering_attributes: [number, num, label, n]
+# Numbering schemes, tried in this order. The first one that matches the start of a heading
+# names its scheme. "dotted" numbers give their depth directly; every other scheme gets the
+# level at which it first appeared (one deeper than the heading before it).
+numbering_schemes:
+  - {name: annex,          pattern: '^(?:Annex|Appendix|Annexe|Anhang)\s+([A-Z0-9]+)[.:]?(?=\s|$)'}
+  - {name: dotted,         pattern: '^(\d+(?:\.\d+)+)\.?(?=\s|$)'}
+  - {name: number,         pattern: '^(\d+)[.)]?(?=\s|$)'}
+  - {name: upper_roman,    pattern: '^([IVXLC]+)\.(?=\s|$)'}
+  - {name: upper_letter,   pattern: '^([A-Z])[.)](?=\s|$)'}
+  - {name: bracket_roman,  pattern: '^\(([ivxlc]+)\)(?=\s|$)'}
+  - {name: bracket_letter, pattern: '^\(([a-z])\)(?=\s|$)'}
+# Words that start a cross-reference as written ("see Table 3", "section 4.2").
+cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
+# A documentation passage "states something checkable" when it holds a number, a formula,
+# or one of these phrases. Narrative passages get the clean status "Narrative - nothing to check".
+checkable_phrases: [is calculated, is computed, is set to, equals, is defined as, is floored, is capped,
+                    at least, at most, not exceed, no less than, no more than, minimum, maximum,
+                    must, shall, is applied, are applied, is multiplied, is divided, rounded, per cent, percent]
+'''
+
+# The notation of R's mathematical functions: how each is written in the tool's linear notation and
+# which of its arguments are the operands. Shared with review.py, which reads it for its word lists.
+R_FUNCTION_MAP_YAML = r'''# r_function_map.yaml - how names in R code and in written formulas map to the tool's neutral
+# function names. Reviewers 1, 2 and 4 read this file.
+#
+# notation: names that the tool reads as a FUNCTION when a written formula shows name( ... ).
+#   Any other name followed by "(" could be a product or a function; the tool does not guess and
+#   marks the formula "could not be read".
+notation:
+  functions:
+    N: normal_cdf
+    "\u03a6": normal_cdf
+    Phi: normal_cdf
+    ln: log
+    log: log
+    exp: exp
+    sqrt: sqrt
+    max: max
+    min: min
+    abs: abs
+    sum_over: sum_over
+    piecewise: piecewise
+  inverse:                      # name^-1( ... ) is read as the inverse function
+    normal_cdf: normal_inverse
+# r_functions: R function -> neutral name, with the argument order the tool relies on and the
+#   domain in which the neutral function can be evaluated (used to draw valid sample points).
+r_functions:
+  pnorm:  {neutral: normal_cdf,     arguments: [q],      only_defaults: [mean, sd, lower.tail, log.p]}
+  qnorm:  {neutral: normal_inverse, arguments: [p],      only_defaults: [mean, sd, lower.tail, log.p]}
+  exp:    {neutral: exp,            arguments: [x]}
+  log:    {neutral: log,            arguments: [x],      only_defaults: [base]}
+  log1p:  {neutral: log1p,          arguments: [x]}
+  expm1:  {neutral: expm1,          arguments: [x]}
+  sqrt:   {neutral: sqrt,           arguments: [x]}
+  abs:    {neutral: abs,            arguments: [x]}
+  max:    {neutral: max,            variadic: true}
+  min:    {neutral: min,            variadic: true}
+  pmax:   {neutral: max,            variadic: true}
+  pmin:   {neutral: min,            variadic: true}
+  ifelse: {neutral: piecewise,      arguments: [test, "yes", "no"]}
+  sum:    {neutral: sum_over,       variadic: true}
+  round:  {neutral: round,          arguments: [x, digits], optional: 1}
+  floor:  {neutral: floor,          arguments: [x]}
+  ceiling: {neutral: ceiling,       arguments: [x]}
+# domains: where each neutral function has a value (open intervals; null means unbounded).
+domains:
+  normal_cdf:     {argument: [null, null]}
+  normal_inverse: {argument: [0, 1]}
+  log:            {argument: [0, null]}
+  log1p:          {argument: [-1, null]}
+  sqrt:           {argument: [0, null]}
+  exp:            {argument: [null, 50]}
+# plumbing: calls that mark a statement as supporting code by syntax (no formula in it).
+plumbing_calls: [stop, warning, message, stopifnot, print, cat, library, require, requireNamespace,
+                 missing, is.null, is.numeric, is.character, is.na, match.arg, invisible, on.exit,
+                 tryCatch, suppressWarnings, inherits, class, structure, names, length, nrow, ncol,
+                 seq_len, seq_along, vapply, lapply, sapply, data, utils::data, format, paste, paste0, sprintf]
+'''
+
+def load_notation():
+    """The names the tool reads as functions in a written formula."""
+    return yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]
 
 def tokenize_formula(text):
     """Cut a written formula into numbers, names and signs. Anything else makes it unreadable."""
@@ -569,10 +677,9 @@ def parse_markup(text, file_name, repairs, tolerant_only=False):
     return reader.finish()
 
 # ---------------------------------------------------------------- tag rules and the block walker
-def load_tag_rules(references_dir, override_path=None):
-    """The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml."""
-    with open(os.path.join(references_dir, "tag_rules.yaml"), encoding="utf-8") as handle:
-        rules = yaml.safe_load(handle)
+def load_tag_rules(override_path=None):
+    """The shipped tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml."""
+    rules = yaml.safe_load(TAG_RULES_YAML)
     rules["shipped_tags"] = sorted(str(tag).lower() for tags in rules["families"].values() for tag in tags)
     analyst_families = {}
     if override_path:
@@ -638,9 +745,12 @@ class WalkState:
     lent_numbering: str = ""                       # a number a container carries for the heading inside it
     ask: object = None                             # the asker, where a guided reading is turned on
     settings: dict = field(default_factory=dict)
-    references_dir: str = ""
     digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
     guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
+    folder: str = ""                               # where the file being read stands, so a picture beside it can be found
+    svgs: dict = field(default_factory=dict)       # the corner's SVG files, by lower-case name and by name without .svg
+    consumed: set = field(default_factory=set)     # SVGs already read in place by a document of the corner (shared by the corner)
+    file_name: str = ""
     lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
 
     def __post_init__(self):
@@ -663,6 +773,21 @@ def walk_element(element, path, depth, state):
         state.skip_next_image = True                     # the picture that follows shows the same equation
         return
     if family == "ignore" or not name:
+        return
+    linked, named_by = (svg_reference(element, state), element) if state.svgs else (None, None)
+    if not linked and state.svgs and state.family(name) == "figure":
+        # a figure may name its picture one level down: <chart><file>Chart2.svg</file></chart>
+        linked, named_by = next(((found, below) for below in element.iter() if below is not element
+                                 for found in [svg_reference(below, state)] if found), (None, None))
+    if linked:                                           # a chart or table drawn as an SVG beside the document: read it here, in place
+        if named_by is not None and len(named_by) == 0 and (named_by.text or "").strip():
+            state.dropped.append(named_by.text)          # the file name written as text is a reference, not what the document says
+        caption = next((core.normalise_text(element_text(n, state.rules, skip=())) for n in element.iter()
+                        if state.rules["family_of"].get(core.local_name(n.tag)) == "caption"), "") or element.get("alt") or element.get("title") or ""
+        with open(linked, "rb") as handle:
+            state.blocks.extend(svg_blocks(handle.read(), os.path.basename(linked), here, state, caption))
+        state.consumed.add(linked)
+        state.notes.append("%s: read in place, where %s refers to it." % (os.path.basename(linked), state.file_name or "the document"))
         return
     if family is None:                                   # discovery names every tag it reaches; this is the net under it
         family = "container" if len(element) else "paragraph"
@@ -705,7 +830,8 @@ def walk_element(element, path, depth, state):
         if state.skip_next_image:
             state.skip_next_image = False
             return
-        state.blocks.append(figure_block(element, here, state))
+        found = figure_block(element, here, state)
+        state.blocks.extend(found if isinstance(found, list) else [found])   # an SVG beside the document may give a table
     elif family == "equation":
         state.blocks.append(equation_block(element, here, state))
     elif family == "caption" and state.blocks and state.blocks[-1]["type"] in ("figure", "table", "equation"):
@@ -852,6 +978,76 @@ def figure_block(element, here, state):
     fingerprint = state.images.get(source) or state.images.get(source.replace("cid:", "")) or ""
     return new_block("figure", label or caption or source, here, caption=caption, image_sha256=fingerprint,
                      source=source)
+
+LINK_ATTRIBUTE = re.compile(r"src|href|ref|file|data|path|url|image|graphic", re.I)
+
+def svg_reference(element, state):
+    """The SVG of this corner an element refers to, or None. A reference is either an attribute
+    whose name says it links (src, href, xlink:href, fileref, data, a tool's own graphic= or
+    image=), or an element's whole text when it names a file ending in .svg. A plain name is
+    matched to a file of the corner in any case, and without .svg only when it came from a link
+    attribute; a path is followed only if it stays inside the document's folder. Found on review:
+    matching any short text without .svg took the heading <title>Floors</title> for floors.svg and
+    replaced the heading with the chart. Enforces: R6"""
+    values = [value for key, value in element.attrib.items() if LINK_ATTRIBUTE.search(core.local_name(key))]
+    text = (element.text or "").strip() if len(element) == 0 else ""
+    if text.lower().endswith(".svg") and len(text) < 200:
+        values.append(text)
+    for value in values:
+        written = (value or "").strip().replace("\\", "/").split("?")[0].split("#")[0]
+        if not written or ".." in written.split("/") or "://" in written or written.startswith("/"):
+            continue
+        if "/" in written and state.folder:
+            resolved = os.path.normpath(os.path.join(state.folder, written)).lower()
+            found = next((path for path in state.svgs.values() if os.path.normpath(path).lower() == resolved), None)
+            if found:
+                return found
+        name = os.path.basename(written).lower()
+        for key in ((name,) if name.endswith(".svg") else (name, name + ".svg")):
+            if key in state.svgs:
+                return state.svgs[key]
+    return None
+
+def svg_blocks(data, name, here, state, caption=""):
+    """The units of one SVG, read by the text it holds: a table where its text stands in a grid, a
+    figure of its labels otherwise. Where it holds no text, a picture stored inside it is read by
+    OCR when that is installed; and a figure that still gives no words says why, instead of standing
+    empty. The words counted are the SVG's own, so the content account closes. Enforces: R2, R13"""
+    import xml.etree.ElementTree as ElementTree
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return [not_read_block(name, "the SVG file is damaged and could not be opened")]
+    markup, words, _ = core.svg_to_markup(data, name)
+    own_caption, labels = (words.split("\n", 1) + [""])[:2]
+    state.atoms.extend(core.atoms_of_plain_text(labels if caption else words, name))
+    blocks = walk_svg_markup(parse_markup(markup, name, [], False), here, state)
+    for block in blocks:
+        block["caption"] = caption or own_caption
+        block["source"], block["image_sha256"] = name, core.sha256_bytes(data)
+        if block["type"] == "figure" and not block["text"].strip():
+            seen = "".join(read_picture(picture, state) for picture in core.svg_embedded_pictures(root)).strip()
+            if seen:
+                block["text"] = seen                     # words read from a picture: shown, never evidence
+            else:
+                block["not_read_reason"] = "the picture gave no words: %s" % core.svg_why_no_text(root)
+    return blocks
+
+def walk_svg_markup(root, here, state):
+    """The blocks the SVG's markup gives: a table block, or one figure block carrying the
+    picture's labels as its text."""
+    blocks = []
+    for node in root:
+        family = state.rules["family_of"].get(core.local_name(node.tag))
+        if family == "table":
+            block = table_block(node, here, state)
+            if block is not None:
+                blocks.append(block)
+        elif family == "figure":
+            blocks.append(new_block("figure", node.get("alt") or "", here,
+                                    caption=next((core.normalise_text("".join(c.itertext())) for c in node if core.local_name(c.tag) == "caption"), "")))
+    return blocks
+
 
 def equation_block(element, here, state):
     """An equation element: MathML or Office Math is converted; LaTeX or linear text is read as
@@ -1363,10 +1559,14 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
         return "too large", [not_read_block(file_name, "the file is larger than the size limit for one input file")]
     with open(path, "rb") as handle:
         data = handle.read()
+    state.folder = os.path.dirname(os.path.abspath(path))
     found = core.detect_format(data, file_name)
     if found in core.NOT_READ:                    # said in plain words, with a next step; never decoded as text
         state.atoms = [core.atom("whole file not read", file_name, "")]
         return found, [not_read_block(file_name, "the file is " + core.NOT_READ[found])]
+    if found == "svg":                               # read by the text it holds, as a table or a figure
+        state.atoms = []
+        return found, svg_blocks(data, file_name, file_name, state)
     if found in core.CONVERTED:                   # read through markup the walker already reads
         markup, words, how = core.converted(found, data, file_name)
         state.atoms = core.atoms_of_plain_text(words, file_name)
@@ -1388,16 +1588,29 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
 def read_corner(ctx, corner, input_key, label):
     """Read every file of one corner, in file-name order, into chunks numbered in reading order."""
     options = ctx.options
-    rules = load_tag_rules(options["references_dir"], options["inputs"].get("tag_rules"))
-    notation = load_notation(options["references_dir"])
+    rules = load_tag_rules(options["inputs"].get("tag_rules"))
+    notation = load_notation()
     chunks, repairs, info_rows, outline, accounts, digests, read_as_what = [], [], [], [], [], [], []
     root = (options["inputs"].get("roots") or {}).get(input_key)
     for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
         info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
-    for path in options["inputs"][input_key]:
+    paths = options["inputs"][input_key]
+    svgs = {}                                        # every SVG of the corner, by name and by name without .svg
+    for path in paths:
+        if path.lower().endswith(".svg"):
+            svgs.setdefault(os.path.basename(path).lower(), path)
+            svgs.setdefault(os.path.splitext(os.path.basename(path))[0].lower(), path)
+    consumed = set()
+    # documents first, pictures last: a chart an XML refers to is read in place, where the XML puts it,
+    # and is not read a second time on its own; one nothing refers to is still read, on its own
+    for path in [p for p in paths if not p.lower().endswith(".svg")] + [p for p in paths if p.lower().endswith(".svg")]:
         file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
+        if path in consumed:
+            info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
+            continue
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
-        state.ask, state.settings, state.references_dir = ctx.ask, ctx.settings, options["references_dir"]
+        state.ask, state.settings = ctx.ask, ctx.settings
+        state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
         try:
             found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
         except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
@@ -2744,7 +2957,7 @@ def package_plan(ctx, files, placed, package_name):
     if not unplaced or ctx.ask is None or ctx.settings.get("agentic_reading") == "off":
         return {}, [], []
     digest = core.manifest_digest(files, placed, safe_text, package_name)
-    prompt = core.load_prompt(ctx.options["references_dir"], "package-plan")
+    prompt = core.load_prompt("package-plan")
     question = core.package_plan_question(digest, prompt, ctx.settings)
     if question["too_large"]:
         return {}, [digest], ["The list of files in the package is too large to ask about, so the built-in tests read it."]
@@ -2777,8 +2990,7 @@ def read_package(ctx):
         return core.StepResult({}, {"units": 0}, ["The package could not be opened: %s." % core.reason_for(problem)])
     tarballs = archives or tarballs
     files = strip_top_folder(files)
-    with open(os.path.join(ctx.options["references_dir"], "r_function_map.yaml"), encoding="utf-8") as handle:
-        function_map = yaml.safe_load(handle)
+    function_map = yaml.safe_load(R_FUNCTION_MAP_YAML)
     description = read_description(core.decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
     namespace = read_namespace(core.decode_text(files["NAMESPACE"])) if "NAMESPACE" in files else None
     context = {"function_map": function_map, "notation": function_map["notation"], "namespace": namespace,
@@ -2820,7 +3032,11 @@ def read_package(ctx):
             "rows": package_rows(description, namespace, units, facts, refused)}
     messages = ["%d units read from %d files of the package." % (len(units), len(files))]
     r_files = sum(1 for path in files if path.lower().endswith(".r"))
-    if "DESCRIPTION" not in files or r_files * 10 < len(files):
+    other_code = sum(1 for path in files if path.lower().endswith((".py", ".sas", ".m", ".jl", ".scala", ".java", ".cpp", ".c")))
+    is_r_package = ("DESCRIPTION" in files and "Package:" in core.decode_text(files["DESCRIPTION"])) or (r_files and r_files >= other_code)
+    if not is_r_package:                             # a DESCRIPTION naming the package, or more R than any other code
+        # Found on a real run: an R package that keeps its code in one file beside many help pages
+        # was called "not an R package" because R files were under a tenth of all its files.
         # the tool's reader of code reads R and nothing else. A model in Python, SAS or MATLAB comes
         # through as files of running text, fully accounted for and impossible to check - so the
         # analyst is told plainly, rather than left to wonder why nothing was linked. Enforces: R2

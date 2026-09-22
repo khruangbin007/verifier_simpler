@@ -347,11 +347,12 @@ class RunnerAndWorkbook(unittest.TestCase):
     def test_run_stops_at_the_human_step_and_resumes_after_confirmation(self):
         self.assertEqual(self.first["state"], "waiting for a person")
         self.assertIn("cell 4", self.first["message"])
-        self.assertEqual(self.first["steps_run"][-1], "find-candidates")
+        self.assertEqual(self.first["steps_run"][-1], "extract-concepts", "before the person: reading, the graph, and the concepts code finds")
         runner.confirm_outline(self.paths, self.settings, "reviewer-1")
         second = runner.run_pipeline(self.paths, self.settings, chat=standin_chat.chat)
         self.assertNotIn("prepare-run", second["steps_run"], "a finished step was repeated")
-        self.assertEqual(second["steps_run"][:2], ["interpret-code", "judge-links"], "the AI steps begin once a person has confirmed the outline")
+        self.assertEqual(second["steps_run"][:4], ["interpret-code", "judge-concepts", "find-candidates", "judge-links"],
+                         "after the person: the model's concepts, then the search that puts them first, then the judge")
 
     def test_pipeline_refuses_an_unknown_function_and_an_unversioned_step(self):
         """pipeline.yaml is the one place a step is named, versioned and mapped to its function.
@@ -377,7 +378,7 @@ class RunnerAndWorkbook(unittest.TestCase):
         layout = runner.load_layout()
         workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
         self.assertEqual(workbook.sheetnames, [sheet["name"] for sheet in layout["sheets"]])
-        self.assertEqual(len(workbook.sheetnames), 8)
+        self.assertEqual(len(workbook.sheetnames), 9)
         for sheet_layout in layout["sheets"]:
             sheet = workbook[sheet_layout["name"]]
             self.assertLessEqual(len(sheet.title), 31)

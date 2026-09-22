@@ -30,10 +30,10 @@ SHAPE = """<?xml version="1.0"?>
 
 def a_question(text=SHAPE, rules=None):
     settings = runner.make_settings({})
-    rules = rules or reading.load_tag_rules(runner.REFERENCES_DIR)
+    rules = rules or reading.load_tag_rules()
     root = reading.parse_markup(text, "s.xml", [], False)
     digest = core.markup_digest(root, rules, "s.xml")
-    prompt = core.load_prompt(runner.REFERENCES_DIR, "slice-rules")
+    prompt = core.load_prompt("slice-rules")
     return core.slice_rules_question(digest, rules, prompt, settings), root, rules
 
 
@@ -60,7 +60,7 @@ class TheDigestShowsShapeAndNotTheDocument(unittest.TestCase):
         settings = runner.make_settings({})
         _, root, rules = a_question()
         digest = core.markup_digest(root, rules, "s.xml")
-        prompt = core.load_prompt(runner.REFERENCES_DIR, "slice-rules")
+        prompt = core.load_prompt("slice-rules")
         self.assertIn("THE READER NEVER", prompt["system"], "the contract lives in the prompt now")
         plain = core.slice_rules_question(digest, rules, prompt, settings)
         changed = dict(prompt, system=prompt["system"] + "\n- never lose a word", version="VERSION 99")

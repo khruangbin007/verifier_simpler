@@ -40,7 +40,7 @@ def a_question():
     files = reading.strip_top_folder(files)
     placed = {member: reading.built_in_reader(member, files[member]) for member in files}
     digest = core.manifest_digest(files, placed, reading.safe_text, "oddly")
-    prompt = core.load_prompt(runner.REFERENCES_DIR, "package-plan")
+    prompt = core.load_prompt("package-plan")
     return core.package_plan_question(digest, prompt, runner.make_settings({}))
 
 

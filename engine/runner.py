@@ -63,7 +63,6 @@ import review
 # ================================================================================================
 # ---------------------------------------------------------------- from verifier5_run_report
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
-REFERENCES_DIR = os.path.join(ENGINE_DIR, "references")
 
 class RunPaused(Exception):
     """The run stopped on purpose and can be resumed. The message tells the person what to do."""
@@ -83,8 +82,9 @@ DEFAULT_SETTINGS = {
     "relative_tolerance": 1e-9, "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "reviewer_role": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
-    "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
+    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
+    "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
+    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_pairs_max": 300, "concepts_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -216,9 +216,10 @@ class LiveValues:
             self.values = {"llm_endpoint": llm_endpoint, "llm_token": llm_token, "llm_user_id": llm_user_id}
 
     def get(self, name):
-        """One live value, read at the moment chat() is called."""
+        """One of the three values, read now. The user id is one value under two names: the widget is
+        called reviewer_id, because the same id records who made a decision and is sent to the LLM."""
         with self.lock:
-            return self.values.get(name, "")
+            return self.values.get("llm_user_id" if name == "reviewer_id" else name, "")
 
     def token_age_minutes(self):
         """Minutes since the current token was pasted."""
@@ -501,8 +502,11 @@ def wait_until_allowed(state, live, settings, sleep):
         if state.deadline and time.time() > state.deadline:
             raise RunPaused("The time box of this foreground run is over. Paste a fresh token "
                             "and run the cell again; no call will be repeated.")
-        too_old = live.set_at and live.token_age_minutes() >= settings["token_lifetime_minutes"]
-        needs_token = state.failed_generation == live.generation or too_old
+        # Only a call the gateway actually refused for authentication makes the run wait for a fresh
+        # token. A token's age alone never does: a run once sat waiting, silently, with a token that
+        # still worked, because it was older than token_lifetime_minutes. Age is shown in cell 4 as a
+        # hint and nothing more.
+        needs_token = state.failed_generation == live.generation
         state.waiting_for_token = bool(needs_token)
         if not needs_token and not state.control.get("pause"):
             return
@@ -616,7 +620,7 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-links",
+CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-concepts", "judge-links",
               "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
@@ -653,13 +657,58 @@ def update_manifest(store, changes):
     store.append("run_manifest", [manifest])
     return manifest
 
+def read_scope_column(path, known_refs):
+    """The "Use in review" cell of every row of the three Chunks sheets, by unit reference and
+    never by row position. Returns {ref: "to use" | "to not use"} for the cells that hold one of
+    the two words; anything else written there is ignored and said so."""
+    import openpyxl
+    found, ignored = {}, []
+    book = openpyxl.load_workbook(path, read_only=True)
+    for name in ("Chunks_Canon", "Chunks_Doc", "Chunks_Model"):
+        if name not in book.sheetnames:
+            continue
+        rows = list(book[name].iter_rows(values_only=True))
+        if not rows:
+            continue
+        header = [str(cell or "") for cell in rows[0]]
+        if "Use in review" not in header or "Ref" not in header:
+            continue
+        at_ref, at_scope = header.index("Ref"), header.index("Use in review")
+        for row in rows[1:]:
+            ref, word = str(row[at_ref] or "").strip(), str(row[at_scope] or "").strip().lower()
+            if not word or ref not in known_refs:
+                continue
+            if word in core.SCOPE_WORDS:
+                found[ref] = word
+            else:
+                ignored.append("%s: '%s' is not one of %s and was ignored" % (ref, word, " / ".join(core.SCOPE_WORDS)))
+    return found, ignored
+
 def confirm_outline(paths, settings, reviewer):
-    """Record that a person has checked the outline of the methodology (notebook cell 4)."""
+    """Record that a person has checked the outline of the methodology (notebook cell 4), and
+    read back what they wrote in the "Use in review" column of the three Chunks sheets: a unit
+    marked "to not use" is left out of the search, the links and the checks, and ends with the
+    status Not in scope. The decisions are a hash chain, like the determinations."""
     store = open_store(paths, settings)
-    update_manifest(store, {"outline_confirmed_by": reviewer or "not named",
-                            "outline_confirmed_at": datetime.datetime.now().isoformat(timespec="seconds")})
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    known = {r["ref"] for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
+    decisions, ignored, workbook = {}, [], os.path.join(paths.outputs_dir, "Output.xlsx")
+    if os.path.exists(workbook):
+        try:
+            decisions, ignored = read_scope_column(workbook, known)
+        except Exception as problem:                 # a workbook that cannot be opened is said, never a stopped cell (R2)
+            ignored.append("Output.xlsx could not be opened (%s); no scope decisions were read" % type(problem).__name__)
+    records = [{"unit_ref": ref, "decision": word, "recorded_at": now, "reviewer_id": reviewer or "not named"}
+               for ref, word in sorted(decisions.items())]
+    chained = core.chain_records(core.chain_head(store.read("scope_decisions")), records)
+    if chained:
+        store.append("scope_decisions", chained)
+    update_manifest(store, {"outline_confirmed_by": reviewer or "not named", "outline_confirmed_at": now})
     store.sync()
-    return "Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name")
+    out = sum(1 for word in decisions.values() if word == core.SCOPE_WORDS[1])
+    said = ["Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name"),
+            "Scope: %d unit(s) marked to not use%s." % (out, "; they will not be searched, linked or checked" if out else "")]
+    return "\n".join(said + ignored)
 
 def human_step_open(step, store, settings, determinations):
     """Is this human step still waiting for its person?"""
@@ -719,7 +768,7 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     provenance = core.Provenance(paths.run_id, step["id"], step["name"], step["version"],
                                    created_at=datetime.datetime.now().isoformat(timespec="seconds"))
     options = dict(step.get("with") or {})
-    options.update({"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
+    options.update({"inputs": core.list_input_files(paths.inputs_dir), "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
@@ -776,12 +825,12 @@ def fingerprint_file(path, corner, inputs_dir):
             "bytes": len(data), "sha256": core.sha256_bytes(data), "swhid": core.swhid_content(data)}
 
 def engine_file_hashes():
-    """SHA-256 of every file that makes up the engine (code, pipeline, references), so
-    that an evidence pack names exactly the code that produced it (the same list as in
-    docs/release_manifest.json)."""
+    """SHA-256 of every file that makes up the engine (its code, which now holds its prompts and
+    reference data, the pipeline and the requirements), so that an evidence pack names exactly the
+    code that produced it - the same list as engine/release.json."""
     import glob
     found = {}
-    for pattern in ("*.py", "pipeline.yaml", "requirements.txt", "references/**/*"):
+    for pattern in ("*.py", "pipeline.yaml", "requirements.txt"):
         for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
             if os.path.isfile(path):
                 found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
@@ -939,11 +988,41 @@ def chunk_note(chunk):
         notes.append("Heading numbering was reconstructed by counting")
     return "; ".join(notes)
 
-def rows_chunks(chunks):
-    """The rows of Chunks_Canon and Chunks_Doc."""
+def concept_names_by_ref(store):
+    """Each unit's concepts as the Chunks sheets show them: the concept names, joined by '; '."""
+    concepts, unit_concepts = review.latest_concepts(store.read)
+    names = {c["concept_id"]: c["name"] for c in concepts}
+    return {u["unit_ref"]: "; ".join(names[c] for c in u["concepts"] if c in names) for u in unit_concepts}
+
+def rows_concepts(store):
+    """The rows of Concepts: one per concept, with every form it is written in, the units that use
+    it in each corner, the files, how each join was made, and what the model found it related to."""
+    concepts, _ = review.latest_concepts(store.read)
+    file_of = {r["ref"]: r.get("source_file") or r.get("file") or "" for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
+    names = {c["concept_id"]: c["name"] for c in concepts}
     rows = []
+    for concept in concepts:
+        refs = concept["refs"]
+        rows.append({"concept_id": concept["concept_id"], "name": concept["name"], "acronyms": "; ".join(concept["acronyms"]),
+                     "forms": "; ".join(concept["forms"]),
+                     "canon": "; ".join(refs.get("canon", [])), "doc": "; ".join(refs.get("doc", [])), "model": "; ".join(refs.get("model", [])),
+                     "files": "; ".join(sorted({file_of.get(ref, "") for found in refs.values() for ref in found} - {""})),
+                     "established": "\n".join(concept["established"]),
+                     "related": "\n".join("%s: %s %s" % (relation, other, names.get(other, "")) for relation, other in concept["related"])})
+    return rows
+
+def scope_of(store):
+    """The latest scope decision per unit, as the yellow column shows it back."""
+    latest = {}
+    for record in store.read("scope_decisions"):
+        latest[record["unit_ref"]] = record["decision"]
+    return latest
+
+def rows_chunks(chunks, scope=None, named=None):
+    """The rows of Chunks_Canon and Chunks_Doc."""
+    rows, scope, named = [], scope or {}, named or {}
     for chunk in chunks:
-        rows.append({"ref": chunk["ref"], "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
+        rows.append({"ref": chunk["ref"], "scope": scope.get(chunk["ref"], ""), "concepts": named.get(chunk["ref"], ""), "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
                      "para_no": chunk.get("para_label") or chunk["para_no"],
                      "kind": chunk["kind"], "text": chunk["text"],
                      "source_file": chunk["source_file"], "refs_out": "; ".join(chunk["refs_out"]),
@@ -963,14 +1042,14 @@ def unit_expression(unit):
                                                " x ".join(str(d) for d in data.get("dims", [])))
     return ""
 
-def rows_model_units(units, interpretations=()):
+def rows_model_units(units, interpretations=(), scope=None, named=None):
     """The rows of Chunks_Model. What the AI said a piece of code does is shown as a quotation
     (in \u201c \u201d), because the words are the model's and not the tool's own. Enforces: R10"""
-    rows, said = [], {record["unit_ref"]: record for record in interpretations}
+    rows, said, scope, named = [], {record["unit_ref"]: record for record in interpretations}, scope or {}, named or {}
     for unit in units:
         code, told = unit.get("code") or {}, said.get(unit["ref"], {})
         lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else ""
-        rows.append({"ref": unit["ref"], "kind": unit["kind"], "file": unit["file"], "lines": lines,
+        rows.append({"ref": unit["ref"], "scope": scope.get(unit["ref"], ""), "concepts": named.get(unit["ref"], ""), "kind": unit["kind"], "file": unit["file"], "lines": lines,
                      "name": unit["name"], "inside": unit["inside"], "text": unit["text"],
                      "expression": unit_expression(unit), "exported": code.get("exported"),
                      "numbers": "; ".join(n["as_written"] for n in code.get("numbers", [])),
@@ -1027,9 +1106,14 @@ def rows_mapping(store, corner):
 def rows_coverage(model_rows, doc_rows, store):
     """Counted from the rows actually written: the second, independent route of the
     coverage identity (part 4). Enforces: R2"""
-    rows = []
+    rows, counted = [], bool(store.read("coverage"))
     for corner, label in COVERAGE_ROWS[:2]:
         written = model_rows if corner == "model" else doc_rows
+        if not counted:                              # empty, never zero: nothing has been counted yet
+            rows.append({"corner": label, "total": len(written), "how_to_read":
+                         "Not counted yet: statuses are given by the step account-coverage, after the model has "
+                         "judged the links. Until then these columns stay empty; cell 4 shows how far the run is."})
+            continue
         row = {"corner": label, "total": len(written), "how_to_read": NEEDS_ATTENTION_MEANS}
         for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES:
             row[status] = sum(1 for r in written if r["status"] == status)
@@ -1072,9 +1156,10 @@ def sheet_rows(store, paths, settings, progress):
         for name, text in row.pop("cells").items():
             row[name] = text
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Canon": rows_chunks(store.read("chunks_canon")),
-            "Chunks_Doc": rows_chunks(store.read("chunks_doc")),
-            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations")),
+            "Chunks_Canon": rows_chunks(store.read("chunks_canon"), scope_of(store), concept_names_by_ref(store)),
+            "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store), concept_names_by_ref(store)),
+            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store), concept_names_by_ref(store)),
+            "Concepts": rows_concepts(store),
             "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
             "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
 
@@ -1092,13 +1177,164 @@ def check_written_totals(rows, store):
                 "Part 4 of the coverage identity does not hold: the totals counted for the %s corner differ "
                 "from the rows written to the workbook. This is a defect in the tool, not in the model under review." % corner)
 
+# ---------------------------------------------------------------- the workbook layout
+# Every sheet of Output.xlsx in order, and every column of each: its header, its colour group, the
+# field of the row it shows, its width, and whether it is typed by a person (input_text). One line
+# per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, reviewer_input: FFFF00}
+sheets:
+- name: Model_Package_Info
+  columns:
+  - {header: Group, group: identity, field: group, width: 26}
+  - {header: Item, group: identity, field: item, width: 40}
+  - {header: Value, group: assessments, field: value, width: 90}
+- name: Chunks_Canon
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
+  - {header: Level, group: identity, field: level, width: 7}
+  - {header: Section (heading chain), group: identity, field: section, width: 44}
+  - {header: Para no., group: identity, field: para_no, width: 9}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Text, group: methodology, field: text, width: 90, input_text: true}
+  - {header: Extracted concepts, group: methodology, field: concepts, width: 40}
+  - {header: Source file, group: identity, field: source_file, width: 28}
+  - {header: Cross-references, group: methodology, field: refs_out, width: 24}
+  - {header: Reading note, group: assessments, field: reading_note, width: 40}
+- name: Chunks_Doc
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
+  - {header: Level, group: identity, field: level, width: 7}
+  - {header: Section (heading chain), group: identity, field: section, width: 44}
+  - {header: Para no., group: identity, field: para_no, width: 9}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Text, group: documentation, field: text, width: 90, input_text: true}
+  - {header: Extracted concepts, group: documentation, field: concepts, width: 40}
+  - {header: Source file, group: identity, field: source_file, width: 28}
+  - {header: Cross-references, group: documentation, field: refs_out, width: 24}
+  - {header: States something checkable, group: assessments, field: checkable, width: 16}
+  - {header: Reading note, group: assessments, field: reading_note, width: 40}
+- name: Chunks_Model
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
+  - {header: Kind, group: identity, field: kind, width: 20}
+  - {header: File, group: identity, field: file, width: 30}
+  - {header: Lines, group: identity, field: lines, width: 10}
+  - {header: Name, group: identity, field: name, width: 24, input_text: true}
+  - {header: Inside, group: identity, field: inside, width: 20}
+  - {header: Text, group: code_text, field: text, width: 80, input_text: true}
+  - {header: Extracted concepts, group: code_text, field: concepts, width: 40}
+  - {header: LLM Interpretation, group: assessments, field: llm_interpretation, width: 60}
+  - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
+  - {header: Numbers used, group: code_text, field: numbers, width: 20}
+  - {header: Exported, group: identity, field: exported, width: 10}
+  - {header: Reading note, group: assessments, field: reading_note, width: 40}
+- name: Concepts
+  columns:
+  - {header: Concept id, group: identity, field: concept_id, width: 11}
+  - {header: Concept, group: identity, field: name, width: 34}
+  - {header: Acronyms and abbreviations, group: identity, field: acronyms, width: 18}
+  - {header: 'Other forms used, as written', group: identity, field: forms, width: 36}
+  - {header: Methodology, group: assessments, field: canon, width: 26}
+  - {header: Documentation, group: assessments, field: doc, width: 26}
+  - {header: Model, group: assessments, field: model, width: 26}
+  - {header: Files, group: assessments, field: files, width: 30}
+  - {header: How established, group: assessments, field: established, width: 60}
+  - {header: Related concepts, group: assessments, field: related, width: 40}
+- name: Mapping_Model_to_Canon_and_Doc
+  columns:
+  - {header: Model ref, group: identity, field: ref, width: 10}
+  - {header: Kind, group: identity, field: kind, width: 18}
+  - {header: Name, group: identity, field: name, width: 22, input_text: true}
+  - {header: File and lines, group: identity, field: where, width: 26}
+  - {header: Code text, group: code_text, field: text, width: 60, input_text: true}
+  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
+  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
+  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
+  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
+  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
+  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
+  - {header: Doc ref(s), group: documentation, field: doc_refs, width: 14}
+  - {header: Relation (doc), group: documentation, field: doc_relation, width: 22}
+  - {header: How established (doc), group: documentation, field: doc_how, width: 50}
+  - {header: What was searched (doc), group: documentation, field: doc_searched, width: 50}
+  - {header: Why not mapped (doc), group: documentation, field: doc_why_not, width: 40}
+  - {header: Doc text, group: documentation, field: doc_text, width: 60, input_text: true}
+  - {header: Math check, group: assessments, field: math_check, width: 50}
+  - {header: Parameter completeness, group: assessments, field: parameter_completeness, width: 50}
+  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
+  - {header: Documentation consistency, group: assessments, field: documentation_consistency, width: 50}
+  - {header: Hard-coded numbers, group: assessments, field: hard_coded_numbers, width: 44}
+  - {header: Unit test, group: assessments, field: unit_test, width: 34}
+  - {header: Quality notes (AI), group: assessments, field: quality_notes_ai, width: 44}
+  - {header: Overall status, group: assessments, field: status, width: 30}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
+- name: Mapping_Doc_to_Canon_and_Model
+  columns:
+  - {header: Doc ref, group: identity, field: ref, width: 10}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Section (heading chain), group: identity, field: section, width: 40}
+  - {header: Doc text, group: documentation, field: text, width: 60, input_text: true}
+  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
+  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
+  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
+  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
+  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
+  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
+  - {header: Model ref(s), group: code_text, field: model_refs, width: 14}
+  - {header: Relation (model), group: code_text, field: model_relation, width: 22}
+  - {header: How established (model), group: code_text, field: model_how, width: 50}
+  - {header: Model text, group: code_text, field: model_text, width: 60, input_text: true}
+  - {header: Value check, group: assessments, field: value_check, width: 50}
+  - {header: Math check, group: assessments, field: math_check, width: 50}
+  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
+  - {header: Parameter note (AI), group: assessments, field: parameter_note_ai, width: 44}
+  - {header: Documentation quality notes, group: assessments, field: quality_notes, width: 44}
+  - {header: Overall status, group: assessments, field: status, width: 30}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
+- name: Mapping_Coverage
+  columns:
+  - {header: Corner, group: identity, field: corner, width: 30}
+  - {header: Units in total, group: identity, field: total, width: 12}
+  - {header: Traced to methodology, group: assessments, field: Traced to methodology, width: 14}
+  - {header: Supporting code (justified), group: assessments, field: Supporting code (justified), width: 14}
+  - {header: Unit test, group: assessments, field: Unit test, width: 12}
+  - {header: Narrative - nothing to check, group: assessments, field: Narrative - nothing to check, width: 14}
+  - {header: Not in scope (a person's decision), group: assessments, field: Not in scope (a person's decision), width: 14}
+  - {header: Traced - differences flagged, group: assessments, field: Traced - differences flagged, width: 14}
+  - {header: Traced - check undecided, group: assessments, field: Traced - check undecided, width: 14}
+  - {header: Not traced - for review, group: assessments, field: Not traced - for review, width: 14}
+  - {header: Not assessed - for manual review, group: assessments, field: Not assessed - for manual review, width: 14}
+  - {header: Needs attention, group: assessments, field: needs_attention, width: 12}
+  - {header: How to read this row, group: identity, field: how_to_read, width: 70}
+- name: Flagged_Items
+  columns:
+  - {header: Item id, group: identity, field: item_id, width: 30}
+  - {header: Concerns, group: identity, field: concerns, width: 22}
+  - {header: Category, group: identity, field: category, width: 34}
+  - {header: Unit ref(s), group: identity, field: unit_refs, width: 14}
+  - {header: Item, group: assessments, field: item, width: 44}
+  - {header: What was observed, group: assessments, field: observed, width: 70}
+  - {header: Methodology says, group: methodology, field: methodology_says, width: 50}
+  - {header: Code does, group: code_text, field: code_does, width: 50}
+  - {header: Documentation says, group: documentation, field: documentation_says, width: 50}
+  - {header: Suggested next step, group: assessments, field: suggested_next_step, width: 44}
+  - {header: Status, group: assessments, field: status, width: 18}
+  - {header: Last decision recorded, group: assessments, field: last_decision_recorded, width: 22}
+  - {header: Decision, group: reviewer_input, field: decision, width: 20, input_text: true}
+  - {header: Reviewer, group: reviewer_input, field: reviewer, width: 20, input_text: true}
+  - {header: Role, group: reviewer_input, field: role, width: 20, input_text: true}
+  - {header: Rationale, group: reviewer_input, field: rationale, width: 60, input_text: true}
+'''
+
 def load_layout():
-    """The workbook layout from references/workbook_layout.yaml."""
-    with open(os.path.join(REFERENCES_DIR, "workbook_layout.yaml"), encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+    """The workbook layout: every sheet and every column of Output.xlsx."""
+    return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
-    """One generic writer for all eight sheets: header row and first column frozen, filter on
+    """One generic writer for every sheet: header row and first column frozen, filter on
     the header, wrapped text, no merged cells, reviewer columns yellow and unlocked."""
     from openpyxl.styles import Alignment, Font, PatternFill, Protection
     from openpyxl.utils import get_column_letter
@@ -1106,7 +1342,10 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     columns = sheet_layout["columns"]
     wrap = Alignment(wrap_text=True, vertical="top")
     for number, column in enumerate(columns, start=1):
-        cell = sheet.cell(row=1, column=number, value=column["header"])
+        header = column["header"]
+        if column["field"] == "concepts" and settings.get("concept_subject"):   # "Extracted financial concepts"
+            header = "Extracted %s concepts" % settings["concept_subject"].strip().lower()
+        cell = sheet.cell(row=1, column=number, value=header)
         cell.font, cell.alignment = Font(bold=True), wrap
         cell.fill = PatternFill("solid", start_color=colours[column["group"]])
         sheet.column_dimensions[get_column_letter(number)].width = column.get("width", 20)
@@ -1123,11 +1362,13 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
-    if sheet_layout["name"] == "Flagged_Items" and rows:
-        decision_column = get_column_letter([c["field"] for c in columns].index("decision") + 1)
-        choice = DataValidation(type="list", formula1='"%s"' % ",".join(core.DECISION_WORDS), allow_blank=True)
-        sheet.add_data_validation(choice)
-        choice.add("%s2:%s%d" % (decision_column, decision_column, len(rows) + 1))
+    fields = [c["field"] for c in columns]
+    for field_name, words in (("decision", core.DECISION_WORDS), ("scope", core.SCOPE_WORDS)):
+        if field_name in fields and rows:            # the drop-downs: Decision on Flagged_Items, Use in review on the Chunks sheets
+            letter = get_column_letter(fields.index(field_name) + 1)
+            choice = DataValidation(type="list", formula1='"%s"' % ",".join(words), allow_blank=True)
+            sheet.add_data_validation(choice)
+            choice.add("%s2:%s%d" % (letter, letter, len(rows) + 1))
     if settings["protect_sheets"]:
         sheet.protection.sheet = True
         sheet.protection.autoFilter = False          # False = not locked: filtering stays possible
@@ -1439,7 +1680,10 @@ def verify_evidence_pack(paths, settings, live=None):
     content hash is computed again from the input files and compared with the record."""
     store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
     def line(what, good, detail=""):
-        rows.append((what, "Confirmed" if good else "Not confirmed", detail))
+        """good is True, False, or None for a check the run has not reached yet - which is not a failure
+        and must not read as one. Found on a real run that stopped after step 06: the coverage line said
+        Not confirmed, as if the pack had been tampered with."""
+        rows.append((what, "Confirmed" if good else "Not reached yet" if good is None else "Not confirmed", detail))
     manifest = (store.read("run_manifest") or [{}])[0]
     changed = [e["file"] for e in manifest.get("inputs", []) if not os.path.exists(os.path.join(paths.inputs_dir, e["file"]))
                or file_sha256(os.path.join(paths.inputs_dir, e["file"])) != e["sha256"]]
@@ -1447,7 +1691,7 @@ def verify_evidence_pack(paths, settings, live=None):
     installed, recorded = engine_file_hashes(), manifest.get("engine_files", {})
     other = sorted(name for name in set(installed) | set(recorded) if installed.get(name) != recorded.get(name))
     line("The engine files that produced this run are the ones installed here", not other, ", ".join(other[:5]))
-    options = {"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR}
+    options = {"inputs": core.list_input_files(paths.inputs_dir)}
     context = core.StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
     for kind, function in (("chunks_canon", reading.read_methodology), ("chunks_doc", reading.read_documentation),
                            ("model_units", reading.read_package)):
@@ -1463,8 +1707,10 @@ def verify_evidence_pack(paths, settings, live=None):
     named = {ref for item in items for ref in item["unit_refs"]}
     not_clean = {s["unit_ref"] for s in statuses if not s["clean"]}
     expected = {r["ref"] for kind in ("model_units", "chunks_doc") for r in store.read(kind)}
+    reached = any(r["step_id"] == "15" for r in store.read("step_records"))
     line("Every unit has one status; units that are not clean and flagged items match",
-         {s["unit_ref"] for s in statuses} == expected and len(statuses) == len(expected) and not_clean == named & expected)
+         None if not reached else ({s["unit_ref"] for s in statuses} == expected and len(statuses) == len(expected) and not_clean == named & expected),
+         "" if reached else "the run has not reached step 15, where each unit gets its status")
     known = expected | {r["ref"] for r in store.read("chunks_canon")}
     line("Every citation on Flagged_Items resolves to a unit", all(ref in known for ref in named))
     identity = run_identity(store, paths)
@@ -1487,6 +1733,8 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "reading.read_documentation": reading.read_documentation,
     "reading.read_package": reading.read_package,
     "review.build_graph": review.build_graph,
+    "review.extract_concepts": review.extract_concepts,
+    "review.judge_concepts": review.judge_concepts,
     "review.find_candidates": review.find_candidates,
     "review.judge_links": review.judge_links, "review.interpret_code": review.interpret_code,
     "review.check_mathematics": review.check_mathematics,

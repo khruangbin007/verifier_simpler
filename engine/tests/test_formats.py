@@ -263,6 +263,17 @@ class Finding7ANonRPackageIsNamedAsOne(unittest.TestCase):
         self.assertIn("does not look like an R package", said)
         self.assertIn("nothing in them can be linked or checked", said)
 
+    def test_an_r_package_with_one_code_file_and_many_help_pages_is_an_r_package(self):
+        """Found on a real run: one R file beside twenty help pages read as "1 of its 24 files are
+        R code" and drew the note. A DESCRIPTION naming the package decides."""
+        members = {"pkg/DESCRIPTION": "Package: pkg\nVersion: 0.1\n", "pkg/NAMESPACE": "export(k)\n", "pkg/R/all.R": "k <- function(x) x\n"}
+        members.update({"pkg/man/page%d.Rd" % n: "\\name{p%d}\n\\title{P}\n" % n for n in range(21)})
+        path = os.path.join(helpers.scratch(), "model.zip")
+        with open(path, "wb") as handle:
+            handle.write(zipped(members))
+        result = reading.read_package(helpers.context_for({"package": [path]}))
+        self.assertFalse([message for message in result.messages if "R package" in message])
+
     def test_an_r_package_draws_no_such_note(self):
         path = os.path.join(helpers.scratch(), "model.zip")
         with open(path, "wb") as handle:
@@ -333,6 +344,108 @@ class Finding10TextHeldOnlyAsTextIsCounted(unittest.TestCase):
         self.assertGreater(account["held as text only"], 0)
         rows = [row["value"] for row in result.records["package_info"][0]["rows"] if row["item"] == "content account"]
         self.assertTrue(any("held only as running text" in row for row in rows), rows)
+
+
+class SvgPicturesAreReadByTheirOwnText(unittest.TestCase):
+    """An SVG holds its text as text, so a chart's labels and a table drawn as a picture are read
+    without guesswork: every word comes from a <text> element. Where a methodology's XML refers
+    to an SVG beside it, the figure takes the picture's content as its own."""
+
+    CHART = (b'<svg xmlns="http://www.w3.org/2000/svg"><title>Figure 2</title>'
+             b'<text x="150" y="20">Discount rate against number of parcels</text><text x="5" y="30">10%</text><text x="5" y="170">0%</text></svg>')
+    TABLE = (b'<svg xmlns="http://www.w3.org/2000/svg"><desc>Floors by segment</desc>'
+             b'<text x="10" y="20">Segment</text><text x="120" y="20">Floor</text>'
+             b'<text x="10" y="40">Retail</text><text x="120" y="40">0.15</text>'
+             b'<text x="10" y="60">Corporate</text><text x="120" y="60"><tspan>0.25</tspan></text></svg>')
+
+    def test_an_svg_is_told_from_xml_by_its_root(self):
+        self.assertEqual(core.detect_format(self.CHART, "chart.svg"), "svg")
+        self.assertEqual(core.detect_format(b'<?xml version="1.0"?><doc><para>x</para></doc>', "m.txt"), "xml")
+
+    def test_text_standing_in_a_grid_is_a_table_and_labels_are_a_figure(self):
+        chunks, _, account = read("floors.svg", self.TABLE)
+        self.assertEqual([chunk["kind"] for chunk in chunks], ["Table"])
+        self.assertEqual(chunks[0]["table"]["rows"], [["Retail", "0.15"], ["Corporate", "0.25"]])
+        self.assertTrue(account["closed"])
+        chunks, _, account = read("chart.svg", self.CHART)
+        self.assertEqual([chunk["kind"] for chunk in chunks], ["Figure"])
+        self.assertIn("Discount rate against number of parcels", chunks[0]["text"])
+        self.assertTrue(account["closed"])
+
+    def test_a_figure_in_the_xml_takes_the_svg_beside_it(self):
+        folder = helpers.scratch()
+        with open(os.path.join(folder, "floors.svg"), "wb") as handle:
+            handle.write(self.TABLE)
+        with open(os.path.join(folder, "method.txt"), "w", encoding="utf-8") as handle:
+            handle.write('<doc><section num="1."><title>Floors</title><para>See Table 3.</para>'
+                         '<figure src="floors.svg"><caption>Table 3. Floors by segment</caption></figure>'
+                         '<figure src="missing.svg"><caption>Figure 9. Not there</caption></figure>'
+                         '<figure src="../floors.svg"><caption>Figure 10. Outside</caption></figure></section></doc>')
+        # every file of the folder is an input, as input_files makes it; the picture must be read once, in place
+        result = reading.read_methodology(helpers.context_for({"methodology": [os.path.join(folder, "floors.svg"),
+                                                                               os.path.join(folder, "method.txt")]}))
+        units = [core.to_plain(unit) for unit in result.records["chunks_canon"]]
+        self.assertEqual({unit["source_file"] for unit in units}, {"method.txt"}, "the chart is read where the XML puts it, not again")
+        self.assertTrue(any(row["value"].startswith("Read in place") for row in result.records["info_rows"]))
+        table = [unit for unit in units if unit["kind"] == "Table"][0]
+        self.assertEqual(table["heading_chain"], ["1. Floors"], "and it takes its place in the outline")
+        self.assertEqual(table["caption"], "Table 3. Floors by segment", "the document's own caption wins")
+        self.assertEqual(table["table"]["rows"], [["Retail", "0.15"], ["Corporate", "0.25"]])
+        figures = [unit for unit in units if unit["kind"] == "Figure"]
+        self.assertEqual(sorted(unit["caption"] for unit in figures), ["Figure 10. Outside", "Figure 9. Not there"],
+                         "a missing picture and a path that climbs out stay plain figures")
+        self.assertTrue(result.records["content_accounts"][0]["closed"])
+
+
+    def test_a_heading_that_shares_a_charts_name_stays_a_heading(self):
+        """Found on review: the heading <title>Floors</title> was taken for floors.svg and replaced
+        by the chart. Only a link attribute or text naming a .svg file refers to a picture."""
+        folder = helpers.scratch()
+        with open(os.path.join(folder, "floors.svg"), "wb") as handle:
+            handle.write(self.TABLE)
+        with open(os.path.join(folder, "method.txt"), "w", encoding="utf-8") as handle:
+            handle.write('<doc><section><title>Floors</title><para>The floors apply.</para></section></doc>')
+        result = reading.read_methodology(helpers.context_for({"methodology": [os.path.join(folder, "floors.svg"),
+                                                                               os.path.join(folder, "method.txt")]}))
+        units = [core.to_plain(unit) for unit in result.records["chunks_canon"]]
+        prose = [unit for unit in units if unit["source_file"] == "method.txt"]
+        self.assertEqual([(unit["kind"], unit["heading_chain"]) for unit in prose], [("Paragraph", ["Floors"])])
+        self.assertIn("floors.svg", {unit["source_file"] for unit in units}, "a chart nothing refers to is still read on its own")
+
+class SvgChartsAsRealToolsWriteThem(unittest.TestCase):
+    """Found in a sample run: of three charts only one gave any words, and none was placed in the
+    methodology - each stood alone at level 0. The XML named its pictures in ways the reader did not
+    follow, and real chart files hold their words in more than <text>."""
+
+    def read_folder(self, files):
+        folder = helpers.scratch()
+        for name, data in files.items():
+            with open(os.path.join(folder, name), "wb") as handle:
+                handle.write(data if isinstance(data, bytes) else data.encode("utf-8"))
+        result = reading.read_methodology(helpers.context_for({"methodology": sorted(os.path.join(folder, n) for n in files)}))
+        return [core.to_plain(unit) for unit in result.records["chunks_canon"]], result.records["content_accounts"]
+
+    def test_each_way_of_naming_and_holding_a_chart_is_read_in_place(self):
+        glyphs = "".join('<use xlink:href="#glyph0-%d" x="%d" y="10"/>' % (i, i * 6) for i in range(30))
+        units, accounts = self.read_folder({
+            "C-EN-5_Chart1.svg": b'<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">Segment</text><text x="120" y="20">Floor</text>'
+                                 b'<text x="10" y="40">Retail</text><text x="120" y="40">0.15</text></svg>',
+            "C-EN-5_Chart2.svg": b'<svg xmlns="http://www.w3.org/2000/svg"><foreignObject x="5" y="5" width="200" height="40">'
+                                 b'<div xmlns="http://www.w3.org/1999/xhtml"><p>Debt to net revenue</p></div></foreignObject></svg>',
+            "C-EN-5_Chart3.svg": '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">%s</svg>' % glyphs,
+            "zz_orphan.svg": b'<svg xmlns="http://www.w3.org/2000/svg"><text x="1" y="1">Unrestricted reserves to debt</text></svg>',
+            "method.txt": '<doc><section num="1."><title>Financial risk</title><para>See Table 3.</para>'
+                          '<graphic entityref="C-EN-5_Chart1"><caption>Table 3. Floors</caption></graphic>'
+                          '<chart><file>C-EN-5_Chart2.svg</file></chart><object data="C-EN-5_Chart3.svg"/></section></doc>'})
+        placed = [unit for unit in units if unit["source_file"] == "method.txt"]
+        self.assertEqual([unit["kind"] for unit in placed], ["Paragraph", "Table", "Figure", "Figure"],
+                         "named by a bare name in any attribute, by text one level down, by data=: all read in place")
+        self.assertTrue(all(unit["heading_chain"] == ["1. Financial risk"] for unit in placed), "under their section, not at level 0")
+        self.assertEqual(placed[2]["text"], "Debt to net revenue", "words held in a foreignObject are read")
+        self.assertIn("drawn as shapes", placed[3]["not_read_reason"], "a chart with no words says why")
+        alone = [unit for unit in units if unit["source_file"] != "method.txt"]
+        self.assertEqual([unit["source_file"] for unit in alone], ["zz_orphan.svg"], "a chart read in place is not read again; one nobody names still is")
+        self.assertTrue(all(account["closed"] for account in accounts), [(a["file"], a["what unaccounted"]) for a in accounts])
 
 
 if __name__ == "__main__":

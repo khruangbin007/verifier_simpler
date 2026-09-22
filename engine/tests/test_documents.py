@@ -80,7 +80,7 @@ TIE--Transportation infrastructure enterprise.</tablefootnote>
 """
 
 
-NOTATION = reading.load_notation(helpers.os.path.join(helpers.ENGINE_DIR, "references"))
+NOTATION = reading.load_notation()
 
 
 class FormulaNotation(unittest.TestCase):

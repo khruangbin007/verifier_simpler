@@ -4,6 +4,8 @@ import unittest
 
 import yaml
 
+import os
+
 import helpers
 import core
 import review
@@ -78,7 +80,7 @@ class Words(unittest.TestCase):
 class Search(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.paths, cls.settings, _ = helpers.run_sample("F_capital", stop_after="06")
+        cls.paths, cls.settings, _ = helpers.run_sample("F_capital", stop_after="07c")     # the search runs after the concepts
         cls.store = runner.open_store(cls.paths, cls.settings)
 
     def test_every_searched_unit_has_a_search_record_with_words_an_analyst_can_read(self):
@@ -129,7 +131,7 @@ class Search(unittest.TestCase):
 
 class QuestionsAndValidators(unittest.TestCase):
     def question(self):
-        prompt = core.load_prompt(runner.REFERENCES_DIR, "judge-unit-to-canon")
+        prompt = core.load_prompt("judge-unit-to-canon")
         passages = [("C-0009", "3.1.1 Floor, paragraph 1", "The probability of default is never taken below 0.03%."),
                     ("C-0008", "3.1, paragraph 1", "The probability of default is estimated from internal ratings and is reviewed every year."),
                     ("C-0099", "9 Other, paragraph 1", "All parcels are weighed at the counter before they are priced.")]
@@ -158,7 +160,7 @@ class QuestionsAndValidators(unittest.TestCase):
             self.assertEqual(answer is not None, expected == "accepted", case["name"])
 
     def test_narrow_answers_are_validated_too(self):
-        question = review.narrow_question("align-symbols", "M-0001", [("CODE SYMBOLS", "base, rate"), ("EQUATION SYMBOLS", "B, R")], runner.REFERENCES_DIR,
+        question = review.narrow_question("align-symbols", "M-0001", [("CODE SYMBOLS", "base, rate"), ("EQUATION SYMBOLS", "B, R")],
                                            SETTINGS, more={"code_symbols": ["base", "rate"], "equation_symbols": ["B", "R"]})
         good = '{"alignment": [{"code": "base", "equation": "B"}, {"code": "rate", "equation": "R"}], "cannot_align": false}'
         twice = '{"alignment": [{"code": "base", "equation": "B"}, {"code": "rate", "equation": "B"}], "cannot_align": false}'
@@ -186,8 +188,76 @@ class QuestionsAndValidators(unittest.TestCase):
         self.assertTrue(store.read("judgement_problems"))
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+class Concepts(unittest.TestCase):
+    """Concepts: the terms of art of whatever the documents are about, every form each is written
+    in, and where each form is used. Code proves what it can; the model adds and judges the rest,
+    and can never name a term the text does not hold. Shared concepts come first in the search."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.paths, cls.settings, _ = helpers.run_sample("F_capital", settings={"concept_subject": "financial"})
+        cls.store = runner.open_store(cls.paths, cls.settings)
+        cls.concepts, cls.per_unit = review.latest_concepts(cls.store.read)
+
+    def test_an_acronym_defined_in_the_methodology_joins_its_expansion_in_every_corner(self):
+        pd = [c for c in self.concepts if "PD" in c["acronyms"]][0]
+        self.assertEqual(pd["name"], "probability of default")
+        self.assertTrue(pd["refs"].get("canon") and pd["refs"].get("doc"), "used in the methodology and the documentation")
+        self.assertTrue(any(line.startswith("defined in C-") for line in pd["established"]), "the join says where it was proved")
+
+    def test_the_chunks_sheets_show_the_concepts_and_the_header_names_the_subject(self):
+        import openpyxl
+        book = openpyxl.load_workbook(os.path.join(self.paths.run_dir, "Output.xlsx"), read_only=True)
+        for name in ("Chunks_Canon", "Chunks_Doc", "Chunks_Model"):
+            rows = list(book[name].iter_rows(values_only=True))
+            self.assertIn("Extracted financial concepts", rows[0], name)
+        rows = list(book["Chunks_Canon"].iter_rows(values_only=True))
+        column = rows[0].index("Extracted financial concepts")
+        self.assertTrue(any("probability of default" in str(row[column] or "") for row in rows[1:]))
+        concepts = list(book["Concepts"].iter_rows(values_only=True))
+        self.assertEqual(len(concepts) - 1, len(self.concepts), "one row per concept")
+        self.assertEqual(len({row[0] for row in concepts[1:]}), len(self.concepts), "each concept once")
+
+    def test_a_shared_concept_puts_a_passage_on_the_shortlist_with_its_reason(self):
+        shared = [c for c in self.store.read("candidates") if "concepts" in (c.get("signals") or {})]
+        self.assertTrue(shared)
+        self.assertTrue(all("shares the concept" in c["reason"] for c in shared))
+
+    def test_a_term_the_passage_does_not_hold_is_refused(self):
+        question = {"question_type": "extract-concepts", "unit_texts": {"C-0001": "The debt-to-net-revenue ratio is used."}}
+        review.validate_concepts(question, {"units": {"C-0001": [{"term": "Debt to net revenue", "acronym": ""}]}})
+        for bad in ({"units": {"C-0001": [{"term": "net debt", "acronym": ""}]}},
+                    {"units": {"C-0009": []}}, {"units": {"C-0001": [{"term": "ratio", "acronym": "DNR"}]}}, {"units": []}):
+            with self.assertRaises(review.Rejected):
+                review.validate_concepts(question, bad)
+
+    def test_a_judged_pair_must_be_one_shown_and_answered_with_one_of_five_relations(self):
+        question = {"question_type": "judge-concepts", "pair_ids": ["P1", "P2"]}
+        review.validate_concepts(question, {"pairs": {"P1": "same", "P2": "related"}})
+        for bad in ({"pairs": {"P1": "same"}}, {"pairs": {"P1": "same", "P2": "similar"}},
+                    {"pairs": {"P1": "same", "P2": "same", "P3": "same"}}, {"pairs": ["same"]}):
+            with self.assertRaises(review.Rejected):
+                review.validate_concepts(question, bad)
+
+    def test_only_what_the_model_calls_the_same_is_joined(self):
+        units = [({"ref": "C-0001", "text": "The Net Present Value and the Present Value Factor are shown."}, "canon"),
+                 ({"ref": "D-0001", "text": "The model reports the Discounted Value of each flow."}, "doc")]
+        npv, pvf, dv = review.concept_key("Net Present Value"), review.concept_key("Present Value Factor"), review.concept_key("Discounted Value")
+        concepts, _ = review.concept_registry(units, extra_joins=[(npv, dv, "AI judgement: the same concept")],
+                                              relations=[(npv, pvf, "related")])
+        joined = [c for c in concepts if c["name"] in ("Net Present Value", "Discounted Value")]
+        self.assertEqual(len(joined), 1, "'same' joins two names into one concept")
+        self.assertEqual(sorted(c["name"] for c in concepts), sorted([joined[0]["name"], "Present Value Factor"]))
+        self.assertEqual([relation for relation, _ in joined[0]["related"]], ["related"], "'related' is kept, and joins nothing")
+
+    def test_a_lone_heading_names_no_concept_and_capitals_read_in_ordinary_case(self):
+        self.assertEqual(review.heading_term("OVERVIEW AND SCOPE"), "Overview and scope")
+        self.assertEqual(review.heading_term("a) Economic fundamentals (10% weighting)"), "Economic fundamentals")
+        mentions, _ = review.unit_mentions({"ref": "C-0001", "text": "Plain words.", "heading_chain": ["Summary"]}, "canon", set())
+        self.assertEqual(mentions, [])
+
+
 
 
 class InterpretingTheCode(unittest.TestCase):
@@ -265,3 +335,6 @@ class InterpretingTheCode(unittest.TestCase):
         self.assertEqual([kept(i) for i in first.read("flagged_items")], [kept(i) for i in second.read("flagged_items")])
         self.assertEqual(helpers.without_times(first.read("coverage")), helpers.without_times(second.read("coverage")))
         self.assertEqual(second.read("interpretations"), [], "switched off, the step asks nothing")
+
+if __name__ == "__main__":
+    unittest.main()

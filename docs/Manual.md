@@ -173,12 +173,12 @@ The notebook is `Verifier.ipynb`. It has five cells, each run in order the first
 | Cell | What it does | When to run it again |
 |---|---|---|
 | **cell 1** | Makes the widgets, installs the packages if any is missing (pinned to what the cluster already has), loads the engine, and reads the endpoint, token and user id from the widgets. | After anything restarts Python, and after pasting a fresh token. |
-| **cell 2** | Your `chat()`. Paste your organisation's function, or set `USE_STANDIN = True` to try the notebook without a model. Ends with a one-word self-test. | After changing `chat()`. |
+| **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `live()` each time it is called. Set `USE_STANDIN = True` to try the notebook without a model. Ends with a one-word self-test. | After changing `chat()`. |
 | **cell 3** | Makes the project folder if it is new and says what to put where. Reads every input file, with no model involved, and shows the outline of the methodology and what each file was read as. | After adding or changing an input, or adding `Inputs/tag_rules.yaml`. |
 | **cell 4** | The first time: records that you confirmed the outline and starts the model steps and the checks in the background. Every time after: shows where the run stands. `PAUSE` and `STOP` at the top do what they say. | To see progress; to pause or stop. |
 | **cell 5** | After the run waits for a person: reads your determinations back from `Output.xlsx` and verifies the evidence pack. `APPENDIX` at the top runs a maintainer's check instead. | After every round of determinations. |
 
-**The widgets.** Endpoint, token and user id for the model gateway (01 to 03); the model id (04); an existing project date and run to resume, or empty for new (05, 06); the Projects folder (07); the package index (08); concurrency and token cap (09, 10); your id and role, which go into the record beside every determination (11, 12); a scratch folder, normally empty (13).
+**The widgets.** Endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the id recorded beside every decision you make; the model id (04); an existing project date and run to resume, or empty for new (05, 06); the Projects folder (07); the package index (08); concurrency and token cap (09, 10); a scratch folder, normally empty (11); and the subject of the documents (12), such as `financial`, which tells the model what kind of concepts to look for and names the concepts column after it.
 
 **The token.** It is read at the moment `chat()` is called, never stored. When it runs out mid-run, cell 4 says the run is waiting for a fresh one: paste it into widget 02, run cell 1, and the run goes on. No question is repeated.
 
@@ -190,11 +190,13 @@ Three folders under `Inputs/`:
 
 | Folder | What | Formats |
 |---|---|---|
-| `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv`/`.tsv`, `.xlsx`, `.rtf`, `.tex` |
+| `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv`/`.tsv`, `.xlsx`, `.rtf`, `.tex`, `.svg` |
 | `2_Model_Package` | the model | an R package as a `.tar.gz`, a `.zip` of it, or its source folder |
 | `3_Model_Documentation` | the model documentation | as for the methodology; `.docx` preferred |
 
 Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.db` and a saved web page's support folder are left out and listed. A format the tool does not read — a slide deck, an old `.doc`, a picture on its own — becomes one row on `Model_Package_Info` saying so and what to save it as instead. Nothing is decoded as text that is not text.
+
+**SVG pictures.** An SVG holds its text as text, so the tool reads a chart or a table drawn as a picture without guessing: every word comes from the picture's own `<text>` elements. Text that stands in a grid of at least two rows of the same width becomes a table, with the first row as its header; anything else becomes a figure whose words are the picture's labels in reading order. Where the methodology's XML refers to a picture beside it — `<figure src="floors.svg">` — that figure takes the picture's table or labels as its own, under the caption the XML gives. Only a picture in the same folder as the document, or a folder inside it, is followed; a missing picture or a path that leaves the folder stays a plain figure.
 
 **Optional.** `Inputs/glossary.xlsx` names the project's own terms, so that the search for corresponding passages knows that two words mean one thing. `Inputs/tag_rules.yaml` tells the reader what the tags of an unfamiliar XML schema are for, and always wins over what the tool would work out.
 
@@ -252,7 +254,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 
 **How to read a path.** *What was observed* on `Flagged_Items` ends with the supporting path, hop by hop: the unit, the function it sits in, the table it reads, the passage it corresponds to with how that was established, the roxygen block and documentation passage that describe it.
 
-**The sheets and columns.** Generated from `engine/references/workbook_layout.yaml`:
+**The sheets and columns.** As laid out in the one place that defines them, `runner.WORKBOOK_LAYOUT_YAML`:
 
 **Model_Package_Info**
 
@@ -336,7 +338,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Hard-coded numbers | assessments | Every non-trivial number in the code, and where the linked passages state it. |
 | Unit test | assessments | Which test block calls the function. For information only; it never raises an item. |
 | Quality notes (AI) | assessments | Text written by the model, labelled as such and filtered. |
-| Overall status | assessments | The one final status of the unit (chapter 6). |
+| Overall status | assessments | The one final status of the unit (the statuses are listed in this section). |
 | Flagged item(s) | assessments | Ids of the rows on Flagged_Items that name this unit. |
 
 **Mapping_Doc_to_Canon_and_Model**
@@ -362,7 +364,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Logic consistency | assessments | Floors, caps and thresholds stated in linked passages, and whether the code applies them. On the documentation sheet: the judged relations. |
 | Parameter note (AI) | assessments | A column mapping or symbol alignment proposed by the model, where one was asked for. |
 | Documentation quality notes | assessments | Deterministic notes: references that resolve to nothing, reconstructed numbering, unreadable parts, repeated paragraphs. |
-| Overall status | assessments | The one final status of the unit (chapter 6). |
+| Overall status | assessments | The one final status of the unit (the statuses are listed in this section). |
 | Flagged item(s) | assessments | Ids of the rows on Flagged_Items that name this unit. |
 
 **Mapping_Coverage**
@@ -403,9 +405,21 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Role | reviewer input |  |
 | Rationale | reviewer input |  |
 
-## 8. Confirming the outline
+## 8. Confirming the outline, and choosing what is in scope
 
-The reading steps run before any model call is spent, and cell 3 shows the outline of the methodology as it was read: every heading at its depth. Check it against the document's own table of contents. Where the tool read a file whose shape it did not know, `Model_Package_Info` says which tag was read as what and why, and what the built-in rules would have done instead. Read those rows before confirming. Then set `OUTLINE_CONFIRMED = True` at the top of cell 4 and run it; the confirmation is recorded with your id.
+The reading steps run before any model call is spent, and cell 3 shows the outline of the methodology as it was read: every heading at its depth. Check it against the document's own table of contents. Where the tool read a file whose shape it did not know, `Model_Package_Info` says which tag was read as what and why, and what the built-in rules would have done instead. Read those rows before confirming.
+
+**Choosing what is in scope.** Each of the three sheets `Chunks_Canon`, `Chunks_Doc` and `Chunks_Model` has a yellow column, **Use in review**, with a drop-down of two words: *to use* and *to not use*. An empty cell means *to use*. Mark *to not use* on anything that should not be reviewed — a cover page, a table of contents, a disclaimer, a helper file of the package — then save the workbook back into the run folder under its own name. When cell 4 is run it reads that column back, by unit reference and never by row position, and records each decision with your id in a hash chain. A unit marked *to not use* is not searched, not linked, not a link target, not interpreted and not checked; it ends with the status **Not in scope (a person's decision)**, which counts as clean and raises no flagged item, and it is still listed, so that what was left out stays visible. Anything else written in the column is ignored and cell 4 says so.
+
+Then set `OUTLINE_CONFIRMED = True` at the top of cell 4 and run it; the confirmation is recorded with your id.
+
+## 8a. Concepts
+
+A **concept** is a term of art of the subject the documents are about — a named quantity, measure, ratio, factor, method or defined term — together with every form it is written in across the three corners: its acronym, its expansion, other spellings, and the name the code gives it. The three Chunks sheets show each unit's concepts in the column **Extracted concepts**, joined by `;`; with widget 12 set to `financial` the column reads *Extracted financial concepts*. The sheet **Concepts** has one row per concept: its name, its acronyms, every other form used as written, the units that use it in the methodology, the documentation and the model, the files, how each of its forms was joined to it, and the concepts the model found related to it.
+
+**How concepts are found, and who decides.** Code first, in cell 3, before any model call (step 06, `extract-concepts`): an acronym the text defines — *discounted cash flow (DCF)* or *DCF (discounted cash flow)* — and a glossary entry written as its own heading over the words it stands for are proved from the text, with the unit that proves them; names in capitals inside a sentence, quoted terms, headings of two words or more, table columns and the names the code gives things are taken as they are written; forms whose words are the same are one concept. Then, after you confirm the outline (step 07b, `judge-concepts`), the model reads every unit for the concepts code could not see — and every term it names must be in that unit word for word, or its whole answer is refused, so no concept is ever one it made up — and judges the pairs code could only suspect: an acronym whose letters are another name's initials, names sharing words. Only a pair it calls *the same* is joined, and the join says so; *narrower*, *broader* and *related* are kept as relations and join nothing.
+
+**How concepts steer the mapping.** The search for corresponding passages (step 07c) runs after the concepts, and a passage that shares a concept with the unit comes first: that signal counts twice as much as any other, and it is the first to fill the places reserved on each shortlist, so a passage that writes *DCF* reaches the judge for a unit that writes *discounted cash flow* even where no other word is shared. The reason shown for such a candidate begins *shares the concept*.
 
 ## 9. Working through `Flagged_Items`
 
@@ -460,7 +474,7 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 - R code is parsed by the tool's own reader, not by R. Unusual syntax becomes a *File not read* unit for that expression only. Functions with loops or branches are compared statement by statement; R semantics that the tool's evaluator does not cover (recycling of vectors, matrix products) end as "uses operations the tool cannot evaluate".
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described and not compared; missing values of different kinds are not told apart.
 - The percentage after "AI judgement" is not calibrated.
-- The evaluation so far used invented sample projects and the stand-in `chat()`; results with a real model on a real package are the owner's Phase 12 campaign (chapter 27).
+- The evaluation so far used invented sample projects and the stand-in `chat()`; results with a real model on a real package are still to be measured (section 22).
 
 ---
 
@@ -491,9 +505,11 @@ The engine is five flat files, imported in one direction: `core` imports nothing
 | 03 | read-documentation | `reading.read_documentation` |
 | 04 | read-package | `reading.read_package` |
 | 05 | build-graph | `review.build_graph`: every unit a node |
-| 06, 09 | find-candidates | `review.find_candidates`, two passes |
+| 06 | extract-concepts | `review.extract_concepts`: the concepts code can prove |
+| 07c, 09 | find-candidates | `review.find_candidates`, two passes; shared concepts first |
 | 07 | confirm-outline | a person, in cell 4 |
 | 07a | interpret-code | `review.interpret_code` |
+| 07b | judge-concepts | `review.judge_concepts`: the model's concepts, and which names are one |
 | 08, 10 | judge-links | `review.judge_links`, two passes |
 | 11 | check-mathematics | `review.check_mathematics` |
 | 12 | check-values | `review.check_values` |
@@ -504,7 +520,7 @@ The engine is five flat files, imported in one direction: `core` imports nothing
 | 17 | record-determinations | `runner.record_determinations` |
 | 18 | build-report | `runner.build_report` |
 
-The steps that ask the model are `read-methodology`, `read-documentation` and `read-package` (only where a file's shape is in doubt and `agentic_reading` is on), `interpret-code`, `judge-links`, `check-mathematics`, `check-values` and `check-rules`. Every other step is code alone.
+The steps that ask the model are `read-methodology`, `read-documentation` and `read-package` (only where a file's shape is in doubt and `agentic_reading` is on), `interpret-code`, `judge-concepts`, `judge-links`, `check-mathematics`, `check-values` and `check-rules`. Every other step is code alone.
 
 ## 16. How the model is used, and held
 
@@ -576,7 +592,9 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 | `interpret_code` | True | Ask the AI to say in plain words what each function, formula statement, top-level statement and test block does, shown with where it sits in the whole package. Fills the column LLM Interpretation on Chunks_Model. One question per piece of code; switch it off to save the calls. |
 | `agentic_reading` | off | Whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. "off" asks nothing and reads as the built-in rules read; "rules" asks one question per file the rules are unsure about and applies the answer under everything the rules already know. |
-| `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the ablation ladder of tools/recall_at_k.py switches them off one by one. |
+| `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the recall ladder (`develop.recall`) switches them off one by one. |
+
+`concept_subject` (default empty): the subject of the documents, from widget 12; it tells the model what kind of concepts to look for and names the concepts column. `concept_weight` (default 2.0): how much more a shared concept counts in the search than any other signal. `concept_batch` (default 8): how many units one extraction question shows the model. `concept_pairs_max` (default 300): the most pairs of names the model is asked to judge in one run. `concepts_with_ai` (default true): whether the model refines the concepts code found; switched off, the registry code made stands.
 
 `agentic_reading` (default `off`): whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. `off` asks nothing; `rules` asks one question per file the rules are unsure about. The sign-off bar for turning it on is `develop.run`, run from cell 5 with `APPENDIX = "sign-off"`; it changes no setting.
 
@@ -608,30 +626,23 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 | You want to add | Where | What must be re-evaluated |
 |---|---|---|
-| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project, or `engine/references/tag_rules.yaml` | `test_reading.py`; the outline of one real document |
-| an R function the comparison should understand | `engine/references/r_function_map.yaml` (neutral name, arguments, domain), `review.to_sympy` and `review.evaluate` | `test_review.py` with new pairs in `engine/tests/equivalence_corpus.yaml`; Reviewer 2 and Reviewer 4 agree the entry |
-| a question type | a prompt under `engine/references/prompts/`, a validator branch in `review.validate_narrow`, a handler in the stand-in | the bad-answers corpus; the token budget for the largest unit |
-| a category | the constants of `core.py`, `review.NEXT_STEPS`, Appendix B | the wording lint; the identity tests |
-| a search signal | `review.search_one`, `review.REASON_TEMPLATES`, the `signals` setting | `tools/recall_at_k.py`: the signal must earn its place on the ablation ladder |
+| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `reading.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
+| an R function the comparison should understand | `reading.R_FUNCTION_MAP_YAML` (neutral name, arguments, domain), `review.to_sympy` and `review.evaluate` | `test_checks.py`, with new pairs in `engine/tests/equivalence_corpus.yaml` |
+| a question type | a prompt in `core.PROMPTS`, a validator branch in `review.validate_narrow`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
+| a category | the constants of `core.py`, `review.NEXT_STEPS`, section 20 | the wording lint; the identity tests |
+| a search signal | `review.search_one`, `review.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
+| a word the search should ignore, or a code-to-prose bridge | `review.STOPWORDS_TEXT`, `review.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
+| a column or a sheet of `Output.xlsx` | `runner.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `runner.py` | `test_runner.py`; the end-to-end tests |
 
-After any change: the whole test suite, `tools/check_docs.py`, `tools/build_manual.py`, the harness (`tools/run_harness.py`), and a new `docs/release_manifest.json` from `tools/make_release_manifest.py`.
+A prompt's text is part of every question id made from it, and recorded answers are found by that id: change a prompt's words and raise its `VERSION` line together, so that no answer to the old question is taken for an answer to the new one.
+
+After any change, see section 23.
 
 ## 22. How the tool was measured
 
-The evaluation dossier is `docs/the tool_0.0.1_Evaluation_Dossier.md`. In short, with the stand-in `chat()` on invented samples: the equivalence corpus of 100 formula pairs (no differing pair is ever reported as agreeing); the seeded-difference harness (`evaluation/harness_F_capital.md`); the recall ladder of the search stage (`evaluation/relatedness_report.md`); the six seeded differences of `F_capital_known`; reproducibility by replay. What is still to be done with the real model on a real package, by the owner, is listed there as well.
+With the stand-in `chat()` on invented samples: an equivalence corpus of 100 formula pairs, in which no differing pair is ever reported as agreeing; the seeded-difference harness (`develop.harness`), in which every seeded difference in a sample ends flagged in an expected category and the clean baseline flags none of its gold clean units; the recall ladder of the search (`develop.recall`); the six seeded differences of `F_capital_known`; and reproducibility by replay from recorded answers. Every measurement appends a row to `engine/tests/history.csv`. What is still to be done is to measure the same with the real model on a real package.
 
-**Line counts.** The plan asks for at least 30 percent of each file to be docstrings, comments and overview. The files are below that share; the numbers are reported here as they are.
-
-| File | Lines | Budget | Docstrings and comments |
-|---|---|---|---|
-| core.py | 450 | 450 | 23% |
-| core.py | 972 | 1100 | 29% |
-| core.py | 438 | 600 | 24% |
-| reading.py | 1453 | 1500 | 19% |
-| reading.py | 1426 | 1500 | 14% |
-| review.py | 1155 | 1500 | 18% |
-| review.py | 1382 | 1500 | 14% |
-| runner.py | 1497 | 1500 | 16% |
+**Line counts.** `python engine/develop.py budgets` prints them. The plan asked for at least 30 percent of each file to be docstrings, comments and overview; the files are below that share, and the numbers are reported as they are rather than padded.
 
 **Dependencies.**
 

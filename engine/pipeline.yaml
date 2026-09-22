@@ -25,10 +25,9 @@ steps:
     version: "0.0.1"
     carried_out_by: review.build_graph
   - id: "06"
-    name: find-candidates
+    name: extract-concepts
     version: "0.0.1"
-    carried_out_by: review.find_candidates
-    with: {pass: 1}
+    carried_out_by: review.extract_concepts
   - id: "07"
     name: confirm-outline
     version: "0.0.2"
@@ -38,6 +37,15 @@ steps:
     name: interpret-code
     version: "0.0.1"
     carried_out_by: review.interpret_code
+  - id: "07b"
+    name: judge-concepts
+    version: "0.0.1"
+    carried_out_by: review.judge_concepts
+  - id: "07c"
+    name: find-candidates
+    version: "0.0.2"
+    carried_out_by: review.find_candidates
+    with: {pass: 1}
   - id: "08"
     name: judge-links
     version: "0.0.1"
@@ -45,7 +53,7 @@ steps:
     with: {pass: 1}
   - id: "09"
     name: find-candidates
-    version: "0.0.1"
+    version: "0.0.2"
     carried_out_by: review.find_candidates
     with: {pass: 2}
   - id: "10"

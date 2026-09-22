@@ -47,7 +47,7 @@ def context_for(inputs, settings=None, read=None, ask=None):
     import core
     import runner
     options = {"inputs": dict({"methodology": [], "documentation": [], "package": [], "glossary": None, "tag_rules": None}, **inputs),
-               "references_dir": runner.REFERENCES_DIR, "run": {"model_id": "TEST", "project_date": "2026-01-01", "run_id": "Run_2026-01-01_0000"}}
+               "run": {"model_id": "TEST", "project_date": "2026-01-01", "run_id": "Run_2026-01-01_0000"}}
     provenance = core.Provenance("Run_2026-01-01_0000", "00", "test", "0.0.1")
     return core.StepContext(settings or runner.make_settings(), options, read or (lambda kind: []), ask, scratch(), lambda text: None, provenance)
 
