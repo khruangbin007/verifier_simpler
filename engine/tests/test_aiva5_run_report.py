@@ -240,27 +240,38 @@ class ResumeAndBreaker(unittest.TestCase):
 
 
 class Store(unittest.TestCase):
-    def test_round_trip_sync_only_changed_restore_and_roll_over(self):
+    def test_round_trip_sync_only_changed_and_restore(self):
+        """Three files. Records of every kind go to one; the single-object kinds to the manifest;
+        sync copies only what changed; a fresh store restores itself from the run folder."""
         store, folder = fresh_store()
         os.makedirs(store.local_dir)
         store.append("chunks_canon", [{"ref": "C-0001", "text": "\u03c1 is rho"}, {"ref": "C-0002", "text": "b"}])
         store.append("coverage", [{"total": 2}])
         self.assertEqual(store.read("chunks_canon")[0]["text"], "\u03c1 is rho")
         self.assertEqual(store.read("coverage"), [{"total": 2}])
-        self.assertEqual(sorted(store.sync()), ["chunks_canon.jsonl", "coverage.json"])
+        self.assertEqual(sorted(store.sync()), ["manifest.json", "records.jsonl"])
         self.assertEqual(store.sync(), [])
         store.append("chunks_canon", [{"ref": "C-0003", "text": "c"}])
-        self.assertEqual(store.sync(), ["chunks_canon.jsonl"])
-        store.roll_bytes = 200
+        self.assertEqual(store.sync(), ["records.jsonl"])
         for batch in range(4):
             store.append_calls([{"question_id": "q%d" % batch, "response_text": "x" * 400, "final": True}])
-        self.assertGreater(len(store.call_files()), 1)
         self.assertEqual(len(store.read_calls()), 4)
         store.sync()
+        self.assertEqual(sorted(os.listdir(store.remote_dir)), ["calls.jsonl.gz", "manifest.json", "records.jsonl"],
+                         "the record of a run is exactly three files")
         other = runner.AuditStore(os.path.join(folder, "local2"), store.remote_dir)
         other.restore()
         self.assertEqual(len(other.read("chunks_canon")), 3)
         self.assertEqual(len(other.read_calls()), 4)
+        self.assertEqual(other.read("coverage"), [{"total": 2}])
+
+    def test_a_record_kind_is_read_back_in_the_order_written_and_kinds_do_not_mix(self):
+        store, _ = fresh_store()
+        os.makedirs(store.local_dir)
+        store.append("a", [{"n": 1}]); store.append("b", [{"n": 2}]); store.append("a", [{"n": 3}])
+        self.assertEqual(store.read("a"), [{"n": 1}, {"n": 3}])
+        self.assertEqual(store.read("b"), [{"n": 2}])
+        self.assertEqual(store.read("nothing"), [])
 
     def test_call_files_have_the_same_bytes_for_the_same_records(self):
         contents = []
@@ -269,7 +280,7 @@ class Store(unittest.TestCase):
             os.makedirs(store.local_dir)
             store.append_calls([{"question_id": "q1", "final": True}])
             time.sleep(0.01)
-            with open(store.call_files()[0], "rb") as handle:
+            with open(store.path(runner.CALLS_FILE), "rb") as handle:
                 contents.append(handle.read())
         self.assertEqual(contents[0], contents[1])
 

@@ -61,13 +61,15 @@ def make_settings(overrides=None):
 
 # ---------------------------------------------------------------- paths and project setup
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
-LONGEST_AUDIT_NAME = "package_doc_checks.jsonl"
+LONGEST_AUDIT_NAME = "Validation_Report.docx"
 PATH_BUDGET = 100
 
 @dataclass
 class RunPaths:
-    """Where one run lives. local_dir is scratch space on the driver; audit_dir is the copy
-    in the Workspace that people see."""
+    """Where one run lives. Output.xlsx and Validation_Report.docx sit in run_dir itself; _audit/
+    beside them holds the three files of the record; local_dir is scratch space on the driver.
+    outputs_dir is the same folder as run_dir, kept as a name so that every reader of the two
+    deliverables says which folder it means."""
     projects_dir: str; model_id: str; project_date: str; project_dir: str; inputs_dir: str
     run_id: str; run_dir: str; outputs_dir: str; audit_dir: str; local_dir: str
 
@@ -145,8 +147,8 @@ def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root=""
     local_dir = os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run_id, place))
     paths = RunPaths(projects_dir, model_id, project_date, project_dir,
                      os.path.join(project_dir, "Inputs"), run_id, run_dir,
-                     os.path.join(run_dir, "Outputs"), os.path.join(run_dir, "_audit"), local_dir)
-    longest = os.path.join(paths.audit_dir, LONGEST_AUDIT_NAME)
+                     run_dir, os.path.join(run_dir, "_audit"), local_dir)
+    longest = os.path.join(paths.run_dir, LONGEST_AUDIT_NAME)
     relative = os.path.relpath(longest, os.path.dirname(os.path.abspath(projects_dir)))
     if len(relative) > PATH_BUDGET:
         raise ValueError("The folder path is %d characters long and the limit is %d, so that "
@@ -193,6 +195,7 @@ class LiveValues:
 
 # ---------------------------------------------------------------- the audit store
 AUDIT_OBJECTS = ("run_manifest", "package_info", "coverage")
+RECORDS_FILE, CALLS_FILE, MANIFEST_FILE = "records.jsonl", "calls.jsonl.gz", "manifest.json"
 
 def copy_whole(source, target):
     """Copy one whole file: to a temporary name, then replace; a plain copy if the file
@@ -208,85 +211,106 @@ def copy_whole(source, target):
 
 @dataclass
 class AuditStore:
-    """All audit files are read and written on local disk; sync() copies changed files
-    whole into _audit/ in the Workspace. JSON Lines, one record per line, sorted keys."""
-    local_dir: str; remote_dir: str; roll_bytes: int = 25 * 1024 * 1024
-    synced: dict = field(default_factory=dict)
+    """The record of a run, in three files. Everything is read and written on local disk and
+    sync() copies whatever changed, whole, into _audit/ in the run folder.
 
-    def path(self, kind):
-        """The local path of one kind of audit file."""
-        extension = ".json" if kind in AUDIT_OBJECTS else ".jsonl"
-        return os.path.join(self.local_dir, kind + extension)
+        records.jsonl    every record of every kind, one per line, each as {"kind", "record"},
+                         in the order written and never rewritten
+        calls.jsonl.gz   every exchange with the model, gzip, one record per line
+        manifest.json    the run manifest, the coverage account and the package description,
+                         each rewritten whole under its own key
+
+    Three files, so that an evidence pack can be checked, copied and archived without anyone
+    having to know which of thirty file names mattered. Enforces: R4, R5, R12"""
+    local_dir: str; remote_dir: str
+    synced: dict = field(default_factory=dict)
+    cache: list = field(default_factory=list)      # records.jsonl as read, so a read does not re-parse the file
+    cached_size: int = -1
+
+    def path(self, name):
+        return os.path.join(self.local_dir, name)
+
+    def records(self):
+        """Every line of records.jsonl, parsed once per change of the file."""
+        target = self.path(RECORDS_FILE)
+        size = os.path.getsize(target) if os.path.exists(target) else 0
+        if size != self.cached_size:
+            self.cache = []
+            if size:
+                with open(target, encoding="utf-8") as handle:
+                    self.cache = [json.loads(line) for line in handle if line.strip()]
+            self.cached_size = size
+        return self.cache
+
+    def manifest(self):
+        target = self.path(MANIFEST_FILE)
+        if not os.path.exists(target):
+            return {}
+        with open(target, encoding="utf-8") as handle:
+            return json.load(handle)
 
     def read(self, kind):
         """Every record of one kind, in the order written."""
         if kind == "llm_calls":
             return self.read_calls()
-        if not os.path.exists(self.path(kind)):
-            return []
-        with open(self.path(kind), encoding="utf-8") as handle:
-            if kind in AUDIT_OBJECTS:
-                return [json.load(handle)]
-            return [json.loads(line) for line in handle if line.strip()]
+        if kind in AUDIT_OBJECTS:
+            found = self.manifest().get(kind)
+            return [found] if found is not None else []
+        return [line["record"] for line in self.records() if line["kind"] == kind]
 
     def append(self, kind, records):
         """Append records of one kind; the three single-object kinds are rewritten whole."""
         if kind in AUDIT_OBJECTS:
-            with open(self.path(kind), "w", encoding="utf-8") as handle:
-                handle.write(json.dumps(core.to_plain(records[-1]), sort_keys=True, indent=1, ensure_ascii=False))
+            whole = self.manifest()
+            whole[kind] = core.to_plain(records[-1])
+            with open(self.path(MANIFEST_FILE), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(whole, sort_keys=True, indent=1, ensure_ascii=False))
             return
-        with open(self.path(kind), "a", encoding="utf-8") as handle:
+        with open(self.path(RECORDS_FILE), "a", encoding="utf-8") as handle:
             for record in records:
-                handle.write(core.canonical_json(record) + "\n")
-
-    def call_files(self):
-        """The gzip files of call records, in order."""
-        names = sorted(n for n in os.listdir(self.local_dir) if re.fullmatch(r"llm_calls_\d{3}\.jsonl\.gz", n))
-        return [os.path.join(self.local_dir, n) for n in names]
+                handle.write(core.canonical_json({"kind": kind, "record": core.to_plain(record)}) + "\n")
 
     def append_calls(self, records):
-        """Call records go to gzip files that roll over at the size limit. The gzip header
-        carries no time stamp, so the same records always give the same bytes."""
-        files = self.call_files()
-        current = files[-1] if files else os.path.join(self.local_dir, "llm_calls_001.jsonl.gz")
-        if files and os.path.getsize(current) >= self.roll_bytes:
-            current = os.path.join(self.local_dir, "llm_calls_%03d.jsonl.gz" % (len(files) + 1))
-        with open(current, "ab") as raw:
+        """Call records go to one gzip file. Its header carries no time stamp, so the same records
+        always give the same bytes; gzip members are appended, and read back as one stream."""
+        with open(self.path(CALLS_FILE), "ab") as raw:
             with gzip.GzipFile(filename="", mode="ab", fileobj=raw, mtime=0) as handle:
                 for record in records:
                     handle.write((core.canonical_json(record) + "\n").encode("utf-8"))
 
     def read_calls(self):
         """Every call record of the run, in the order written."""
-        records = []
-        for path in self.call_files():
-            with gzip.open(path, "rt", encoding="utf-8") as handle:
-                records.extend(json.loads(line) for line in handle if line.strip())
-        return records
+        target = self.path(CALLS_FILE)
+        if not os.path.exists(target):
+            return []
+        with gzip.open(target, "rt", encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
 
     def sync(self):
-        """Copy every file that changed since the last sync, whole. Returns what was copied."""
+        """Copy each of the three files that changed since the last sync, whole. Returns what was copied."""
         copied = []
-        for folder, _, names in os.walk(self.local_dir):
-            for name in sorted(names):
-                source = os.path.join(folder, name)
-                relative = os.path.relpath(source, self.local_dir)
-                stamp = (os.path.getsize(source), os.stat(source).st_mtime_ns)
-                if relative.startswith("work") or self.synced.get(relative) == stamp:
-                    continue
-                copy_whole(source, os.path.join(self.remote_dir, relative))
-                self.synced[relative] = stamp
-                copied.append(relative)
+        for name in (RECORDS_FILE, CALLS_FILE, MANIFEST_FILE):
+            source = self.path(name)
+            if not os.path.exists(source):
+                continue
+            stamp = (os.path.getsize(source), os.stat(source).st_mtime_ns)
+            if self.synced.get(name) == stamp:
+                continue
+            copy_whole(source, os.path.join(self.remote_dir, name))
+            self.synced[name] = stamp
+            copied.append(name)
         return copied
 
     def restore(self):
-        """On resume: copy the run folder's audit files back to local disk first."""
-        if os.path.isdir(self.remote_dir) and not os.path.exists(self.path("run_manifest")):
-            shutil.copytree(self.remote_dir, self.local_dir, dirs_exist_ok=True)
+        """On resume: copy the run folder's three files back to local disk first."""
+        if os.path.isdir(self.remote_dir) and not os.path.exists(self.path(MANIFEST_FILE)):
+            for name in (RECORDS_FILE, CALLS_FILE, MANIFEST_FILE):
+                if os.path.exists(os.path.join(self.remote_dir, name)):
+                    copy_whole(os.path.join(self.remote_dir, name), self.path(name))
 
 def open_store(paths, settings):
     """The audit store of a run, restored from the run folder when local scratch is empty."""
-    store = AuditStore(paths.local_dir, paths.audit_dir, int(settings["llm_file_roll_mb"] * 1024 * 1024))
+    store = AuditStore(paths.local_dir, paths.audit_dir)
     store.restore()
     return store
 
@@ -550,7 +574,7 @@ REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
     "confirm-outline": "Waiting for a person: check Level and Section (heading chain) on Chunks_Canon "
                        "against the methodology's own outline, then run cell 4 to confirm.",
-    "await-determinations": "Waiting for a person: download Output.xlsx from Outputs/, fill the four "
+    "await-determinations": "Waiting for a person: download Output.xlsx from the run folder, fill the four "
                             "yellow columns on Flagged_Items, put it back in the run folder and run cell 5."}
 
 def load_pipeline(engine_dir=ENGINE_DIR):
@@ -1084,44 +1108,12 @@ def file_sha256(path):
     with open(path, "rb") as handle:
         return core.sha256_bytes(handle.read())
 
-def progress_text(store, waiting_message):
-    """Where the run stands, in one or two plain sentences."""
-    records = store.read("step_records")
-    if not records:
-        return "The run has been opened; no step has finished yet."
-    last = records[-1]
-    text = "Step %s (%s) is the last finished step." % (last["step_id"], last["name"])
-    return text + (" " + waiting_message if waiting_message else "")
+REPORT_SCOPE = (
+    "This review compares three things: the methodology, the model's code and data, and the model "
+    "documentation. The tool reads all three, links what corresponds, checks formulas, values and stated rules "
+    "by code, and raises what it could not line up for a person to decide. It does not run the model, does not "
+    "judge whether the methodology is sound, and rates nothing: every flagged item is a question for a person.")
 
-def rebuild_outputs(store, paths, settings, waiting_message):
-    """Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy
-    them whole into Outputs/. The guard: a workbook in Outputs/ that differs from the last
-    one AIVA wrote is a reviewer's work in progress and is never overwritten before it has
-    been read in. Afterwards Outputs/ holds exactly the two files. Enforces: R6, R12"""
-    work = os.path.join(store.local_dir, "work")
-    os.makedirs(work, exist_ok=True)
-    progress = progress_text(store, waiting_message)
-    manifest = (store.read("run_manifest") or [{}])[0]
-    target = os.path.join(paths.outputs_dir, "Output.xlsx")
-    guarded = (os.path.exists(target) and manifest.get("last_workbook_sha256")
-               and file_sha256(target) not in (manifest["last_workbook_sha256"], manifest.get("last_upload_sha256")))
-    local_workbook = os.path.join(work, "Output.xlsx")
-    build_workbook(store, paths, settings, progress, local_workbook)
-    if guarded:
-        log_line(store, "Output.xlsx in Outputs/ was edited and not yet read in: left untouched")
-    else:
-        copy_whole(local_workbook, target)
-        if manifest:
-            update_manifest(store, {"last_workbook_sha256": file_sha256(target)})
-    if store.read("flagged_items"):
-        local_report = os.path.join(work, "Validation_Report.docx")
-        build_report_file(store, paths, settings, local_report)
-        copy_whole(local_report, os.path.join(paths.outputs_dir, "Validation_Report.docx"))
-    build_run_summary(store, paths, progress, os.path.join(store.local_dir, "Run_Summary.docx"))
-    store.sync()
-    return not guarded
-
-# ---------------------------------------------------------------- Run_Summary.docx
 def docx_table(document, header, rows):
     """A plain table in a Word document, header row in bold."""
     table = document.add_table(rows=1, cols=len(header))
@@ -1134,28 +1126,6 @@ def docx_table(document, header, rows):
         for cell, text in zip(table.add_row().cells, row):
             cell.text = str(text)
     return table
-
-def build_run_summary(store, paths, progress, target):
-    """Where the run stands, in plain words; refreshed after every step."""
-    import docx
-    document = docx.Document()
-    document.add_heading("AIVA run summary", level=1)
-    document.add_paragraph("Model ID %s, date initiated %s, run %s." % (paths.model_id, paths.project_date, paths.run_id))
-    document.add_heading("Where the run stands", level=2)
-    document.add_paragraph(progress)
-    document.add_heading("What each finished step produced", level=2)
-    rows = []
-    for record in store.read("step_records"):
-        produced = ", ".join("%s: %d" % (k, v) for k, v in sorted(record["counts"].items())) or "nothing to count"
-        rows.append((record["step_id"], record["name"], produced, " ".join(record["messages"])))
-    docx_table(document, ("Step", "Name", "Produced", "Notes"), rows)
-    document.save(target)
-
-REPORT_SCOPE = (
-    "AIVA compares three things: the methodology, the model code and data in the R package, and the model "
-    "documentation. It reads all three, links what corresponds, checks formulas, values and stated rules by "
-    "code, and raises what it could not line up for a person to decide. It does not run the model, does not "
-    "judge whether the methodology is sound, and rates nothing: every flagged item is a question for a person.")
 
 def call_statistics(store):
     """The AI call statistics shown on Model_Package_Info and in the report's annex."""
@@ -1178,31 +1148,45 @@ def call_statistics(store):
     rows.append(("Median seconds per call", core.plain_number(seconds[len(seconds) // 2], 3)))
     return rows
 
-def call_plan(paths, settings, step_id, seconds_per_call=0.0):
-    """The call plan of one AI step, obtained by really building every question of the step
-    (building is deterministic and cheap) without asking any. Shown before the step starts."""
-    store, collected = open_store(paths, settings), []
-    step = next(s for s in load_pipeline()["steps"] if s["id"] == step_id)
-    def collect(questions):
-        collected.extend(questions)
-        return {}
-    options = dict(step.get("with") or {})
-    options.update({"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
-                    "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
-    provenance = core.Provenance(paths.run_id, step["id"], step["name"], step["version"])
-    STEP_FUNCTIONS[step["carried_out_by"]](core.StepContext(settings, options, store.read, collect, paths.local_dir, lambda text: None, provenance))
-    by_type = {}
-    for question in collected:
-        by_type[question["question_type"]] = by_type.get(question["question_type"], 0) + 1
-    largest = max([q["estimated_tokens"] for q in collected] or [0])
-    minutes = len(collected) * seconds_per_call / max(1, int(settings["concurrency_limit"])) / 60.0
-    return {"step": step["name"], "questions": len(collected), "by_type": by_type, "largest_estimated_tokens": largest,
-            "token_cap": settings["token_cap"], "expected_minutes": round(minutes, 1),
-            "note": "Questions that depend on earlier answers of the same step are not in this count."}
+def progress_text(store, waiting_message):
+    """Where the run stands, in one or two plain sentences."""
+    records = store.read("step_records")
+    if not records:
+        return "The run has been opened; no step has finished yet."
+    last = records[-1]
+    text = "Step %s (%s) is the last finished step." % (last["step_id"], last["name"])
+    return text + (" " + waiting_message if waiting_message else "")
+
+def rebuild_outputs(store, paths, settings, waiting_message):
+    """Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy
+    them whole into the run folder. The guard: a workbook in the run folder that differs from the last
+    one AIVA wrote is a reviewer's work in progress and is never overwritten before it has
+    been read in. Afterwards the run folder holds exactly the two files. Enforces: R6, R12"""
+    work = os.path.join(store.local_dir, "work")
+    os.makedirs(work, exist_ok=True)
+    progress = progress_text(store, waiting_message)
+    manifest = (store.read("run_manifest") or [{}])[0]
+    target = os.path.join(paths.outputs_dir, "Output.xlsx")
+    guarded = (os.path.exists(target) and manifest.get("last_workbook_sha256")
+               and file_sha256(target) not in (manifest["last_workbook_sha256"], manifest.get("last_upload_sha256")))
+    local_workbook = os.path.join(work, "Output.xlsx")
+    build_workbook(store, paths, settings, progress, local_workbook)
+    if guarded:
+        log_line(store, "Output.xlsx in the run folder was edited and not yet read in: left untouched")
+    else:
+        copy_whole(local_workbook, target)
+        if manifest:
+            update_manifest(store, {"last_workbook_sha256": file_sha256(target)})
+    if store.read("flagged_items"):
+        local_report = os.path.join(work, "Validation_Report.docx")
+        build_report_file(store, paths, settings, local_report)
+        copy_whole(local_report, os.path.join(paths.outputs_dir, "Validation_Report.docx"))
+    store.sync()
+    return not guarded
 
 # ---------------------------------------------------------------- determinations
 def find_uploads(paths, identity):
-    """Every .xlsx in Outputs/ whose embedded identity matches this run, whatever it is called
+    """Every .xlsx in the run folder whose embedded identity matches this run, whatever it is called
     (the behaviour of an upload onto an existing name is not documented). Returns the
     matching files, newest last, and plain messages about files that were refused."""
     import openpyxl
@@ -1260,12 +1244,9 @@ def record_determinations(ctx):
     uploads, messages = find_uploads(paths, identity)
     edited = [p for p in uploads if file_sha256(p) != manifest.get("last_workbook_sha256")]
     if not edited:
-        return core.StepResult({}, {"determinations recorded": 0}, messages + ["No edited workbook of this run was found in Outputs/."])
+        return core.StepResult({}, {"determinations recorded": 0}, messages + ["No edited workbook of this run was found in the run folder."])
     chosen = edited[-1]
     digest = file_sha256(chosen)
-    os.makedirs(os.path.join(paths.audit_dir, "uploads"), exist_ok=True)
-    for path in edited:
-        copy_whole(path, os.path.join(paths.audit_dir, "uploads", "%s_%s" % (file_sha256(path)[:12], os.path.basename(path))))
     cells, notes = read_yellow_cells(chosen, items)
     messages += notes
     latest, records = {}, []
@@ -1291,7 +1272,7 @@ def record_determinations(ctx):
         if not same:
             records.append(core.Determination(item_id, decision, values["reviewer"], values["role"], values["rationale"], now,
                                                 settings["reviewer_id"], digest))
-    for path in uploads:                                 # tidy Outputs/ back to exactly the two files AIVA writes
+    for path in uploads:                                 # tidy the run folder back to exactly the two files AIVA writes
         if os.path.basename(path) != "Output.xlsx":
             os.remove(path)
     chained = core.chain_records(core.chain_head(ctx.read("determinations")), [core.to_plain(r) for r in records])
@@ -1369,28 +1350,20 @@ def build_report_file(store, paths, settings, target):
     document.save(target)
 
 def build_report(ctx):
-    """Step 18, build-report: the exports of the graph for anyone who wants to load it
-    elsewhere (nodes.csv, edges.csv, graph.graphml). The two output files themselves are
-    rebuilt by the runner after every step."""
-    import csv
-    paths, ledger = ctx.options["paths"], ctx.read("graph_ledger")
-    folder = os.path.join(paths.audit_dir, "exports")
-    os.makedirs(folder, exist_ok=True)
+    """Step 18, build-report: a summary of the graph as it stands - nodes and edges by kind - as
+    one record, so that a reader of the pack can see the graph's shape without loading every
+    ledger record. The graph itself is the graph_ledger records; the two deliverables are rebuilt
+    by the runner after every step."""
+    ledger = ctx.read("graph_ledger")
     nodes = [r for r in ledger if r["record_type"] == "node"]
     edges = [r for r in ledger if r["record_type"] == "edge"]
-    with open(os.path.join(folder, "nodes.csv"), "w", newline="", encoding="utf-8") as handle:
-        csv.writer(handle).writerows([("ref", "kind", "corner")] + [(n["ref"], n["node_kind"], n["corner"]) for n in nodes])
-    with open(os.path.join(folder, "edges.csv"), "w", newline="", encoding="utf-8") as handle:
-        csv.writer(handle).writerows([("source", "target", "kind", "relation", "how")] +
-                                     [(e["source"], e["target"], e["kind"], e.get("relation", ""), e["how"]) for e in edges])
-    escape = lambda text: str(text).replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<graphml xmlns="http://graphml.graphdrawing.org/xmlns">',
-             '<key id="kind" for="all" attr.name="kind" attr.type="string"/>', '<graph edgedefault="directed">']
-    lines += ['<node id="%s"><data key="kind">%s</data></node>' % (escape(n["ref"]), escape(n["node_kind"])) for n in nodes]
-    lines += ['<edge source="%s" target="%s"><data key="kind">%s</data></edge>' % (escape(e["source"]), escape(e["target"]), escape(e["kind"])) for e in edges]
-    with open(os.path.join(folder, "graph.graphml"), "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines + ["</graph>", "</graphml>"]))
-    return core.StepResult({}, {"nodes exported": len(nodes), "edges exported": len(edges)}, [])
+    by_node, by_edge = {}, {}
+    for node in nodes:
+        by_node[node["node_kind"]] = by_node.get(node["node_kind"], 0) + 1
+    for edge in edges:
+        by_edge[edge["kind"]] = by_edge.get(edge["kind"], 0) + 1
+    summary = {"nodes": len(nodes), "edges": len(edges), "nodes_by_kind": by_node, "edges_by_kind": by_edge}
+    return core.StepResult({"graph_summary": [summary]}, {"nodes": len(nodes), "edges": len(edges)}, [])
 
 # ---------------------------------------------------------------- verify this evidence pack
 def verify_evidence_pack(paths, settings, live=None):

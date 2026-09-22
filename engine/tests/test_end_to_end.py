@@ -87,9 +87,8 @@ class WhatAnAnalystReads(unittest.TestCase):
         import docx
         items = runner.open_store(self.paths, self.settings).read("flagged_items")
         report = docx.Document(os.path.join(self.paths.outputs_dir, "Validation_Report.docx"))
-        summary = docx.Document(os.path.join(self.paths.audit_dir, "Run_Summary.docx"))
         problems = []
-        for document, label in ((report, "report"), (summary, "summary")):
+        for document, label in ((report, "report"),):
             texts = [p.text for p in document.paragraphs] + [c.text for t in document.tables for r in t.rows for c in r.cells]
             for text in texts:
                 problems += self.problems_in(text, label)
@@ -140,7 +139,10 @@ class HumanRoundTrip(unittest.TestCase):
 
     def record(self):
         result = runner.run_pipeline(self.paths, self.settings, chat=standin_chat.chat, determinations=True)
-        self.assertEqual(sorted(os.listdir(self.paths.outputs_dir)), ["Output.xlsx", "Validation_Report.docx"])
+        self.assertEqual(sorted(os.listdir(self.paths.run_dir)), ["Output.xlsx", "Validation_Report.docx", "_audit"],
+                         "the run folder holds the two deliverables and the record, nothing else")
+        self.assertEqual(sorted(os.listdir(self.paths.audit_dir)), ["calls.jsonl.gz", "manifest.json", "records.jsonl"],
+                         "the record is exactly three files")
         messages = [m for r in self.store.read("step_records") if r["name"] == "record-determinations" for m in r["messages"]]
         return result, messages
 
@@ -152,7 +154,9 @@ class HumanRoundTrip(unittest.TestCase):
         self.assertEqual(recorded[self.items[0]]["decision"], "Requires action")
         self.assertEqual(recorded[self.items[0]]["recorded_by"], "analyst.one")
         self.assertEqual(len(recorded), 2)
-        self.assertTrue(os.listdir(os.path.join(self.paths.audit_dir, "uploads")))
+        manifest = self.store.read("run_manifest")[0]
+        self.assertEqual(len(manifest.get("last_workbook_sha256", "")), 64,
+                         "the returned workbook is recorded by its fingerprint; its bytes are not copied")
         self.assertTrue(core.verify_chain(self.store.read("determinations"))[0])
 
     def test_a_person_may_use_the_words_that_aiva_itself_never_uses(self):
@@ -218,11 +222,19 @@ class VerifyingARunFolder(unittest.TestCase):
         return [what for what, verdict, _ in runner.verify_evidence_pack(self.paths, self.settings) if verdict != "Confirmed"]
 
     def rewrite(self, kind, change):
-        path = os.path.join(self.paths.audit_dir, kind + ".jsonl")
+        """Tamper with the records of one kind inside the pack's single records file."""
+        path = os.path.join(self.paths.audit_dir, runner.RECORDS_FILE)
         with open(path, encoding="utf-8") as handle:
-            records = [json.loads(line) for line in handle]
+            lines = [json.loads(line) for line in handle if line.strip()]
+        mine = [line["record"] for line in lines if line["kind"] == kind]
+        changed = iter(change(mine))
+        kept = []
+        for line in lines:
+            if line["kind"] != kind:
+                kept.append(line)
+        kept += [{"kind": kind, "record": record} for record in changed]
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in change(records)))
+            handle.write("".join(json.dumps(line, sort_keys=True) + "\n" for line in kept))
 
     def test_an_untouched_run_folder_is_confirmed_on_every_line(self):
         self.assertEqual(self.not_confirmed(), [])
