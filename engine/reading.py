@@ -3200,7 +3200,12 @@ class Dataflow:
             parts = assignment_parts(node)
             return self.resolve(parts[0].value, env, masked) if parts and parts[0].kind == "name" else []
         if kind == "dollar":
-            return self.sources(node.args[0], env, masked)
+            holder, field = node.args[0], node.args[1] if len(node.args) > 1 else None
+            if holder.kind == "name" and holder.value == ".data" and field is not None:
+                return self.resolve(field.value, dict(env, locals=set(), formals=set()), True)   # dplyr's pronoun: a column
+            if holder.kind == "name" and holder.value == ".env" and field is not None:
+                return self.resolve(field.value, env, False)                                   # dplyr's pronoun: not a column
+            return self.sources(holder, env, masked)
         if kind == "ns":
             return []
         if kind == "function":

@@ -199,6 +199,18 @@ class ImplementationMapSample(unittest.TestCase):
                 if record.get("code") and record.get("function_ref"):
                     self.assertIn(record["code"], text[record["function_ref"]], "not as written")
 
+    def test_the_pronouns_of_dplyr_are_read_as_dplyr_reads_them(self):
+        """Packages written for CRAN name columns as .data$x, to keep the checks quiet, and values of the
+        function as .env$x. Without this, .data$throughput would be read as a column called .data."""
+        source = ('f <- function(d, limit) {\n  d %>% dplyr::mutate(ok = .data$throughput > .env$limit, '
+                  'wide = .data$berth_utilisation * 2)\n}')
+        unit = {"ref": "M-0001", "kind": "Function", "name": "f", "text": source, "lines": [1, 3], "code": {"exported": True}}
+        records = reading.Dataflow([unit]).run()
+        nodes = {r["node"]: r for r in records if r["record_type"] == "node"}
+        self.assertEqual(sorted(nodes["column:ok"]["from"]), ["column:throughput", "f:arg:limit"])
+        self.assertIn("column:berth_utilisation", nodes["column:wide"]["from"])
+        self.assertNotIn("column:.data", nodes)
+
     def test_a_join_key_only_matches_and_a_loop_keeps_what_it_is_given(self):
         """Found building stage 2: left_join(anchor_table, by = "score_band") made score_band look computed
         from the table, though only anchor is added; and the walk stopped at notch_down's recursive call
