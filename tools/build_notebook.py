@@ -48,17 +48,38 @@ print("AIVA folder:", AIVA_HOME)
 print("The widgets are at the top of the notebook. Fill in '08 JFrog index URL', then run cell 3.")
 ''')
 
-code("Cell 3 - install the packages from the JFrog index, then restart Python", r"""
+code("Cell 3 - install the packages from the JFrog index, then restart Python", '''
 # Once per cluster start. The index URL is the widget "08 JFrog index URL" that cell 2 made.
 # Restarting Python clears every name, so cell 4 sets the import path up again afterwards.
-import os, re, subprocess, sys
+import importlib.metadata, os, re, subprocess, sys, tempfile
 
 ALLOW_DEFAULT_INDEX = False      # True only on a cluster meant to install from pip's own default index
+
+# The runtime's own packages. The notebook's kernel imports them to START: Spark loads pyarrow, and the
+# runtime's pyarrow is compiled against the runtime's numpy. An install that moves one of them leaves a
+# kernel that cannot start at all - "Your notebook session has crashed" on every restart. So each is pinned
+# to the version the runtime already has, and pip has to fit AIVA's packages around them or fail here.
+RUNTIME_OWNED = ("numpy", "pandas", "pyarrow", "scipy")
 
 index_url = dbutils.widgets.get("jfrog_index_url").strip()
 here = os.getcwd()
 requirements = next((p for p in (os.path.join(here, "engine", "requirements.txt"), os.path.join(os.path.dirname(here), "engine", "requirements.txt")) if os.path.exists(p)), "")
-hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")        # an index URL can carry a credential
+hide = lambda text: re.sub(r"//[^/@\\s]+@", "//...@", text or "")        # an index URL can carry a credential
+
+def runtime_pins():
+    pins = []
+    for name in RUNTIME_OWNED:
+        try:
+            pins.append("%s==%s" % (name, importlib.metadata.version(name)))
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return pins
+
+def runtime_still_starts():
+    """What the kernel does when it starts, done first in a separate process: if the runtime's own
+    packages no longer import together, restarting Python would crash the session, so it is not restarted."""
+    probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
+    return probe.returncode == 0, (probe.stderr or "").strip().splitlines()[-1:] or [""]
 
 if not requirements:
     print("requirements.txt was not found beside the notebook. Nothing was installed.")
@@ -67,24 +88,38 @@ elif not index_url and not ALLOW_DEFAULT_INDEX:
     print("Paste it into the widget '08 JFrog index URL' at the top of this notebook, then run this cell again.")
     print("To use pip's own default index instead, set ALLOW_DEFAULT_INDEX = True above.")
 else:
-    command = [sys.executable, "-m", "pip", "install", "-r", requirements] + (["--index-url", index_url] if index_url else [])
+    pins = runtime_pins()
+    constraints = os.path.join(tempfile.mkdtemp(prefix="aiva_"), "runtime_constraints.txt")
+    with open(constraints, "w") as handle:
+        handle.write("\\n".join(pins) + "\\n")
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + (["--index-url", index_url] if index_url else [])
     print("Installing", requirements, "from", "the index in the widget." if index_url else "pip's own default index.")
+    print("Kept exactly as the runtime has them:", ", ".join(pins) or "none of them were found.")
     done = subprocess.run(command, capture_output=True, text=True)
     print(hide(done.stdout)[-1500:])
     if done.returncode:
         print("The install did not finish, so do not go on to cell 4. What pip said:")
         print(hide(done.stderr)[-1500:])
+        print("If pip says it could not find versions that fit, the index lacks an older version of a package AIVA needs")
+        print("that works with this runtime's own packages. Nothing the runtime depends on was changed.")
     else:
         optional = requirements.replace("requirements.txt", "requirements-optional.txt")
         if os.path.exists(optional):                 # allowed to fail: AIVA works without these, and says what it then leaves out
             extra = subprocess.run(command[:4] + ["-r", optional] + command[6:], capture_output=True, text=True)
             print("Optional packages (reading the words inside pictures):", "installed." if not extra.returncode else
                   "not installed - they may be missing from the index. AIVA runs without them; pictures are then not read.")
-        try:
-            dbutils.library.restartPython()
-        except Exception:
-            print("Please restart the Python process by hand, then go on with cell 4.")
-""")
+        starts, said = runtime_still_starts()
+        if not starts:
+            print("STOPPED BEFORE RESTARTING PYTHON: after the install, the runtime's own packages no longer import together")
+            print("(" + hide(said[0]) + "). Restarting now would crash this notebook session, so it was not restarted.")
+            print("To undo the install: detach this notebook from the cluster and attach it again, which discards what this")
+            print("cell installed. Do not restart the cluster for this; other people's notebooks were not touched.")
+        else:
+            try:
+                dbutils.library.restartPython()
+            except Exception:
+                print("Please restart the Python process by hand, then go on with cell 4.")
+''')
 
 code("Cell 4 - the import path, the engine, and preflight", '''
 # Cell 3 restarts Python, which clears everything, so the notebook's folder is worked out again here.

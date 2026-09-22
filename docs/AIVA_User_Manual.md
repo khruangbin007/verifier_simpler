@@ -366,6 +366,9 @@ The first page names the model ID, the date initiated, the run, the package and 
 
 | What you see | What it means and what to do |
 |---|---|
+| "Your notebook session has crashed" right after `cell 3`, with *compiled using NumPy 1.x cannot be run in NumPy 2* or *PyArrow must be installed* in the output | An install moved a package the runtime needs to start, so every restart crashes. Detach the notebook from the cluster and attach it again: that discards what `cell 3` installed, and only this notebook was affected. Do not restart the cluster for this. Then run `cell 2` onwards again. Since 21 September 2026 `cell 3` keeps the runtime's own numpy, pandas, pyarrow and scipy exactly as they are, and checks before restarting that they still import together, so this should not happen again; if it does, tell whoever maintains AIVA. |
+| `cell 3` says "STOPPED BEFORE RESTARTING PYTHON" | The install changed something the runtime needs to start, and `cell 3` noticed before restarting, so the session is still alive. Detach the notebook and attach it again to undo the install, and tell whoever maintains AIVA which package pip named. |
+| `cell 3` says pip could not find versions that fit | The index has no version of a package AIVA needs that works with this runtime's own packages. Nothing was changed. Ask for an older version of the package pip names to be added to the index. |
 | The status cell says the run waits for a fresh token | The token ran out. Paste a new one (mode B: then run `cell 5`). No question is repeated. |
 | "The time box of this foreground run is over" | Mode C stopped by itself. Paste a fresh token and run `cell 12` again. |
 | "Many calls in a row failed, so the run paused itself" | The gateway is not answering. Check it with `cell 7`, then run `cell 12` again. |
@@ -750,7 +753,7 @@ Run everything with `python -m unittest discover -s engine/tests`.
 | `test_guided_reading.py` | 14 | test_guided_reading.py - the first phase in which a reading step asks a question. |
 | `test_hard_reading_samples.py` | 12 | test_hard_reading_samples.py - G, H and I exist to be read badly, and to make the badness measurable. |
 | `test_layout_rules.py` | 7 | Rules that hold for the whole engine: one-way imports, line budgets, plain code, no execution of input text (R7), and the wording lint, static and dynamic (R1, R10). |
-| `test_notebook.py` | 6 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
+| `test_notebook.py` | 9 | The notebook's cells are run here, outside Databricks, against a stand-in for dbutils, so that a change in the engine that would break a cell is seen before an analyst sees it. |
 | `test_package_plan.py` | 16 | test_package_plan.py - R5. |
 | `test_reading_report.py` | 14 | test_reading_report.py - the sign-off bar has to be able to FAIL, or it is decoration. |
 | `test_run_goes_on.py` | 6 | test_run_goes_on.py - R2 says nothing stops a run. |

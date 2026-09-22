@@ -97,6 +97,73 @@ class NotebookCells(unittest.TestCase):
         self.assertIn("ALLOW_DEFAULT_INDEX", source, "pip's own default index is a decision, never a fallback")
         self.assertIn("returncode", source, "a failed install must not look like a finished one")
 
+    def run_cell_3(self, runtime_starts):
+        """Cell 3, executed with pip replaced by a recorder, so that what it WOULD run is seen."""
+        from unittest import mock
+        cells = ["".join(c["source"]) for c in json.load(open(os.path.join(helpers.ROOT_DIR, "AIVA_Interface.ipynb"),
+                                                              encoding="utf-8"))["cells"]]
+        ran, restarted = [], []
+
+        class Done:
+            def __init__(self, code, stderr=""):
+                self.returncode, self.stdout, self.stderr = code, "", stderr
+
+        def fake_run(command, capture_output=True, text=True):
+            ran.append(list(command))
+            if "-c" in command and "import numpy, pandas, pyarrow" in command:
+                return Done(0) if runtime_starts else Done(1, "ImportError: numpy.core.multiarray failed to import")
+            return Done(0)
+
+        class Library:
+            def restartPython(self):
+                restarted.append(True)
+
+        fake = FakeDbutils({"jfrog_index_url": "https://user:SECRET@jfrog.example/simple"})
+        fake.library = Library()
+        printed, previous = io.StringIO(), os.getcwd()
+        os.chdir(helpers.ROOT_DIR)
+        try:
+            with mock.patch("subprocess.run", fake_run), contextlib.redirect_stdout(printed):
+                exec(compile(cells[2], "cell 3", "exec"), {"dbutils": fake})
+        finally:
+            os.chdir(previous)
+        return ran, restarted, printed.getvalue()
+
+    def test_cell_3_pins_every_package_the_runtime_owns_to_the_version_it_has(self):
+        """On 21 September 2026 cell 3 crashed a notebook session: the newest xarray, pulled in by
+        rdata, wanted a newer pandas and numpy than the runtime had, pip installed numpy 2.5.3 into
+        the notebook, and the runtime's own pyarrow - compiled against numpy 1.x - could no longer
+        be imported. The kernel imports it to start, so every restart crashed. Every package the
+        runtime owns is now pinned to the version it already has."""
+        import importlib.metadata
+        ran, _, said = self.run_cell_3(runtime_starts=True)
+        install = [command for command in ran if "install" in command][0]
+        self.assertIn("-c", install, "pip must be constrained to the runtime's own versions")
+        with open(install[install.index("-c") + 1], encoding="utf-8") as handle:
+            pins = handle.read().split()
+        for name in ("numpy", "pandas", "pyarrow", "scipy"):
+            try:
+                have = importlib.metadata.version(name)
+            except importlib.metadata.PackageNotFoundError:
+                continue
+            self.assertIn("%s==%s" % (name, have), pins, "%s must be kept exactly as the runtime has it" % name)
+        self.assertIn("Kept exactly as the runtime has them", said)
+        self.assertNotIn("SECRET", said, "the index URL's credential is never printed")
+
+    def test_cell_3_restarts_python_only_when_the_runtime_still_starts(self):
+        _, restarted, said = self.run_cell_3(runtime_starts=True)
+        self.assertEqual(restarted, [True])
+        self.assertNotIn("STOPPED BEFORE RESTARTING", said)
+
+    def test_cell_3_does_not_restart_python_into_a_crash(self):
+        """The restart is what crashed the session. If the runtime's own packages no longer import
+        together, cell 3 keeps the session alive and says how to undo the install."""
+        _, restarted, said = self.run_cell_3(runtime_starts=False)
+        self.assertEqual(restarted, [], "restarting now would crash the notebook session")
+        self.assertIn("STOPPED BEFORE RESTARTING PYTHON", said)
+        self.assertIn("detach this notebook from the cluster and attach it again", said)
+        self.assertIn("Do not restart the cluster", said)
+
     def test_the_sign_off_cell_asks_the_real_model_and_changes_nothing(self):
         """Cell 19 is the one place the reading sign-off bar can be met, so it must use the chat()
         the analyst pasted in cell 6 and never the stand-in, and it must not turn guided reading
