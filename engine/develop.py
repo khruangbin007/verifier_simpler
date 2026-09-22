@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - develop.py - everything that is about the tool rather than about a run: how it
+Verifier 0.0.3 - develop.py - everything that is about the tool rather than about a run: how it
 is measured, released, checked against its own manual, and how the notebook is built.
 For whoever maintains the tool.
 
@@ -730,7 +730,7 @@ def report_lines(found, samples, label):
     stamp = datetime.date.today().isoformat()
     standin = "stand-in" in label
     lines = ["# Reading report: does guided reading earn its place?", "",
-             "**Measured %s, engine 0.0.2, phase R6, with %s.**" % (stamp, label), ""]
+             "**Measured %s, engine %s, with %s.**" % (stamp, core.ENGINE_VERSION, label), ""]
     if standin:
         lines += ["> **This run used the stand-in, not a model.** The stand-in reads the digest and applies",
                   "> the rule the prompt describes. It shows the machinery is sound and the vocabularies are",
@@ -788,10 +788,14 @@ def append_history(found, samples, label, stamp):
 # A budget keeps a module reviewable. core.py and runner.py also hold data that was once in
 # engine/references: the prompts (about 250 lines) and the workbook layout (about 140), so their
 # budgets are raised by that much and no more. reading.py rose by 100 for the SVG reader (text in any
-# nesting, HTML in foreignObject, pictures inside SVGs, charts read in place where the XML refers to them).
+# nesting, HTML in foreignObject, pictures inside SVGs, charts read in place where the XML refers to them),
+# and by 350 for the data flow of a package, the implementation map's backbone.
 # review.py rose by 350 for concepts: extracting them, joining their forms, the two questions about
 # them and the search signal that puts them first.
-BUDGETS = {"core.py": 2250, "reading.py": 3100, "review.py": 2950, "runner.py": 1800, "develop.py": 1800}
+# runner.py rose by 100 for the implementation map's sheet and the final outputs a person decides there,
+# and by 250 more for the map itself: the tree, its IDs and groups, and its three branches.
+# review.py rose by 300 more for the skill map-implementation: the Tracer's tools, turns and validator, and the Namer.
+BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 3250, "runner.py": 2150, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -866,6 +870,165 @@ def release(arguments):
 
 
 # ================================================================================================
+# ---------------------------------------------------------------- the implementation map: what the reader recovers
+def map_measure(sample="J_pipeline", record=True, chat=None):
+    """How much of a sample's answer key (gold_map.yaml) the traced data flow holds, part by part. A value's
+    sources are read through the calls that compute it: base_score comes from the three columns weighted_score
+    is given. Raw inputs are the leaves of the walk down from each final output. What the map says of the
+    documents is read from its branches 91 and 92, on a whole run with the stand-in. Returns {part: (found, total)}."""
+    import helpers
+    import reading
+    import yaml
+    with open(os.path.join(SAMPLES, sample, "gold_map.yaml"), encoding="utf-8") as handle:
+        gold = yaml.safe_load(handle)
+    import standin_chat
+    paths, settings, _ = helpers.run_sample(sample, chat=chat or standin_chat.chat_well_behaved)   # the whole run: the map's branches need links
+    store = runner.open_store(paths, settings)
+    flow, mapped = store.read("dataflow"), runner.implementation_map(store, settings)
+    canon = {c["ref"]: c for c in store.read("chunks_canon")}
+    doc = {c["ref"]: c for c in store.read("chunks_doc")}
+    missing = runner.not_on_the_map(store, mapped, settings)
+    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+    roots = next(r for r in flow if r["record_type"] == "roots")
+    calls = {(r["function"], r["callee"]) for r in nodes.values() if r["kind"] == "call"}
+    def direct(node_id):
+        """The names a value is computed from, through the calls that compute it."""
+        names = set()
+        for source in nodes.get(node_id, {}).get("from", []):
+            inner = nodes.get(source, {})
+            if inner.get("kind") == "call":
+                names |= {nodes.get(s, {}).get("name", s) for s in inner["from"] if s != "%s:return" % inner["callee"]}
+            else:
+                names.add(inner.get("name", source))
+        return names
+    leaves = set()
+    for output in gold["final_outputs"]:
+        leaves |= reading.walk_dataflow(flow, output)[0]
+    leaf_names = {kind: {nodes[leaf]["name"] for leaf in leaves if leaf in nodes and nodes[leaf]["kind"] == kind}
+                  for kind in ("argument", "column", "stored data", "file", "number")}
+    gaps = [r for r in flow if r["record_type"] == "gap"]
+    raw = gold["raw_inputs"]
+    found = {
+        "final outputs and not-reached functions among the candidates code finds":
+            (len(set(roots["proposed"]) & set(gold["final_outputs"])) + len(set(roots["not_reached"]) & set(gold["not_reached"])),
+             len(gold["final_outputs"]) + len(gold["not_reached"])),
+        "calls between package functions": (sum((caller, callee) in calls for caller, callees in gold["calls"].items() for callee in callees),
+                                            sum(len(callees) for callees in gold["calls"].values())),
+        "values within a function, with what each is computed from":
+            (sum(source in direct("%s:%s" % (f, v)) for f, flows in gold["flows"].items() for v, sources in flows.items() for source in sources),
+             sum(len(sources) for flows in gold["flows"].values() for sources in flows.values())),
+        "columns a dplyr verb creates, with what each is computed from":
+            (sum(source in direct("column:%s" % column) for column, sources in gold["columns"].items() for source in sources),
+             sum(len(sources) for sources in gold["columns"].values())),
+        "raw inputs: arguments of a final output": (len(set(raw["argument"]) & leaf_names["argument"]), len(raw["argument"])),
+        "raw inputs: columns of an argument": (len(set(raw["column_of_an_argument"]) & leaf_names["column"]), len(raw["column_of_an_argument"])),
+        "raw inputs: stored data": (len(set(raw["stored_data"]) & leaf_names["stored data"]), len(raw["stored_data"])),
+        "raw inputs: files": (len(set(raw["file"]) & leaf_names["file"]), len(raw["file"])),
+        "raw inputs: hard-coded numbers": (len(set(raw["hard_coded_number"]) & leaf_names["number"]), len(raw["hard_coded_number"])),
+        "gaps named, for the agents": (sum(any(g["function"] == gap["function"] and gap["code"] in g["code"] for g in gaps) for gap in gold["gaps"]),
+                                       len(gold["gaps"])),
+        "methodology no step implements": (sum(any(heading in " > ".join(canon[ref]["heading_chain"]) for ref in missing["methodology"])
+                                               for heading in gold["methodology_not_implemented"]), len(gold["methodology_not_implemented"])),
+        "documentation describing nothing in the map": (sum(any(words in doc[ref]["text"] for ref in missing["documentation"])
+                                                            for words in gold["documentation_describing_nothing"]),
+                                                        len(gold["documentation_describing_nothing"])),
+        "gaps on the path traced by the agents": (sum(1 for t in store.read("map_traces") if t["status"].startswith("traced")),
+                                                  len(store.read("map_traces"))),
+        "no more in those two counts than the answer key": (int(len(missing["methodology"]) + len(missing["documentation"]) <=
+                                                                 len(gold["methodology_not_implemented"]) + len(gold["documentation_describing_nothing"])), 1)}
+    if record:
+        remember("map-measure", datetime.date.today().isoformat(), sample, "no model",
+                 **{re.sub(r"\W+", "_", part.split(",")[0])[:40]: "%d/%d" % pair for part, pair in found.items()})
+    return found
+
+
+def map_baseline_text(found):
+    width = max(len(part) for part in found)
+    return "\n".join("%-*s %2d of %2d" % (width, part, got, total) for part, (got, total) in found.items())
+
+
+# ================================================================================================
+# ---------------------------------------------------------------- the sign-off bar of the map's agents
+MAP_BAR_SAMPLES = ("J_pipeline", "F_capital")
+
+def map_run(sample, chat, live=None, settings=None):
+    """One run of a sample to the end of the map's agents, with what the bar measures: the traces, the
+    names, the questions refused, any link whose quote is not in the code, and the shape of the tree."""
+    import helpers
+    projects = helpers.scratch()
+    helpers.copy_sample(sample, projects, "BAR", "2026-01-01")
+    run_settings = runner.make_settings(dict({"require_outline_confirmation": False}, **(settings or {})))
+    paths = runner.open_run(projects, "BAR", "2026-01-01", scratch_root=helpers.scratch())
+    runner.run_pipeline(paths, run_settings, chat=chat, live=live, stop_after="07d")
+    store = runner.open_store(paths, run_settings)
+    text = {u["ref"]: u["text"] for u in store.read("model_units")}
+    traces = store.read("map_traces")
+    unquoted = [(t["gap"]["function"], edge["value"]) for t in traces for edge in t["edges"]
+                if edge["quote"] not in text.get(t["gap"]["function_ref"], "")]
+    asked = [call for call in store.read_calls() if call["question_type"] == "trace-gap"]
+    rows = runner.implementation_map(store, run_settings)
+    return {"traces": traces, "steps": len(rows),
+            "questions": len({call["question_id"] for call in asked}),
+            "refused": len({call["question_id"] for call in asked if call["final"] and call["outcome"] != "accepted"}),
+            "unquoted": unquoted,
+            "open": [(t["gap"]["function"], t["status"]) for t in traces if not t["status"].startswith(("traced", "the code cannot tell"))],
+            "shape": [(row["map_id"], row["role"], row["output_variable"], row["ov_ref"], row["function_name"]) for row in rows]}
+
+def map_bar(found, measured):
+    """The four tests of the map's sign-off bar, each as (held, what it says)."""
+    unquoted = [(sample, pair) for sample, one in found.items() for pair in one["unquoted"]]
+    moved = [sample for sample, one in found.items() if one["shape"] != one["shape_without_a_model"]]
+    refused = [(sample, one["refused"], one["questions"]) for sample, one in found.items() if one["refused"]]
+    open_gaps = [(sample, gap) for sample, one in found.items() for gap in one["open"]]
+    missing = ["%s: %s of %s" % (part, got, total) for part, (got, total) in measured.items() if got != total]
+    return [
+        (not missing, "The map holds every part of J_pipeline's answer key" + ("" if not missing else ": %s" % "; ".join(missing))),
+        (not unquoted, "Every link the AI declared quotes the code word for word"
+                       + ("" if not unquoted else ": %s" % "; ".join("%s %s" % pair for pair in unquoted))),
+        (not moved, "The shape of the map is the same as with no model at all: code decides it"
+                    + ("" if not moved else ": moved on %s" % ", ".join(moved))),
+        (not refused and not open_gaps,
+         "Every question the agents asked was answered and accepted the first time, and every gap on the path ends traced or "
+         "with a reason" + ("" if not refused and not open_gaps else ": %s" % "; ".join(
+             ["%s %d of %d questions refused" % triple for triple in refused] + ["%s %s" % pair for sample, pair in open_gaps])))]
+
+def map_report(chat, live=None, samples=MAP_BAR_SAMPLES, label="the real model"):
+    """The sign-off bar of the map's agents, run against a chat(). The map is built by code; the agents
+    only close the gaps code names, and every link they declare quotes the code. This says whether that holds with the model you use. Returns the report as text."""
+    import standin_chat
+    found = {}
+    for sample in samples:
+        one = map_run(sample, chat, live)
+        one["shape_without_a_model"] = map_run(sample, standin_chat.chat_well_behaved, settings={"map_with_ai": False})["shape"]
+        found[sample] = one
+    measured = map_measure("J_pipeline", record=False, chat=chat)
+    stamp, standin = datetime.date.today().isoformat(), "stand-in" in label
+    lines = ["# The Model Implementation Map: do its agents earn their place?", "",
+             "**Measured %s, engine %s, with %s.**" % (stamp, core.ENGINE_VERSION, label), ""]
+    if standin:
+        lines += ["> **This run used the stand-in, not a model.** It shows the machinery is sound: the actions are",
+                  "> refused unless they quote the code, the shape of the map comes from code, and a run replays. It is",
+                  "> not evidence about how a model traces a gap it has never seen, and the bar below is therefore",
+                  "> reported but **not met**. Run it again from cell 5 with APPENDIX = \"map-sign-off\" on Databricks.", ""]
+    lines += ["## Per sample", "", "| Sample | Rows of the map | Questions | Refused | Gaps open | Links not quoted |",
+              "|---|---|---|---|---|---|"]
+    for sample, one in found.items():
+        lines.append("| %s | %d | %d | %d | %d | %d |" % (sample, one["steps"], one["questions"], one["refused"],
+                                                          len(one["open"]), len(one["unquoted"])))
+    lines += ["", "## The answer key", "", "| Part | Found |", "|---|---|"]
+    lines += ["| %s | %d of %d |" % (part, got, total) for part, (got, total) in measured.items()]
+    lines += ["", "## The bar", ""]
+    held = map_bar(found, measured)
+    lines += ["- **%s** %s" % ("HELD" if ok else "NOT HELD", says) for ok, says in held]
+    lines += ["", "**The bar is %s.**" % ("met" if all(ok for ok, _ in held) and not standin else
+                                          "reported but NOT met: it was run with the stand-in, not a model" if standin else "NOT met")]
+    remember("map-bar", stamp, ", ".join(samples), "stand-in" if standin else "the real model",
+             held=sum(ok for ok, _ in held), of=len(held), refused=sum(one["refused"] for one in found.values()),
+             gaps_open=sum(len(one["open"]) for one in found.values()), steps=sum(one["steps"] for one in found.values()))
+    return "\n".join(lines)
+
+
+# ================================================================================================
 # ---------------------------------------------------------------- the manual against the code
 def manual_problems():
     """Every way the one manual can drift from the code, as plain sentences. The manual may name
@@ -889,7 +1052,7 @@ def manual_problems():
     for setting in sorted(runner.DEFAULT_SETTINGS):
         if setting not in text:
             found.append("setting '%s' is not explained in the manual" % setting)
-    for rule in ("R%d" % n for n in range(1, 14)):
+    for rule in ("R%d" % n for n in range(1, 15)):
         if not re.search(r"\| %s \|" % rule, text):
             found.append("design rule %s has no row in the manual" % rule)
     for step in runner.load_pipeline()["steps"]:
@@ -1094,11 +1257,14 @@ if PATHS is not None:
         for message in record["messages"]:
             if message.startswith(("Read as:", "Not read:")) or "left out" in message or "R package" in message:
                 print("  " + message)
+    flow = store.read("dataflow")
+    if flow:
+        outputs, how, _ = runner.reading.decided_outputs(flow, {})
+        print("\nFinal outputs code proposes: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
     concepts, _ = runner.review.latest_concepts(store.read)
     print("\nConcepts found by code: %d (sheet Concepts). The model refines them after you confirm the outline." % len(concepts))
     print("Run folder:", PATHS.run_dir)
     print("Open Output.xlsx there. The three Chunks sheets show everything that was read; Model_Package_Info what was not.")
-    print("To leave a unit out of the review, write 'to not use' in its yellow 'Use in review' cell and save the workbook back")
     print("into the run folder before cell 4. If the outline is right, go to cell 4; if not, fix the input and run this cell again.")
 '''
 
@@ -1178,7 +1344,8 @@ CELL_5 = r'''# ===== Cell 5 of 5 - finish: read your determinations back, verify
 # After the run waits for a person: download Output.xlsx from the run folder, fill the yellow columns on
 # Flagged_Items, put it back in the run folder, and run this cell. Run it again after every round of edits.
 # APPENDIX runs a maintainer's check instead: "probe" (a new cluster), "sanity" (the sample projects with the
-# stand-in), "harness" (seeded differences), or "sign-off" (guided reading against your real chat()).
+# stand-in), "harness" (seeded differences), "sign-off" (guided reading against your real chat()), or
+# "map-sign-off" (the implementation map's agents against your real chat()).
 APPENDIX = ""
 
 if APPENDIX:
@@ -1196,6 +1363,8 @@ if APPENDIX:
         develop.harness(["A_minimal", "--limit", "10"])
     elif APPENDIX == "sign-off":
         print(develop.run(ACTIVE_CHAT, LIVE, label="the real model"))
+    elif APPENDIX == "map-sign-off":
+        print(develop.map_report(ACTIVE_CHAT, LIVE, label="the real model"))
 elif "PATHS" not in globals() or PATHS is None:
     print("Cell 3 has not read the inputs yet. Run cells 3 and 4 first.")
 else:
@@ -1244,6 +1413,11 @@ if __name__ == "__main__":
         harness(sys.argv[2:])
     if what == "recall":
         recall(sys.argv[2:] or ["A_minimal", "F_capital"])
+    if what == "map-bar":
+        import standin_chat
+        print(map_report(standin_chat.chat_well_behaved, label="the stand-in"))
+    if what == "map-measure":
+        print(map_baseline_text(map_measure(sys.argv[2] if len(sys.argv) > 2 else "J_pipeline")))
     if what == "reading-report":
         import standin_chat
         print(run(standin_chat.chat_well_behaved, label="the stand-in"))

@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - core.py - what every other module stands on. For every reviewer.
+Verifier 0.0.3 - core.py - what every other module stands on. For every reviewer.
 
 WHAT THIS FILE DOES
   Three layers, in one file because each is small and all three are needed before a single
@@ -58,8 +58,8 @@ import unicodedata
 import zipfile
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier0_shared
-ENGINE_VERSION = "0.0.2"
+# ---------------------------------------------------------------- the contracts: what every record is, and the words the tool may use
+ENGINE_VERSION = "0.0.3"
 GENESIS_HASH = "0" * 64
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
@@ -83,7 +83,6 @@ ST_UNIT_TEST, ST_NARRATIVE = "Unit test", "Narrative - nothing to check"
 ST_DIFFERS, ST_UNDECIDED = "Traced - differences flagged", "Traced - check undecided"
 ST_NOT_TRACED, ST_NOT_ASSESSED = "Not traced - for review", "Not assessed - for manual review"
 ST_EXCLUDED = "Not in scope (a person's decision)"
-SCOPE_WORDS = ("to use", "to not use")             # what a person writes beside a unit when confirming the outline
 CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
 NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
 
@@ -114,7 +113,7 @@ UNDECIDED_REASONS = (
 REJECTION_REASONS = (
     "it could not be read", "it named a passage that was not shown",
     "it quoted words that are not in the text", "it accepted a planted control passage",
-    "it contradicted itself")
+    "it contradicted itself", "it repeated an action it had already taken")
 
 KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL = "Function", "Formula statement", "Top-level statement"
 KIND_TEST, KIND_TABLE, KIND_OBJECT = "Test block", "Parameter table", "Parameter object"
@@ -481,8 +480,8 @@ def expr_to_text(expr, parent_rank=0):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier0r_reading
-# ---------------------------------------------------------------- prompt machinery (from verifier3_mapping)
+# ---------------------------------------------------------------- the reading floor
+# ---------------------------------------------------------------- prompt machinery: one question, its budget and its id
 
 # ---------------------------------------------------------------- the prompts
 # Every question the tool asks, as the model sees it: a version line, the system half, the main half
@@ -528,6 +527,32 @@ Rules on your answer:
 - every words must appear in that passage word for word (upper and lower case may differ);
 - name a concept only where the passage means that same thing; where in doubt, leave it out;
 - give an empty list for a passage that names none of them.
+''',
+    'trace-gap': r'''VERSION 1
+=== SYSTEM ===
+You trace how an R package computes its values, one step at a time. You are given one place in its code that the tool could not follow by reading it, what the tool already knows about that function, and a list of actions. Each turn you choose exactly one action; the tool carries it out and shows you what it found. Once you know what the value at that place is computed from, you declare it, copying the code that shows it word for word. You never use a name that is not in the code, never write code of your own, and you stop when the place is traced or when the code cannot tell. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: trace-gap
+[[UNIT]]
+THE ACTIONS
+open_unit {"ref": "M-0012"}: shows the code of a unit of the package
+statements_setting {"function": "f", "name": "x"}: shows the statements of f that set x, and what each is computed from
+callers_of {"function": "f"}: shows every call of f in the package, with what each call gives each parameter
+return_of {"function": "f"}: shows what f returns is computed from
+columns_of {"table": "t"}: shows the columns of a stored table
+declare_edge {"value": "x", "from": ["a", "b"], "quote": "code copied word for word"}: records that x is computed from a and b; the quote must be code of the function at this place, or of a unit you opened, and must contain x and every name in from
+declare_input {"name": "x", "kind": "argument", "quote": "code copied word for word"}: records that x comes from outside the computation; kind is one of argument, stored data, file, hard-coded number, from outside
+done {"because": "a few words"}: the place is traced
+give_up {"because": "a few words"}: the code cannot tell
+[[ABOUT]]
+ANSWER FORMAT
+{"action": "declare_edge", "args": {"value": "total", "from": ["price", "count"], "quote": "total <- price * count"}}
+Rules on your answer:
+- exactly one action from the list above, with its arguments;
+- every ref, function, table and name must be one the tool has shown you;
+- a quote must be copied from the code word for word;
+- never repeat an action you have already taken;
+- end with done once you have declared what the value is computed from, or with give_up.
 ''',
     'interpret-code': r'''VERSION 1
 === SYSTEM ===
@@ -774,7 +799,7 @@ def cut_text(text, limit, keep_words=()):
     piece = text[start:start + limit]
     return ("[... cut ...] " if start else "") + piece + (" [... cut ...]" if start + limit < len(text) else "")
 
-# ---------------------------------------------------------------- answer machinery (from verifier3_mapping)
+# ---------------------------------------------------------------- answer machinery: reading a reply, strictly
 def last_json_object(text):
     """The last balanced {...} object in a text, or None. Braces inside strings are skipped."""
     end = text.rfind("}")
@@ -801,7 +826,7 @@ def strict_json(text):
         return dict(pairs)
     return json.loads(text, object_pairs_hook=no_repeats)
 
-# ---------------------------------------------------------------- element helpers (from verifier1_documents)
+# ---------------------------------------------------------------- element helpers
 def local_name(tag):
     """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
     if not isinstance(tag, str):
@@ -822,7 +847,7 @@ def child_named(element, name):
             return child
     return None
 
-# ---------------------------------------------------------------- baseline slicing (from verifier1_documents)
+# ---------------------------------------------------------------- baseline slicing: what a document's shape says
 def attribute_text(element, names, digits_too=False):
     """The first of the named attributes that holds text worth reading, with its name. A bare
     number is no heading, so it is passed over unless digits_too."""
@@ -1643,7 +1668,7 @@ def validate_package_plan(question, answer, rejected):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier1f_formats
+# ---------------------------------------------------------------- the front door: what a file is, and how it becomes markup
 # ---------------------------------------------------------------- what a file is
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")

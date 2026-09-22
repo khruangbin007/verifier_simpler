@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - review.py - what corresponds to what, and what differs. For Reviewer 3
+Verifier 0.0.3 - review.py - what corresponds to what, and what differs. For Reviewer 3
 (mapping) and Reviewer 4 (checks).
 
 WHAT THIS FILE DOES
@@ -22,8 +22,9 @@ WHAT IT TAKES IN AND PRODUCES
   rule_checks, package_doc_checks, unit_status, flagged_items and coverage records.
 
 WHICH SHEETS SHOW ITS RESULTS
-  Mapping_Canon_Model, Mapping_Model_Doc and Mapping_Canon_Doc (the links, with refs, relations
-  and how each was established); Flagged_Items; and the coverage identity on Model_Package_Info.
+  Model_Implementation_Map (each model unit in its place in the computation, with its links, checks
+  and status), Chunks_Doc (a documentation passage with its links and checks), Chunks_Model,
+  Mapping_Coverage, Flagged_Items; and the coverage identity on Model_Package_Info.
 
 DESIGN RULES ENFORCED HERE
   R1  a status is a plain observation; a flagged item is a question for a person, never a grade
@@ -53,7 +54,7 @@ import core
 import reading
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier3_mapping
+# ---------------------------------------------------------------- mapping: what corresponds to what
 LEDGER_VOLATILE = ("created_at", "run_id")
 CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model": "the package"}
 
@@ -690,10 +691,9 @@ def concept_spans(text, forms):
     return found
 
 def concept_sources(ctx):
-    """The units whose concepts are read: the three corners, in order, without those a person left out."""
-    excluded = excluded_refs(ctx)
+    """The units whose concepts are read: the three corners, in order."""
     return [(unit, corner) for kind, corner in (("chunks_canon", "canon"), ("chunks_doc", "doc"), ("model_units", "model"))
-            for unit in ctx.read(kind) if unit["ref"] not in excluded]
+            for unit in ctx.read(kind)]
 
 def concept_registry(sources, guessed=()):
     """The registry and each unit's concepts. Model first: its concepts; then every definition the
@@ -861,6 +861,156 @@ def judge_concepts(ctx):
                             % (len(concepts), len(guessed))])
 
 
+# ---------------------------------------------------------------- the skill map-implementation: the implementation map's agents
+# Code traced the data flow (step 05a); these agents work only where it stopped. The Tracer is given one
+# gap on the path from a final output and a fixed list of actions; each turn it chooses one, code carries
+# it out on the records and shows what it found, and every link it declares must copy the code word for
+# word and use only names that code holds. Each turn is a question of its own, recorded, so a run replays
+# without a model. The Namer gives each step a plain name, outside the accounting. The Auditor is code.
+# The model chooses; code executes. Enforces: R3, R4, R5
+MAP_ACTIONS = ("open_unit", "statements_setting", "callers_of", "return_of", "columns_of", "declare_edge", "declare_input", "done", "give_up")
+INPUT_KINDS = ("argument", "stored data", "file", "hard-coded number", "from outside")
+
+class MapTools:
+    """What the Tracer can ask to see, answered by code from the traced flow and the units."""
+    def __init__(self, flow, units):
+        self.nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+        self.units = {u["ref"]: u for u in units}
+        self.functions = {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
+        self.tables = {r["name"]: r for r in self.nodes.values() if r["kind"] == "stored data"}
+
+    def label(self, node_id):
+        return self.nodes.get(node_id, {}).get("name", node_id)
+
+    def sources(self, record):
+        return ", ".join(self.label(s) for s in record["from"]) or "nothing the tool could see"
+
+    def show(self, action, args):
+        if action == "open_unit":
+            return core.cut_text(self.units[args["ref"]]["text"], 3000)
+        if action == "statements_setting":
+            found = [r for r in self.nodes.values() if r["name"] == args["name"] and r["kind"] in ("value", "column")
+                     and (r.get("function") == args["function"] or args["function"] in r.get("created_in", []))]
+            return "\n".join("line %d: %s  (computed from: %s)" % (r["line"], r["code"], self.sources(r)) for r in found) or \
+                "No statement of %s sets %s that the tool could see." % (args["function"], args["name"])
+        if action == "callers_of":
+            calls = [r for r in self.nodes.values() if r["kind"] == "call" and r["callee"] == args["function"]]
+            return "\n".join("in %s, line %d: %s  (%s)" % (r["function"], r["line"], r["code"], "; ".join(
+                "%s = %s" % (formal, ", ".join(self.label(s) for s in given)) for formal, given in r["bindings"].items())) for r in calls) or \
+                "Nothing in the package calls %s." % args["function"]
+        if action == "return_of":
+            record = self.nodes.get("%s:return" % args["function"])
+            return "%s returns what is computed from: %s" % (args["function"], self.sources(record)) if record else "The tool could not read %s." % args["function"]
+        if action == "columns_of":
+            return "%s has the columns: %s" % (args["table"], ", ".join(self.tables[args["table"]].get("columns") or []))
+        return "Recorded."
+
+def trace_question(state, tools, settings):
+    """One turn of the Tracer: the gap, what the tool knows of its function, the names it may use, and
+    every action taken so far with what it showed."""
+    gap, function = state["gap"], state["gap"]["function"]
+    known = [r for r in tools.nodes.values() if r.get("function") == function and r["kind"] in ("value", "argument", "return")]
+    listing = "\n".join("  %s (%s): computed from %s" % (r["name"], r["kind"], tools.sources(r)) for r in known)
+    place = ("function %s (%s), line %d: %s\ncode at this place: %s\n\nTHE WHOLE FUNCTION\n%s\n\n"
+             "WHAT THE TOOL KNOWS OF THIS FUNCTION\n%s\n\nTHE PACKAGE\nfunctions: %s\nstored tables: %s") % (
+        function, gap["function_ref"], gap["line"], gap["why"], gap["code"], tools.functions[function]["text"], listing or "  nothing",
+        ", ".join("%s (%s)" % (name, unit["ref"]) for name, unit in sorted(tools.functions.items())), ", ".join(sorted(tools.tables)) or "none")
+    history = "\n".join("%d. %s %s\n   the tool showed: %s" % (number, hop["action"], json.dumps(hop["args"], sort_keys=True), hop["shown"])
+                        for number, hop in enumerate(state["hops"], start=1)) or "Nothing yet: this is the first action."
+    texts = [tools.functions[function]["text"]] + [tools.units[ref]["text"] for ref in state["opened"]]
+    # a block needs its label: the assembler drops a block without one, which sent the model a question with no gap in it
+    return narrow_question("trace-gap", gap["function_ref"], [("THE PLACE THE TOOL COULD NOT FOLLOW", place), ("WHAT HAPPENED SO FAR", history)], settings,
+                           more={"texts": texts, "refs": sorted(tools.units), "functions": sorted(tools.functions),
+                                 "tables": sorted(tools.tables), "taken": [[hop["action"], hop["args"]] for hop in state["hops"]]})
+
+def validate_trace(question, answer):
+    """One action of the Tracer. It must be one of the list, with the arguments that action takes; every
+    unit, function and table must be the package's; a quote must be in the code shown word for word and
+    must hold every name the action declares, so no link rests on a name the model made up; and no
+    action may be taken twice. Enforces: R3"""
+    action, args = answer.get("action"), answer.get("args")
+    if action not in MAP_ACTIONS or not isinstance(args, dict):
+        raise Rejected(core.REJECTION_REASONS[0])
+    if [action, args] in question["taken"]:
+        raise Rejected(core.REJECTION_REASONS[5])
+    text = lambda key: args.get(key) if isinstance(args.get(key), str) and args.get(key).strip() else None
+    if action == "open_unit" and args.get("ref") not in question["refs"]:
+        raise Rejected(core.REJECTION_REASONS[1])
+    if action in ("statements_setting", "callers_of", "return_of") and args.get("function") not in question["functions"]:
+        raise Rejected(core.REJECTION_REASONS[1])
+    if action == "statements_setting" and not text("name"):
+        raise Rejected(core.REJECTION_REASONS[0])
+    if action == "columns_of" and args.get("table") not in question["tables"]:
+        raise Rejected(core.REJECTION_REASONS[1])
+    if action in ("declare_edge", "declare_input"):
+        names = [args.get("value")] + list(args.get("from") or []) if action == "declare_edge" else [args.get("name")]
+        if not text("quote") or not all(isinstance(n, str) and n.strip() for n in names) or \
+           (action == "declare_edge" and not args.get("from")) or (action == "declare_input" and args.get("kind") not in INPUT_KINDS):
+            raise Rejected(core.REJECTION_REASONS[0])
+        squash = lambda words: re.sub(r"\s+", " ", words).strip()
+        if not any(squash(args["quote"]) in squash(code) for code in question["texts"]):
+            raise Rejected(core.REJECTION_REASONS[2])
+        if not all(re.search(r"(?<![\w.$])%s(?![\w.])" % re.escape(n.strip()), args["quote"]) for n in names):
+            raise Rejected(core.REJECTION_REASONS[1])
+    if action in ("done", "give_up") and not text("because"):
+        raise Rejected(core.REJECTION_REASONS[0])
+
+def map_implementation(ctx):
+    """Step 07d, map-implementation, the skill: the Tracer resolves the gaps on the path from each final
+    output, turn by turn, within map_hops_max turns a gap and map_calls_max questions in all; the
+    Auditor, code alone, says what is traced, what is open and what no output
+    reaches. Without a model the gaps stay named and the steps unnamed. Enforces: R2, R3, R4, R5, R14"""
+    flow, units, settings = ctx.read("dataflow"), ctx.read("model_units"), ctx.settings
+    if not flow:
+        return core.StepResult(messages=["No data flow was traced, so there is nothing to map."])
+    outputs, _, not_reached = reading.decided_outputs(flow, {})
+    reached = set()
+    for output in outputs:
+        reached |= reading.walk_dataflow(flow, output)[2]
+    tools, gaps = MapTools(flow, units), [g for g in flow if g["record_type"] == "gap"]
+    states = [{"gap": g, "hops": [], "edges": [], "inputs": [], "status": "", "opened": []} for g in gaps if g["function"] in reached]
+    budget, asked = int(settings["map_calls_max"]), 0
+    use_ai = ctx.ask is not None and settings["map_with_ai"]
+    for _ in range(int(settings["map_hops_max"]) if use_ai else 0):
+        turn = [state for state in states if not state["status"]][:max(0, budget - asked)]
+        if not turn:
+            break
+        questions = [trace_question(state, tools, settings) for state in turn]
+        asked += len(questions)
+        answers = ctx.ask([q for q in questions if not q["too_large"]])
+        for question, state in zip(questions, turn):
+            final = answers.get(question["question_id"])
+            if final is None or final["outcome"] != "accepted":
+                state["status"] = "the AI's answer could not be used: %s" % (final or {}).get("outcome", "not asked, the question was too large").split(": ", 1)[-1]
+                continue
+            action, args = final["answer"]["action"], final["answer"]["args"]
+            shown = tools.show(action, args)
+            state["hops"].append({"action": action, "args": args, "shown": core.cut_text(shown, 600), "question_id": question["question_id"]})
+            if action == "open_unit" and args["ref"] not in state["opened"]:
+                state["opened"].append(args["ref"])
+            elif action == "declare_edge":
+                state["edges"].append({"value": args["value"], "from": list(args["from"]), "quote": args["quote"]})
+            elif action == "declare_input":
+                state["inputs"].append({"name": args["name"], "kind": args["kind"], "quote": args["quote"]})
+            elif action == "done":
+                state["status"] = "traced: %s" % args["because"]
+            elif action == "give_up":
+                state["status"] = "the code cannot tell: %s" % args["because"]
+    for state in states:
+        state["status"] = state["status"] or ("not asked: no model" if not use_ai else "stopped at the limit of %d turns" % int(settings["map_hops_max"])
+                                              if len(state["hops"]) >= int(settings["map_hops_max"]) else "stopped at the limit of %d questions" % budget)
+    traced = [s for s in states if s["status"].startswith("traced")]
+    audit = {"final_outputs": outputs, "functions reached": sorted(reached), "not reached": not_reached,
+             "gaps": len(gaps), "gaps on the path": len(states), "gaps traced": len(traced),
+             "gaps open": [{"function": s["gap"]["function"], "line": s["gap"]["line"], "status": s["status"]} for s in states if s not in traced],
+             "gaps not reached": [{"function": g["function"], "line": g["line"], "why": g["why"]} for g in gaps if g["function"] not in reached],
+             "loops": sorted({loop for output in outputs for loop in reading.walk_dataflow(flow, output)[1]}), "questions": asked}
+    traces = [{"gap": s["gap"], "hops": s["hops"], "edges": s["edges"], "inputs": s["inputs"], "status": s["status"]} for s in states]
+    return core.StepResult({"map_traces": traces, "map_audit": [audit]},
+                           {"gaps on the path": len(states), "gaps traced": len(traced)},
+                           ["Final outputs %s: %d gaps on the path, %d traced by the AI; %d gaps in functions no output reaches."
+                            % (", ".join(outputs), len(states), len(traced), len(audit["gaps not reached"]))])
+
 # ---------------------------------------------------------------- step 05: build-graph
 def structural_edges(units, provenance):
     """Edges the readers established: contains, calls, tested_by, documents, generated_from,
@@ -1017,25 +1167,12 @@ def search_one(source_ref, representation, corner, world, settings):
               "note": "" if candidates else "Nothing in %s shares a word, a symbol, a number or a citation with this unit." % CORNER_NAMES[corner]}
     return candidates, record
 
-def excluded_refs(ctx):
-    """The units a person marked "to not use" when confirming the outline: the latest decision
-    per unit, from the scope_decisions records. Such a unit is not searched, not linked, not
-    checked and not a target, and ends with the status Not in scope. Enforces: R1, R2"""
-    latest = {}
-    for record in ctx.read("scope_decisions"):
-        latest[record["unit_ref"]] = record["decision"]
-    return {ref for ref, decision in latest.items() if decision == core.SCOPE_WORDS[1]}
-
-def in_scope(records, excluded):
-    return [r for r in records if r["ref"] not in excluded]
-
 def build_world(ctx, search_pass):
     """Everything the search needs, built once per step: representations of all units and
     chunks, one BM25 index per corner, the bridge vocabulary, anchors and the walk."""
     settings, lists = ctx.settings, load_word_lists()
     trivial = set(settings["trivial_numbers"])
-    excluded = excluded_refs(ctx)
-    canon, doc, units = (in_scope(ctx.read(kind), excluded) for kind in ("chunks_canon", "chunks_doc", "model_units"))
+    canon, doc, units = (ctx.read(kind) for kind in ("chunks_canon", "chunks_doc", "model_units"))
     tables = {t["unit_ref"]: t for t in ctx.read("parameter_tables")}
     by_ref = {u["ref"]: u for u in units}
     documented_by = {u["roxygen"]["documents_ref"]: u for u in units if u.get("roxygen") and u["roxygen"]["documents_ref"]}
@@ -1365,6 +1502,8 @@ def validate_answer(question, text):
             core.validate_package_plan(question, answer, Rejected)
         elif question["question_type"] == "match-concepts":
             validate_concepts(question, answer)
+        elif question["question_type"] == "trace-gap":
+            validate_trace(question, answer)
         elif question["question_type"] in JUDGE_RELATIONS:
             validate_judge(question, answer)
         else:
@@ -1441,7 +1580,7 @@ def interpret_code(ctx):
     Accepted answers fill the column "LLM Interpretation" of Chunks_Model. An interpretation
     is an aid to reading and nothing more: it gives no status, raises no flagged item and takes
     no part in the coverage identity, and a question that fails leaves a plain note. Enforces: R3"""
-    units = [u for u in ctx.read("model_units") if u["ref"] not in excluded_refs(ctx)]
+    units = ctx.read("model_units")
     if not ctx.settings.get("interpret_code", True):
         return core.StepResult(messages=["Interpreting the code is switched off (setting interpret_code)."])
     outline, described = package_outline(units, (ctx.read("package_info") or [{}])[0])
@@ -1557,7 +1696,7 @@ def second_opinions(ctx, follow_ups, sources, world):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier4_checks
+# ---------------------------------------------------------------- the checks, the statuses and the flagged items
 SKILL_VERSIONS = {"check-mathematics": "0.0.1", "check-values": "0.0.1", "check-rules": "0.0.1",
                   "check-package-docs": "0.0.1", "account-coverage": "0.0.1"}
 
@@ -1879,10 +2018,9 @@ def compare_formulas(prepared, settings, data_values):
 CODE_RELATIONS = ("Implements", "Partly implements", "Differs from")
 PROSE_FORMULA_PHRASES = ("product of", "sum of", "multiplied by", "divided by", "ratio of", "square root of", " times the ")
 
-def load_world(ctx, everything=False):
+def load_world(ctx, everything=False):   # everything: kept for callers; every unit is read either way
     """Units, chunks, the graph and the latest link of every linked pair, read once per step."""
-    excluded = set() if everything else excluded_refs(ctx)
-    units, canon, doc = (in_scope(ctx.read(kind), excluded) for kind in ("model_units", "chunks_canon", "chunks_doc"))
+    units, canon, doc = (ctx.read(kind) for kind in ("model_units", "chunks_canon", "chunks_doc"))
     ledger = ctx.read("graph_ledger")
     world = {"units": units, "canon": canon, "doc": doc, "ledger": ledger, "graph": load_graph(ledger),
              "by_ref": {record["ref"]: record for record in units + canon + doc}, "links": {}, "children": {},
@@ -2748,7 +2886,7 @@ def lines_or(lines, fallback):
     return "\n".join(dict.fromkeys(lines)) if lines else fallback
 
 def model_cells(unit, world, facts):
-    """The assessment cells of one row of Mapping_Model_to_Canon_and_Doc. Every cell shows real
+    """The assessment cells of a model unit, shown on its row of the map and its status on Chunks_Model. Every cell shows real
     content or "Not applicable" for this kind of unit."""
     mine, na = facts.get(unit["ref"], {}), core.NOT_APPLICABLE
     is_code = unit["kind"] in (core.KIND_FUNCTION, core.KIND_FORMULA)
@@ -2773,7 +2911,7 @@ def model_cells(unit, world, facts):
             "quality_notes_ai": lines_or(ai_notes, "No note")}
 
 def doc_cells(chunk, world, facts, duplicates):
-    """The assessment cells of one row of Mapping_Doc_to_Canon_and_Model."""
+    """The assessment cells of a documentation unit, shown beside the passage on Chunks_Doc."""
     mine, na = facts.get(chunk["ref"], {}), core.NOT_APPLICABLE
     relations = ["%s %s" % (world["links"][(chunk["ref"], ref)]["relation"], ref) for ref in linked(world, chunk["ref"], "C-") if (chunk["ref"], ref) in world["links"]]
     relations += ["%s: %s" % (ref, (world["links"].get((ref, chunk["ref"])) or world["links"].get((chunk["ref"], ref)))["relation"]) for ref in linked(world, chunk["ref"], "M-")]
@@ -2878,13 +3016,6 @@ def account_coverage(ctx):
         cells = model_cells(record, world, facts) if corner == "model" else doc_cells(record, world, facts, duplicates)
         statuses.append({"unit_ref": record["ref"], "corner": corner, "status": outcome[0], "clean": outcome[0] in core.CLEAN_STATUSES,
                          "decided_by_rule": outcome[1], "reason_shown": outcome[2], "item_ids": ids_by_unit.get(record["ref"], []), "cells": cells})
-    excluded = excluded_refs(ctx)
-    for kind, corner in (("model_units", "model"), ("chunks_doc", "doc")):
-        for record in ctx.read(kind):
-            if record["ref"] in excluded:
-                statuses.append({"unit_ref": record["ref"], "corner": corner, "status": core.ST_EXCLUDED, "clean": True,
-                                 "decided_by_rule": "excluded by a person", "reason_shown": "marked to not use when the outline was confirmed",
-                                 "item_ids": [], "cells": {}})
     all_units, all_doc = ctx.read("model_units"), ctx.read("chunks_doc")
     check_identity(all_units, all_doc, statuses, items, world, ctx.read("package_info"))
     coverage = {}

@@ -77,9 +77,14 @@ class WhatAnAnalystReads(unittest.TestCase):
         import openpyxl
         workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
         layout = {s["name"]: s for s in runner.load_layout()["sheets"]}
-        for name in ("Mapping_Model_to_Canon_and_Doc", "Mapping_Doc_to_Canon_and_Model"):
+        # the review's own cells, which the two mapping sheets used to hold: on a unit's row each shows
+        # content, "Not applicable" or "Not run yet". A sheet's own columns (a reading note, say) may be blank,
+        # and so may a row of the map, where a row is a step and not a unit.
+        cells = {key for record in runner.open_store(self.paths, self.settings).read("unit_status") for key in (record.get("cells") or {})}
+        for name in ("Chunks_Doc", "Chunks_Model"):
             sheet = workbook[name]
-            wanted = [i for i, c in enumerate(layout[name]["columns"]) if c["group"] == "assessments"]
+            wanted = [i for i, c in enumerate(layout[name]["columns"]) if c["field"] in cells | {"status", "item_ids"}]
+            self.assertTrue(wanted, name)
             for row in sheet.iter_rows(min_row=2, values_only=True):
                 self.assertTrue(all(row[i] not in (None, "") for i in wanted), "%s row %s" % (name, row[0]))
 
@@ -97,21 +102,35 @@ class WhatAnAnalystReads(unittest.TestCase):
         self.assertEqual(sorted(h.split(" - ")[0] for h in headings), sorted(i["item_id"] for i in items))
         self.assertIn("%d of %d flagged items are still open." % (len(items), len(items)), [p.text for p in report.paragraphs])
 
-    def test_coverage_on_the_sheet_equals_what_filtering_overall_status_gives(self):
+    def test_coverage_is_counted_from_the_map_and_from_the_sheets(self):
+        """Mapping_Coverage is read off the map: a row per final output and a row per corner. Its numbers
+        must be the map's and the Chunks sheets' own, and each corner's covered and not covered must
+        account for every unit it counts."""
         import openpyxl
         workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
-        coverage = workbook["Mapping_Coverage"]
-        header = [c.value for c in coverage[1]]
-        for position, name in enumerate(("Mapping_Model_to_Canon_and_Doc", "Mapping_Doc_to_Canon_and_Model"), start=2):
-            sheet = workbook[name]
-            column = [c.value for c in sheet[1]].index("Overall status")
-            statuses = [row[column] for row in sheet.iter_rows(min_row=2, values_only=True)]
-            row = dict(zip(header, [c.value for c in coverage[position]]))
-            for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES:
-                self.assertEqual(row[status], statuses.count(status), (name, status))
+        read = lambda name: [dict(zip([c.value for c in workbook[name][1]], [c.value for c in row]))
+                             for row in workbook[name].iter_rows(min_row=2)]
+        coverage, mapped = read("Mapping_Coverage"), read("Model_Implementation_Map")
+        store = runner.open_store(self.paths, self.settings)
+        missing = runner.not_on_the_map(store, runner.implementation_map(store, self.settings), self.settings)
+        branches = {}
+        for row in mapped:
+            branches.setdefault(str(row["MapID1"]), []).append(row)
+        for row in coverage:
+            branch = row["What is counted"].split(" ")[0]
+            if branch.isdigit():
+                steps = branches[branch]
+                self.assertEqual(row["In total"], len(steps), branch)
+                self.assertEqual(row["Deepest level"], max(step["Level"] for step in steps), branch)
+                self.assertEqual(row["Covered"] + row["Not covered"], len(steps), branch)
+        corners = {row["What is counted"]: row for row in coverage}
+        model = corners["Model units (one row each on Chunks_Model)"]
+        self.assertEqual(model["In total"], len(read("Chunks_Model")))
+        self.assertEqual(model["Covered"] + model["Not covered"], model["In total"], "every model unit is counted once")
+        self.assertEqual(model["Not covered"], len(missing["model_units"]))
+        self.assertEqual(corners["Methodology passages"]["Not covered"], len(missing["methodology"]))
+        self.assertEqual(corners["Documentation passages"]["Not covered"], len(missing["documentation"]))
 
-
-class HumanRoundTrip(unittest.TestCase):
     def setUp(self):
         self.paths, self.settings, _ = helpers.run_sample("A_minimal", chat=standin_chat.chat, settings={"reviewer_id": "analyst.one"})
         self.store = runner.open_store(self.paths, self.settings)

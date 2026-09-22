@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - runner.py - the run: its folder, its record, the model calls, the workbook and
+Verifier 0.0.3 - runner.py - the run: its folder, its record, the model calls, the workbook and
 the report. For Reviewer 5.
 
 WHAT THIS FILE DOES
@@ -61,7 +61,7 @@ import reading
 import review
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier5_run_report
+# ---------------------------------------------------------------- the run: its folder, its record and its two deliverables
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class RunPaused(Exception):
@@ -84,7 +84,8 @@ DEFAULT_SETTINGS = {
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
     "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
-    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True}
+    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
+    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -620,7 +621,7 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-concepts", "judge-links",
+CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-concepts", "map-implementation", "judge-links",
               "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
@@ -657,58 +658,20 @@ def update_manifest(store, changes):
     store.append("run_manifest", [manifest])
     return manifest
 
-def read_scope_column(path, known_refs):
-    """The "Use in review" cell of every row of the three Chunks sheets, by unit reference and
-    never by row position. Returns {ref: "to use" | "to not use"} for the cells that hold one of
-    the two words; anything else written there is ignored and said so."""
-    import openpyxl
-    found, ignored = {}, []
-    book = openpyxl.load_workbook(path, read_only=True)
-    for name in ("Chunks_Canon", "Chunks_Doc", "Chunks_Model"):
-        if name not in book.sheetnames:
-            continue
-        rows = list(book[name].iter_rows(values_only=True))
-        if not rows:
-            continue
-        header = [str(cell or "") for cell in rows[0]]
-        if "Use in review" not in header or "Ref" not in header:
-            continue
-        at_ref, at_scope = header.index("Ref"), header.index("Use in review")
-        for row in rows[1:]:
-            ref, word = str(row[at_ref] or "").strip(), str(row[at_scope] or "").strip().lower()
-            if not word or ref not in known_refs:
-                continue
-            if word in core.SCOPE_WORDS:
-                found[ref] = word
-            else:
-                ignored.append("%s: '%s' is not one of %s and was ignored" % (ref, word, " / ".join(core.SCOPE_WORDS)))
-    return found, ignored
-
 def confirm_outline(paths, settings, reviewer):
-    """Record that a person has checked the outline of the methodology (notebook cell 4), and
-    read back what they wrote in the "Use in review" column of the three Chunks sheets: a unit
-    marked "to not use" is left out of the search, the links and the checks, and ends with the
-    status Not in scope. The decisions are a hash chain, like the determinations."""
+    """Record that a person has checked the outline of the methodology (notebook cell 4), and say which
+    final outputs the run will map. Nothing is typed into the workbook here: every unit is reviewed, and
+    the final outputs are the ones code proposes."""
     store = open_store(paths, settings)
     now = datetime.datetime.now().isoformat(timespec="seconds")
-    known = {r["ref"] for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
-    decisions, ignored, workbook = {}, [], os.path.join(paths.outputs_dir, "Output.xlsx")
-    if os.path.exists(workbook):
-        try:
-            decisions, ignored = read_scope_column(workbook, known)
-        except Exception as problem:                 # a workbook that cannot be opened is said, never a stopped cell (R2)
-            ignored.append("Output.xlsx could not be opened (%s); no scope decisions were read" % type(problem).__name__)
-    records = [{"unit_ref": ref, "decision": word, "recorded_at": now, "reviewer_id": reviewer or "not named"}
-               for ref, word in sorted(decisions.items())]
-    chained = core.chain_records(core.chain_head(store.read("scope_decisions")), records)
-    if chained:
-        store.append("scope_decisions", chained)
     update_manifest(store, {"outline_confirmed_by": reviewer or "not named", "outline_confirmed_at": now})
     store.sync()
-    out = sum(1 for word in decisions.values() if word == core.SCOPE_WORDS[1])
-    said = ["Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name"),
-            "Scope: %d unit(s) marked to not use%s." % (out, "; they will not be searched, linked or checked" if out else "")]
-    return "\n".join(said + ignored)
+    said = ["Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name")]
+    flow = store.read("dataflow")
+    if flow:
+        outputs, how, _ = reading.decided_outputs(flow, {})
+        said.append("Final outputs: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
+    return "\n".join(said)
 
 def human_step_open(step, store, settings, determinations):
     """Is this human step still waiting for its person?"""
@@ -882,8 +845,10 @@ CELL_WITHHELD = "This text could not be shown in plain words; the technical text
 CUT_NOTE = " ... (cut here; the full text is in the audit files)"
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
-COVERAGE_ROWS = (("model", "Model units (one row each on Mapping_Model_to_Canon_and_Doc)"),
-                 ("doc", "Documentation units (one row each on Mapping_Doc_to_Canon_and_Model)"),
+REVIEW_CELLS = ("math_check", "value_check", "logic_consistency", "documentation_consistency", "hard_coded_numbers",
+                "parameter_completeness", "parameter_note_ai", "quality_notes", "quality_notes_ai", "unit_test", "status", "item_ids")
+COVERAGE_ROWS = (("model", "Model units (one row each on Chunks_Model)"),
+                 ("doc", "Documentation units (one row each on Chunks_Doc)"),
                  ("canon", "Methodology passages (for information only)"))
 NEEDS_ATTENTION_MEANS = ("Needs attention = units whose status is not clean; each has an entry on Flagged_Items.")
 
@@ -1015,18 +980,211 @@ def rows_concepts(store):
                      "established": "\n".join(concept["how"][:12])})
     return rows
 
-def scope_of(store):
-    """The latest scope decision per unit, as the yellow column shows it back."""
-    latest = {}
-    for record in store.read("scope_decisions"):
-        latest[record["unit_ref"]] = record["decision"]
-    return latest
+MAP_ROLES = {"return": "Final output", "value": "Intermediate value", "column": "Column", "argument": "Parameter",
+             "stored data": "Raw input: stored data", "file": "Raw input: file", "number": "Raw input: hard-coded number",
+             "outside": "From outside the package"}
+MAP_OUTLINE_MAX = 7          # Excel groups rows eight levels deep (outline levels 0 to 7); deeper rows are indented only
+MAP_ID_COLUMNS = 12          # the Map ID, one column per level, for filtering; a deeper level joins the last column
 
-def rows_chunks(chunks, scope=None, named=None):
+def covering_unit(units, file, line):
+    """The most specific model unit whose lines hold a line of a file: a statement before its function."""
+    found = [u for u in units if u.get("file") == file and u.get("lines") and u["lines"][0] <= line <= u["lines"][-1]]
+    return min(found, key=lambda u: (u["lines"][-1] - u["lines"][0], u["ref"]))["ref"] if found else ""
+
+def implementation_map(store, settings=None):
+    """The rows of Model_Implementation_Map: one row per value the model computes, from each final output
+    down to the rawest inputs. A row says one thing: this variable, computed here, by this function, from
+    these arguments - and every argument is a row of its own beneath it, where it is the variable. A called
+    function is entered with that call's own arguments, and what it computes inside stands under the value
+    it produces. Nothing that is not part of a calculation appears: what no final output reaches is not a
+    row of this sheet, it is counted on Mapping_Coverage. Enforces: R2, R4, R14"""
+    flow = store.read("dataflow")
+    if not flow:
+        return []
+    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+    units = store.read("model_units")
+    functions = {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
+    outputs, _, _ = reading.decided_outputs(flow, {})
+    concepts, _ = review.latest_concepts(store.read)
+    concept_of = {name: c["concept_id"] for c in concepts for name in c["identifiers"]}
+    by_function = (settings or DEFAULT_SETTINGS)["map_granularity"] == "function"
+    rows_max = int((settings or DEFAULT_SETTINGS)["map_rows_max"])
+    rows, cut = [], []
+
+    def variable_of(node):
+        """The one variable a row is about. A function's returned value takes the name of the variable
+        that holds it, or the function's own name where it returns an expression."""
+        if node["kind"] == "return":
+            found = re.match(r"\s*([A-Za-z._][\w.]*)\s*(?:<-|=[^=])", node.get("code") or "")
+            return found.group(1) if found else node.get("function", "")
+        return node["name"]
+
+    def ref_of(node):
+        if node["kind"] in ("stored data", "file"):
+            return node.get("unit_ref", "")
+        function = node.get("function")
+        if function in functions:
+            if node["kind"] == "argument":
+                return functions[function]["ref"]
+            return covering_unit(units, functions[function]["file"], node["line"]) or functions[function]["ref"]
+        return ""
+
+    def function_of(node):
+        """The function that defines this value: for what a function returns, that function; otherwise the
+        package function this value calls, else the function named in the code itself (a function of R or
+        of another package, which has no unit of its own). A raw input is defined by no function."""
+        if node["kind"] not in ("value", "column", "return"):
+            return "", ""
+        if node["kind"] == "return":
+            return node.get("function", ""), functions.get(node.get("function"), {}).get("ref", "")
+        calls = [nodes[s] for s in node["from"] if nodes.get(s, {}).get("kind") == "call"]
+        if calls:
+            callee = calls[0]["callee"]
+            return callee, functions.get(callee, {}).get("ref", "")
+        code = (node.get("code") or "").split("\n")[0]
+        written = re.sub(r"^\s*[A-Za-z._][\w.]*\s*(?:<-|=[^=])", "", code)
+        found = re.search(r"(?:([A-Za-z._][\w.]*)::)?([A-Za-z._][\w.]*)\s*\(", written)
+        return (found.group(2) if found else ""), ""
+
+    def expand(source, frames, depth=0):
+        """One source, resolved to the values that are rows: a call becomes what it was given and what the
+        called function computes inside from it; a parameter becomes the argument the call gave it, or its
+        default; and, asked for a map by function, a value becomes what it rests on. Everything else is a
+        row of its own."""
+        record = nodes.get(source)
+        if record is None or record["kind"] == "guard" or depth > 60:
+            return []
+        if record["kind"] == "call":
+            callee = record["callee"]
+            found = [pair for argument in record["from"] if argument != "%s:return" % callee
+                     for pair in expand(argument, frames, depth + 1)]
+            if callee in (name for name, _ in frames):
+                return found                                     # the function calls itself: its arguments stand, the descent stops
+            inner = frames + [(callee, record["bindings"])]
+            for inside in nodes.get("%s:return" % callee, {"from": []})["from"]:
+                kid = nodes.get(inside, {})
+                if kid.get("kind") == "argument" and kid.get("function") == callee:
+                    if record["bindings"].get(kid["name"], ["default"]) == ["default"]:
+                        found += [pair for value in kid.get("default_from") or [] for pair in expand(value, inner, depth + 1)]
+                    continue                                     # a parameter is the argument the call gave, already a row
+                found += expand(inside, inner, depth + 1)
+            return found
+        if record["kind"] == "argument" and record.get("function") == frames[-1][0] and frames[-1][1] is not None:
+            given = frames[-1][1].get(record["name"], ["default"])
+            if given == ["default"]:
+                return [pair for value in record.get("default_from") or [] for pair in expand(value, frames, depth + 1)]
+            return [pair for value in given for pair in expand(value, frames[:-1], depth + 1)]
+        if by_function and record["kind"] in ("value", "column") and record["from"]:
+            return [pair for value in record["from"] for pair in expand(value, frames, depth + 1)]
+        return [(source, frames)]
+
+    def children(node, frames):
+        """What this value is computed from, each a row of its own beneath it."""
+        seen, once = set(), []
+        for source in node["from"]:
+            for child, child_frames in expand(source, frames):
+                key = (child, tuple(name for name, _ in child_frames))
+                if key not in seen:                              # the same value twice under one step is one row
+                    seen.add(key)
+                    once.append((child, child_frames))
+        return once
+
+    def emit(node_id, frames, map_id, level, path):
+        node = nodes.get(node_id)
+        if node is None or node["kind"] == "guard":
+            return
+        key = (node_id, tuple(name for name, _ in frames))
+        if key in path:                                          # a value that feeds itself: the descent stops
+            return
+        if len(rows) >= rows_max:
+            if not cut:
+                cut.append(True)
+                rows.append(dict(blank_row(), map_id=map_id, level=level, output_variable="the map was cut here",
+                                 arguments="the setting map_rows_max stopped the map; ask for a map by function (map_granularity) or raise it"))
+            return
+        kids = children(node, frames)
+        variable = variable_of(node)
+        name, ref = function_of(node)
+        row = dict(blank_row(), map_id=map_id, level=level, output_variable=variable, ov_ref=ref_of(node),
+                   ov_code=node.get("code") or node.get("file") or "", ov_concept=concept_of.get(variable, ""),
+                   function_name=name, fn_ref=ref, role=MAP_ROLES.get(node["kind"], node["kind"]),
+                   arguments="; ".join(dict.fromkeys(variable_of(nodes[child]) for child, _ in kids if child in nodes)))
+        if node["kind"] == "argument" and frames[-1][1] is None:
+            row["role"] = "Raw input: argument of the final output"
+        if node["kind"] == "column" and not node["from"]:
+            row["role"] = "Raw input: column of the data given"
+        for position, part in enumerate(map_id.split(".")[:MAP_ID_COLUMNS], start=1):
+            row["id%d" % position] = ".".join(map_id.split(".")[MAP_ID_COLUMNS - 1:]) if position == MAP_ID_COLUMNS else part
+        rows.append(row)
+        width = max(2, len(str(len(kids))))
+        for position, (child, child_frames) in enumerate(kids, start=1):
+            emit(child, child_frames, "%s.%0*d" % (map_id, width, position), level + 1, path | {key})
+
+    for position, output in enumerate(outputs, start=1):
+        emit("%s:return" % output, [(output, None)], "%02d" % position, 0, frozenset())
+    return rows
+
+def blank_row():
+    """Every column of the map, empty: a row fills the ones it has."""
+    row = {"map_id": "", "level": 0, "output_variable": "", "ov_ref": "", "ov_code": "", "ov_concept": "",
+           "function_name": "", "fn_ref": "", "arguments": "", "role": ""}
+    row.update({"id%d" % number: "" for number in range(1, MAP_ID_COLUMNS + 1)})
+    return row
+
+def not_on_the_map(store, map_rows, settings=None):
+    """What no calculation reaches, counted for Mapping_Coverage and never shown on the map: the model
+    units no final output reaches, the methodology no step implements, and the documentation describing
+    nothing in the map. A methodology passage counts as implemented when a step of the map is linked to
+    it, or when every non-trivial number it states is a value the map uses - hard-coded in a step, or held
+    in a table or file it reads. Enforces: R2, R14"""
+    units, flow = store.read("model_units"), store.read("dataflow")
+    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+    functions = {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
+    outputs, _, not_reached = reading.decided_outputs(flow, {}) if flow else ([], {}, [])
+    reached = {name for name in functions if name not in not_reached}
+    on_map = {row["ov_ref"] for row in map_rows if row["ov_ref"]} | {row["fn_ref"] for row in map_rows if row["fn_ref"]}
+    links, generated = {}, []
+    for edge in store.read("graph_ledger"):
+        if edge["record_type"] != "edge":
+            continue
+        source, target = edge["source"], edge["target"]
+        if edge["kind"] == "corresponds":
+            unit = source if source.startswith("M-") else target
+            links.setdefault(unit, []).append(target if unit == source else source)
+        elif edge["kind"] in ("documents", "tested_by", "generated_from"):
+            generated.append((source, target))
+    for name in reached:                                          # the roxygen, help pages, tests and statements of a step
+        home = functions[name]
+        on_map |= {u["ref"] for u in units if u.get("file") == home["file"] and u.get("lines")
+                   and home["lines"][0] <= u["lines"][0] and u["lines"][-1] <= home["lines"][-1]}
+    for _ in range(3):                                            # what documents or tests a unit on the map belongs with it
+        on_map |= {other for pair in generated for other in pair if set(pair) & on_map}
+    linked = {other for unit in on_map for other in links.get(unit, [])}
+    trivial = {core.Decimal(str(number)) for number in (settings or DEFAULT_SETTINGS)["trivial_numbers"]}
+    used = {core.Decimal(node["name"]) for node in nodes.values() if node["kind"] == "number" and node.get("function") in reached}
+    tables_read = {node["name"] for node in nodes.values() if node["kind"] in ("stored data", "file")}
+    for table in store.read("parameter_tables"):
+        if table["object_name"] in tables_read:
+            used |= {core.Decimal(core.parse_number(str(cell))["value"]) for record in table["rows"] for cell in record
+                     if core.parse_number(str(cell))}
+    rules = reading.load_tag_rules()
+    def by_values(chunk):
+        stated = {core.Decimal(number["value"]) for number in core.find_numbers(chunk["text"])} - trivial
+        return bool(stated) and stated <= used
+    checkable = lambda chunk: reading.states_something_checkable(
+        {"type": chunk["kind"].lower(), "text": chunk["text"], "not_read_reason": chunk.get("not_read_reason", "")}, rules)
+    named = {record["unit_ref"] for record in review.latest_concepts(store.read)[1] if record["concepts"]}
+    return {"model_units": [u["ref"] for u in units if u["ref"] not in on_map],
+            "methodology": [c["ref"] for c in store.read("chunks_canon") if c["ref"] not in linked and checkable(c) and not by_values(c)],
+            "documentation": [c["ref"] for c in store.read("chunks_doc") if c["ref"] not in linked and c["ref"] not in named],
+            "on_map": on_map, "linked": linked, "final_outputs": outputs,
+            "linked_units": {unit for unit in on_map if links.get(unit)}}
+
+def rows_chunks(chunks, named=None):
     """The rows of Chunks_Canon and Chunks_Doc."""
-    rows, scope, named = [], scope or {}, named or {}
+    rows, named = [], named or {}
     for chunk in chunks:
-        rows.append({"ref": chunk["ref"], "scope": scope.get(chunk["ref"], ""), "concepts": named.get(chunk["ref"], ""), "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
+        rows.append({"ref": chunk["ref"], "concepts": named.get(chunk["ref"], ""), "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
                      "para_no": chunk.get("para_label") or chunk["para_no"],
                      "kind": chunk["kind"], "text": chunk["text"],
                      "source_file": chunk["source_file"], "refs_out": "; ".join(chunk["refs_out"]),
@@ -1046,14 +1204,14 @@ def unit_expression(unit):
                                                " x ".join(str(d) for d in data.get("dims", [])))
     return ""
 
-def rows_model_units(units, interpretations=(), scope=None, named=None):
+def rows_model_units(units, interpretations=(), named=None):
     """The rows of Chunks_Model. What the AI said a piece of code does is shown as a quotation
     (in \u201c \u201d), because the words are the model's and not the tool's own. Enforces: R10"""
-    rows, said, scope, named = [], {record["unit_ref"]: record for record in interpretations}, scope or {}, named or {}
+    rows, said, named = [], {record["unit_ref"]: record for record in interpretations}, named or {}
     for unit in units:
         code, told = unit.get("code") or {}, said.get(unit["ref"], {})
         lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else ""
-        rows.append({"ref": unit["ref"], "scope": scope.get(unit["ref"], ""), "concepts": named.get(unit["ref"], ""), "kind": unit["kind"], "file": unit["file"], "lines": lines,
+        rows.append({"ref": unit["ref"], "concepts": named.get(unit["ref"], ""), "kind": unit["kind"], "file": unit["file"], "lines": lines,
                      "name": unit["name"], "inside": unit["inside"], "text": unit["text"],
                      "expression": unit_expression(unit), "exported": code.get("exported"),
                      "numbers": "; ".join(n["as_written"] for n in code.get("numbers", [])),
@@ -1077,10 +1235,12 @@ def link_columns(unit_ref, prefix, corner_letter, links, searches, texts):
             prefix + "_why_not": "" if shown else search.get("note", ""),
             prefix + "_text": texts_by_ref((e["target"], texts.get(e["target"], "")) for e in shown)}
 
-def rows_mapping(store, corner):
-    """One row per model unit (corner "model") or per documentation unit (corner "doc").
-    The words in the assessment cells were written by verifier3 and verifier4; this only lays out."""
-    units = store.read("model_units") if corner == "model" else store.read("chunks_doc")
+def assessment_of(store):
+    """What the review made of each unit, for whichever sheet shows it: the links it was given with how
+    each was established, what was searched for it and why it was not linked, its checks, its status and
+    its flagged items. Until the two mapping sheets were removed this laid out those sheets; the same
+    words now go to Chunks_Doc, to Chunks_Model and to the map."""
+    units = store.read("model_units") + store.read("chunks_doc")
     texts = {r["ref"]: r["text"] for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
     links, searches = {}, {}
     for record in store.read("graph_ledger"):
@@ -1094,42 +1254,96 @@ def rows_mapping(store, corner):
         merged.update({k: v for k, v in record.items() if v})
         searches[key] = merged
     statuses = {r["unit_ref"]: r for r in store.read("unit_status")}
-    base_rows = rows_model_units(units) if corner == "model" else rows_chunks(units)
-    rows = []
-    for row in base_rows:
-        row.update(link_columns(row["ref"], "canon", "C-", links, searches, texts))
-        other = ("doc", "D-") if corner == "model" else ("model", "M-")
-        row.update(link_columns(row["ref"], other[0], other[1], links, searches, texts))
-        status = statuses.get(row["ref"])
+    found = {}
+    for unit in units:
+        model = unit["ref"].startswith("M-")
+        row = dict(link_columns(unit["ref"], "canon", "C-", links, searches, texts))
+        other = ("doc", "D-") if model else ("model", "M-")
+        row.update(link_columns(unit["ref"], other[0], other[1], links, searches, texts))
+        status = statuses.get(unit["ref"])
         row["status"] = status["status"] if status else core.NOT_RUN_YET
         row["item_ids"] = ("\n".join(status["item_ids"]) or "No item") if status else ""
         row["cells"] = status["cells"] if status else {}
-        rows.append(row)
-    return rows
+        row["searched"] = "\n".join(filter(None, [row.get("canon_searched", ""), row.get("canon_why_not", ""),
+                                                  row.get(other[0] + "_searched", ""), row.get(other[0] + "_why_not", "")])) or core.NOT_APPLICABLE
+        found[unit["ref"]] = row
+    return found
 
-def rows_coverage(model_rows, doc_rows, store):
-    """Counted from the rows actually written: the second, independent route of the
-    coverage identity (part 4). Enforces: R2"""
-    rows, counted = [], bool(store.read("coverage"))
-    for corner, label in COVERAGE_ROWS[:2]:
-        written = model_rows if corner == "model" else doc_rows
-        if not counted:                              # empty, never zero: nothing has been counted yet
-            rows.append({"corner": label, "total": len(written), "how_to_read":
-                         "Not counted yet: statuses are given by the step account-coverage, after the model has "
-                         "judged the links. Until then these columns stay empty; cell 4 shows how far the run is."})
+def coverage_rows(store, map_rows, model_rows, doc_rows, settings=None):
+    """Mapping_Coverage, counted from the map and from what the map does not reach. One row per final
+    output: how many values it takes, how deep, what it rests on by kind, how many of its steps are linked
+    to the methodology, what its checks said, what needs attention and what is flagged. Then one row per
+    corner, each read the way that corner needs. Enforces: R2, R10"""
+    statuses = {r["unit_ref"]: r for r in store.read("unit_status")}
+    items_of = {}
+    for item in store.read("flagged_items"):
+        for ref in item["unit_refs"]:
+            items_of.setdefault(ref, []).append(item)
+    checks = [(r["unit_ref"], str(r.get("outcome") or "")) for kind in ("math_checks", "value_checks", "rule_checks", "package_doc_checks")
+              for r in store.read(kind)]
+    missing = not_on_the_map(store, map_rows, settings) if store.read("dataflow") else {
+        "model_units": [], "methodology": [], "documentation": [], "on_map": set(), "linked": set(), "final_outputs": []}
+    branches = {}
+    for row in map_rows:
+        branches.setdefault(row["map_id"].split(".")[0], []).append(row)
+
+    def about(units, rows_shown, counts_what, how_to_read, extra=None):
+        found = [outcome for ref, outcome in checks if ref in units]
+        by_category, by_status = {}, {}
+        for ref in units:
+            for item in items_of.get(ref, []):
+                by_category[item["category"]] = by_category.get(item["category"], 0) + 1
+            if ref in statuses:
+                by_status[statuses[ref]["status"]] = by_status.get(statuses[ref]["status"], 0) + 1
+        role = lambda start: sum(1 for r in rows_shown if r["role"].startswith(start))
+        row = {"counts_what": counts_what, "how_to_read": how_to_read,
+               "checks_agree": sum(o.startswith("agrees") for o in found), "checks_differ": sum(o.startswith("differs") for o in found),
+               "checks_undecided": sum(not o.startswith(("agrees", "differs")) for o in found),
+               "needs_attention": sum(n for status, n in by_status.items() if status in core.NOT_CLEAN_STATUSES),
+               "items": sum(by_category.values()), "items_by_category": "\n".join("%s: %d" % pair for pair in sorted(by_category.items())),
+               "statuses": "\n".join("%s: %d" % pair for pair in sorted(by_status.items())),
+               "in_arguments": role("Raw input: argument"), "in_columns": role("Raw input: column"),
+               "in_tables": role("Raw input: stored data"), "in_files": role("Raw input: file"), "in_numbers": role("Raw input: hard-coded")}
+        row.update(extra or {})
+        return row
+
+    rows = []
+    for position, output in enumerate(missing["final_outputs"], start=1):
+        shown = branches.get("%02d" % position, [])
+        if not shown:
             continue
-        row = {"corner": label, "total": len(written), "how_to_read": NEEDS_ATTENTION_MEANS}
-        for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES:
-            row[status] = sum(1 for r in written if r["status"] == status)
-        row["needs_attention"] = sum(row[status] for status in core.NOT_CLEAN_STATUSES)
-        rows.append(row)
+        units = {row["ov_ref"] for row in shown if row["ov_ref"]}
+        linked = sum(1 for row in shown if row["ov_ref"] in missing["linked_units"])
+        rows.append(about(units, shown, "values the model computes on the way to %s" % output,
+                          "A row of the map is one variable, computed by one function from the arguments beneath it. Covered = "
+                          "values whose unit a methodology passage is linked to; the rest may still be right, and are for a person to read.",
+                          {"row": "%02d %s (final output)" % (position, output), "total": len(shown), "covered": linked,
+                           "not_covered": len(shown) - linked, "depth": max(row["level"] for row in shown)}))
+    model_units = {r["ref"] for r in model_rows}
+    rows.append(about(model_units, [], "units of the model package",
+                      "Covered = units a final output reaches: a step of the map, or the roxygen, help page, test or statement belonging "
+                      "to one; not covered = the units no final output reaches, which the map does not show: dead code, a second way in, "
+                      "or a function only the tests call.",
+                      {"row": "Model units (one row each on Chunks_Model)", "total": len(model_units),
+                       "covered": len(model_units) - len(missing["model_units"]), "not_covered": len(missing["model_units"])}))
     canon = store.read("chunks_canon")
-    pointed = {e["target"] for e in store.read("graph_ledger")
-               if e.get("record_type") == "edge" and e["kind"] == "corresponds" and e["relation"] in core.LINKING_RELATIONS}
-    count = sum(1 for c in canon if c["ref"] in pointed)
-    rows.append({"corner": COVERAGE_ROWS[2][1], "total": len(canon), "how_to_read":
-                 "%d of %d passages are pointed to by at least one link. The others are listed in the "
-                 "report, for information only." % (count, len(canon))})
+    rows.append(about({c["ref"] for c in canon}, [], "passages of the methodology",
+                      "Covered = passages a unit on the map is linked to; not covered = passages that state a number, formula or rule "
+                      "that no step implements. The rest state nothing to implement.",
+                      {"row": "Methodology passages", "total": len(canon),
+                       "covered": len({c["ref"] for c in canon} & missing["linked"]), "not_covered": len(missing["methodology"])}))
+    doc_refs = {r["ref"] for r in doc_rows}
+    rows.append(about(doc_refs, [], "passages of the model documentation",
+                      "Covered = passages a unit on the map is linked to; not covered = passages describing nothing in the map and "
+                      "naming none of the model's concepts.",
+                      {"row": "Documentation passages", "total": len(doc_refs),
+                       "covered": len(doc_refs & missing["linked"]), "not_covered": len(missing["documentation"])}))
+    if not store.read("coverage"):
+        for row in rows:
+            row["how_to_read"] = ("Not counted yet: statuses and checks are given by the step account-coverage, after the model has "
+                                  "judged the links. Until then these columns stay empty; cell 4 shows how far the run is.")
+            for key in ("checks_agree", "checks_differ", "checks_undecided", "needs_attention", "items", "items_by_category", "statuses"):
+                row[key] = ""
     return rows
 
 def latest_determinations(store):
@@ -1155,27 +1369,33 @@ def rows_flagged(store):
 
 def sheet_rows(store, paths, settings, progress):
     """The rows of all eight sheets, by sheet name."""
-    model_rows, doc_rows = rows_mapping(store, "model"), rows_mapping(store, "doc")
-    for row in model_rows + doc_rows:
-        for name, text in row.pop("cells").items():
-            row[name] = text
+    mapped = implementation_map(store, settings)
+    assessed = assessment_of(store)
+    def with_assessment(rows):
+        for row in rows:
+            found = assessed.get(row["ref"], {})
+            row.update({key: value for key, value in found.items() if key != "cells"})
+            row.update(found.get("cells") or {})
+        return rows
+    model_rows = with_assessment(rows_model_units(store.read("model_units"), store.read("interpretations"), concept_names_by_ref(store)))
+    doc_rows = with_assessment(rows_chunks(store.read("chunks_doc"), concept_names_by_ref(store)))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Canon": rows_chunks(store.read("chunks_canon"), scope_of(store), concept_names_by_ref(store)),
-            "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store), concept_names_by_ref(store)),
-            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store), concept_names_by_ref(store)),
+            "Chunks_Canon": rows_chunks(store.read("chunks_canon"), concept_names_by_ref(store)),
+            "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
             "Concepts": rows_concepts(store),
-            "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
-            "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
+            "Model_Implementation_Map": mapped,
+            "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows, settings), "Flagged_Items": rows_flagged(store)}
 
 def check_written_totals(rows, store):
     """Identity part 4: what account-coverage counted must equal what the workbook holds."""
     coverage = store.read("coverage")
     if not coverage:
         return
-    for position, corner in enumerate(("model", "doc")):
-        counted, written = coverage[0][corner], rows["Mapping_Coverage"][position]
-        same = counted["total"] == written["total"] and all(
-            counted["by_status"].get(s, 0) == written[s] for s in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES)
+    for corner, sheet in (("model", "Chunks_Model"), ("doc", "Chunks_Doc")):
+        counted, written = coverage[0][corner], rows[sheet]
+        same = counted["total"] == len(written) and all(
+            counted["by_status"].get(status, 0) == sum(1 for row in written if row.get("status") == status)
+            for status in core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES)
         if not same:
             raise review.EngineFault(
                 "Part 4 of the coverage identity does not hold: the totals counted for the %s corner differ "
@@ -1195,7 +1415,6 @@ sheets:
 - name: Chunks_Canon
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
   - {header: Level, group: identity, field: level, width: 7}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
   - {header: Para no., group: identity, field: para_no, width: 9}
@@ -1208,7 +1427,6 @@ sheets:
 - name: Chunks_Doc
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
   - {header: Level, group: identity, field: level, width: 7}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
   - {header: Para no., group: identity, field: para_no, width: 9}
@@ -1218,11 +1436,24 @@ sheets:
   - {header: Source file, group: identity, field: source_file, width: 28}
   - {header: Cross-references, group: documentation, field: refs_out, width: 24}
   - {header: States something checkable, group: assessments, field: checkable, width: 16}
+  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
+  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
+  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
+  - {header: Model ref(s), group: documentation, field: model_refs, width: 14}
+  - {header: Relation (model), group: documentation, field: model_relation, width: 22}
+  - {header: How established (model), group: documentation, field: model_how, width: 50}
+  - {header: What was searched / why not mapped, group: methodology, field: searched, width: 40}
+  - {header: Value check, group: assessments, field: value_check, width: 50}
+  - {header: Math check, group: assessments, field: math_check, width: 50}
+  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
+  - {header: Parameter note (AI), group: assessments, field: parameter_note_ai, width: 44}
+  - {header: Documentation quality notes, group: assessments, field: quality_notes, width: 40}
+  - {header: Overall status, group: assessments, field: status, width: 26}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 16}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Chunks_Model
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
   - {header: Kind, group: identity, field: kind, width: 20}
   - {header: File, group: identity, field: file, width: 30}
   - {header: Lines, group: identity, field: lines, width: 10}
@@ -1234,6 +1465,8 @@ sheets:
   - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
   - {header: Numbers used, group: code_text, field: numbers, width: 20}
   - {header: Exported, group: identity, field: exported, width: 10}
+  - {header: Overall status, group: assessments, field: status, width: 26}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 16}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Concepts
   columns:
@@ -1245,72 +1478,49 @@ sheets:
   - {header: Same words in the rest of the model, group: assessments, field: model, width: 30}
   - {header: Candidate synonyms and acronyms (AI guess), group: assessments, field: guessed, width: 40}
   - {header: How established, group: assessments, field: established, width: 60}
-- name: Mapping_Model_to_Canon_and_Doc
+- name: Model_Implementation_Map
   columns:
-  - {header: Model ref, group: identity, field: ref, width: 10}
-  - {header: Kind, group: identity, field: kind, width: 18}
-  - {header: Name, group: identity, field: name, width: 22, input_text: true}
-  - {header: File and lines, group: identity, field: where, width: 26}
-  - {header: Code text, group: code_text, field: text, width: 60, input_text: true}
-  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
-  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
-  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
-  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
-  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
-  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
-  - {header: Doc ref(s), group: documentation, field: doc_refs, width: 14}
-  - {header: Relation (doc), group: documentation, field: doc_relation, width: 22}
-  - {header: How established (doc), group: documentation, field: doc_how, width: 50}
-  - {header: What was searched (doc), group: documentation, field: doc_searched, width: 50}
-  - {header: Why not mapped (doc), group: documentation, field: doc_why_not, width: 40}
-  - {header: Doc text, group: documentation, field: doc_text, width: 60, input_text: true}
-  - {header: Math check, group: assessments, field: math_check, width: 50}
-  - {header: Parameter completeness, group: assessments, field: parameter_completeness, width: 50}
-  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
-  - {header: Documentation consistency, group: assessments, field: documentation_consistency, width: 50}
-  - {header: Hard-coded numbers, group: assessments, field: hard_coded_numbers, width: 44}
-  - {header: Unit test, group: assessments, field: unit_test, width: 34}
-  - {header: Quality notes (AI), group: assessments, field: quality_notes_ai, width: 44}
-  - {header: Overall status, group: assessments, field: status, width: 30}
-  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
-- name: Mapping_Doc_to_Canon_and_Model
-  columns:
-  - {header: Doc ref, group: identity, field: ref, width: 10}
-  - {header: Type, group: identity, field: kind, width: 11}
-  - {header: Section (heading chain), group: identity, field: section, width: 40}
-  - {header: Doc text, group: documentation, field: text, width: 60, input_text: true}
-  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
-  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
-  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
-  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
-  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
-  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
-  - {header: Model ref(s), group: code_text, field: model_refs, width: 14}
-  - {header: Relation (model), group: code_text, field: model_relation, width: 22}
-  - {header: How established (model), group: code_text, field: model_how, width: 50}
-  - {header: Model text, group: code_text, field: model_text, width: 60, input_text: true}
-  - {header: Value check, group: assessments, field: value_check, width: 50}
-  - {header: Math check, group: assessments, field: math_check, width: 50}
-  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
-  - {header: Parameter note (AI), group: assessments, field: parameter_note_ai, width: 44}
-  - {header: Documentation quality notes, group: assessments, field: quality_notes, width: 44}
-  - {header: Overall status, group: assessments, field: status, width: 30}
-  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
+  - {header: MapID1, group: identity, field: id1, width: 7}
+  - {header: MapID2, group: identity, field: id2, width: 7}
+  - {header: MapID3, group: identity, field: id3, width: 7}
+  - {header: MapID4, group: identity, field: id4, width: 7}
+  - {header: MapID5, group: identity, field: id5, width: 7}
+  - {header: MapID6, group: identity, field: id6, width: 7}
+  - {header: MapID7, group: identity, field: id7, width: 7}
+  - {header: MapID8, group: identity, field: id8, width: 7}
+  - {header: MapID9, group: identity, field: id9, width: 7}
+  - {header: MapID10, group: identity, field: id10, width: 7}
+  - {header: MapID11, group: identity, field: id11, width: 7}
+  - {header: MapID12, group: identity, field: id12, width: 7}
+  - {header: Level, group: identity, field: level, width: 7}
+  - {header: Output Variable, group: identity, field: output_variable, width: 28}
+  - {header: Output Variable - Model Ref, group: assessments, field: ov_ref, width: 16, links_to: Chunks_Model}
+  - {header: Output Variable - Model Code, group: code_text, field: ov_code, width: 60}
+  - {header: Output Variable - Mapped Concept Ref, group: methodology, field: ov_concept, width: 18, links_to: Concepts}
+  - {header: Function Name, group: identity, field: function_name, width: 24}
+  - {header: Function Name - Model Ref, group: assessments, field: fn_ref, width: 16, links_to: Chunks_Model}
+  - {header: Arguments, group: assessments, field: arguments, width: 46}
 - name: Mapping_Coverage
   columns:
-  - {header: Corner, group: identity, field: corner, width: 30}
-  - {header: Units in total, group: identity, field: total, width: 12}
-  - {header: Traced to methodology, group: assessments, field: Traced to methodology, width: 14}
-  - {header: Supporting code (justified), group: assessments, field: Supporting code (justified), width: 14}
-  - {header: Unit test, group: assessments, field: Unit test, width: 12}
-  - {header: Narrative - nothing to check, group: assessments, field: Narrative - nothing to check, width: 14}
-  - {header: Not in scope (a person's decision), group: assessments, field: Not in scope (a person's decision), width: 14}
-  - {header: Traced - differences flagged, group: assessments, field: Traced - differences flagged, width: 14}
-  - {header: Traced - check undecided, group: assessments, field: Traced - check undecided, width: 14}
-  - {header: Not traced - for review, group: assessments, field: Not traced - for review, width: 14}
-  - {header: Not assessed - for manual review, group: assessments, field: Not assessed - for manual review, width: 14}
+  - {header: What is counted, group: identity, field: row, width: 40}
+  - {header: Each row counts, group: identity, field: counts_what, width: 34}
+  - {header: In total, group: assessments, field: total, width: 10}
+  - {header: Covered, group: assessments, field: covered, width: 10}
+  - {header: Not covered, group: assessments, field: not_covered, width: 12}
+  - {header: 'Rests on: arguments', group: assessments, field: in_arguments, width: 12}
+  - {header: 'Rests on: columns of the data', group: assessments, field: in_columns, width: 14}
+  - {header: 'Rests on: stored tables', group: assessments, field: in_tables, width: 12}
+  - {header: 'Rests on: files', group: assessments, field: in_files, width: 10}
+  - {header: 'Rests on: hard-coded numbers', group: assessments, field: in_numbers, width: 14}
+  - {header: Deepest level, group: assessments, field: depth, width: 10}
+  - {header: Checks agreeing, group: assessments, field: checks_agree, width: 12}
+  - {header: Checks differing, group: assessments, field: checks_differ, width: 12}
+  - {header: Checks undecided, group: assessments, field: checks_undecided, width: 12}
   - {header: Needs attention, group: assessments, field: needs_attention, width: 12}
-  - {header: How to read this row, group: identity, field: how_to_read, width: 70}
+  - {header: Flagged items, group: assessments, field: items, width: 10}
+  - {header: Flagged items by category, group: assessments, field: items_by_category, width: 40}
+  - {header: Statuses, group: assessments, field: statuses, width: 40}
+  - {header: How to read this row, group: assessments, field: how_to_read, width: 70}
 - name: Flagged_Items
   columns:
   - {header: Item id, group: identity, field: item_id, width: 30}
@@ -1335,11 +1545,12 @@ def load_layout():
     """The workbook layout: every sheet and every column of Output.xlsx."""
     return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
-def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
+def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None):
     """One generic writer for every sheet: header row and first column frozen, filter on
     the header, wrapped text, no merged cells, reviewer columns yellow and unlocked."""
     from openpyxl.styles import Alignment, Font, PatternFill, Protection
     from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.hyperlink import Hyperlink
     from openpyxl.worksheet.datavalidation import DataValidation
     columns = sheet_layout["columns"]
     wrap = Alignment(wrap_text=True, vertical="top")
@@ -1354,18 +1565,38 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     for row_number, row in enumerate(rows, start=2):
         for number, column in enumerate(columns, start=1):
             value = row.get(column["field"])
-            if value in (None, "") and column["group"] == "assessments" and sheet_layout["name"].startswith(("Mapping_Model", "Mapping_Doc")):
+            if value in (None, "") and column["field"] in REVIEW_CELLS and sheet_layout["name"].startswith("Chunks_"):
                 value = core.NOT_RUN_YET
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap
             if column["group"] == "reviewer_input":
                 cell.fill = PatternFill("solid", start_color=colours["reviewer_input"])
                 cell.protection = Protection(locked=False)
+    if sheet_layout["name"] == "Model_Implementation_Map":     # collapsible: each parent a summary row above its members
+        sheet.sheet_properties.outlinePr.summaryBelow = False
+        sheet.column_dimensions.group(get_column_letter(1), get_column_letter(MAP_ID_COLUMNS), outline_level=1)
+        at_variable = [c["field"] for c in columns].index("output_variable") + 1
+        for number, row in enumerate(rows, start=2):
+            level = int(row.get("level") or 0)
+            if level:
+                sheet.row_dimensions[number].outline_level = min(level, MAP_OUTLINE_MAX)
+            sheet.cell(row=number, column=at_variable).alignment = Alignment(wrap_text=True, vertical="top", indent=min(level, 15))
+    index = index or {}
+    for number, column in enumerate(columns, start=1):         # a reference is a link to the row that holds it
+        target = column.get("links_to")
+        if not target:
+            continue
+        for row_number, row in enumerate(rows, start=2):
+            where = (index.get(target) or {}).get(row.get(column["field"]))
+            if where:
+                cell = sheet.cell(row=row_number, column=number)
+                cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, where))
+                cell.style = "Hyperlink"
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
     fields = [c["field"] for c in columns]
-    for field_name, words in (("decision", core.DECISION_WORDS), ("scope", core.SCOPE_WORDS)):
+    for field_name, words in (("decision", core.DECISION_WORDS),):
         if field_name in fields and rows:            # the drop-downs: Decision on Flagged_Items, Use in review on the Chunks sheets
             letter = get_column_letter(fields.index(field_name) + 1)
             choice = DataValidation(type="list", formula1='"%s"' % ",".join(words), allow_blank=True)
@@ -1385,9 +1616,11 @@ def build_workbook(store, paths, settings, progress, target):
     check_written_totals(rows, store)
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
+    index = {"Chunks_Model": {row["ref"]: number for number, row in enumerate(rows.get("Chunks_Model") or [], start=2)},
+             "Concepts": {row.get("concept_id"): number for number, row in enumerate(rows.get("Concepts") or [], start=2)}}
     for sheet_layout in layout["sheets"]:
         sheet = workbook.create_sheet(sheet_layout["name"])
-        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
+        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store, index)
     workbook.properties.title = "the tool Output"
     workbook.properties.description = core.canonical_json(run_identity(store, paths))
     workbook.save(target)
@@ -1601,10 +1834,10 @@ def build_report_file(store, paths, settings, target):
     limits += [("Repair", "%s: %s" % (r["file"], r["kind"])) for r in store.read("read_repairs")][:40]
     docx_table(document, ("Unit or file", "Limit of this run"), limits or [("None", "Nothing was left unread or unassessed")])
     document.add_heading("3. Coverage", level=2)
-    coverage = (store.read("coverage") or [{}])[0]
-    rows = [(label, coverage.get(corner, {}).get("total", ""), coverage.get(corner, {}).get("needs_attention", "for information only"))
-            for corner, label in COVERAGE_ROWS]
-    docx_table(document, ("Corner", "Units", "Needs attention"), rows)
+    counted = coverage_rows(store, implementation_map(store, settings), rows_model_units(store.read("model_units")),
+                            rows_chunks(store.read("chunks_doc")))
+    docx_table(document, ("What is counted", "In total", "Covered", "Not covered", "Needs attention"),
+               [(row["row"], row["total"], row["covered"], row["not_covered"], row["needs_attention"]) for row in counted])
     document.add_paragraph(NEEDS_ATTENTION_MEANS)
     document.add_heading("4. Flagged items by concern and category", level=2)
     counts = {}
@@ -1735,8 +1968,10 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "reading.read_documentation": reading.read_documentation,
     "reading.read_package": reading.read_package,
     "review.build_graph": review.build_graph,
+    "reading.trace_dataflow": reading.trace_dataflow,
     "review.extract_concepts": review.extract_concepts,
     "review.judge_concepts": review.judge_concepts,
+    "review.map_implementation": review.map_implementation,
     "review.find_candidates": review.find_candidates,
     "review.judge_links": review.judge_links, "review.interpret_code": review.interpret_code,
     "review.check_mathematics": review.check_mathematics,

@@ -1,6 +1,6 @@
 # Verifier
 
-Reads a model's methodology, its package of code and data, and its documentation; links what corresponds; checks by code whether linked formulas, values and stated rules agree; and raises what it could not line up as questions for a person. It runs no model, rates nothing, and is tied to no sector.
+Reads a model's methodology, its package of code and data, and its documentation; maps how the model computes what it returns, from each final output down to its rawest inputs; links what corresponds; checks by code whether linked formulas, values and stated rules agree; and raises what it could not line up as questions for a person. It runs no model, rates nothing, and is tied to no sector.
 
 ```
 Verifier.ipynb          the notebook: five cells

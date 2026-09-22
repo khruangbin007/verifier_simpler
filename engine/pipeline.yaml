@@ -2,7 +2,7 @@
 # person or by one function named here. Only functions listed in STEP_FUNCTIONS of the runner
 # may be named; nothing is loaded by path. A step's version is part of the provenance of every
 # record it writes, so a change to how a step works is a change to its version here.
-engine_version: "0.0.2"
+engine_version: "0.0.3"
 steps:
   - id: "01"
     name: prepare-run
@@ -24,6 +24,10 @@ steps:
     name: build-graph
     version: "0.0.1"
     carried_out_by: review.build_graph
+  - id: "05a"
+    name: trace-dataflow
+    version: "0.0.1"
+    carried_out_by: reading.trace_dataflow
   - id: "06"
     name: extract-concepts
     version: "0.0.1"
@@ -46,6 +50,10 @@ steps:
     version: "0.0.2"
     carried_out_by: review.find_candidates
     with: {pass: 1}
+  - id: "07d"
+    name: map-implementation
+    version: "0.0.1"
+    carried_out_by: review.map_implementation
   - id: "08"
     name: judge-links
     version: "0.0.1"

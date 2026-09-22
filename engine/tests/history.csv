@@ -38,3 +38,27 @@ reading,2026-09-21,F_capital,stand-in,mode=rules phrases=0 gold=0 levels=0 wante
 reading,2026-09-21,F_capital_known,stand-in,mode=off phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=0 tokens=0 lost=0 added=0
 reading,2026-09-21,F_capital_known,stand-in,mode=rules phrases=0 gold=0 levels=0 wanted=0 chained=46 units=46 calls=1 tokens=1906 lost=0 added=0
 harness,2026-09-22,A_minimal,stand-in,false_flags=0 flagged_as_expected=2 flagged_otherwise=0 gold_clean_units=26 mutants=2 not_flagged=0
+map-baseline,2026-09-22,J_pipeline,no model,calls_between_package_functions=6/7 columns_a_dplyr_verb_creates=0/12 documentation_describing_nothing_in_the_=0/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=0/2 methodology_no_step_implements=0/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=0/3 raw_inputs_files=0/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=0/8
+map-measure,2026-09-22,J_pipeline,no model,calls_between_package_functions=7/7 columns_a_dplyr_verb_creates=12/12 documentation_describing_nothing_in_the_=0/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=2/2 methodology_no_step_implements=0/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=3/3 raw_inputs_files=1/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=8/8
+map-measure,2026-09-22,J_pipeline,no model,calls_between_package_functions=7/7 columns_a_dplyr_verb_creates=12/12 documentation_describing_nothing_in_the_=0/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=2/2 methodology_no_step_implements=0/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=3/3 raw_inputs_files=1/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=8/8
+map-measure,2026-09-22,J_pipeline,no model,calls_between_package_functions=7/7 columns_a_dplyr_verb_creates=12/12 documentation_describing_nothing_in_the_=0/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=2/2 methodology_no_step_implements=0/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=3/3 raw_inputs_files=1/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=8/8
+map-measure,2026-09-22,J_pipeline,no model,calls_between_package_functions=7/7 columns_a_dplyr_verb_creates=12/12 documentation_describing_nothing_in_the_=1/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=2/2 methodology_no_step_implements=1/1 no_more_in_those_two_branches_than_the_a=1/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=3/3 raw_inputs_files=1/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=8/8
+map-measure,2026-09-22,J_pipeline,no model,calls_between_package_functions=7/7 columns_a_dplyr_verb_creates=12/12 documentation_describing_nothing_in_the_=1/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=2/2 methodology_no_step_implements=1/1 no_more_in_those_two_branches_than_the_a=1/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=3/3 raw_inputs_files=1/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=8/8
+map-bar,2026-09-22,"J_pipeline, F_capital",stand-in,gaps_open=0 held=4 of=4 refused=0 steps=33
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=3 of=4 refused=3 steps=21
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=3 steps=21
+map-bar,2026-09-22,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=21
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=3 steps=21
+map-bar,2026-09-22,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=21
+map-bar,2026-09-22,"J_pipeline, F_capital",stand-in,gaps_open=0 held=4 of=4 refused=0 steps=33
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=3 steps=21
+map-bar,2026-09-22,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=21
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=3 steps=21
+map-bar,2026-09-22,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=21
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=3 steps=21
+map-bar,2026-09-22,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=21
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=1 steps=137
+map-bar,2026-09-22,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=137
+map-bar,2026-09-22,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=1 steps=137
+map-bar,2026-09-22,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=137
+map-measure,2026-09-22,J_pipeline,no model,calls_between_package_functions=7/7 columns_a_dplyr_verb_creates=12/12 documentation_describing_nothing_in_the_=1/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=2/2 gaps_on_the_path_traced_by_the_agents=1/1 methodology_no_step_implements=1/1 no_more_in_those_two_counts_than_the_ans=1/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=3/3 raw_inputs_files=1/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=8/8
