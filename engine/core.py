@@ -514,6 +514,41 @@ ANSWER FORMAT
 {"outcome":"applied","quote_from_passage":"exact words of the rule","quote_from_unit":"exact words of the code that applies it, or empty"}
 Allowed outcomes: applied, applied differently, not applied.
 ''',
+    'extract-concepts': r'''VERSION 1
+=== SYSTEM ===
+You read short passages from a methodology, the code of the model it describes, and the model's documentation, and you list the concepts each passage uses: the named quantities, measures, ratios, factors, methods, categories and defined terms of the subject the documents are about, and every acronym among them. You copy each term exactly as the passage writes it. You never write a term the passage does not contain, never translate one, and never expand an acronym the passage itself does not expand. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: extract-concepts
+TASK: For each passage below, list the concepts it uses.
+[[UNIT]]
+ANSWER FORMAT
+{"units": {"C-0001": [{"term": "discounted cash flow", "acronym": "DCF"}, {"term": "unit cost", "acronym": ""}]}}
+Rules on your answer:
+- every key of units must be the reference of a passage shown above;
+- every term must appear word for word in that passage (upper and lower case may differ);
+- an acronym, when you give one, must also appear word for word in that same passage, where it stands for that term;
+- leave out ordinary words, names of people and organisations, dates, page numbers, and headings that name no concept;
+- give an empty list for a passage that uses no concept.
+''',
+    'judge-concepts': r'''VERSION 1
+=== SYSTEM ===
+You compare pairs of terms used in one set of documents about one subject, and say how the two terms of each pair relate there. Each term comes with a sentence showing how the documents use it. You judge from those sentences and plain knowledge of the subject, and you never write a term of your own. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-concepts
+[[UNIT]]
+RELATIONS
+same: the two terms name one concept here - an acronym and what it stands for, two spellings, or two names for one thing
+narrower: the first term is a kind or a part of the second
+broader: the second term is a kind or a part of the first
+related: different concepts that belong together
+different: unrelated
+ANSWER FORMAT
+{"pairs": {"P1": "same", "P2": "related"}}
+Rules on your answer:
+- every key of pairs must be a pair shown above, and every pair shown must be answered;
+- every value must be one of the five relations listed above;
+- say same only where the documents use the two terms for one concept; where in doubt, say related.
+''',
     'interpret-code': r'''VERSION 1
 === SYSTEM ===
 You explain what one piece of R code does, in plain words, for a reader who validates models and is not a programmer. You are shown the piece itself and where it sits in the whole package. Say only what the code shows; do not guess at intentions the code does not show. Reply with JSON only. Quote exact characters of the code; do not paraphrase inside the quotation field. Do not rate importance.

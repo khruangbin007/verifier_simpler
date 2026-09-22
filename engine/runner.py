@@ -83,7 +83,8 @@ DEFAULT_SETTINGS = {
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
-    "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"]}
+    "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
+    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_pairs_max": 300, "concepts_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -619,7 +620,7 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-links",
+CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-concepts", "judge-links",
               "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
 HUMAN_MESSAGES = {
@@ -987,6 +988,29 @@ def chunk_note(chunk):
         notes.append("Heading numbering was reconstructed by counting")
     return "; ".join(notes)
 
+def concept_names_by_ref(store):
+    """Each unit's concepts as the Chunks sheets show them: the concept names, joined by '; '."""
+    concepts, unit_concepts = review.latest_concepts(store.read)
+    names = {c["concept_id"]: c["name"] for c in concepts}
+    return {u["unit_ref"]: "; ".join(names[c] for c in u["concepts"] if c in names) for u in unit_concepts}
+
+def rows_concepts(store):
+    """The rows of Concepts: one per concept, with every form it is written in, the units that use
+    it in each corner, the files, how each join was made, and what the model found it related to."""
+    concepts, _ = review.latest_concepts(store.read)
+    file_of = {r["ref"]: r.get("source_file") or r.get("file") or "" for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
+    names = {c["concept_id"]: c["name"] for c in concepts}
+    rows = []
+    for concept in concepts:
+        refs = concept["refs"]
+        rows.append({"concept_id": concept["concept_id"], "name": concept["name"], "acronyms": "; ".join(concept["acronyms"]),
+                     "forms": "; ".join(concept["forms"]),
+                     "canon": "; ".join(refs.get("canon", [])), "doc": "; ".join(refs.get("doc", [])), "model": "; ".join(refs.get("model", [])),
+                     "files": "; ".join(sorted({file_of.get(ref, "") for found in refs.values() for ref in found} - {""})),
+                     "established": "\n".join(concept["established"]),
+                     "related": "\n".join("%s: %s %s" % (relation, other, names.get(other, "")) for relation, other in concept["related"])})
+    return rows
+
 def scope_of(store):
     """The latest scope decision per unit, as the yellow column shows it back."""
     latest = {}
@@ -994,11 +1018,11 @@ def scope_of(store):
         latest[record["unit_ref"]] = record["decision"]
     return latest
 
-def rows_chunks(chunks, scope=None):
+def rows_chunks(chunks, scope=None, named=None):
     """The rows of Chunks_Canon and Chunks_Doc."""
-    rows, scope = [], scope or {}
+    rows, scope, named = [], scope or {}, named or {}
     for chunk in chunks:
-        rows.append({"ref": chunk["ref"], "scope": scope.get(chunk["ref"], ""), "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
+        rows.append({"ref": chunk["ref"], "scope": scope.get(chunk["ref"], ""), "concepts": named.get(chunk["ref"], ""), "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
                      "para_no": chunk.get("para_label") or chunk["para_no"],
                      "kind": chunk["kind"], "text": chunk["text"],
                      "source_file": chunk["source_file"], "refs_out": "; ".join(chunk["refs_out"]),
@@ -1018,14 +1042,14 @@ def unit_expression(unit):
                                                " x ".join(str(d) for d in data.get("dims", [])))
     return ""
 
-def rows_model_units(units, interpretations=(), scope=None):
+def rows_model_units(units, interpretations=(), scope=None, named=None):
     """The rows of Chunks_Model. What the AI said a piece of code does is shown as a quotation
     (in \u201c \u201d), because the words are the model's and not the tool's own. Enforces: R10"""
-    rows, said, scope = [], {record["unit_ref"]: record for record in interpretations}, scope or {}
+    rows, said, scope, named = [], {record["unit_ref"]: record for record in interpretations}, scope or {}, named or {}
     for unit in units:
         code, told = unit.get("code") or {}, said.get(unit["ref"], {})
         lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else ""
-        rows.append({"ref": unit["ref"], "scope": scope.get(unit["ref"], ""), "kind": unit["kind"], "file": unit["file"], "lines": lines,
+        rows.append({"ref": unit["ref"], "scope": scope.get(unit["ref"], ""), "concepts": named.get(unit["ref"], ""), "kind": unit["kind"], "file": unit["file"], "lines": lines,
                      "name": unit["name"], "inside": unit["inside"], "text": unit["text"],
                      "expression": unit_expression(unit), "exported": code.get("exported"),
                      "numbers": "; ".join(n["as_written"] for n in code.get("numbers", [])),
@@ -1132,9 +1156,10 @@ def sheet_rows(store, paths, settings, progress):
         for name, text in row.pop("cells").items():
             row[name] = text
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Canon": rows_chunks(store.read("chunks_canon"), scope_of(store)),
-            "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store)),
-            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store)),
+            "Chunks_Canon": rows_chunks(store.read("chunks_canon"), scope_of(store), concept_names_by_ref(store)),
+            "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store), concept_names_by_ref(store)),
+            "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store), concept_names_by_ref(store)),
+            "Concepts": rows_concepts(store),
             "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
             "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
 
@@ -1172,6 +1197,7 @@ sheets:
   - {header: Para no., group: identity, field: para_no, width: 9}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: methodology, field: text, width: 90, input_text: true}
+  - {header: Extracted concepts, group: methodology, field: concepts, width: 40}
   - {header: Source file, group: identity, field: source_file, width: 28}
   - {header: Cross-references, group: methodology, field: refs_out, width: 24}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
@@ -1184,6 +1210,7 @@ sheets:
   - {header: Para no., group: identity, field: para_no, width: 9}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: documentation, field: text, width: 90, input_text: true}
+  - {header: Extracted concepts, group: documentation, field: concepts, width: 40}
   - {header: Source file, group: identity, field: source_file, width: 28}
   - {header: Cross-references, group: documentation, field: refs_out, width: 24}
   - {header: States something checkable, group: assessments, field: checkable, width: 16}
@@ -1198,11 +1225,24 @@ sheets:
   - {header: Name, group: identity, field: name, width: 24, input_text: true}
   - {header: Inside, group: identity, field: inside, width: 20}
   - {header: Text, group: code_text, field: text, width: 80, input_text: true}
+  - {header: Extracted concepts, group: code_text, field: concepts, width: 40}
   - {header: LLM Interpretation, group: assessments, field: llm_interpretation, width: 60}
   - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
   - {header: Numbers used, group: code_text, field: numbers, width: 20}
   - {header: Exported, group: identity, field: exported, width: 10}
   - {header: Reading note, group: assessments, field: reading_note, width: 40}
+- name: Concepts
+  columns:
+  - {header: Concept id, group: identity, field: concept_id, width: 11}
+  - {header: Concept, group: identity, field: name, width: 34}
+  - {header: Acronyms and abbreviations, group: identity, field: acronyms, width: 18}
+  - {header: 'Other forms used, as written', group: identity, field: forms, width: 36}
+  - {header: Methodology, group: assessments, field: canon, width: 26}
+  - {header: Documentation, group: assessments, field: doc, width: 26}
+  - {header: Model, group: assessments, field: model, width: 26}
+  - {header: Files, group: assessments, field: files, width: 30}
+  - {header: How established, group: assessments, field: established, width: 60}
+  - {header: Related concepts, group: assessments, field: related, width: 40}
 - name: Mapping_Model_to_Canon_and_Doc
   columns:
   - {header: Model ref, group: identity, field: ref, width: 10}
@@ -1294,7 +1334,7 @@ def load_layout():
     return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
-    """One generic writer for all eight sheets: header row and first column frozen, filter on
+    """One generic writer for every sheet: header row and first column frozen, filter on
     the header, wrapped text, no merged cells, reviewer columns yellow and unlocked."""
     from openpyxl.styles import Alignment, Font, PatternFill, Protection
     from openpyxl.utils import get_column_letter
@@ -1302,7 +1342,10 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     columns = sheet_layout["columns"]
     wrap = Alignment(wrap_text=True, vertical="top")
     for number, column in enumerate(columns, start=1):
-        cell = sheet.cell(row=1, column=number, value=column["header"])
+        header = column["header"]
+        if column["field"] == "concepts" and settings.get("concept_subject"):   # "Extracted financial concepts"
+            header = "Extracted %s concepts" % settings["concept_subject"].strip().lower()
+        cell = sheet.cell(row=1, column=number, value=header)
         cell.font, cell.alignment = Font(bold=True), wrap
         cell.fill = PatternFill("solid", start_color=colours[column["group"]])
         sheet.column_dimensions[get_column_letter(number)].width = column.get("width", 20)
@@ -1690,6 +1733,8 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "reading.read_documentation": reading.read_documentation,
     "reading.read_package": reading.read_package,
     "review.build_graph": review.build_graph,
+    "review.extract_concepts": review.extract_concepts,
+    "review.judge_concepts": review.judge_concepts,
     "review.find_candidates": review.find_candidates,
     "review.judge_links": review.judge_links, "review.interpret_code": review.interpret_code,
     "review.check_mathematics": review.check_mathematics,

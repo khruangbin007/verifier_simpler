@@ -789,7 +789,9 @@ def append_history(found, samples, label, stamp):
 # engine/references: the prompts (about 250 lines) and the workbook layout (about 140), so their
 # budgets are raised by that much and no more. reading.py rose by 100 for the SVG reader (text in any
 # nesting, HTML in foreignObject, pictures inside SVGs, charts read in place where the XML refers to them).
-BUDGETS = {"core.py": 2250, "reading.py": 3100, "review.py": 2600, "runner.py": 1750, "develop.py": 1800}
+# review.py rose by 350 for concepts: extracting them, joining their forms, the two questions about
+# them and the search signal that puts them first.
+BUDGETS = {"core.py": 2250, "reading.py": 3100, "review.py": 2950, "runner.py": 1800, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -946,6 +948,7 @@ widget("model_id", "", "04 Model ID"); widget("project", "", "05 Project date (e
 widget("projects_dir", os.path.join(HOME, "Projects"), "07 Projects folder"); widget("jfrog_index_url", "", "08 Package index URL")
 widget("concurrency_limit", "4", "09 Concurrency limit"); widget("token_cap", "40000", "10 Token cap")
 widget("scratch_dir", "", "11 Scratch folder (usually empty)")
+widget("concept_subject", "", "12 Subject of the documents, for concepts (e.g. financial)")
 for old_widget in ("llm_user_id", "reviewer_role"):      # widgets of an earlier notebook, no longer used
     try:
         w.remove(old_widget)
@@ -1005,7 +1008,7 @@ else:
 
     def current_settings():
         return runner.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
-                                     "reviewer_id": w.get("reviewer_id")})
+                                     "reviewer_id": w.get("reviewer_id"), "concept_subject": w.get("concept_subject").strip()})
 
     def open_current():
         """The run the widgets name, opened; or None with a message when the project has no inputs yet. Used
@@ -1091,7 +1094,9 @@ if PATHS is not None:
         for message in record["messages"]:
             if message.startswith(("Read as:", "Not read:")) or "left out" in message or "R package" in message:
                 print("  " + message)
-    print("\nRun folder:", PATHS.run_dir)
+    concepts, _ = runner.review.latest_concepts(store.read)
+    print("\nConcepts found by code: %d (sheet Concepts). The model refines them after you confirm the outline." % len(concepts))
+    print("Run folder:", PATHS.run_dir)
     print("Open Output.xlsx there. The three Chunks sheets show everything that was read; Model_Package_Info what was not.")
     print("To leave a unit out of the review, write 'to not use' in its yellow 'Use in review' cell and save the workbook back")
     print("into the run folder before cell 4. If the outline is right, go to cell 4; if not, fix the input and run this cell again.")

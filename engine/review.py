@@ -483,6 +483,7 @@ def table_shape_score(table, chunk_table, stop):
 
 # ---------------------------------------------------------------- fusion and reasons
 REASON_TEMPLATES = {      # every phrase the search stage can put into "How established"
+    "concepts": "shares the concept {detail}",
     "fields": "shares the words {detail}",
     "bridge": "{detail}",
     "references": "it is cited as written ({detail})",
@@ -490,21 +491,23 @@ REASON_TEMPLATES = {      # every phrase the search stage can put into "How esta
     "signatures": "its formula has a similar structure",
     "table shape": "its table has similar headers, row keys or values",
     "propagation": "inherited from {detail}"}
-SIGNAL_ORDER = ("references", "fields", "bridge", "anchors", "table shape", "signatures", "propagation")
+SIGNAL_ORDER = ("concepts", "references", "fields", "bridge", "anchors", "table shape", "signatures", "propagation")
 
-def fuse(rankings, settings, cited=(), reserve_from=("anchors", "propagation")):
+def fuse(rankings, settings, cited=(), reserve_from=("concepts", "anchors", "propagation")):
     """Reciprocal rank fusion: score = sum over signals of 1 / (60 + rank). Only ranks are
-    combined, so no signal's raw scale matters. Explicitly cited chunks are always included
-    (up to three); two places are reserved for the best anchor or propagated candidates
-    that the word search did not rank; ties break by reference. Enforces: R5"""
+    combined, so no signal's raw scale matters. Shared concepts come first: that signal counts
+    concept_weight times, and it is the first to fill the reserved places, so a passage sharing a
+    concept with the unit reaches the judge even where the words differ. Explicitly cited chunks
+    are always included (up to three); ties break by reference. Enforces: R5"""
     constant, k = settings["rrf_constant"], int(settings["k_candidates"])
     scores, ranks = {}, {}
     for signal in SIGNAL_ORDER:
         refs = rankings.get(signal, [])
         if signal == "signatures":                       # used to re-order, never alone
             refs = [ref for ref in refs if ref in scores]
+        weight = float(settings["concept_weight"]) if signal == "concepts" else 1.0
         for rank, ref in enumerate(refs, start=1):
-            scores[ref] = scores.get(ref, 0.0) + 1.0 / (constant + rank)
+            scores[ref] = scores.get(ref, 0.0) + weight / (constant + rank)
             ranks.setdefault(ref, {})[signal] = rank
     ordered = sorted(scores, key=lambda ref: (-scores[ref], ref))
     must = list(dict.fromkeys(list(cited)[:3]))
@@ -519,6 +522,376 @@ def reason_text(signals, details):
     phrases = [REASON_TEMPLATES[signal].format(detail=details.get(signal, "")) for signal in SIGNAL_ORDER
                if signal in signals and (details.get(signal) or "{detail}" not in REASON_TEMPLATES[signal])]
     return "Proposed because: " + "; ".join(phrases) if phrases else "Proposed by rank only"
+
+# ---------------------------------------------------------------- concepts: what the documents are about, and every name each goes by
+# A concept is a term of art of the subject the documents are about - a named quantity, measure,
+# ratio, factor, method or defined term - with every form it is written in across the three corners:
+# its acronym, its expansion, other spellings, the name the code gives it. Code finds what it can
+# prove (an acronym defined in the text, a glossary entry under its own heading, the same words in
+# another form); after the person confirms the outline the model adds what code cannot see and judges
+# which forms name one concept. Every form carries the units it was seen in. Enforces: R3, R4, R9
+CONCEPT_STOP = {"the", "a", "an", "of", "and", "or", "to", "for", "in", "on", "at", "by", "with", "as", "&", "is", "are"}
+ROMAN = re.compile(r"^(?=[MDCLXVI]+$)M*(C[MD]|D?C{0,3})(X[CL]|L?X{0,3})(I[XV]|V?I{0,3})$")
+ACRONYM = re.compile(r"(?<![\w&])([A-Z][A-Z0-9&]{1,7})(s?)(?![\w&])")
+LONG_THEN_SHORT = re.compile(r"((?:[A-Za-z][\w'\u2019&/-]*\s+){0,7}[A-Za-z][\w'\u2019&/-]*)\s*\(\s*([A-Z][A-Za-z0-9&]{1,9})\s*\)")
+SHORT_THEN_LONG = re.compile(r"(?<![\w&])([A-Z][A-Z0-9&]{1,9})\s*\(\s*([A-Za-z][^()]{3,90})\)")
+QUOTED_TERM = re.compile(r"[\u201c\"]([A-Za-z][^\u201c\u201d\"]{2,60})[\u201d\"]")
+CONCEPT_RELATIONS = ("same", "narrower", "broader", "related", "different")
+
+def concept_singular(word):
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+def concept_key(text):
+    """The words of a name as they are compared: lower case, one space, no possessive, no hyphen or
+    underscore, each word singular, no article or preposition at either end. Two forms with one key
+    are one concept. An acronym keeps its own key, so that DCF and DCFs are one and 'dcf' in a
+    sentence is not taken for it."""
+    raw = text.strip()
+    if ACRONYM.fullmatch(raw):
+        return "acronym:" + ACRONYM.fullmatch(raw).group(1)
+    words = [concept_singular(w) for w in re.findall(r"[a-z0-9&]+", raw.lower().replace("\u2019", "'").replace("'s", "").replace("_", " "))]
+    while words and words[0] in CONCEPT_STOP:
+        words.pop(0)
+    while words and words[-1] in CONCEPT_STOP:
+        words.pop()
+    return " ".join(words)
+
+def spells(short, words):
+    """Do the words spell the acronym by their initials, hyphenated compounds counted word by word,
+    starting at its first letter? Uses the search's own initials_match for the order."""
+    parts = [part for word in words for part in re.split(r"[-/]", word) if part]
+    letters = [c for c in short.lower() if c.isalpha()]
+    return bool(parts and letters) and parts[0][0].lower() == letters[0] and len(parts) <= len(letters) + 3 and initials_match(short, parts)
+
+def defined_acronyms(text):
+    """Acronyms the text defines, as (acronym, what it stands for, the words that define it):
+    'discounted cash flow (DCF)' and 'DCF (discounted cash flow)'. The long form is the shortest run
+    of words next to the brackets that spells the acronym, so leading words are not swept in."""
+    found = []
+    for match in LONG_THEN_SHORT.finditer(text):
+        words, short = match.group(1).split(), re.sub(r"(?<=[A-Z0-9])s$", "", match.group(2))
+        for size in range(1, min(len(words), 9) + 1):
+            if spells(short, words[-size:]):
+                found.append((short, " ".join(words[-size:]), match.group(0).strip()))
+                break
+    for match in SHORT_THEN_LONG.finditer(text):
+        short, words = match.group(1), match.group(2).split()
+        for size in range(len(words), 0, -1):
+            if spells(short, words[:size]):
+                found.append((short, " ".join(words[:size]).rstrip(".,;:"), match.group(0).strip()))
+                break
+    return found
+
+def heading_term(heading):
+    """A heading as a concept: its numbering, a weighting in brackets and end punctuation taken off;
+    a heading written in capitals read in ordinary case. None where it is too long to be a name."""
+    text = re.sub(r"^\s*(?:\d+(?:\.\d+)*\.?|[A-Za-z][.)]|\([a-z0-9]+\))\s+", "", heading or "")
+    text = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip(" .:;")
+    if text.isupper() and len(text.split()) > 1:
+        text = text.capitalize()
+    return text if 1 <= len(text.split()) <= 6 and not text.isdigit() else None
+
+def title_terms(text):
+    """Runs of two to six capitalised words inside a sentence - 'Enterprise Risk Profile' - where an
+    article or preposition may stand between them. A capital at the start of a sentence is not taken
+    for a name."""
+    found, words = [], re.findall(r"[A-Za-z][\w'\u2019&-]*|[.;:!?]", text)
+    run = []
+    for position, word in enumerate(words + ["."]):
+        starts_sentence = position == 0 or words[position - 1] in ".;:!?"
+        if word[:1].isupper() and not word.isupper() and not (starts_sentence and not run):
+            run.append(word)
+        elif run and word.lower() in ("of", "and", "to", "for", "&", "the") and position + 1 < len(words) and words[position + 1][:1].isupper():
+            run.append(word)
+        else:
+            while run and run[-1].lower() in CONCEPT_STOP:
+                run.pop()
+            if 2 <= len(run) <= 6:
+                found.append(" ".join(run))
+            run = []
+    return found
+
+def unit_mentions(unit, corner, ordinary):
+    """Every form a unit writes a concept in, as (form, kind), and the acronyms it defines. `ordinary`
+    is the set of words the corpus also writes in lower case: a word in capitals that is also an
+    ordinary word ('OVERVIEW') is not an acronym unless the text defines it."""
+    text = unit.get("text") or ""
+    mentions, definitions = [], defined_acronyms(text)
+    for short, long_form, _ in definitions:
+        mentions += [(short, "acronym"), (long_form, "defined term")]
+    defined = {short for short, _, _ in definitions}
+    shouting = sum(1 for w in re.findall(r"[A-Za-z]{2,}", text) if w.isupper()) > 0.5 * max(1, len(re.findall(r"[A-Za-z]{2,}", text)))
+    for match in ACRONYM.finditer(text):
+        short = match.group(1)
+        if short in defined or not (shouting or ROMAN.match(short) or short.lower() in ordinary or short.isdigit() or short.lower() in CONCEPT_STOP):
+            mentions.append((short, "acronym"))
+    mentions += [(term, "term") for term in title_terms(text)] + [(term.strip(), "term") for term in QUOTED_TERM.findall(text)]
+    if corner != "model":
+        chain = unit.get("heading_chain") or []
+        term = heading_term(chain[-1]) if chain else None
+        if term and (len(term.split()) >= 2 or ACRONYM.fullmatch(term)):     # a lone word ("Summary") names no concept
+            mentions.append((term, "heading"))
+        for cell in ((unit.get("table") or {}).get("header") or []):
+            if re.search(r"[A-Za-z]{3}", str(cell)) and 2 <= len(str(cell).split()) <= 6:
+                mentions.append((str(cell).strip(), "table column"))
+    else:
+        name = unit.get("name") or ""
+        if re.search(r"[_.]|[a-z][A-Z]", name) and len(re.split(r"[_.]|(?<=[a-z])(?=[A-Z])", name)) >= 2:
+            mentions.append((name, "name in the code"))
+    return [(form, kind) for form, kind in dict.fromkeys(mentions) if concept_key(form)], definitions
+
+def glossary_definition(unit):
+    """A glossary entry written as its own heading - '108. SACP.' - over a paragraph that begins
+    with what it stands for. Returns (acronym, long form, evidence) or None."""
+    chain = unit.get("heading_chain") or []
+    short = heading_term(chain[-1]) if chain else None
+    if not short or not ACRONYM.fullmatch(short.replace(" ", "")):
+        return None
+    words = re.split(r"[.:;]", unit.get("text") or "", maxsplit=1)[0].split()
+    for size in range(1, min(len(words), 9) + 1):
+        if spells(short, words[:size]):
+            return short, " ".join(words[:size]), "under the heading '%s': %s" % (chain[-1], " ".join(words[:size]))
+    return None
+
+class ConceptSets:
+    """Forms of names joined into concepts, remembering why each join was made."""
+    def __init__(self):
+        self.parent, self.why = {}, {}
+    def find(self, key):
+        self.parent.setdefault(key, key)
+        while self.parent[key] != key:
+            self.parent[key] = self.parent[self.parent[key]]
+            key = self.parent[key]
+        return key
+    def join(self, one, other, why):
+        a, b = self.find(one), self.find(other)
+        if a != b:
+            self.parent[max(a, b)] = min(a, b)
+        self.why.setdefault(self.find(one), []).append(why)
+
+def concept_registry(sources, extra_mentions=(), extra_joins=(), relations=()):
+    """The registry: every unit's forms joined into concepts. sources: [(unit, corner)]. Returns
+    (concepts, unit_concepts). A join is made by code - the same key, a definition in the text, a
+    glossary entry - or by the model's judgement, which the caller passes in with its evidence."""
+    ordinary = {w for unit, _ in sources for w in re.findall(r"\b[a-z]{2,}\b", unit.get("text") or "")}
+    sets, seen, forms_of = ConceptSets(), {}, {}
+    for unit, corner in sources:
+        mentions, definitions = unit_mentions(unit, corner, ordinary)
+        mentions += [(form, kind) for ref, form, kind in extra_mentions if ref == unit["ref"]]
+        glossary = glossary_definition(unit) if corner != "model" else None
+        for short, long_form, evidence in definitions + ([glossary] if glossary else []):
+            sets.join(concept_key(short), concept_key(long_form), "defined in %s: \u201c%s\u201d" % (unit["ref"], evidence[:120]))
+            mentions += [(short, "acronym"), (long_form, "defined term")]
+        for form, kind in dict.fromkeys(mentions):
+            key = concept_key(form)
+            sets.find(key)
+            entry = forms_of.setdefault(key, {}).setdefault(form, {"kind": kind, "refs": {}})
+            if ACRONYM.fullmatch(form) or kind == "defined term":
+                entry["kind"] = "acronym" if ACRONYM.fullmatch(form) else kind   # the strongest reading of a form wins
+            if unit["ref"] not in entry["refs"].setdefault(corner, []):
+                entry["refs"][corner].append(unit["ref"])
+            seen.setdefault(unit["ref"], []).append(key)
+    for one, other, why in extra_joins:
+        if one in forms_of and other in forms_of:
+            sets.join(one, other, why)
+    members = {}
+    for key in forms_of:
+        members.setdefault(sets.find(key), []).append(key)
+    order = []
+    for unit, _ in sources:
+        for key in seen.get(unit["ref"], []):
+            if sets.find(key) not in order:
+                order.append(sets.find(key))
+    ids = {root: "K-%04d" % number for number, root in enumerate(order, start=1)}
+    concepts = []
+    for root in order:
+        forms = {form: info for key in sorted(members[root]) for form, info in forms_of[key].items()}
+        spoken = [form for form, info in forms.items() if info["kind"] != "acronym" and info["kind"] != "name in the code"]
+        defined = [form for form, info in forms.items() if info["kind"] == "defined term"]
+        acronyms = sorted({form for form, info in forms.items() if info["kind"] == "acronym"})
+        count = lambda form: sum(len(refs) for refs in forms[form]["refs"].values())
+        name = (max(defined, key=lambda f: (count(f), len(f))) if defined else max(spoken, key=lambda f: (count(f), -len(f))) if spoken
+                else acronyms[0] if acronyms else next(iter(forms)))
+        refs = {}
+        for info in forms.values():
+            for corner, found in info["refs"].items():
+                refs.setdefault(corner, [])
+                refs[corner] += [ref for ref in found if ref not in refs[corner]]
+        how = [why for key in members[root] for why in sets.why.get(key, [])]
+        concepts.append({"concept_id": ids[root], "name": name, "acronyms": acronyms,
+                         "forms": sorted({form for form in forms if form != name and form not in acronyms}, key=str.lower),
+                         "refs": {corner: sorted(found) for corner, found in refs.items()},
+                         "established": list(dict.fromkeys(how)) or ["the same words wherever it is used"],
+                         "related": [(relation, ids[sets.find(other)]) for one, other, relation in relations
+                                     if sets.find(one) == root and sets.find(other) in ids and sets.find(other) != root]})
+    unit_concepts = [{"unit_ref": unit["ref"], "corner": corner, "concepts": list(dict.fromkeys(ids[sets.find(key)] for key in seen.get(unit["ref"], [])))}
+                     for unit, corner in sources]
+    return concepts, unit_concepts
+
+def concept_sources(ctx):
+    """The units whose concepts are read: the three corners, in order, without those a person left out."""
+    excluded = excluded_refs(ctx)
+    return [(unit, corner) for kind, corner in (("chunks_canon", "canon"), ("chunks_doc", "doc"), ("model_units", "model"))
+            for unit in ctx.read(kind) if unit["ref"] not in excluded]
+
+def latest_concepts(read):
+    """The registry and the units' concepts of the latest stage that wrote them: the model's, once
+    judge-concepts has run, and code's before that. read is a store's or a step context's read."""
+    for stage in ("ai", "code"):
+        concepts = [r for r in read("concepts") if r.get("stage") == stage]
+        if concepts:
+            return concepts, [r for r in read("unit_concepts") if r.get("stage") == stage]
+    return [], []
+
+def extract_concepts(ctx):
+    """Step 06, extract-concepts: the concepts code can prove, before any model call - acronyms the
+    text defines, glossary entries under their own heading, names in capitals inside a sentence,
+    quoted terms, headings, table columns and the names the code gives things - joined where their
+    words are the same. Shown on the three Chunks sheets and on Concepts before the outline is
+    confirmed. Enforces: R3, R4"""
+    concepts, unit_concepts = concept_registry(concept_sources(ctx))
+    for record in concepts + unit_concepts:
+        record["stage"] = "code"
+    return core.StepResult({"concepts": concepts, "unit_concepts": unit_concepts},
+                           {"concepts": len(concepts), "units with a concept": sum(1 for u in unit_concepts if u["concepts"])},
+                           ["%d concepts found by code; the model refines them after the outline is confirmed." % len(concepts)])
+
+def concept_passages(sources, settings):
+    """The units to ask about, cut and grouped into questions of settings['concept_batch'] units."""
+    size, limit = max(1, int(settings["concept_batch"])), int(settings["max_passage_chars"])
+    shown = [(unit["ref"], (" > ".join(unit.get("heading_chain") or []) + "\n" if unit.get("heading_chain") else "") +
+              core.cut_text(unit.get("text") or "", limit)) for unit, _ in sources if (unit.get("text") or "").strip()]
+    return [shown[start:start + size] for start in range(0, len(shown), size)]
+
+def concept_extract_question(group, settings):
+    subject = settings.get("concept_subject") or ""
+    label = ("THE DOCUMENTS ARE ABOUT: %s\n" % subject if subject else "") + "THE PASSAGES"
+    text = "\n".join("[%s]\n%s" % (ref, words) for ref, words in group)
+    return narrow_question("extract-concepts", group[0][0], [(label, text)], settings,
+                           more={"unit_texts": {ref: words for ref, words in group}})
+
+def concept_pairs(concepts, sources, limit):
+    """Pairs worth asking about, by what code can see but not prove: an acronym whose letters are
+    the initials of another concept's name, and names that share their last word and one more.
+    Each pair carries a sentence of the documents for each side. Capped at `limit`."""
+    text_of = {unit["ref"]: unit.get("text") or "" for unit, _ in sources}
+    def sentence(concept):
+        form = ([concept["name"]] + concept["acronyms"] + concept["forms"])
+        for corner in ("canon", "doc", "model"):
+            for ref in concept["refs"].get(corner, []):
+                for part in re.split(r"(?<=[.;:])\s+", text_of.get(ref, "")):
+                    if any(f.lower() in part.lower() for f in form):
+                        return ref, part.strip()[:220]
+        return "", ""
+    pairs, seen = [], set()
+    by_last = {}
+    for concept in concepts:
+        words = concept_key(concept["name"]).split()
+        if words and not concept_key(concept["name"]).startswith("acronym:"):
+            by_last.setdefault(words[-1], []).append(concept)
+    for concept in concepts:
+        for short in concept["acronyms"]:
+            for other in concepts:
+                if other is not concept and spells(short, other["name"].split()) and (concept["concept_id"], other["concept_id"]) not in seen:
+                    seen.add((concept["concept_id"], other["concept_id"]))
+                    pairs.append((concept, other))
+    for group in by_last.values():
+        for position, one in enumerate(group):
+            for other in group[position + 1:]:
+                shared = set(concept_key(one["name"]).split()) & set(concept_key(other["name"]).split())
+                if len(shared) >= 2 and (one["concept_id"], other["concept_id"]) not in seen:
+                    seen.add((one["concept_id"], other["concept_id"]))
+                    pairs.append((one, other))
+    return [(one, other, sentence(one), sentence(other)) for one, other in pairs[:limit]]
+
+def concept_judge_question(batch, settings):
+    lines, ids = [], {}
+    for number, (one, other, (ref_one, said_one), (ref_two, said_two)) in enumerate(batch, start=1):
+        ids["P%d" % number] = (one, other)
+        lines.append("P%d\n  first: %s%s\n    as used in %s: %s\n  second: %s%s\n    as used in %s: %s" % (
+            number, one["name"], " (%s)" % ", ".join(one["acronyms"]) if one["acronyms"] else "", ref_one or "the documents", said_one,
+            other["name"], " (%s)" % ", ".join(other["acronyms"]) if other["acronyms"] else "", ref_two or "the documents", said_two))
+    subject = settings.get("concept_subject") or ""
+    label = ("THE DOCUMENTS ARE ABOUT: %s\n" % subject if subject else "") + "THE PAIRS"
+    return narrow_question("judge-concepts", batch[0][0]["concept_id"], [(label, "\n".join(lines))], settings,
+                           more={"pair_ids": sorted(ids)}), ids
+
+def validate_concepts(question, answer):
+    """The two concept questions. An extracted term must be in its passage word for word, so no
+    concept is ever one the model made up; a judged pair must be one that was shown, answered with
+    one of the five relations. Enforces: R3"""
+    squash = lambda text: re.sub(r"[\s\u2010-\u2015-]+", " ", (text or "").lower().replace("\u2019", "'")).strip()
+    if question["question_type"] == "extract-concepts":
+        units = answer.get("units")
+        if not isinstance(units, dict):
+            raise Rejected(core.REJECTION_REASONS[0])
+        for ref, terms in units.items():
+            if ref not in question["unit_texts"] or not isinstance(terms, list):
+                raise Rejected(core.REJECTION_REASONS[1])
+            for term in terms:
+                if not isinstance(term, dict) or not isinstance(term.get("term"), str) or not term["term"].strip():
+                    raise Rejected(core.REJECTION_REASONS[0])
+                for words in (term["term"], term.get("acronym") or ""):
+                    if words and squash(words) not in squash(question["unit_texts"][ref]):
+                        raise Rejected(core.REJECTION_REASONS[2])
+    else:
+        pairs = answer.get("pairs")
+        if not isinstance(pairs, dict) or set(pairs) - set(question["pair_ids"]):
+            raise Rejected(core.REJECTION_REASONS[1] if isinstance(pairs, dict) else core.REJECTION_REASONS[0])
+        if set(question["pair_ids"]) - set(pairs) or any(value not in CONCEPT_RELATIONS for value in pairs.values()):
+            raise Rejected(core.REJECTION_REASONS[0])
+
+def judge_concepts(ctx):
+    """Step 07b, judge-concepts: after the outline is confirmed, the model reads every unit for the
+    concepts code could not prove - each kept only if it is written in the unit word for word - and
+    then judges the pairs code could only suspect: is DCF 'discounted cash flow' here, is one name
+    narrower than another. Only 'same' joins two concepts; the other answers are kept as relations.
+    Every join says how it was made. Without a model, the registry code made stands. Enforces: R3, R4"""
+    sources, settings = concept_sources(ctx), ctx.settings
+    if ctx.ask is None or not settings["concepts_with_ai"]:
+        concepts, unit_concepts = concept_registry(sources)
+        for record in concepts + unit_concepts:
+            record["stage"] = "ai"
+        return core.StepResult({"concepts": concepts, "unit_concepts": unit_concepts}, {"concepts": len(concepts)},
+                               ["Concepts are those code found: no model was asked."])
+    questions = [concept_extract_question(group, settings) for group in concept_passages(sources, settings)]
+    answers = ctx.ask([q for q in questions if not q["too_large"]])
+    extra, joins = [], []
+    for question in questions:
+        record = answers.get(question["question_id"]) or {}
+        for ref, terms in ((record.get("answer") or {}).get("units") or {}).items():
+            for term in terms:
+                extra.append((ref, term["term"].strip(), "term found by the model"))
+                if term.get("acronym") and spells(term["acronym"], term["term"].split()):
+                    extra.append((ref, term["acronym"].strip(), "acronym"))
+                    joins.append((concept_key(term["acronym"].strip()), concept_key(term["term"]),
+                                  "written together in %s, and its letters are the initials (the model paired them)" % ref))
+    concepts, _ = concept_registry(sources, extra, joins)
+    pairs = concept_pairs(concepts, sources, int(settings["concept_pairs_max"]))
+    batches = [pairs[start:start + 12] for start in range(0, len(pairs), 12)]
+    asked = [concept_judge_question(batch, settings) for batch in batches]
+    judged = ctx.ask([question for question, _ in asked if not question["too_large"]]) if asked else {}
+    relations = []
+    for question, ids in asked:
+        for pair_id, relation in (((judged.get(question["question_id"]) or {}).get("answer") or {}).get("pairs") or {}).items():
+            one, other = ids[pair_id]
+            a, b = concept_key(one["name"]), concept_key(other["name"])
+            if relation == "same":
+                joins.append((a, b, "AI judgement: the same concept as \u2018%s\u2019" % other["name"]))
+            elif relation in ("narrower", "broader", "related"):
+                relations.append((a, b, relation))
+    concepts, unit_concepts = concept_registry(sources, extra, joins, relations)
+    for record in concepts + unit_concepts:
+        record["stage"] = "ai"
+    same = sum(1 for _, _, why in joins if why.startswith("AI judgement"))
+    return core.StepResult({"concepts": concepts, "unit_concepts": unit_concepts},
+                           {"concepts": len(concepts), "pairs judged": len(pairs), "joined by the model": same},
+                           ["%d concepts; the model judged %d pairs and found %d the same." % (len(concepts), len(pairs), same)])
+
 
 # ---------------------------------------------------------------- step 05: build-graph
 def structural_edges(units, provenance):
@@ -613,6 +986,12 @@ def search_one(source_ref, representation, corner, world, settings):
     """All signals for one unit and one target corner, fused into a shortlist of candidates."""
     targets, index, enabled = world["targets"][corner], world["index"][corner], settings["signals"]
     rankings, details = {}, {}
+    mine = world["concepts_of"].get(source_ref, set())
+    if "concepts" in enabled and mine:                   # shared concepts, the rarer the concept the stronger
+        shared = {ref: sum(world["concept_idf"][c] for c in mine & world["concepts_of"].get(ref, set())) for ref in targets}
+        rankings["concepts"] = ranked({ref: score for ref, score in shared.items() if score > 0})
+        details["concepts"] = {ref: ", ".join(sorted(world["concept_names"][c] for c in mine & world["concepts_of"].get(ref, set()))[:3])
+                               for ref in rankings["concepts"]}
     query = {word: 1.0 for words in representation["fields"].values() for word in words}
     expansions = expansions_for(representation, world["bridge_by_term"]) if "bridge" in enabled else []
     if "fields" in enabled:
@@ -732,7 +1111,16 @@ def build_world(ctx, search_pass):
                "model": {u["ref"]: u for u in units if is_searched(u, settings)}}
     index = {corner: build_index({ref: representations[ref] for ref in targets[corner]}) for corner in targets}
     signatures = {ref: r["signature"] for ref, r in representations.items() if r.get("signature")}
-    return {"representations": representations, "targets": targets, "index": index, "bridge_by_term": bridge_by_term,
+    concepts, unit_concepts = latest_concepts(ctx.read)
+    concepts_of = {u["unit_ref"]: set(u["concepts"]) for u in unit_concepts}
+    frequency = {}
+    for found in concepts_of.values():
+        for concept in found:
+            frequency[concept] = frequency.get(concept, 0) + 1
+    total = max(1, len(concepts_of))
+    return {"concepts_of": concepts_of, "concept_idf": {c: math.log(1 + total / n) for c, n in frequency.items()},
+            "concept_names": {c["concept_id"]: c["name"] for c in concepts},
+            "representations": representations, "targets": targets, "index": index, "bridge_by_term": bridge_by_term,
             "anchors": anchors, "weights": weights, "walk": walk, "signatures": signatures, "lists": lists,
             "units": units, "doc": doc, "canon": canon, "propagated": {}, "search_pass": search_pass}
 
@@ -1007,6 +1395,8 @@ def validate_answer(question, text):
             core.validate_slice_rules(question, answer, Rejected)
         elif question["question_type"] == "package-plan":
             core.validate_package_plan(question, answer, Rejected)
+        elif question["question_type"] in ("extract-concepts", "judge-concepts"):
+            validate_concepts(question, answer)
         elif question["question_type"] in JUDGE_RELATIONS:
             validate_judge(question, answer)
         else:

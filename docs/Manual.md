@@ -178,7 +178,7 @@ The notebook is `Verifier.ipynb`. It has five cells, each run in order the first
 | **cell 4** | The first time: records that you confirmed the outline and starts the model steps and the checks in the background. Every time after: shows where the run stands. `PAUSE` and `STOP` at the top do what they say. | To see progress; to pause or stop. |
 | **cell 5** | After the run waits for a person: reads your determinations back from `Output.xlsx` and verifies the evidence pack. `APPENDIX` at the top runs a maintainer's check instead. | After every round of determinations. |
 
-**The widgets.** Endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the id recorded beside every decision you make; the model id (04); an existing project date and run to resume, or empty for new (05, 06); the Projects folder (07); the package index (08); concurrency and token cap (09, 10); a scratch folder, normally empty (11).
+**The widgets.** Endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the id recorded beside every decision you make; the model id (04); an existing project date and run to resume, or empty for new (05, 06); the Projects folder (07); the package index (08); concurrency and token cap (09, 10); a scratch folder, normally empty (11); and the subject of the documents (12), such as `financial`, which tells the model what kind of concepts to look for and names the concepts column after it.
 
 **The token.** It is read at the moment `chat()` is called, never stored. When it runs out mid-run, cell 4 says the run is waiting for a fresh one: paste it into widget 02, run cell 1, and the run goes on. No question is repeated.
 
@@ -413,6 +413,14 @@ The reading steps run before any model call is spent, and cell 3 shows the outli
 
 Then set `OUTLINE_CONFIRMED = True` at the top of cell 4 and run it; the confirmation is recorded with your id.
 
+## 8a. Concepts
+
+A **concept** is a term of art of the subject the documents are about — a named quantity, measure, ratio, factor, method or defined term — together with every form it is written in across the three corners: its acronym, its expansion, other spellings, and the name the code gives it. The three Chunks sheets show each unit's concepts in the column **Extracted concepts**, joined by `;`; with widget 12 set to `financial` the column reads *Extracted financial concepts*. The sheet **Concepts** has one row per concept: its name, its acronyms, every other form used as written, the units that use it in the methodology, the documentation and the model, the files, how each of its forms was joined to it, and the concepts the model found related to it.
+
+**How concepts are found, and who decides.** Code first, in cell 3, before any model call (step 06, `extract-concepts`): an acronym the text defines — *discounted cash flow (DCF)* or *DCF (discounted cash flow)* — and a glossary entry written as its own heading over the words it stands for are proved from the text, with the unit that proves them; names in capitals inside a sentence, quoted terms, headings of two words or more, table columns and the names the code gives things are taken as they are written; forms whose words are the same are one concept. Then, after you confirm the outline (step 07b, `judge-concepts`), the model reads every unit for the concepts code could not see — and every term it names must be in that unit word for word, or its whole answer is refused, so no concept is ever one it made up — and judges the pairs code could only suspect: an acronym whose letters are another name's initials, names sharing words. Only a pair it calls *the same* is joined, and the join says so; *narrower*, *broader* and *related* are kept as relations and join nothing.
+
+**How concepts steer the mapping.** The search for corresponding passages (step 07c) runs after the concepts, and a passage that shares a concept with the unit comes first: that signal counts twice as much as any other, and it is the first to fill the places reserved on each shortlist, so a passage that writes *DCF* reaches the judge for a unit that writes *discounted cash flow* even where no other word is shared. The reason shown for such a candidate begins *shares the concept*.
+
 ## 9. Working through `Flagged_Items`
 
 1. Download `Output.xlsx` from `the run folder`.
@@ -497,9 +505,11 @@ The engine is five flat files, imported in one direction: `core` imports nothing
 | 03 | read-documentation | `reading.read_documentation` |
 | 04 | read-package | `reading.read_package` |
 | 05 | build-graph | `review.build_graph`: every unit a node |
-| 06, 09 | find-candidates | `review.find_candidates`, two passes |
+| 06 | extract-concepts | `review.extract_concepts`: the concepts code can prove |
+| 07c, 09 | find-candidates | `review.find_candidates`, two passes; shared concepts first |
 | 07 | confirm-outline | a person, in cell 4 |
 | 07a | interpret-code | `review.interpret_code` |
+| 07b | judge-concepts | `review.judge_concepts`: the model's concepts, and which names are one |
 | 08, 10 | judge-links | `review.judge_links`, two passes |
 | 11 | check-mathematics | `review.check_mathematics` |
 | 12 | check-values | `review.check_values` |
@@ -510,7 +520,7 @@ The engine is five flat files, imported in one direction: `core` imports nothing
 | 17 | record-determinations | `runner.record_determinations` |
 | 18 | build-report | `runner.build_report` |
 
-The steps that ask the model are `read-methodology`, `read-documentation` and `read-package` (only where a file's shape is in doubt and `agentic_reading` is on), `interpret-code`, `judge-links`, `check-mathematics`, `check-values` and `check-rules`. Every other step is code alone.
+The steps that ask the model are `read-methodology`, `read-documentation` and `read-package` (only where a file's shape is in doubt and `agentic_reading` is on), `interpret-code`, `judge-concepts`, `judge-links`, `check-mathematics`, `check-values` and `check-rules`. Every other step is code alone.
 
 ## 16. How the model is used, and held
 
@@ -583,6 +593,8 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `interpret_code` | True | Ask the AI to say in plain words what each function, formula statement, top-level statement and test block does, shown with where it sits in the whole package. Fills the column LLM Interpretation on Chunks_Model. One question per piece of code; switch it off to save the calls. |
 | `agentic_reading` | off | Whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. "off" asks nothing and reads as the built-in rules read; "rules" asks one question per file the rules are unsure about and applies the answer under everything the rules already know. |
 | `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the recall ladder (`develop.recall`) switches them off one by one. |
+
+`concept_subject` (default empty): the subject of the documents, from widget 12; it tells the model what kind of concepts to look for and names the concepts column. `concept_weight` (default 2.0): how much more a shared concept counts in the search than any other signal. `concept_batch` (default 8): how many units one extraction question shows the model. `concept_pairs_max` (default 300): the most pairs of names the model is asked to judge in one run. `concepts_with_ai` (default true): whether the model refines the concepts code found; switched off, the registry code made stands.
 
 `agentic_reading` (default `off`): whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. `off` asks nothing; `rules` asks one question per file the rules are unsure about. The sign-off bar for turning it on is `develop.run`, run from cell 5 with `APPENDIX = "sign-off"`; it changes no setting.
 
