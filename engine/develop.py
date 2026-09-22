@@ -792,9 +792,10 @@ def append_history(found, samples, label, stamp):
 # and by 350 for the data flow of a package, the implementation map's backbone.
 # review.py rose by 350 for concepts: extracting them, joining their forms, the two questions about
 # them and the search signal that puts them first.
-# runner.py rose by 100 for the implementation map's sheet and the final outputs a person decides there.
+# runner.py rose by 100 for the implementation map's sheet and the final outputs a person decides there,
+# and by 250 more for the map itself: the tree, its IDs and groups, and its three branches.
 # review.py rose by 300 more for the skill map-implementation: the Tracer's tools, turns and validator, and the Namer.
-BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 3250, "runner.py": 1900, "develop.py": 1800}
+BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 3250, "runner.py": 2150, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -874,14 +875,18 @@ def map_measure(sample="J_pipeline", record=True):
     """How much of a sample's answer key (gold_map.yaml) the traced data flow holds, part by part. A value's
     sources are read through the calls that compute it: base_score comes from the three columns weighted_score
     is given. Raw inputs are the leaves of the walk down from each final output. What the map says of the
-    documents is its own work (stage 5) and scores zero until then. Returns {part: (found, total)}."""
+    documents is read from its branches 91 and 92, on a whole run with the stand-in. Returns {part: (found, total)}."""
     import helpers
     import reading
     import yaml
     with open(os.path.join(SAMPLES, sample, "gold_map.yaml"), encoding="utf-8") as handle:
         gold = yaml.safe_load(handle)
-    paths, settings, _ = helpers.run_sample(sample, stop_after="05a")
-    flow = runner.open_store(paths, settings).read("dataflow")
+    import standin_chat
+    paths, settings, _ = helpers.run_sample(sample, chat=standin_chat.chat_well_behaved)     # the whole run: the map's branches need links
+    store = runner.open_store(paths, settings)
+    flow, mapped = store.read("dataflow"), runner.implementation_map(store, settings)
+    canon = {c["ref"]: c for c in store.read("chunks_canon")}
+    branch = lambda number: [row for row in mapped if row["map_id"].startswith(number + ".")]
     nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
     roots = next(r for r in flow if r["record_type"] == "roots")
     calls = {(r["function"], r["callee"]) for r in nodes.values() if r["kind"] == "call"}
@@ -921,11 +926,15 @@ def map_measure(sample="J_pipeline", record=True):
         "raw inputs: hard-coded numbers": (len(set(raw["hard_coded_number"]) & leaf_names["number"]), len(raw["hard_coded_number"])),
         "gaps named, for the agents": (sum(any(g["function"] == gap["function"] and gap["code"] in g["code"] for g in gaps) for gap in gold["gaps"]),
                                        len(gold["gaps"])),
-        "methodology no step implements (the map, stage 5)": (0, len(gold["methodology_not_implemented"])),
-        "documentation describing nothing in the map (the map, stage 5)": (0, len(gold["documentation_describing_nothing"]))}
+        "methodology no step implements": (sum(any(heading in " > ".join(canon[row["methodology"].split(" ")[0]]["heading_chain"]) for row in branch("91"))
+                                               for heading in gold["methodology_not_implemented"]), len(gold["methodology_not_implemented"])),
+        "documentation describing nothing in the map": (sum(any(words in row["step"] for row in branch("92")) for words in gold["documentation_describing_nothing"]),
+                                                        len(gold["documentation_describing_nothing"])),
+        "no more in those two branches than the answer key": (int(len(branch("91")) + len(branch("92")) <= len(gold["methodology_not_implemented"]) +
+                                                                  len(gold["documentation_describing_nothing"])), 1)}
     if record:
         remember("map-measure", datetime.date.today().isoformat(), sample, "no model",
-                 **{re.sub(r"\W+", "_", part.split(",")[0].split(" (")[0])[:40]: "%d/%d" % pair for part, pair in found.items()})
+                 **{re.sub(r"\W+", "_", part.split(",")[0])[:40]: "%d/%d" % pair for part, pair in found.items()})
     return found
 
 

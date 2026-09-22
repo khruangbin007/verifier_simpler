@@ -1041,30 +1041,226 @@ def output_decisions(store):
         latest[record["function"]] = record["decision"]
     return {name: word for name, word in latest.items() if word}   # '' is a withdrawn decision: code's proposal again
 
-def rows_implementation_map(store):
-    """The rows of Model_Implementation_Map. Until the map is built (stage 5 of its plan): one row per
-    package function - the final outputs first, numbered 01, 02 - with what code proposes and why, who
-    calls it and what it calls, and the yellow column where a person decides."""
+# ---------------------------------------------------------------- Model_Implementation_Map: the tree
+MAP_ROLES = {"return": "Final output", "value": "Intermediate value", "column": "Column", "call": "Calls a function",
+             "argument": "Parameter", "guard": "Guard: a check whose value is not kept", "stored data": "Raw input: stored data",
+             "file": "Raw input: file", "number": "Raw input: hard-coded number", "outside": "From outside the package"}
+MAP_OUTLINE_MAX = 7          # Excel groups rows eight levels deep (outline levels 0 to 7); deeper rows are indented only
+
+def covering_unit(units, file, line):
+    """The most specific model unit whose lines hold a line of a file: a statement before its function."""
+    found = [u for u in units if u.get("file") == file and u.get("lines") and u["lines"][0] <= line <= u["lines"][-1]]
+    return min(found, key=lambda u: (u["lines"][-1] - u["lines"][0], u["ref"]))["ref"] if found else ""
+
+def implementation_map(store, settings=None):
+    """The rows of Model_Implementation_Map. From each final output down to the rawest inputs: every step
+    a row, under the step it feeds, numbered so that sorting the IDs gives the tree back; a called function
+    entered with that call's own arguments, as the walk of the data flow does; a step already shown in the
+    same calling context a single 'see' row; a function calling itself a marked loop. Then three branches,
+    so nothing falls out: 90 the model units no final output reaches, 91 the methodology no step
+    implements, 92 the documentation describing nothing in the map. Every row carries its model unit, the
+    code as written, its concepts, the methodology and documentation linked to it, its checks, status and
+    flagged items, and how it was established. Enforces: R2, R4, R14"""
     flow = store.read("dataflow")
     if not flow:
         return []
+    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+    units = store.read("model_units")
+    by_ref, functions = {u["ref"]: u for u in units}, {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
     decided = output_decisions(store)
-    outputs, how, not_reached = reading.decided_outputs(flow, decided)
-    roots = next(r for r in flow if r["record_type"] == "roots")
-    units = {u["name"]: u for u in store.read("model_units") if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
-    calls = [r for r in flow if r["record_type"] == "node" and r["kind"] == "call"]
-    order = outputs + [name for name in sorted(units, key=lambda n: units[n]["ref"]) if name not in outputs]
-    rows = []
-    for name in order:
-        callers = sorted({c["function"] for c in calls if c["callee"] == name and c["function"] != name})
-        callees = sorted({c["callee"] for c in calls if c["function"] == name})
-        rows.append({"map_id": "%02d" % (outputs.index(name) + 1) if name in outputs else "", "function": name,
-                     "model_ref": units[name]["ref"] if name in units else "",
-                     "role": "Final output" if name in outputs else "Not reached from any final output" if name in not_reached else "Called by the model",
-                     "proposed": "yes" if name in roots["proposed"] else "no",
-                     "why": how.get(name) or roots["why"].get(name, "") or ("called by " + ", ".join(callers) if callers else ""),
-                     "calls": ", ".join(callees), "called_by": ", ".join(callers), "final_output": decided.get(name, "")})
+    outputs, how_output, not_reached = reading.decided_outputs(flow, decided)
+    names = {r["node"]: r["name"] for r in store.read("step_names")}
+    gaps = {(t["gap"]["function"], t["gap"]["line"]): t for t in store.read("map_traces")}
+    open_gaps = {(g["function"], g["line"]): g for g in flow if g["record_type"] == "gap"}
+    concepts, _ = review.latest_concepts(store.read)
+    concept_of = {name: c["concept_id"] for c in concepts for name in c["identifiers"]}
+    canon, doc = {c["ref"]: c for c in store.read("chunks_canon")}, {c["ref"]: c for c in store.read("chunks_doc")}
+    links, related, generated = {}, {}, []
+    for edge in store.read("graph_ledger"):
+        if edge["record_type"] != "edge":
+            continue
+        a, b, how = edge["source"], edge["target"], edge.get("how_established", "")
+        if edge["kind"] == "corresponds":
+            unit, other = (a, b) if a in by_ref else (b, a)
+            links.setdefault(unit, []).append((other, how))
+        elif edge["kind"] in ("documents", "tested_by"):             # whichever end is a function is the function
+            ends = sorted((a, b), key=lambda ref: by_ref.get(ref, {}).get("kind") != core.KIND_FUNCTION)
+            related.setdefault(ends[0], []).append(ends[1])
+        elif edge["kind"] == "generated_from":
+            generated.append((a, b))
+    for help_page, source in generated:                          # a help page belongs where the roxygen it came from belongs
+        for function_ref, others in list(related.items()):
+            if source in others or help_page in others:
+                others += [ref for ref in (help_page, source) if ref not in others]
+    statuses = {s["unit_ref"]: s for s in store.read("unit_status")}
+    items = {}
+    for item in store.read("flagged_items"):
+        for ref in item["unit_refs"]:
+            items.setdefault(ref, []).append(item["item_id"])
+    rows, shown, decision_shown, unit_shown = [], {}, set(), set()
+
+    def model_ref(node):
+        if node["kind"] == "call":
+            return functions[node["callee"]]["ref"] if node["callee"] in functions else ""
+        if node["kind"] in ("stored data", "file"):
+            return node.get("unit_ref", "")
+        if node.get("function") in functions and node["kind"] != "argument":
+            return covering_unit(units, functions[node["function"]]["file"], node["line"]) or functions[node["function"]]["ref"]
+        return functions[node["function"]]["ref"] if node.get("function") in functions else ""
+
+    def row_for(node_id, level, map_id, how, frames):
+        node = nodes[node_id]
+        ref = model_ref(node)
+        about = node["callee"] if node["kind"] == "call" else node.get("function") or ", ".join(node.get("created_in") or [])
+        label = names.get(node_id) or {"call": "%s()" % node.get("callee", ""), "argument": "parameter %s of %s" % (node["name"], node.get("function", "")),
+                                       "stored data": "stored table %s" % node["name"], "file": "file %s" % node["name"],
+                                       "number": "the number %s" % node["name"]}.get(node["kind"], node["name"])
+        role = MAP_ROLES[node["kind"]] if not (node["kind"] == "return" and level) else "What %s returns" % node["function"]
+        if node["kind"] == "argument" and frames[-1][1] is None and node.get("function") == frames[-1][0]:
+            role = "Raw input: argument of the final output"
+        if node["kind"] == "column" and not node["from"]:
+            role = "Raw input: column of the data given"
+        gap = gaps.get((node.get("function"), node.get("line"))) or open_gaps.get((node.get("function"), node.get("line")))
+        if gap:
+            how = "; ".join(filter(None, [how, "AI tracing - %s%s" % (gap["status"], "".join(
+                ": %s is computed from %s (quoting \u201c%s\u201d)" % (e["value"], ", ".join(e["from"]), e["quote"]) for e in gap["edges"]))
+                if "status" in gap else "open gap: %s" % gap["why"]]))
+        mine = [c for c in (node["name"], about) if c in concept_of]
+        linked = links.get(ref, []) + (links.get(functions[about]["ref"], []) if about in functions and functions[about]["ref"] != ref else [])
+        status = statuses.get(ref, {})
+        cells = [text for key, text in sorted((status.get("cells") or {}).items())
+                 if key in ("math_check", "value_check", "logic_consistency", "hard_coded_numbers") and text and text != core.NOT_APPLICABLE]
+        first_of_unit = ref not in unit_shown
+        unit_shown.add(ref)
+        if not first_of_unit:
+            cells, status = [], {}
+        first_row_of_function = node["kind"] in ("return", "call") and about in functions and about not in decision_shown
+        if first_row_of_function:
+            decision_shown.add(about)
+        return {"map_id": map_id, "level": level, "step": ("\u201c%s\u201d" % label) if node_id in names else label, "role": role,
+                "function": about, "variable": node["name"] if node["kind"] in ("value", "column", "argument") else node.get("callee", ""),
+                "model_ref": ref, "code": node.get("code") or node.get("file") or "",
+                "concepts": "; ".join(sorted({"%s %s" % (concept_of[c], c) for c in mine})),
+                "methodology": "\n".join(dict.fromkeys("%s (%s)" % (other, how_link) for other, how_link in linked if other in canon)),
+                "documentation": "\n".join(dict.fromkeys("%s (%s)" % (other, how_link) for other, how_link in linked if other in doc)),
+                "checks": "\n".join(cells), "status": status.get("status", ""), "flagged": ", ".join(sorted(set(items.get(ref, [])))) if first_of_unit else "",
+                "how": how, "related": ", ".join(sorted(set(related.get(functions[about]["ref"], [])))) if first_row_of_function else "",
+                "final_output": decided.get(about, "") if first_row_of_function else ""}
+
+    def children(node_id, frames):
+        node = nodes[node_id]
+        if node["kind"] == "call":
+            if node["callee"] in (frame for frame, _ in frames):
+                return [(s, frames, "the call gives it") for s in node["from"] if s != "%s:return" % node["callee"]]
+            inner = frames + [(node["callee"], node["bindings"])]
+            entry = nodes.get("%s:return" % node["callee"], {"from": []})
+            guards = [n for n, r in nodes.items() if r["kind"] == "guard" and r.get("function") == node["callee"]]
+            return [(s, inner, "parsed from the code") for s in entry["from"]] + [(g, inner, "parsed from the code") for g in guards]
+        if node["kind"] == "argument" and node.get("function") == frames[-1][0] and frames[-1][1] is not None:
+            given = frames[-1][1].get(node["name"], ["default"])
+            if given == ["default"]:
+                return [(s, frames, "its default: %s" % node.get("default_code", "")) for s in node.get("default_from") or []]
+            return [(s, frames[:-1], "what the call gives this parameter") for s in given]
+        if node["kind"] == "return":
+            guards = [n for n, r in nodes.items() if r["kind"] == "guard" and r.get("function") == node["function"]]
+            return [(s, frames, "parsed from the code") for s in node["from"]] + [(g, frames, "parsed from the code") for g in guards]
+        if node["kind"] in ("value", "column", "guard"):
+            return [(s, frames, "parsed from the code") for s in node["from"]]
+        return []
+
+    def folded(kids, depth=0):
+        """A parameter of a called function is not a row of its own: its row is what the call gave it, and
+        'given to f's parameter p' goes to How established. One level fewer for every call."""
+        out = []
+        for child, child_frames, child_how in kids:
+            node = nodes.get(child, {})
+            if depth < 50 and node.get("kind") == "argument" and child_frames[-1][1] is not None and node.get("function") == child_frames[-1][0]:
+                out += [(inner, inner_frames, "%s; given to %s's parameter %s" % (inner_how, node["function"], node["name"]))
+                        for inner, inner_frames, inner_how in folded(children(child, child_frames), depth + 1)]
+            else:
+                out.append((child, child_frames, child_how))
+        return out
+
+    def emit(node_id, frames, level, map_id, how):
+        if node_id not in nodes:
+            return
+        node = nodes[node_id]
+        key = (node_id, tuple(frame for frame, _ in frames))
+        if key in shown and node["kind"] != "number":
+            rows.append({"map_id": map_id, "level": level, "step": "see %s" % shown[key], "role": "The same step as %s" % shown[key],
+                         "function": node.get("function", ""), "variable": node["name"], "model_ref": "", "code": "", "concepts": "",
+                         "methodology": "", "documentation": "", "checks": "", "status": "", "flagged": "", "how": how, "related": "", "final_output": ""})
+            return
+        shown[key] = map_id
+        row = row_for(node_id, level, map_id, how, frames)
+        if node["kind"] == "call" and node["callee"] in (frame for frame, _ in frames):
+            row["role"], row["how"] = "Loop: %s calls itself" % node["callee"], "parsed from the code; the descent stops here"
+        rows.append(row)
+        kids = folded(children(node_id, frames))
+        width = max(2, len(str(len(kids))))
+        for position, (child, child_frames, child_how) in enumerate(kids, start=1):
+            emit(child, child_frames, level + 1, "%s.%0*d" % (map_id, width, position), child_how)
+
+    for position, output in enumerate(outputs, start=1):
+        emit("%s:return" % output, [(output, None)], 0, "%02d" % position, how_output.get(output, ""))
+    mapped = {r["model_ref"] for r in rows if r["model_ref"]} | {ref.strip() for r in rows for ref in r["related"].split(",") if ref.strip()}
+    reached = {name for name in functions if name not in not_reached}
+    inside = {u["ref"] for u in units for name in reached if u.get("file") == functions[name]["file"] and u.get("lines")
+              and functions[name]["lines"][0] <= u["lines"][0] and u["lines"][-1] <= functions[name]["lines"][-1]}
+    def branch(number, title, members):
+        rows.append({"map_id": number, "level": 0, "step": title, "role": "Branch", "function": "", "variable": "", "model_ref": "", "code": "",
+                     "concepts": "", "methodology": "", "documentation": "", "checks": "", "status": "", "flagged": "",
+                     "how": "none" if not members else "%d" % len(members), "related": "", "final_output": ""})
+        for position, member in enumerate(members, start=1):
+            rows.append(dict(member, map_id="%s.%02d" % (number, position), level=1))
+    for name in reached:                                         # a statement of a reached function no row points at belongs to its function
+        first = next((r for r in rows if r["function"] == name and r["role"] in ("Final output", "Calls a function")), None)
+        loose = sorted(u["ref"] for u in units if u["ref"] in inside and u["ref"] not in mapped and u["file"] == functions[name]["file"]
+                       and functions[name]["lines"][0] <= u["lines"][0] and u["lines"][-1] <= functions[name]["lines"][-1] and u["ref"] != functions[name]["ref"])
+        if first is not None and loose:
+            first["related"] = ", ".join(filter(None, [first["related"]] + loose))
+            mapped |= set(loose)
+    leftover = [u for u in units if u["ref"] not in mapped and u["ref"] not in inside]
+    branch("90", "Model units no final output reaches", [
+        {"step": u["name"] or u["kind"], "role": "Not reached from any final output", "function": u["name"] if u["kind"] == core.KIND_FUNCTION else "",
+         "variable": "", "model_ref": u["ref"], "code": core.cut_text(u["text"], 200), "concepts": "", "methodology": "", "documentation": "",
+         "checks": "", "status": statuses.get(u["ref"], {}).get("status", ""), "flagged": ", ".join(sorted(set(items.get(u["ref"], [])))),
+         "how": "nothing in the package calls it" if u["name"] in not_reached else "no step of the map is this unit or contains it",
+         "related": "", "final_output": decided.get(u["name"], "") if u["kind"] == core.KIND_FUNCTION else ""} for u in leftover])
+    on_map = {ref for r in rows if r["map_id"][:2] not in ("90",) for ref in [r["model_ref"]] if ref} | inside
+    implemented = {other for unit in on_map for other, _ in links.get(unit, [])}
+    trivial = {core.Decimal(str(n)) for n in (settings or DEFAULT_SETTINGS)["trivial_numbers"]}
+    used = {}                                                    # every value the map uses: hard-coded in a step, or in a table it reads
+    for node in nodes.values():
+        if node["kind"] == "number" and node.get("function") in reached:
+            used.setdefault(core.Decimal(node["name"]), node.get("function_ref") or "")
+    tables_read = {r["name"] for r in nodes.values() if r["kind"] in ("stored data", "file")}
+    for table in store.read("parameter_tables"):
+        if table["object_name"] in tables_read or any(table["unit_ref"] == r.get("unit_ref") for r in nodes.values() if r["kind"] == "file"):
+            for cell in (cell for record in table["rows"] for cell in record):
+                parsed = core.parse_number(str(cell))
+                if parsed:
+                    used.setdefault(core.Decimal(parsed["value"]), table["unit_ref"])
+    def by_values(chunk):
+        stated = {core.Decimal(n["value"]) for n in core.find_numbers(chunk["text"])} - trivial
+        return sorted(stated) if stated and stated <= set(used) else []
+    rules = reading.load_tag_rules()
+    checkable = lambda chunk: reading.states_something_checkable({"type": chunk["kind"].lower(), "text": chunk["text"],
+                                                                  "not_read_reason": chunk.get("not_read_reason", "")}, rules)
+    branch("91", "Methodology no step implements", [
+        {"step": core.cut_text(c["text"], 160), "role": "States something no step of the map is linked to", "function": "", "variable": "",
+         "model_ref": "", "code": "", "concepts": "", "methodology": "%s (%s)" % (c["ref"], " > ".join(c["heading_chain"])), "documentation": "",
+         "checks": "", "status": "", "flagged": "", "how": "no step of the map is linked to it by the AI judge, and it states a number, formula or rule",
+         "related": "", "final_output": ""} for c in canon.values() if c["ref"] not in implemented and checkable(c) and not by_values(c)])
+    named = {u["unit_ref"] for u in review.latest_concepts(store.read)[1] if u["concepts"]}
+    branch("92", "Documentation describing nothing in the map", [
+        {"step": core.cut_text(c["text"], 160), "role": "Describes nothing in the map", "function": "", "variable": "", "model_ref": "", "code": "",
+         "concepts": "", "methodology": "", "documentation": "%s (%s)" % (c["ref"], " > ".join(c["heading_chain"])), "checks": "",
+         "status": statuses.get(c["ref"], {}).get("status", ""), "flagged": ", ".join(sorted(set(items.get(c["ref"], [])))),
+         "how": "no step of the map is linked to it, and it names none of the model's concepts", "related": "", "final_output": ""}
+        for c in doc.values() if c["ref"] not in implemented and c["ref"] not in named])
     return rows
+
 
 def read_output_column(path, functions):
     """The yellow 'Final output (your decision)' cells of Model_Implementation_Map, by function name and
@@ -1080,13 +1276,20 @@ def read_output_column(path, functions):
     if "Function" not in header or "Final output (your decision)" not in header:
         return found, ignored
     at_name, at_word = header.index("Function"), header.index("Final output (your decision)")
+    words = {}
     for row in rows[1:]:
         name, word = str(row[at_name] or "").strip(), str(row[at_word] or "").strip().lower()
         if name in functions:
-            if word in core.OUTPUT_WORDS or not word:
-                found[name] = word
-            else:
-                ignored.append("%s: '%s' is not one of %s and was ignored" % (name, word, " / ".join(core.OUTPUT_WORDS)))
+            words.setdefault(name, set())
+            if word:
+                words[name].add(word)
+    for name, said in sorted(words.items()):                  # a function has one decision, on however many rows it appears
+        if said - set(core.OUTPUT_WORDS):
+            ignored.append("%s: '%s' is not one of %s and was ignored" % (name, sorted(said - set(core.OUTPUT_WORDS))[0], " / ".join(core.OUTPUT_WORDS)))
+        elif len(said) > 1:
+            ignored.append("%s: both yes and no were written on its rows, so neither was taken" % name)
+        else:
+            found[name] = next(iter(said), "")
     return found, ignored
 
 def scope_of(store):
@@ -1238,7 +1441,7 @@ def sheet_rows(store, paths, settings, progress):
             "Chunks_Doc": rows_chunks(store.read("chunks_doc"), scope_of(store), concept_names_by_ref(store)),
             "Chunks_Model": rows_model_units(store.read("model_units"), store.read("interpretations"), scope_of(store), concept_names_by_ref(store)),
             "Concepts": rows_concepts(store),
-            "Model_Implementation_Map": rows_implementation_map(store),
+            "Model_Implementation_Map": implementation_map(store, settings),
             "Mapping_Model_to_Canon_and_Doc": model_rows, "Mapping_Doc_to_Canon_and_Model": doc_rows,
             "Mapping_Coverage": rows_coverage(model_rows, doc_rows, store), "Flagged_Items": rows_flagged(store)}
 
@@ -1322,14 +1525,23 @@ sheets:
   - {header: How established, group: assessments, field: established, width: 60}
 - name: Model_Implementation_Map
   columns:
-  - {header: Map ID, group: identity, field: map_id, width: 10}
-  - {header: Function, group: identity, field: function, width: 26}
-  - {header: Model ref, group: identity, field: model_ref, width: 10}
-  - {header: Role, group: assessments, field: role, width: 26}
-  - {header: Code proposes it as a final output, group: assessments, field: proposed, width: 14}
-  - {header: Why, group: assessments, field: why, width: 44}
-  - {header: Calls, group: assessments, field: calls, width: 34}
-  - {header: Called by, group: assessments, field: called_by, width: 26}
+  - {header: Map ID, group: identity, field: map_id, width: 16}
+  - {header: Level, group: identity, field: level, width: 7}
+  - {header: Step, group: identity, field: step, width: 46}
+  - {header: Role, group: identity, field: role, width: 30}
+  - {header: Function, group: identity, field: function, width: 22}
+  - {header: Output variable, group: assessments, field: variable, width: 20}
+  - {header: Input variables, group: assessments, field: inputs, width: 30}
+  - {header: Model ref, group: assessments, field: model_ref, width: 10}
+  - {header: Code, group: assessments, field: code, width: 50}
+  - {header: Concepts, group: assessments, field: concepts, width: 22}
+  - {header: Methodology, group: assessments, field: methodology, width: 30}
+  - {header: Documentation, group: assessments, field: documentation, width: 30}
+  - {header: Checks, group: assessments, field: checks, width: 36}
+  - {header: Status, group: assessments, field: status, width: 24}
+  - {header: Flagged items, group: assessments, field: flagged, width: 16}
+  - {header: How established, group: assessments, field: how, width: 44}
+  - {header: Related model units, group: assessments, field: related, width: 22}
   - {header: Final output (your decision), group: reviewer_input, field: final_output, width: 16, input_text: true}
 - name: Mapping_Model_to_Canon_and_Doc
   columns:
@@ -1447,6 +1659,14 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
             if column["group"] == "reviewer_input":
                 cell.fill = PatternFill("solid", start_color=colours["reviewer_input"])
                 cell.protection = Protection(locked=False)
+    if sheet_layout["name"] == "Model_Implementation_Map":     # collapsible: each parent a summary row above its members
+        sheet.sheet_properties.outlinePr.summaryBelow = False
+        at_step = [c["field"] for c in columns].index("step") + 1
+        for number, row in enumerate(rows, start=2):
+            level = int(row.get("level") or 0)
+            if level:
+                sheet.row_dimensions[number].outline_level = min(level, MAP_OUTLINE_MAX)
+            sheet.cell(row=number, column=at_step).alignment = Alignment(wrap_text=True, vertical="top", indent=min(level, 15))
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))

@@ -160,14 +160,13 @@ class ImplementationMapSample(unittest.TestCase):
         self.assertEqual(functions, expected)
 
     def test_the_traced_flow_holds_the_whole_answer_key(self):
-        """Stage 2 is done when code alone recovers everything the answer key asks of it: the final output
-        and the functions no output reaches, every call (the recursive one too), every value and column
-        with what it is computed from, every raw input, and both gaps named with their code. What the map
-        says of the documents is its own work, stage 5."""
+        """Code alone recovers everything the answer key asks of the data flow - the final output and the
+        functions no output reaches, every call, every value and column with what it is computed from, every
+        raw input, both gaps named - and the map (stage 5) finds the methodology section no step implements
+        and the documentation describing nothing, and nothing more in either branch."""
         import develop
         for part, (got, total) in develop.map_measure("J_pipeline", record=False).items():
-            if "stage 5" not in part:
-                self.assertEqual(got, total, part)
+            self.assertEqual(got, total, part)
 
     def flow(self, sample):
         paths, settings, _ = helpers.run_sample(sample, stop_after="05a")
@@ -249,17 +248,18 @@ class FinalOutputs(unittest.TestCase):
                 sheet.cell(row=row, column=at_word + 1).value = choices[name]
         book.save(path)
 
-    def test_the_sheet_lists_every_function_with_what_code_proposes_and_why(self):
+    def test_the_sheet_shows_every_function_with_what_code_proposes_and_why(self):
+        """On the tree (stage 5): the final output is the top row, 01, with code's reasons; every other
+        function is a call on its path or a row of branch 90, the functions no final output reaches."""
         _, _, path, openpyxl = self.run_to_cell_3()
         rows = list(openpyxl.load_workbook(path, read_only=True)["Model_Implementation_Map"].iter_rows(values_only=True))
-        header, body = rows[0], rows[1:]
-        by_name = {row[header.index("Function")]: dict(zip(header, row)) for row in body}
-        self.assertEqual(len(body), 10, "every package function, once")
-        self.assertEqual(body[0][header.index("Function")], "harbour_rating", "the final outputs come first")
-        self.assertEqual(by_name["harbour_rating"]["Map ID"], "01")
-        self.assertIn("called by a test or vignette", by_name["harbour_rating"]["Why"])
-        self.assertEqual(by_name["legacy_score"]["Role"], "Not reached from any final output")
-        self.assertEqual(by_name["notch_down"]["Called by"], "cap_rating")
+        header, body = rows[0], [dict(zip(rows[0], row)) for row in rows[1:]]
+        self.assertEqual((body[0]["Map ID"], body[0]["Function"], body[0]["Role"]), ("01", "harbour_rating", "Final output"))
+        self.assertIn("called by a test or vignette", body[0]["How established"])
+        unreached = {row["Function"] for row in body if str(row["Map ID"]).startswith("90.")}
+        self.assertEqual(unreached & {"legacy_score", "combine_results", "%||%"}, {"legacy_score", "combine_results", "%||%"})
+        shown = {row["Function"] for row in body if row["Role"] in ("Final output", "Calls a function") or str(row["Map ID"]).startswith("90.")}
+        self.assertTrue({"harbour_rating", "factor_scores", "weighted_score", "adjust_score", "anchor_rating", "cap_rating", "notch_down"} <= shown)
 
     def test_a_decision_overrides_the_proposal_is_chained_and_an_emptied_cell_withdraws_it(self):
         paths, settings, path, openpyxl = self.run_to_cell_3()
@@ -370,6 +370,92 @@ class MapAgents(unittest.TestCase):
         traces, audit, names = self.custom_run(lambda prompt: {}, map_with_ai=False)
         self.assertEqual(traces[0]["status"], "not asked: no model")
         self.assertEqual((audit["questions"], names), (0, []))
+
+
+class ImplementationMapSheet(unittest.TestCase):
+    """Stage 5, the sheet: from each final output down to the rawest inputs, IDs that sort back into the
+    tree, repeats as 'see' rows, loops marked, three branches so nothing falls out, and every row traceable
+    to its model unit, the methodology, the documentation, the concepts and the flagged items."""
+
+    @classmethod
+    def setUpClass(cls):
+        import standin_chat
+        cls.paths, cls.settings, _ = helpers.run_sample("J_pipeline", chat=standin_chat.chat_well_behaved)
+        cls.store = runner.open_store(cls.paths, cls.settings)
+        cls.rows = runner.implementation_map(cls.store, cls.settings)
+
+    def test_sorting_the_ids_gives_the_tree_back(self):
+        ids = [row["map_id"] for row in self.rows]
+        self.assertEqual(ids, sorted(ids), "the ID column sorts back into the tree")
+        seen = set()
+        for row in self.rows:
+            parent = row["map_id"].rsplit(".", 1)[0] if "." in row["map_id"] else None
+            self.assertTrue(parent is None or parent in seen, "%s appears before its parent" % row["map_id"])
+            self.assertEqual(row["level"], row["map_id"].count("."), row["map_id"])
+            seen.add(row["map_id"])
+
+    def test_the_tree_runs_from_the_final_output_to_the_rawest_inputs(self):
+        import yaml
+        with open(os.path.join(helpers.SAMPLES_DIR, "J_pipeline", "gold_map.yaml"), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)["raw_inputs"]
+        top = [row for row in self.rows if row["map_id"] == "01"][0]
+        self.assertEqual((top["function"], top["role"]), ("harbour_rating", "Final output"))
+        leaves = [row for row in self.rows if row["map_id"].startswith("01.") and row["role"].startswith("Raw input")]
+        found = lambda role, name: any(row["role"].startswith(role) and name in (row["variable"], row["step"], row["code"]) for row in leaves)
+        for name in raw["argument"]:
+            self.assertTrue(found("Raw input: argument", name), name)
+        for name in raw["column_of_an_argument"]:
+            self.assertTrue(found("Raw input: column", name), name)
+        for name in raw["stored_data"]:
+            self.assertTrue(any(row["role"] == "Raw input: stored data" and row["step"].endswith(name) for row in leaves), name)
+        self.assertTrue(any(row["role"] == "Raw input: file" and "thresholds.csv" in row["step"] for row in leaves))
+        for number in raw["hard_coded_number"]:
+            self.assertTrue(any(row["role"] == "Raw input: hard-coded number" and row["step"] == "the number %s" % number for row in leaves), number)
+
+    def test_every_see_row_points_at_a_real_step_and_the_recursion_is_a_loop(self):
+        ids = {row["map_id"] for row in self.rows}
+        for row in self.rows:
+            if row["step"].startswith("see "):
+                self.assertIn(row["step"][4:], ids)
+        self.assertEqual([row["function"] for row in self.rows if row["role"].startswith("Loop")], ["notch_down"])
+
+    def test_every_model_unit_is_on_the_map_and_every_flagged_item_is_real(self):
+        refs = {row["model_ref"] for row in self.rows} | {ref.strip() for row in self.rows for ref in row["related"].split(",")}
+        missing = sorted(u["ref"] for u in self.store.read("model_units") if u["ref"] not in refs)
+        self.assertEqual(missing, [], "every model unit is a row, related to one, or in branch 90")
+        items = {item["item_id"] for item in self.store.read("flagged_items")}
+        shown = [item for row in self.rows for item in row["flagged"].split(", ") if item]
+        self.assertTrue(shown and set(shown) <= items)
+
+    def test_the_methodology_and_documentation_branches_hold_the_answer_keys_two(self):
+        branch = lambda number: [row for row in self.rows if row["map_id"].startswith(number + ".")]
+        self.assertEqual([row["step"][:30] for row in branch("91")], ["The rating is lowered by one n"], "the stress test, and only it")
+        self.assertEqual([row["step"][:30] for row in branch("92")], ["The package also produces a qu"], "the dashboard, and only it")
+
+    def test_the_rows_group_and_indent_in_excel(self):
+        import openpyxl
+        book = openpyxl.load_workbook(os.path.join(self.paths.run_dir, "Output.xlsx"))
+        sheet = book["Model_Implementation_Map"]
+        self.assertFalse(sheet.sheet_properties.outlinePr.summaryBelow, "a parent sits above its members")
+        header = [cell.value for cell in sheet[1]]
+        deepest = 0
+        for number in range(2, sheet.max_row + 1):
+            level = int(sheet.cell(row=number, column=header.index("Level") + 1).value or 0)
+            self.assertEqual(sheet.row_dimensions[number].outline_level, min(level, 7), "Excel groups eight levels deep")
+            self.assertEqual(sheet.cell(row=number, column=header.index("Step") + 1).alignment.indent, min(level, 15))
+            deepest = max(deepest, level)
+        self.assertGreater(deepest, 7, "and deeper rows are indented, not lost")
+
+    def test_capital_k_enters_each_call_with_that_calls_arguments(self):
+        import standin_chat
+        paths, settings, _ = helpers.run_sample("F_capital", chat=standin_chat.chat_well_behaved)
+        rows = runner.implementation_map(runner.open_store(paths, settings), settings)
+        tree = [row for row in rows if row["map_id"] == "01" or row["map_id"].startswith("01.")]
+        self.assertEqual(tree[0]["function"], "capital_k")
+        calls = {row["function"] for row in tree if row["role"] == "Calls a function"}
+        self.assertTrue({"cond_pd", "floor_pd", "asset_correlation"} <= calls)
+        self.assertTrue(any(row["step"] == "the number 0.999" and "default" in row["how"] for row in tree), "q takes its default there")
+        self.assertFalse([row for row in tree if "open gap" in row["how"]])
 
 
 if __name__ == "__main__":

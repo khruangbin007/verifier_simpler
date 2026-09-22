@@ -3107,6 +3107,9 @@ class Dataflow:
                       "function_ref": self.functions[env["function"]]["ref"] if env else "", "line": self.line_of(env, at),
                       "code": self.code_of(env, at), "from": []}
             self.nodes[node_id] = record
+        if env and not record["function"] and kind == "column" and at is not None:   # read before it was created: take its creation site
+            record.update(function=env["function"], function_ref=self.functions[env["function"]]["ref"],
+                          line=self.line_of(env, at), code=self.code_of(env, at))
         for source in sources:
             if source not in record["from"] and source != node_id:
                 record["from"].append(source)
@@ -3146,7 +3149,10 @@ class Dataflow:
         for inner in walk_nodes(function.args[-1]):
             if inner.kind == "call" and callee_name(inner) == "return" and len(inner.args) > 1:
                 returned += self.sources(inner.args[1], env)
-        self.node("%s:return" % name, "return", "the value %s returns" % name, env, function, list(dict.fromkeys(returned)))
+        body = function.args[-1]
+        last = (body.args[-1] if body.kind == "block" and body.args else body)
+        # what a function returns is placed at the statement that computes it, where a statement unit and its checks sit
+        self.node("%s:return" % name, "return", "the value %s returns" % name, env, last if last is not None else function, list(dict.fromkeys(returned)))
 
     def body(self, block, env):
         """The statements of a body, each set value a node; returns the sources of what the body gives."""
