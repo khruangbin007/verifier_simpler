@@ -751,11 +751,12 @@ def digest_text(digest):
             lines.append("    sample: %s" % sample)
     return "\n".join(lines)
 
-def slice_rules_question(digest, rules, prompt, settings, skill_body=""):
-    """One question about the shape of one file. The skill's own procedure and prohibitions are
-    prepended to the system half, so what the reader is contracted to do is what the model is
-    told to do, and a changed contract asks a new question. Enforces: R3, R5"""
-    system = ((skill_body + "\n\n" if skill_body else "") + prompt["system"]).strip()
+def slice_rules_question(digest, rules, prompt, settings):
+    """One question about the shape of one file. The reader's own procedure and prohibitions are
+    the first thing in the prompt's system half, so what the reader is contracted to do is what the
+    model is told to do, and a changed contract is a new prompt version and a new question.
+    Enforces: R3, R5"""
+    system = prompt["system"].strip()
     main = prompt["main"].replace("[[UNIT]]", digest_text(digest))
     return {"question_type": "slice-rules", "unit_ref": digest["file"], "system_prompt": system,
             "main_prompt": main, "letters": {}, "planted": [], "passage_texts": {}, "unit_text": "",
@@ -829,31 +830,6 @@ def overlay_from_answer(answer, rules, analyst_tags, discovered=None):
     return families, levels, why
 
 # ---------------------------------------------------------------- asking about the shape of a file
-SKILL_BODIES = {}
-
-def skill_body(references_dir, skill):
-    """The Procedure, Quality rules and Never sections of a skill, as the instructions the model
-    works under. Until 0.0.2 this text was read by people only; a reading step now puts its own
-    contract in front of the model that helps carry it out, and the skill's version is part of
-    the question id, so a changed contract asks a new question. Enforces: R3"""
-    if skill in SKILL_BODIES:
-        return SKILL_BODIES[skill]
-    path = os.path.join(os.path.dirname(references_dir), "skills", skill, "SKILL.md")
-    wanted, keep, found = ("## Procedure", "## Quality rules", "## Never"), False, []
-    try:
-        with open(path, encoding="utf-8") as handle:
-            for line in handle.read().split("\n"):
-                if line.startswith("## "):
-                    keep = line.strip() in wanted
-                if keep:
-                    found.append(line)
-    except OSError:
-        found = []
-    SKILL_BODIES[skill] = "\n".join(found).strip()
-    return SKILL_BODIES[skill]
-
-
-
 def reading_doubts(root, state, discovered):
     """Where the built-in rules themselves say they are unsure. Only these ask a question; a
     file the rules read confidently costs no call at all and comes out exactly as before."""
@@ -879,7 +855,7 @@ def guided_rules(root, file_name, state, discovered):
     digest = markup_digest(root, state.rules, file_name)
     state.digests.append(digest)
     prompt = load_prompt(state.references_dir, "slice-rules")
-    question = slice_rules_question(digest, state.rules, prompt, state.settings, state.skill_body)
+    question = slice_rules_question(digest, state.rules, prompt, state.settings)
     if question["too_large"]:
         state.notes.append("%s: its shape is too large to ask about, so the built-in rules read it." % file_name)
         return
@@ -939,9 +915,9 @@ def manifest_text(digest):
             lines.append("    line: %s" % sample)
     return "\n".join(lines)
 
-def package_plan_question(digest, prompt, settings, skill_body=""):
+def package_plan_question(digest, prompt, settings):
     """One question about one tarball, asked only where members were left unplaced."""
-    system = ((skill_body + "\n\n" if skill_body else "") + prompt["system"]).strip()
+    system = prompt["system"].strip()
     main = prompt["main"].replace("[[UNIT]]", manifest_text(digest))
     unplaced = [row["path"] for row in digest["members"] if not row["placed_as"]]
     return {"question_type": "package-plan", "unit_ref": digest["file"], "system_prompt": system,

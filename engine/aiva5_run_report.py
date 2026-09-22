@@ -56,8 +56,6 @@ import aiva2_package
 import aiva3_mapping
 import aiva4_checks
 
-SKILL_VERSIONS = {"prepare-run": "0.0.2", "confirm-outline": "0.0.2", "await-determinations": "0.0.1",
-                  "record-determinations": "0.0.1", "build-report": "0.0.1"}
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 REFERENCES_DIR = os.path.join(ENGINE_DIR, "references")
 
@@ -578,9 +576,6 @@ def replay_chat(call_records):
     return chat
 
 # ---------------------------------------------------------------- the pipeline runner
-# read-methodology and read-documentation ask only where the built-in rules are themselves in
-# doubt, and only when agentic_reading is not "off". On a file the rules read confidently they
-# spend no call and produce exactly what they produced before.
 CHAT_STEPS = ("read-methodology", "read-documentation", "read-package", "interpret-code", "judge-links",
               "check-mathematics", "check-values", "check-rules")
 REPEATABLE_STEPS = ("record-determinations", "build-report")
@@ -591,23 +586,24 @@ HUMAN_MESSAGES = {
                             "yellow columns on Flagged_Items, upload it into Outputs/ and run cell 14."}
 
 def load_pipeline(engine_dir=ENGINE_DIR):
-    """Read pipeline.yaml and refuse anything that is not a known skill and function. Enforces: R11"""
+    """Read pipeline.yaml and refuse anything that is not a known step carried out by a known
+    function. A step is named, versioned and mapped to its function in the one file; only
+    functions listed in STEP_FUNCTIONS can be named, and there is no loading of scripts by path.
+    Enforces: R11"""
     with open(os.path.join(engine_dir, "pipeline.yaml"), encoding="utf-8") as handle:
         pipeline = yaml.safe_load(handle)
-    declared = dict(SKILL_VERSIONS)
-    for bundle in (aiva1_documents, aiva2_package, aiva3_mapping, aiva4_checks):
-        declared.update(bundle.SKILL_VERSIONS)
+    seen = set()
     for step in pipeline["steps"]:
-        if not step.get("human") and step["function"] not in STEP_FUNCTIONS:
-            raise ValueError("pipeline.yaml names '%s', which is not in the list of functions "
-                             "allowed to run" % step["function"])
-        with open(os.path.join(engine_dir, "skills", step["skill"], "SKILL.md"), encoding="utf-8") as handle:
-            front_matter = yaml.safe_load(handle.read().split("---")[1])
-        step["skill_version"] = str(front_matter["metadata"]["version"])
-        if declared.get(step["skill"]) != step["skill_version"]:
-            raise ValueError("The contract of skill '%s' is at version %s but the code declares %s: "
-                             "contract and code are out of step, so the run does not start."
-                             % (step["skill"], step["skill_version"], declared.get(step["skill"])))
+        for key in ("id", "name", "version", "carried_out_by"):
+            if key not in step:
+                raise ValueError("Step %s of pipeline.yaml has no '%s'." % (step.get("id", "?"), key))
+        if step["id"] in seen:
+            raise ValueError("Step id %s appears twice in pipeline.yaml." % step["id"])
+        seen.add(step["id"])
+        step["version"] = str(step["version"])
+        if step["carried_out_by"] != "a person" and step["carried_out_by"] not in STEP_FUNCTIONS:
+            raise ValueError("pipeline.yaml names '%s', which is not a function this engine offers. "
+                             "Only the functions in STEP_FUNCTIONS may be named." % step["carried_out_by"])
     return pipeline
 
 def update_manifest(store, changes):
@@ -627,7 +623,7 @@ def confirm_outline(paths, settings, reviewer):
 
 def human_step_open(step, store, settings, determinations):
     """Is this human step still waiting for its person?"""
-    if step["skill"] == "confirm-outline":
+    if step["name"] == "confirm-outline":
         manifest = (store.read("run_manifest") or [{}])[0]
         return settings["require_outline_confirmation"] and not manifest.get("outline_confirmed_by")
     return not determinations and not store.read("determinations")
@@ -648,15 +644,15 @@ def run_pipeline(paths, settings, chat=None, live=None, determinations=False, st
     for step in pipeline["steps"]:
         if stop_after and step["id"] > stop_after:
             break
-        if step["skill"] in REPEATABLE_STEPS:
+        if step["name"] in REPEATABLE_STEPS:
             if not determinations:
                 continue                     # these two run each time the determinations cell is run
         elif step["id"] in done:
             continue
         if step.get("human"):
             if human_step_open(step, store, settings, determinations):
-                rebuild_outputs(store, paths, settings, HUMAN_MESSAGES[step["skill"]])
-                return {"state": "waiting for a person", "message": HUMAN_MESSAGES[step["skill"]], "steps_run": steps_run}
+                rebuild_outputs(store, paths, settings, HUMAN_MESSAGES[step["name"]])
+                return {"state": "waiting for a person", "message": HUMAN_MESSAGES[step["name"]], "steps_run": steps_run}
             record_step(store, step, shared.StepResult(), 0.0)
             continue
         try:
@@ -664,7 +660,7 @@ def run_pipeline(paths, settings, chat=None, live=None, determinations=False, st
         except RunPaused as pause:
             store.sync()
             return {"state": "paused", "message": str(pause), "steps_run": steps_run}
-        steps_run.append(step["skill"])
+        steps_run.append(step["name"])
         if keep_alive:
             keep_alive()
         if stop_after and step["id"] == stop_after:
@@ -678,9 +674,9 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     rebuild the outputs and sync. Steps never touch the store themselves."""
     notes = []
     ask = None
-    if step["skill"] in CHAT_STEPS and chat is not None:
+    if step["name"] in CHAT_STEPS and chat is not None:
         ask = make_asker(chat, live, store, settings, aiva3_mapping.validate_answer, state, sleep)
-    provenance = shared.Provenance(paths.run_id, step["id"], step["skill"], step["skill_version"],
+    provenance = shared.Provenance(paths.run_id, step["id"], step["name"], step["version"],
                                    created_at=datetime.datetime.now().isoformat(timespec="seconds"))
     options = dict(step.get("with") or {})
     options.update({"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
@@ -688,7 +684,7 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
     context = shared.StepContext(settings, options, store.read, ask, work_dir, notes.append, provenance)
-    function = STEP_FUNCTIONS[step["function"]]
+    function = STEP_FUNCTIONS[step["carried_out_by"]]
     started = time.time()
     try:
         result = function(context)
@@ -712,14 +708,14 @@ def step_failure(step, problem, work_dir):
         handle.write("".join(traceback.format_exception(type(problem), problem, problem.__traceback__)))
     return ("Step %s (%s) could not finish, because of a fault inside AIVA (%s). The steps after it ran on what there "
             "was, and say what they could not do. The details are in the run's work folder, for whoever maintains AIVA."
-            % (step["id"], step["skill"], type(problem).__name__))
+            % (step["id"], step["name"], type(problem).__name__))
 
 def record_step(store, step, result, seconds):
     """Leave the step record that makes a finished step visible and resume possible."""
     produced = {kind: len(records) for kind, records in sorted(result.records.items())}
     store.append("step_records", [{
-        "step_id": step["id"], "skill": step["skill"], "skill_version": step["skill_version"],
-        "function": step.get("function", "a person"), "produced": produced, "counts": result.counts,
+        "step_id": step["id"], "name": step["name"], "version": step["version"],
+        "carried_out_by": step["carried_out_by"], "produced": produced, "counts": result.counts,
         "messages": result.messages, "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "seconds": round(seconds, 3)}])
 
@@ -740,12 +736,12 @@ def fingerprint_file(path, corner, inputs_dir):
             "bytes": len(data), "sha256": shared.sha256_bytes(data), "swhid": shared.swhid_content(data)}
 
 def engine_file_hashes():
-    """SHA-256 of every file that makes up the engine (code, pipeline, skills, references), so
+    """SHA-256 of every file that makes up the engine (code, pipeline, references), so
     that an evidence pack names exactly the code that produced it (the same list as in
     docs/release_manifest.json)."""
     import glob
     found = {}
-    for pattern in ("*.py", "pipeline.yaml", "requirements.txt", "skills/*/SKILL.md", "references/**/*"):
+    for pattern in ("*.py", "pipeline.yaml", "requirements.txt", "references/**/*"):
         for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
             if os.path.isfile(path):
                 found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
@@ -1126,7 +1122,7 @@ def progress_text(store, waiting_message):
     if not records:
         return "The run has been opened; no step has finished yet."
     last = records[-1]
-    text = "Step %s (%s) is the last finished step." % (last["step_id"], last["skill"])
+    text = "Step %s (%s) is the last finished step." % (last["step_id"], last["name"])
     return text + (" " + waiting_message if waiting_message else "")
 
 def rebuild_outputs(store, paths, settings, waiting_message):
@@ -1183,8 +1179,8 @@ def build_run_summary(store, paths, progress, target):
     rows = []
     for record in store.read("step_records"):
         produced = ", ".join("%s: %d" % (k, v) for k, v in sorted(record["counts"].items())) or "nothing to count"
-        rows.append((record["step_id"], record["skill"], produced, " ".join(record["messages"])))
-    docx_table(document, ("Step", "Skill", "Produced", "Notes"), rows)
+        rows.append((record["step_id"], record["name"], produced, " ".join(record["messages"])))
+    docx_table(document, ("Step", "Name", "Produced", "Notes"), rows)
     document.save(target)
 
 REPORT_SCOPE = (
@@ -1225,14 +1221,14 @@ def call_plan(paths, settings, step_id, seconds_per_call=0.0):
     options = dict(step.get("with") or {})
     options.update({"inputs": aiva1f_formats.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
-    provenance = shared.Provenance(paths.run_id, step["id"], step["skill"], step["skill_version"])
-    STEP_FUNCTIONS[step["function"]](shared.StepContext(settings, options, store.read, collect, paths.local_dir, lambda text: None, provenance))
+    provenance = shared.Provenance(paths.run_id, step["id"], step["name"], step["version"])
+    STEP_FUNCTIONS[step["carried_out_by"]](shared.StepContext(settings, options, store.read, collect, paths.local_dir, lambda text: None, provenance))
     by_type = {}
     for question in collected:
         by_type[question["question_type"]] = by_type.get(question["question_type"], 0) + 1
     largest = max([q["estimated_tokens"] for q in collected] or [0])
     minutes = len(collected) * seconds_per_call / max(1, int(settings["concurrency_limit"])) / 60.0
-    return {"step": step["skill"], "questions": len(collected), "by_type": by_type, "largest_estimated_tokens": largest,
+    return {"step": step["name"], "questions": len(collected), "by_type": by_type, "largest_estimated_tokens": largest,
             "token_cap": settings["token_cap"], "expected_minutes": round(minutes, 1),
             "note": "Questions that depend on earlier answers of the same step are not in this count."}
 
@@ -1284,7 +1280,7 @@ def read_yellow_cells(path, known_ids):
     return {item_id: values for item_id, values in found.items() if values is not None}, messages
 
 def record_determinations(ctx):
-    """Step 17, skill record-determinations: find the uploaded workbook by its identity, keep a
+    """Step 17, record-determinations: find the uploaded workbook by its identity, keep a
     copy of its bytes in _audit/uploads/, read and validate the yellow cells, and append one
     record for every item whose four values changed. Earlier records are never changed; a
     cleared decision is recorded as Withdrawn. The record is a hash chain. Enforces: R4, R12"""
@@ -1405,7 +1401,7 @@ def build_report_file(store, paths, settings, target):
     document.save(target)
 
 def build_report(ctx):
-    """Step 18, skill build-report: the exports of the graph for anyone who wants to load it
+    """Step 18, build-report: the exports of the graph for anyone who wants to load it
     elsewhere (nodes.csv, edges.csv, graph.graphml). The two output files themselves are
     rebuilt by the runner after every step."""
     import csv

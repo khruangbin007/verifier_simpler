@@ -52,7 +52,6 @@ import aiva0_shared as shared
 import aiva0r_reading as reading
 import aiva1_documents
 
-SKILL_VERSIONS = {"build-graph": "0.0.1", "find-candidates": "0.0.1", "judge-links": "0.0.1", "interpret-code": "0.0.1"}
 LEDGER_VOLATILE = ("created_at", "run_id")
 CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model": "the package"}
 
@@ -523,7 +522,7 @@ def structural_edges(units, provenance):
     return edges
 
 def build_graph(ctx):
-    """Step 05, skill build-graph: nodes for every chunk and unit, structural edges,
+    """Step 05, build-graph: nodes for every chunk and unit, structural edges,
     cross-references resolved within their own corner, and the bridge vocabulary."""
     canon, doc, units = ctx.read("chunks_canon"), ctx.read("chunks_doc"), ctx.read("model_units")
     lists = load_word_lists(ctx.options["references_dir"])
@@ -714,7 +713,7 @@ def propagated_candidates(world, graph):
     return inherited
 
 def find_candidates(ctx):
-    """Step 06 (pass 1) and step 08 (pass 2), skill find-candidates. Pass 1 searches for every
+    """Step 06 (pass 1) and step 08 (pass 2), find-candidates. Pass 1 searches for every
     searched model unit in the methodology and the documentation, and for every checkable
     documentation passage in the methodology. Pass 2 searches again, with propagation, only
     for units still without a methodology link, and looks in the package for documentation
@@ -1035,7 +1034,7 @@ def interpret_question(unit, functions, outline, described, references_dir, sett
     return narrow_question("interpret-code", unit["ref"], blocks, references_dir, settings, more={"code_text": unit["text"]})
 
 def interpret_code(ctx):
-    """Step 07a, skill interpret-code. One question per function, formula statement, top-level
+    """Step 07a, interpret-code. One question per function, formula statement, top-level
     statement and test block: what does this piece do, given where it sits in the package?
     Accepted answers fill the column "LLM Interpretation" of Chunks_Model. An interpretation
     is an aid to reading and nothing more: it gives no status, raises no flagged item and takes
@@ -1069,7 +1068,7 @@ def interpret_code(ctx):
                              messages=["%d of %d pieces of code were given an interpretation by the AI." % (done, len(records))])
 
 def judge_links(ctx):
-    """Steps 07 and 09, skill judge-links. Builds one question per unit and corner, asks them
+    """Steps 07 and 09, judge-links. Builds one question per unit and corner, asks them
     through ask(), and turns ACCEPTED answers into `corresponds` edges with the relation
     word, the confidence, both quotations and the proposal reason. Rejected answers leave
     the unit without a link and are recorded for account-coverage. Enforces: R3, R4"""

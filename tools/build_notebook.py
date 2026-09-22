@@ -323,7 +323,7 @@ if "STATE" in globals():
 store = aiva.open_store(PATHS, SETTINGS)
 print(aiva.progress_text(store, RESULT.get("message", "") if "RESULT" in globals() else ""))
 for record in store.read("step_records"):
-    print("  step %s %-22s %s" % (record["step_id"], record["skill"], ", ".join("%s: %s" % item for item in sorted(record["counts"].items()))))
+    print("  step %s %-22s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted(record["counts"].items()))))
 for label, value in aiva.call_statistics(store):
     print("  %-52s %s" % (label, value))
 print("Token pasted %.1f minutes ago.%s" % (LIVE.token_age_minutes(), " The run is WAITING FOR A FRESH TOKEN: paste it into the widget (mode B: then run cell 5)." if "STATE" in globals() and STATE.waiting_for_token else ""))
@@ -334,7 +334,7 @@ code("Cell 14 - determinations: run after uploading the completed Output.xlsx in
 SETTINGS = current_settings()
 RESULT = aiva.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE, determinations=True)
 store = aiva.open_store(PATHS, SETTINGS)
-last = [r for r in store.read("step_records") if r["skill"] == "record-determinations"][-1:]
+last = [r for r in store.read("step_records") if r["name"] == "record-determinations"][-1:]
 for record in last:
     print("Determinations recorded this time:", record["counts"].get("determinations recorded", 0))
     print("\\n".join(record["messages"]))

@@ -320,16 +320,24 @@ class RunnerAndWorkbook(unittest.TestCase):
         self.assertNotIn("prepare-run", second["steps_run"], "a finished step was repeated")
         self.assertEqual(second["steps_run"][:2], ["interpret-code", "judge-links"], "the AI steps begin once a person has confirmed the outline")
 
-    def test_pipeline_refuses_unknown_functions_and_version_drift(self):
-        saved = dict(run.SKILL_VERSIONS)
-        run.SKILL_VERSIONS["prepare-run"] = "9.9.9"
-        try:
-            with self.assertRaises(ValueError) as refused:
-                run.load_pipeline()
-            self.assertIn("out of step", str(refused.exception))
-        finally:
-            run.SKILL_VERSIONS.clear()
-            run.SKILL_VERSIONS.update(saved)
+    def test_pipeline_refuses_an_unknown_function_and_an_unversioned_step(self):
+        """pipeline.yaml is the one place a step is named, versioned and mapped to its function.
+        A function the engine does not offer is refused, so nothing is ever loaded by path; and a
+        step with no version is refused, so every record's provenance carries one."""
+        import tempfile
+        folder = tempfile.mkdtemp(prefix="pipeline_")
+        with open(os.path.join(run.ENGINE_DIR, "pipeline.yaml"), encoding="utf-8") as handle:
+            text = handle.read()
+        with open(os.path.join(folder, "pipeline.yaml"), "w", encoding="utf-8") as handle:
+            handle.write(text.replace("carried_out_by: aiva5_run_report.prepare_run", "carried_out_by: os.system", 1))
+        with self.assertRaises(ValueError) as refused:
+            run.load_pipeline(folder)
+        self.assertIn("not a function this engine offers", str(refused.exception))
+        with open(os.path.join(folder, "pipeline.yaml"), "w", encoding="utf-8") as handle:
+            handle.write(text.replace('    version: "0.0.2"\n    carried_out_by: aiva5_run_report.prepare_run', "    carried_out_by: aiva5_run_report.prepare_run", 1))
+        with self.assertRaises(ValueError) as refused:
+            run.load_pipeline(folder)
+        self.assertIn("has no 'version'", str(refused.exception))
 
     def test_workbook_format(self):
         import openpyxl

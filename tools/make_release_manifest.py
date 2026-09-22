@@ -30,7 +30,7 @@ def current():
             if os.path.isfile(path) and "__pycache__" not in path:
                 with open(path, "rb") as handle:
                     files[os.path.relpath(path, ROOT).replace(os.sep, "/")] = hashlib.sha256(handle.read()).hexdigest()
-    skills = {step["skill"]: step["skill_version"] for step in run.load_pipeline()["steps"]}
+    skills = {step["skill"]: step["step_version"] for step in run.load_pipeline()["steps"]}
     with open(os.path.join(ROOT, "engine", "requirements.txt"), encoding="utf-8") as handle:
         requirements = [line.strip() for line in handle if line.strip() and not line.startswith("#")]
     return {"engine_version": shared.ENGINE_VERSION, "files": files, "skill_versions": skills, "requirements": requirements}

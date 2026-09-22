@@ -473,7 +473,7 @@ def combine(results):
     return results[0]
 
 def check_mathematics(ctx):
-    """Step 11, skill check-mathematics. Pairs: every function or formula statement linked to
+    """Step 11, check-mathematics. Pairs: every function or formula statement linked to
     a passage that states a formula; every roxygen \\deqn formula against the function it
     documents; every documentation equation against the methodology equation it is linked
     to. Alignment is settled first (by code, then by the validated align-symbols answer)
@@ -725,7 +725,7 @@ def prose_value_lines(text, stated_texts, stop, trivial, label):
     return lines, differs
 
 def check_values(ctx):
-    """Step 12, skill check-values: parameter tables against the tables they are linked to
+    """Step 12, check-values: parameter tables against the tables they are linked to
     (a table that the judge did not link is still matched by its shape); documentation
     tables against methodology tables; numbers written in linked code; numbers in
     documentation passages and roxygen text. All under compare_values. Enforces: R3"""
@@ -858,7 +858,7 @@ def rule_in_trees(kind, number, members):
     return ""
 
 def check_rules(ctx):
-    """Step 13, skill check-rules. For every top-level function (and every formula statement
+    """Step 13, check-rules. For every top-level function (and every formula statement
     outside a function) linked to a passage that states a floor or a cap: code inspection
     first; only when the code shows no such node is the check-rule question asked."""
     world, settings, references = load_world(ctx), ctx.settings, ctx.options["references_dir"]
@@ -898,7 +898,7 @@ def check_rules(ctx):
 
 # ---------------------------------------------------------------- step 14: check-package-docs (no AI)
 def check_package_docs(ctx):
-    """Step 14, skill check-package-docs. Roxygen blocks and help pages against the code they
+    """Step 14, check-package-docs. Roxygen blocks and help pages against the code they
     document: arguments, stated defaults, stated values, @export against NAMESPACE, usage
     against the signature, page in step with its source block, block and page present for
     exported objects, a data block for every stored object, example code that parses."""
@@ -1327,7 +1327,7 @@ def check_identity(units, doc, statuses, items, world, package_info):
             raise AivaDefect(defect % ("Part 3 of the coverage identity does not hold: %s is not fully covered by units." % entry["file"]))
 
 def account_coverage(ctx):
-    """Step 15, skill account-coverage: one status per unit by the ordered rules, the cells of
+    """Step 15, account-coverage: one status per unit by the ordered rules, the cells of
     the assessment columns, one flagged item per unit and category, the identity, and the
     totals that the workbook builder must reproduce by counting its rows. Enforces: R1, R2"""
     world = load_world(ctx)

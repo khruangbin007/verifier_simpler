@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 
-ENGINE_VERSION = "0.0.1"
+ENGINE_VERSION = "0.0.2"
 GENESIS_HASH = "0" * 64
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
@@ -176,8 +176,8 @@ class ModelUnit:
 
 @dataclass(frozen=True)
 class Provenance:
-    """Which run, step and skill produced a record, and from which AI exchange if any."""
-    run_id: str; step_id: str; skill: str; skill_version: str; engine_version: str = ENGINE_VERSION
+    """Which run and step produced a record, at which version, and from which AI exchange if any."""
+    run_id: str; step_id: str; step: str; step_version: str; engine_version: str = ENGINE_VERSION
     prompt_hash: Optional[str] = None; response_hash: Optional[str] = None; created_at: str = ""
 
 @dataclass(frozen=True)

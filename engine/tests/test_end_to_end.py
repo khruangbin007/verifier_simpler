@@ -141,7 +141,7 @@ class HumanRoundTrip(unittest.TestCase):
     def record(self):
         result = run.run_pipeline(self.paths, self.settings, chat=standin_chat.chat, determinations=True)
         self.assertEqual(sorted(os.listdir(self.paths.outputs_dir)), ["Output.xlsx", "Validation_Report.docx"])
-        messages = [m for r in self.store.read("step_records") if r["skill"] == "record-determinations" for m in r["messages"]]
+        messages = [m for r in self.store.read("step_records") if r["name"] == "record-determinations" for m in r["messages"]]
         return result, messages
 
     def test_a_renamed_sorted_workbook_with_an_added_sheet_is_read_by_item_id(self):
@@ -195,7 +195,7 @@ class HumanRoundTrip(unittest.TestCase):
         with open(os.path.join(self.paths.outputs_dir, "Old.xls"), "wb") as handle:
             handle.write(b"\xd0\xcf\x11\xe0 old format")
         result = run.run_pipeline(self.paths, self.settings, chat=standin_chat.chat, determinations=True)
-        messages = [m for r in self.store.read("step_records") if r["skill"] == "record-determinations" for m in r["messages"]]
+        messages = [m for r in self.store.read("step_records") if r["name"] == "record-determinations" for m in r["messages"]]
         self.assertTrue(any("belongs to another run" in m for m in messages))
         self.assertTrue(any(".xls format" in m for m in messages))
         self.assertEqual(self.store.read("determinations"), [])

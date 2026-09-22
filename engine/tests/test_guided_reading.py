@@ -55,16 +55,18 @@ class TheDigestShowsShapeAndNotTheDocument(unittest.TestCase):
             for sample in row["samples"]:
                 self.assertLessEqual(len(sample), reading.DIGEST_SAMPLE_CHARS)
 
-    def test_the_question_id_changes_when_the_skill_contract_changes(self):
+    def test_the_question_id_changes_when_the_prompt_changes(self):
+        """The reader's procedure and prohibitions are the first thing in the prompt's system
+        half, so a changed contract is a new prompt version and a new question id."""
         settings = run.make_settings({})
         _, root, rules = a_question()
         digest = reading.markup_digest(root, rules, "s.xml")
         prompt = reading.load_prompt(run.REFERENCES_DIR, "slice-rules")
-        plain = reading.slice_rules_question(digest, rules, prompt, settings, "")
-        with_body = reading.slice_rules_question(digest, rules, prompt, settings, "## Never\n- never lose a word")
-        self.assertNotEqual(plain["question_id"], with_body["question_id"])
-        self.assertIn("never lose a word", with_body["system_prompt"])
-
+        self.assertIn("THE READER NEVER", prompt["system"], "the contract lives in the prompt now")
+        plain = reading.slice_rules_question(digest, rules, prompt, settings)
+        changed = dict(prompt, system=prompt["system"] + "\n- never lose a word", version="VERSION 99")
+        again = reading.slice_rules_question(digest, rules, changed, settings)
+        self.assertNotEqual(plain["question_id"], again["question_id"])
 
 class TheBadAnswerCorpus(unittest.TestCase):
     def test_every_answer_in_the_corpus_is_handled_as_the_corpus_says(self):

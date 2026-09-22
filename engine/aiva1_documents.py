@@ -53,7 +53,6 @@ import aiva0_shared as shared
 import aiva0r_reading as reading
 import aiva1f_formats as formats
 
-SKILL_VERSIONS = {"read-methodology": "0.0.4", "read-documentation": "0.0.4"}
 
 class NotReadable(Exception):
     """A formula or a file that AIVA cannot read. The message is a plain reason for the analyst."""
@@ -623,7 +622,6 @@ class WalkState:
     ask: object = None                             # the asker, where a guided reading is turned on
     settings: dict = field(default_factory=dict)
     references_dir: str = ""
-    skill_body: str = ""                           # the skill's own procedure and prohibitions, shown to the model
     digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
     guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
@@ -1381,8 +1379,6 @@ def read_corner(ctx, corner, input_key, label):
         file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
         state.ask, state.settings, state.references_dir = ctx.ask, ctx.settings, options["references_dir"]
-        state.skill_body = reading.skill_body(options["references_dir"],
-                                              "read-methodology" if corner == "canon" else "read-documentation")
         try:
             found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
         except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
@@ -1445,9 +1441,9 @@ def read_corner(ctx, corner, input_key, label):
                               "content account open on": len(open_accounts)}, messages)
 
 def read_methodology(ctx):
-    """Step 02, skill read-methodology: the canonical methodology into chunks C-0001, C-0002, ..."""
+    """Step 02, read-methodology: the canonical methodology into chunks C-0001, C-0002, ..."""
     return read_corner(ctx, "canon", "methodology", "Methodology files")
 
 def read_documentation(ctx):
-    """Step 03, skill read-documentation: the model documentation into chunks D-0001, D-0002, ..."""
+    """Step 03, read-documentation: the model documentation into chunks D-0001, D-0002, ..."""
     return read_corner(ctx, "doc", "documentation", "Documentation files")

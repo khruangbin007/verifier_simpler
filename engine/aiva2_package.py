@@ -51,7 +51,6 @@ import aiva0r_reading
 import aiva1f_formats
 import aiva1_documents
 
-SKILL_VERSIONS = {"read-package": "0.0.4"}
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
 PARSER_NAME = "AIVA R reader 0.0.1"
 
@@ -1327,8 +1326,7 @@ def package_plan(ctx, files, placed, package_name):
         return {}, [], []
     digest = aiva0r_reading.manifest_digest(files, placed, safe_text, package_name)
     prompt = aiva0r_reading.load_prompt(ctx.options["references_dir"], "package-plan")
-    body = aiva0r_reading.skill_body(ctx.options["references_dir"], "read-package")
-    question = aiva0r_reading.package_plan_question(digest, prompt, ctx.settings, body)
+    question = aiva0r_reading.package_plan_question(digest, prompt, ctx.settings)
     if question["too_large"]:
         return {}, [digest], ["The list of files in the package is too large to ask about, so the built-in tests read it."]
     found = ctx.ask([question]).get(question["question_id"])
@@ -1346,7 +1344,7 @@ def safe_text(data):
     return aiva1f_formats.decode_text(data) if b"\x00" not in data[:4096] else None
 
 def read_package(ctx):
-    """Step 04, skill read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
+    """Step 04, read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
     data, man/, tests/, vignettes/, the rest; by name inside each), so references are stable
     for an unchanged tarball. Enforces: R2, R5"""
     tarballs = ctx.options["inputs"]["package"]
