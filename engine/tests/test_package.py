@@ -7,6 +7,7 @@ import unittest
 import helpers
 import core
 import reading
+import runner
 import build_samples
 
 R_SNIPPETS = (          # what real R code looks like; every snippet must parse without a "not read" part
@@ -157,15 +158,58 @@ class ImplementationMapSample(unittest.TestCase):
         expected = set(self.gold["final_outputs"] + self.gold["not_reached"]) | set(self.gold["calls"]) | {c for cs in self.gold["calls"].values() for c in cs}
         self.assertEqual(functions, expected)
 
-    def test_the_baseline_measures_every_part_of_the_answer_key(self):
+    def test_the_traced_flow_holds_the_whole_answer_key(self):
+        """Stage 2 is done when code alone recovers everything the answer key asks of it: the final output
+        and the functions no output reaches, every call (the recursive one too), every value and column
+        with what it is computed from, every raw input, and both gaps named with their code. What the map
+        says of the documents is its own work, stage 5."""
         import develop
-        found = develop.map_baseline("J_pipeline", record=False)
-        self.assertEqual(found["calls between package functions"], (6, 7), "all but the recursive call")
-        self.assertEqual(found["columns a dplyr verb creates, with what each is computed from"][0], 0, "no column is recorded yet")
-        self.assertEqual(found["final outputs and not-reached functions among the candidates code finds"], (4, 4))
-        for part, (got, total) in found.items():
-            self.assertLessEqual(got, total, part)
-            self.assertGreater(total, 0, part)
+        for part, (got, total) in develop.map_measure("J_pipeline", record=False).items():
+            if "stage 5" not in part:
+                self.assertEqual(got, total, part)
+
+    def flow(self, sample):
+        paths, settings, _ = helpers.run_sample(sample, stop_after="05a")
+        store = runner.open_store(paths, settings)
+        return store.read("dataflow"), {u["ref"]: u["text"] for u in store.read("model_units")}
+
+    def test_capital_k_resolves_to_raw_inputs_with_no_gap(self):
+        """The first done-when of stage 2. pdc is set by a call into cond_pd, whose pd is what floor_pd
+        returns there, whose rho is what asset_correlation returns, and whose q is its default."""
+        flow, _ = self.flow("F_capital")
+        leaves, loops, reached = reading.walk_dataflow(flow, "capital_k")
+        nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+        self.assertEqual(reached, {"capital_k", "cond_pd", "floor_pd", "asset_correlation"})
+        self.assertEqual({nodes[leaf]["kind"] for leaf in leaves}, {"argument", "stored data", "number"})
+        self.assertEqual({nodes[leaf]["name"] for leaf in leaves if nodes[leaf]["kind"] == "argument"}, {"pd", "lgd", "segment"})
+        self.assertFalse(loops)
+        self.assertFalse([g for g in flow if g["record_type"] == "gap" and g["function"] in reached])
+        call = next(r for r in nodes.values() if r["kind"] == "call" and r["callee"] == "cond_pd" and r["function"] == "capital_k")
+        self.assertEqual([nodes[s]["callee"] for s in call["bindings"]["pd"] + call["bindings"]["rho"]], ["floor_pd", "asset_correlation"])
+        self.assertEqual(call["bindings"]["q"], ["default"])
+
+    def test_every_source_is_a_node_and_every_line_of_code_is_as_written(self):
+        for sample in ("J_pipeline", "F_capital"):
+            flow, text = self.flow(sample)
+            nodes = {r["node"] for r in flow if r["record_type"] == "node"}
+            for record in flow:
+                if record["record_type"] == "node":
+                    for source in record["from"] + (record.get("default_from") or []):
+                        self.assertIn(source, nodes, "%s: %s comes from %s, which is not a node" % (sample, record["node"], source))
+                if record.get("code") and record.get("function_ref"):
+                    self.assertIn(record["code"], text[record["function_ref"]], "not as written")
+
+    def test_a_join_key_only_matches_and_a_loop_keeps_what_it_is_given(self):
+        """Found building stage 2: left_join(anchor_table, by = "score_band") made score_band look computed
+        from the table, though only anchor is added; and the walk stopped at notch_down's recursive call
+        without the arguments it is given, losing the stored table rating_scale."""
+        flow, _ = self.flow("J_pipeline")
+        nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+        self.assertNotIn("data:anchor_table", nodes["column:score_band"]["from"])
+        self.assertIn("data:anchor_table", nodes["column:anchor"]["from"])
+        leaves, loops, _ = reading.walk_dataflow(flow, "harbour_rating")
+        self.assertIn("data:rating_scale", leaves)
+        self.assertEqual([nodes[loop]["callee"] for loop in loops], ["notch_down"])
 
 
 if __name__ == "__main__":

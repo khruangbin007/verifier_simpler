@@ -788,10 +788,11 @@ def append_history(found, samples, label, stamp):
 # A budget keeps a module reviewable. core.py and runner.py also hold data that was once in
 # engine/references: the prompts (about 250 lines) and the workbook layout (about 140), so their
 # budgets are raised by that much and no more. reading.py rose by 100 for the SVG reader (text in any
-# nesting, HTML in foreignObject, pictures inside SVGs, charts read in place where the XML refers to them).
+# nesting, HTML in foreignObject, pictures inside SVGs, charts read in place where the XML refers to them),
+# and by 350 for the data flow of a package, the implementation map's backbone.
 # review.py rose by 350 for concepts: extracting them, joining their forms, the two questions about
 # them and the search signal that puts them first.
-BUDGETS = {"core.py": 2250, "reading.py": 3100, "review.py": 2950, "runner.py": 1800, "develop.py": 1800}
+BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 2950, "runner.py": 1800, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -867,53 +868,62 @@ def release(arguments):
 
 # ================================================================================================
 # ---------------------------------------------------------------- the implementation map: what the reader recovers
-def map_baseline(sample="J_pipeline", record=True):
-    """How much of a sample's answer key (gold_map.yaml) today's reader already recovers, part by part:
-    the work list for building the Model Implementation Map. Nothing here builds the map; a part the
-    reader has no record for scores zero. Returns {part: (found, total)}, and appends it to history."""
+def map_measure(sample="J_pipeline", record=True):
+    """How much of a sample's answer key (gold_map.yaml) the traced data flow holds, part by part. A value's
+    sources are read through the calls that compute it: base_score comes from the three columns weighted_score
+    is given. Raw inputs are the leaves of the walk down from each final output. What the map says of the
+    documents is its own work (stage 5) and scores zero until then. Returns {part: (found, total)}."""
     import helpers
+    import reading
     import yaml
     with open(os.path.join(SAMPLES, sample, "gold_map.yaml"), encoding="utf-8") as handle:
         gold = yaml.safe_load(handle)
-    paths, settings, _ = helpers.run_sample(sample, stop_after="05")
-    store = runner.open_store(paths, settings)
-    units = store.read("model_units")
-    name = {u["ref"]: u["name"] for u in units}
-    functions = {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION}
-    edges = [r for r in store.read("graph_ledger") if r["record_type"] == "edge"]
-    calls = {(name.get(e["source"]), name.get(e["target"])) for e in edges if e["kind"] == "calls"}
-    reads = {(name.get(e["source"]), name.get(e["target"])) for e in edges if e["kind"] == "reads_data"}
-    roots = set(functions) - {callee for caller, callee in calls if caller != callee}
-    code = lambda unit: unit.get("code") or {}
-    def computed_from(variable, source, inside=None):
-        """Some statement sets the variable and reads the source - per statement, not per function."""
-        return any(variable in (code(u).get("symbols_written") or []) and source in (code(u).get("symbols_read") or [])
-                   and (inside is None or u.get("parent_ref") == functions[inside]["ref"]) for u in units if u["kind"] == core.KIND_FORMULA)
-    numbers = {str(n.get("value") if isinstance(n, dict) else n) for u in units for n in code(u).get("numbers") or []}
-    formals = {formal for output in gold["final_outputs"] if output in functions for formal, _ in code(functions[output]).get("formals") or []}
+    paths, settings, _ = helpers.run_sample(sample, stop_after="05a")
+    flow = runner.open_store(paths, settings).read("dataflow")
+    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+    roots = next(r for r in flow if r["record_type"] == "roots")
+    calls = {(r["function"], r["callee"]) for r in nodes.values() if r["kind"] == "call"}
+    def direct(node_id):
+        """The names a value is computed from, through the calls that compute it."""
+        names = set()
+        for source in nodes.get(node_id, {}).get("from", []):
+            inner = nodes.get(source, {})
+            if inner.get("kind") == "call":
+                names |= {nodes.get(s, {}).get("name", s) for s in inner["from"] if s != "%s:return" % inner["callee"]}
+            else:
+                names.add(inner.get("name", source))
+        return names
+    leaves = set()
+    for output in gold["final_outputs"]:
+        leaves |= reading.walk_dataflow(flow, output)[0]
+    leaf_names = {kind: {nodes[leaf]["name"] for leaf in leaves if leaf in nodes and nodes[leaf]["kind"] == kind}
+                  for kind in ("argument", "column", "stored data", "file", "number")}
+    gaps = [r for r in flow if r["record_type"] == "gap"]
     raw = gold["raw_inputs"]
     found = {
         "final outputs and not-reached functions among the candidates code finds":
-            (len(roots & set(gold["final_outputs"] + gold["not_reached"])), len(gold["final_outputs"]) + len(gold["not_reached"])),
+            (len(set(roots["proposed"]) & set(gold["final_outputs"])) + len(set(roots["not_reached"]) & set(gold["not_reached"])),
+             len(gold["final_outputs"]) + len(gold["not_reached"])),
         "calls between package functions": (sum((caller, callee) in calls for caller, callees in gold["calls"].items() for callee in callees),
                                             sum(len(callees) for callees in gold["calls"].values())),
         "values within a function, with what each is computed from":
-            (sum(computed_from(v, source, f) for f, flows in gold["flows"].items() for v, sources in flows.items() for source in sources),
+            (sum(source in direct("%s:%s" % (f, v)) for f, flows in gold["flows"].items() for v, sources in flows.items() for source in sources),
              sum(len(sources) for flows in gold["flows"].values() for sources in flows.values())),
         "columns a dplyr verb creates, with what each is computed from":
-            (sum(computed_from(column, source) for column, sources in gold["columns"].items() for source in sources),
+            (sum(source in direct("column:%s" % column) for column, sources in gold["columns"].items() for source in sources),
              sum(len(sources) for sources in gold["columns"].values())),
-        "raw inputs: arguments of a final output": (len(set(raw["argument"]) & formals), len(raw["argument"])),
-        "raw inputs: columns of an argument": (0, len(raw["column_of_an_argument"])),
-        "raw inputs: stored data": (sum(any(target == table for _, target in reads) for table in raw["stored_data"]), len(raw["stored_data"])),
-        "raw inputs: files": (sum(any(os.path.basename(path) in (target or "") for _, target in reads) for path in raw["file"]), len(raw["file"])),
-        "raw inputs: hard-coded numbers": (len(set(raw["hard_coded_number"]) & numbers), len(raw["hard_coded_number"])),
-        "gaps named, for the agents": (0, len(gold["gaps"])),
-        "methodology no step implements": (0, len(gold["methodology_not_implemented"])),
-        "documentation describing nothing in the map": (0, len(gold["documentation_describing_nothing"]))}
+        "raw inputs: arguments of a final output": (len(set(raw["argument"]) & leaf_names["argument"]), len(raw["argument"])),
+        "raw inputs: columns of an argument": (len(set(raw["column_of_an_argument"]) & leaf_names["column"]), len(raw["column_of_an_argument"])),
+        "raw inputs: stored data": (len(set(raw["stored_data"]) & leaf_names["stored data"]), len(raw["stored_data"])),
+        "raw inputs: files": (len(set(raw["file"]) & leaf_names["file"]), len(raw["file"])),
+        "raw inputs: hard-coded numbers": (len(set(raw["hard_coded_number"]) & leaf_names["number"]), len(raw["hard_coded_number"])),
+        "gaps named, for the agents": (sum(any(g["function"] == gap["function"] and gap["code"] in g["code"] for g in gaps) for gap in gold["gaps"]),
+                                       len(gold["gaps"])),
+        "methodology no step implements (the map, stage 5)": (0, len(gold["methodology_not_implemented"])),
+        "documentation describing nothing in the map (the map, stage 5)": (0, len(gold["documentation_describing_nothing"]))}
     if record:
-        remember("map-baseline", datetime.date.today().isoformat(), sample, "no model",
-                 **{re.sub(r"\W+", "_", part.split(",")[0])[:40]: "%d/%d" % pair for part, pair in found.items()})
+        remember("map-measure", datetime.date.today().isoformat(), sample, "no model",
+                 **{re.sub(r"\W+", "_", part.split(",")[0].split(" (")[0])[:40]: "%d/%d" % pair for part, pair in found.items()})
     return found
 
 
@@ -1301,8 +1311,8 @@ if __name__ == "__main__":
         harness(sys.argv[2:])
     if what == "recall":
         recall(sys.argv[2:] or ["A_minimal", "F_capital"])
-    if what == "map-baseline":
-        print(map_baseline_text(map_baseline(sys.argv[2] if len(sys.argv) > 2 else "J_pipeline")))
+    if what == "map-measure":
+        print(map_baseline_text(map_measure(sys.argv[2] if len(sys.argv) > 2 else "J_pipeline")))
     if what == "reading-report":
         import standin_chat
         print(run(standin_chat.chat_well_behaved, label="the stand-in"))

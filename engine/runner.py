@@ -1735,6 +1735,7 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "reading.read_documentation": reading.read_documentation,
     "reading.read_package": reading.read_package,
     "review.build_graph": review.build_graph,
+    "reading.trace_dataflow": reading.trace_dataflow,
     "review.extract_concepts": review.extract_concepts,
     "review.judge_concepts": review.judge_concepts,
     "review.find_candidates": review.find_candidates,

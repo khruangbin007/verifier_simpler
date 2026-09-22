@@ -3057,3 +3057,350 @@ def read_package(ctx):
     return core.StepResult({"model_units": units, "parameter_tables": tables, "package_info": [info],
                               "content_accounts": [account], "shape_digests": digests},
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)
+
+# ---------------------------------------------------------------- the data flow of a package: the implementation map's backbone
+# Every function traced by code alone: each value it sets and the values it is computed from; each call,
+# with which argument went to which parameter there; each column a dplyr verb creates and from what; the
+# stored tables, files and hard-coded numbers everything comes from. What code cannot follow - a lambda
+# purrr applies, do.call over a list built at run time, eval, <<-, an object system - is a named gap with
+# its code, for the agents. Nothing here is guessed, and the units are not touched: this is a record of its
+# own, so every M- reference stays as it was. Enforces: R2, R4, R7
+DPLYR_CREATE = {"mutate", "transmute", "summarise", "summarize", "reframe"}
+DPLYR_JOIN = {"left_join", "inner_join", "right_join", "full_join", "semi_join", "anti_join"}
+DPLYR_MASKING = DPLYR_CREATE | DPLYR_JOIN | {"filter", "select", "arrange", "group_by", "rename", "distinct", "count", "pull",
+                                              "case_when", "if_else", "slice", "relocate", "summarise_at", "with", "within", "subset", "transform"}
+FILE_READERS = {"read.csv", "read.csv2", "read.table", "read.delim", "readRDS", "read_csv", "read_csv2", "read_tsv", "read_delim",
+                "read_excel", "read_xlsx", "read_xls", "fread", "load", "scan", "readLines", "read_rds", "read_parquet", "fromJSON", "read_yaml"}
+APPLIERS = {"map", "map_dbl", "map_chr", "map_int", "map_lgl", "map_df", "map_dfr", "map_dfc", "map2", "map2_dbl", "pmap", "imap", "walk",
+            "reduce", "keep", "discard", "lapply", "sapply", "vapply", "mapply", "Map", "Reduce", "Filter", "apply", "tapply", "outer"}
+OPAQUE_CALLS = {"do.call": "do.call over arguments built at run time", "eval": "code built at run time and evaluated",
+                "evalq": "code built at run time and evaluated", "parse": "code built from text at run time",
+                "get": "a value looked up by a name built at run time", "mget": "values looked up by names built at run time",
+                "assign": "a value stored under a name built at run time", "match.fun": "a function chosen at run time",
+                "UseMethod": "a function chosen by the class of its argument at run time", "NextMethod": "a function chosen by class at run time",
+                "setRefClass": "an object system (reference classes)", "R6Class": "an object system (R6)", "setClass": "an object system (S4)",
+                "setMethod": "an object system (S4 methods)", "local": "code run in an environment of its own"}
+
+class Dataflow:
+    """The data flow of one package, traced function by function. Node ids:
+    'f:v' a value v set in function f; 'f:arg:a' a parameter; 'f:return' what f returns;
+    'call:f:line:g' one call of g from f; 'column:c' a data-frame column; 'data:t' a stored table;
+    'file:path'; 'number:value:f:line'; 'guard:f:line' a call whose value is not kept;
+    'outside:name' a name from outside the package (R itself, another package, the session)."""
+
+    def __init__(self, units, trivial=()):
+        self.units, self.trivial = units, set(trivial)
+        self.functions = {u["name"]: u for u in units if u["kind"] == core.KIND_FUNCTION and not u.get("inside")}
+        self.tables = {u["data"]["object_name"]: u for u in units if (u.get("data") or {}).get("object_name")}
+        self.nodes, self.records, self.parsed = {}, [], {}
+        for name, unit in self.functions.items():
+            found = parse_r_source(unit["text"])
+            node = found[0] if found and not isinstance(found[0], tuple) else None
+            parts = assignment_parts(node) if node is not None else None
+            self.parsed[name] = parts[1] if parts and parts[1].kind == "function" else node if node is not None and node.kind == "function" else None
+
+    # ------------------------------------------------ records
+    def node(self, node_id, kind, name, env=None, at=None, sources=(), **extra):
+        record = self.nodes.get(node_id)
+        if record is None:
+            record = {"record_type": "node", "node": node_id, "kind": kind, "name": name, "function": env["function"] if env else "",
+                      "function_ref": self.functions[env["function"]]["ref"] if env else "", "line": self.line_of(env, at),
+                      "code": self.code_of(env, at), "from": []}
+            self.nodes[node_id] = record
+        for source in sources:
+            if source not in record["from"] and source != node_id:
+                record["from"].append(source)
+        record.update(extra)
+        return node_id
+
+    def gap(self, env, at, why):
+        self.records.append({"record_type": "gap", "function": env["function"], "function_ref": self.functions[env["function"]]["ref"],
+                             "line": self.line_of(env, at), "code": self.code_of(env, at), "why": why})
+
+    def line_of(self, env, at):
+        return self.functions[env["function"]]["lines"][0] + at.line - 1 if env and at is not None and at.line else 0
+
+    def code_of(self, env, at):
+        """The code as written: the lines of the unit's own text that the node spans."""
+        if not env or at is None or not at.line:
+            return ""
+        lines = self.functions[env["function"]]["text"].split("\n")
+        return "\n".join(lines[at.line - 1:max(at.line, at.end_line or at.line)]).strip()
+
+    # ------------------------------------------------ one function
+    def trace(self, name):
+        function = self.parsed.get(name)
+        env = {"function": name, "formals": set(), "locals": set(), "lambda": set()}
+        if function is None:
+            self.records.append({"record_type": "gap", "function": name, "function_ref": self.functions[name]["ref"], "line": self.functions[name]["lines"][0],
+                                 "code": self.functions[name]["text"].split("\n")[0], "why": "the function could not be read"})
+            return
+        env["formals"] = set(function.names)
+        env["locals"] = {parts[0].value for inner in walk_nodes(function.args[-1]) for parts in [assignment_parts(inner)]
+                         if parts and parts[0].kind in ("name", "str")}
+        for formal, default in zip(function.names, function.args[:-1]):
+            defaults = self.sources(default, env) if default.kind != "missing" else []
+            self.node("%s:arg:%s" % (name, formal), "argument", formal, env, function, default_from=defaults,
+                      default_code=self.code_of(env, default) if default.kind != "missing" else "")
+        returned = self.body(function.args[-1], env)
+        for inner in walk_nodes(function.args[-1]):
+            if inner.kind == "call" and callee_name(inner) == "return" and len(inner.args) > 1:
+                returned += self.sources(inner.args[1], env)
+        self.node("%s:return" % name, "return", "the value %s returns" % name, env, function, list(dict.fromkeys(returned)))
+
+    def body(self, block, env):
+        """The statements of a body, each set value a node; returns the sources of what the body gives."""
+        items = list(block.args) if block.kind == "block" else [block]
+        given = []
+        for position, item in enumerate(items):
+            last = position == len(items) - 1
+            parts = assignment_parts(item)
+            if parts:
+                target = parts[0]
+                while target.kind in ("dollar", "index") and target.args:
+                    target = target.args[0]                 # x$c <- v and x[i] <- v change x
+                if item.value in ("<<-", "->>"):
+                    self.gap(env, item, "a value assigned outside the function with <<-")
+                if target.kind in ("name", "str"):
+                    extra = self.sources(parts[0], env) if parts[0] is not target else []
+                    node = self.node("%s:%s" % (env["function"], target.value), "value", target.value, env, item,
+                                     self.sources(parts[1], env) + extra)
+                    given = [node] if last else given
+            elif item.kind == "if" and not last:
+                self.sources(item.args[0], env)
+                for branch in item.args[1:]:
+                    self.body(branch, env)
+            elif item.kind in ("for", "while", "repeat"):
+                self.sources(item.args[0], env) if item.kind != "repeat" else None
+                self.body(item.args[-1], env)
+            elif last:
+                given = self.sources(item, env)
+            elif not (item.kind == "call" and callee_name(item) == "return"):
+                self.node("guard:%s:%d" % (env["function"], item.line), "guard", self.code_of(env, item).split("\n")[0][:80], env, item,
+                          self.sources(item, env))
+        return given
+
+    # ------------------------------------------------ what a value is computed from
+    def sources(self, node, env, masked=False):
+        kind = node.kind
+        if kind == "num":
+            value = node.value.rstrip("Li")
+            return [self.node("number:%s:%s:%d" % (value, env["function"], node.line), "number", value, env, node, trivial=value in self.trivial)]
+        if kind in ("str", "missing"):
+            return []
+        if kind == "name":
+            return self.resolve(node.value, env, masked)
+        if kind == "binary" and node.value in ("%>%", "|>"):
+            left, right = node.args
+            call = right if right.kind == "call" else Node("call", "(", (right,), (), right.line, right.end_line)
+            return self.sources(Node("call", "(", (call.args[0], left) + tuple(call.args[1:]), ("",) + tuple(call.names),
+                                     call.line, call.end_line), env, masked)
+        if kind == "binary" and node.value in ASSIGNMENT_SIGNS:
+            self.body(Node("block", "", (node,), (), node.line, node.end_line), env)
+            parts = assignment_parts(node)
+            return self.resolve(parts[0].value, env, masked) if parts and parts[0].kind == "name" else []
+        if kind == "dollar":
+            return self.sources(node.args[0], env, masked)
+        if kind == "ns":
+            return []
+        if kind == "function":
+            self.gap(env, node, "a function written in place, whose arguments are given at run time")
+            inner = dict(env, **{"lambda": set(env["lambda"]) | set(node.names)})
+            return self.sources(node.args[-1], inner, masked)
+        if kind == "call":
+            return self.call(node, env, masked)
+        return [source for child in node.args for source in self.sources(child, env, masked)]
+
+    def resolve(self, name, env, masked):
+        if name in CONSTANT_NAMES or name in env["lambda"]:
+            return []
+        if name in env["locals"]:
+            return ["%s:%s" % (env["function"], name)]
+        if name in env["formals"]:
+            return ["%s:arg:%s" % (env["function"], name)]
+        if name in self.tables:
+            return [self.table_node(name)]
+        if name in self.functions:
+            return []                                        # a function passed as a value: its call is what counts
+        if masked:                                           # inside dplyr, a bare name is a column of the data
+            return [self.node("column:%s" % name, "column", name, created_in=self.nodes.get("column:%s" % name, {}).get("created_in", []))]
+        return [self.node("outside:%s" % name, "outside", name)]
+
+    def table_node(self, name):
+        table = self.tables[name]
+        return self.node("data:%s" % name, "stored data", name, file=table["data"].get("container_file", ""), unit_ref=table["ref"],
+                         columns=[column for column, _ in table["data"].get("columns") or []])
+
+    def call(self, node, env, masked):
+        name = callee_name(node)
+        args = list(node.args[1:])
+        names = list(node.names) + [""] * (len(args) - len(node.names))
+        if name in OPAQUE_CALLS:
+            self.gap(env, node, OPAQUE_CALLS[name])
+            return [source for arg in args for source in self.sources(arg, env, masked)]
+        if name in FILE_READERS:
+            path = self.file_path(args[0]) if args else ""
+            if not path:
+                self.gap(env, node, "a file read from a path built at run time")
+                return [source for arg in args for source in self.sources(arg, env, masked)]
+            table = next((t for t, u in self.tables.items() if u["data"].get("container_file") == path), None)
+            return [self.node("file:%s" % path, "file", path, unit_ref=self.tables[table]["ref"] if table else "")]
+        if name in DPLYR_CREATE:
+            frame = self.sources(args[0], env, masked) if args and not names[0] else []
+            created = []
+            for arg, column in zip(args, names):
+                if column:
+                    created.append(self.node("column:%s" % column, "column", column, env, node, self.sources(arg, env, True)))
+                    self.nodes["column:%s" % column].setdefault("created_in", [])
+                    if env["function"] not in self.nodes["column:%s" % column]["created_in"]:
+                        self.nodes["column:%s" % column]["created_in"].append(env["function"])
+                elif arg is not args[0]:
+                    self.gap(env, node, "columns created by an expression that does not name them")
+            return frame + created
+        if name in DPLYR_JOIN:
+            keys = {inner.value for arg, label in zip(args, names) if label == "by" for inner in walk_nodes(arg) if inner.kind == "str"}
+            joined = []
+            for arg in args[:2]:
+                joined += self.sources(arg, env, masked)
+                if arg.kind == "name" and arg.value in self.tables:     # the table's columns join the data; its keys only match
+                    for column in self.nodes[self.table_node(arg.value)]["columns"]:
+                        if column not in keys:
+                            joined.append(self.node("column:%s" % column, "column", column, env, node, ["data:%s" % arg.value]))
+            return joined
+        if name in APPLIERS:
+            found = []
+            for arg in args:
+                if arg.kind == "name" and arg.value in self.functions:
+                    found.append(self.record_call(arg.value, env, node, [], [], masked))
+                else:
+                    found += self.sources(arg, env, masked)
+            return found
+        inner = masked or name in DPLYR_MASKING
+        values = [self.sources(arg, env, inner) for arg in args]
+        if name in self.functions:
+            return [self.record_call(name, env, node, values, names, inner)]
+        return [source for value in values for source in value]
+
+    def record_call(self, callee, env, node, values, names, masked):
+        """One call of a package function: its node, the parameter each argument goes to there - by name
+        first, then by position, R's own order - and what a parameter left out takes: its default."""
+        formals = list(self.parsed[callee].names) if self.parsed.get(callee) is not None else []
+        bound, free = {}, [f for f in formals if f not in names and f != "..."]
+        for value, name in zip(values, names):
+            if name in formals:
+                bound[name] = value
+            elif free:
+                bound[free.pop(0)] = value
+            elif "..." in formals:
+                bound.setdefault("...", []).extend(value)
+        bindings = {formal: bound.get(formal, ["default"]) for formal in formals}
+        call_id = "call:%s:%d:%s" % (env["function"], node.line, callee)
+        self.node(call_id, "call", "%s()" % callee, env, node, [source for value in values for source in value] + ["%s:return" % callee],
+                  callee=callee, bindings=bindings)
+        return call_id
+
+    def file_path(self, arg):
+        """The path a reader is given: a string as written, or system.file(...), which names a file under inst/."""
+        if arg.kind == "str":
+            return arg.value
+        if arg.kind == "call" and callee_name(arg) == "system.file":
+            parts = [a.value for a, n in zip(arg.args[1:], list(arg.names) + [""] * len(arg.args)) if a.kind == "str" and not n]
+            return "inst/" + "/".join(parts) if parts else ""
+        return ""
+
+    # ------------------------------------------------ the whole package
+    def run(self):
+        for name in sorted(self.functions, key=lambda n: self.functions[n]["ref"]):
+            self.trace(name)
+        calls = [r for r in self.nodes.values() if r["kind"] == "call"]
+        called = {r["callee"] for r in calls if r["callee"] != r["function"]}
+        entry = set()
+        for unit in self.units:                          # the tests and vignettes that call a package function
+            if unit["kind"] in (core.KIND_TEST, core.KIND_TOPLEVEL, core.KIND_VIGNETTE):
+                for found in parse_r_source(unit["text"]):
+                    if not isinstance(found, tuple):
+                        entry |= {callee_name(inner) for inner in walk_nodes(found) if inner.kind == "call"} & set(self.functions)
+        uncalled = set(self.functions) - called
+        proposed = sorted(name for name in uncalled if (self.functions[name].get("code") or {}).get("exported") or name in entry)
+        reached, frontier = set(proposed), list(proposed)
+        while frontier:
+            caller = frontier.pop()
+            for record in calls:
+                if record["function"] == caller and record["callee"] not in reached:
+                    reached.add(record["callee"])
+                    frontier.append(record["callee"])
+        roots = {"record_type": "roots", "proposed": proposed, "not_reached": sorted(set(self.functions) - reached),
+                 "why": {name: ", ".join(filter(None, ["nothing in the package calls it",
+                                                         "exported" if (self.functions[name].get("code") or {}).get("exported") else "",
+                                                         "called by a test or vignette" if name in entry else ""])) for name in uncalled}}
+        return list(self.nodes.values()) + self.records + [roots]
+
+def walk_nodes(node):
+    """Every node of a tree, the tree itself first, without entering functions written inside it."""
+    yield node
+    for child in node.args:
+        if child.kind != "function":
+            yield from walk_nodes(child)
+
+def trace_dataflow(ctx):
+    """Step 05a, trace-dataflow: the package's data flow, by code alone - every value each function sets
+    and what it is computed from, every call with its arguments matched to their parameters, every column
+    a dplyr verb creates, every stored table, file and hard-coded number, and the gaps code cannot follow.
+    Proposes the final outputs: exported functions nothing in the package calls, and those its tests and
+    vignettes call. Enforces: R2, R4, R7"""
+    flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"])
+    records = flow.run()
+    count = lambda kind: sum(1 for r in records if r.get("kind") == kind)
+    gaps = [r for r in records if r["record_type"] == "gap"]
+    roots = records[-1]
+    return core.StepResult({"dataflow": records},
+                           {"values": count("value"), "calls": count("call"), "columns": count("column"), "gaps": len(gaps),
+                            "proposed final outputs": len(roots["proposed"])},
+                           ["Traced %d functions: %d values, %d calls, %d columns; %d gaps for the agents. Proposed final outputs: %s."
+                            % (len(flow.functions), count("value"), count("call"), count("column"), len(gaps), ", ".join(roots["proposed"]) or "none")])
+
+def walk_dataflow(records, function):
+    """Everything the value a function returns is computed from, followed into every call with that call's
+    own arguments: (leaves, loops, functions reached). A parameter of a called function is what the call
+    passed it there, or its default; a parameter of the function the walk began in is a raw input. A
+    leaf is where the flow starts: such a parameter, a stored table, a file, a number, a column nothing
+    creates, or a name from outside the package. A function already being walked is a loop. Enforces: R2"""
+    nodes = {r["node"]: r for r in records if r["record_type"] == "node"}
+    leaves, loops, reached, seen = set(), set(), {function}, set()
+    def visit(node_id, frames):
+        key = (node_id, tuple(frame for frame, _ in frames))
+        if key in seen:
+            return
+        seen.add(key)
+        node = nodes.get(node_id)
+        if node is None or node["kind"] in ("stored data", "file", "number", "outside"):
+            leaves.add(node_id)
+            return
+        if node["kind"] == "call":
+            if node["callee"] in (frame for frame, _ in frames):
+                loops.add(node_id)                           # a loop stops the descent, not what the call is given
+                for source in node["from"]:
+                    if source != "%s:return" % node["callee"]:
+                        visit(source, frames)
+                return
+            reached.add(node["callee"])
+            visit("%s:return" % node["callee"], frames + [(node["callee"], node["bindings"])])
+            return
+        if node["kind"] == "argument" and node["function"] == frames[-1][0]:
+            bound = frames[-1][1]
+            if bound is None:
+                leaves.add(node_id)                          # a parameter of the final output: a raw input
+                return
+            given = bound.get(node["name"], ["default"])
+            for source in (node.get("default_from") or [] if given == ["default"] else given):
+                visit(source, frames if given == ["default"] else frames[:-1])
+            if given == ["default"] and not node.get("default_from"):
+                leaves.add(node_id)
+            return
+        if node["kind"] == "column" and not node["from"]:
+            leaves.add(node_id)                              # a column no verb creates: it came in with the data
+            return
+        for source in node["from"]:
+            visit(source, frames)
+    visit("%s:return" % function, [(function, None)])
+    return leaves, loops, reached

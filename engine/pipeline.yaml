@@ -24,6 +24,10 @@ steps:
     name: build-graph
     version: "0.0.1"
     carried_out_by: review.build_graph
+  - id: "05a"
+    name: trace-dataflow
+    version: "0.0.1"
+    carried_out_by: reading.trace_dataflow
   - id: "06"
     name: extract-concepts
     version: "0.0.1"
