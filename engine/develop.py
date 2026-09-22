@@ -785,7 +785,10 @@ def append_history(found, samples, label, stamp):
 
 # ================================================================================================
 # ---------------------------------------------------------------- from tools/count_lines.py
-BUDGETS = {"core.py": 2000, "reading.py": 3000, "review.py": 2600, "runner.py": 1600, "develop.py": 1800}
+# A budget keeps a module reviewable. core.py and runner.py also hold data that was once in
+# engine/references: the prompts (about 250 lines) and the workbook layout (about 140), so their
+# budgets are raised by that much and no more. reading.py and review.py absorbed less and did not need it.
+BUDGETS = {"core.py": 2250, "reading.py": 3000, "review.py": 2600, "runner.py": 1750, "develop.py": 1800}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -828,8 +831,7 @@ def report():
 if os.path.join(ROOT, "engine") not in sys.path:
     sys.path.insert(0, os.path.join(ROOT, "engine"))
 
-PATTERNS = ("engine/*.py", "engine/pipeline.yaml", "engine/requirements.txt", "engine/skills/*/SKILL.md", "engine/references/**/*",
-            "Verifier.ipynb", "tools/*.py")
+PATTERNS = ("engine/*.py", "engine/pipeline.yaml", "engine/requirements.txt", "Verifier.ipynb")
 
 
 def current():
@@ -893,6 +895,14 @@ def manual_problems():
     for message in ("cell 1", "cell 2", "cell 3", "cell 4", "cell 5"):
         if message not in text.lower():
             found.append("the manual never mentions %s of the notebook" % message)
+    # a file the manual names by its path in the repository, or a test file by its name, must exist:
+    # a restructure that moves or renames a file otherwise leaves the manual pointing at nothing
+    for path in sorted(set(re.findall(r"`((?:engine|docs|tools|evaluation)/[\w./*-]+)`", text))):
+        if not glob.glob(os.path.join(ROOT, path)):
+            found.append("the manual names `%s`, which is not in the repository" % path)
+    for name in sorted(set(re.findall(r"`(test_\w+\.py)`", text))):
+        if not os.path.exists(os.path.join(TESTS, name)):
+            found.append("the manual names the test file `%s`, which does not exist" % name)
     banned = core.has_banned_wording(text)
     if banned:
         found.append("the manual uses the banned word '%s'" % banned)

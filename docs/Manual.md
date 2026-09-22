@@ -254,7 +254,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 
 **How to read a path.** *What was observed* on `Flagged_Items` ends with the supporting path, hop by hop: the unit, the function it sits in, the table it reads, the passage it corresponds to with how that was established, the roxygen block and documentation passage that describe it.
 
-**The sheets and columns.** Generated from `engine/references/workbook_layout.yaml`:
+**The sheets and columns.** As laid out in the one place that defines them, `runner.WORKBOOK_LAYOUT_YAML`:
 
 **Model_Package_Info**
 
@@ -338,7 +338,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Hard-coded numbers | assessments | Every non-trivial number in the code, and where the linked passages state it. |
 | Unit test | assessments | Which test block calls the function. For information only; it never raises an item. |
 | Quality notes (AI) | assessments | Text written by the model, labelled as such and filtered. |
-| Overall status | assessments | The one final status of the unit (chapter 6). |
+| Overall status | assessments | The one final status of the unit (the statuses are listed in this section). |
 | Flagged item(s) | assessments | Ids of the rows on Flagged_Items that name this unit. |
 
 **Mapping_Doc_to_Canon_and_Model**
@@ -364,7 +364,7 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 | Logic consistency | assessments | Floors, caps and thresholds stated in linked passages, and whether the code applies them. On the documentation sheet: the judged relations. |
 | Parameter note (AI) | assessments | A column mapping or symbol alignment proposed by the model, where one was asked for. |
 | Documentation quality notes | assessments | Deterministic notes: references that resolve to nothing, reconstructed numbering, unreadable parts, repeated paragraphs. |
-| Overall status | assessments | The one final status of the unit (chapter 6). |
+| Overall status | assessments | The one final status of the unit (the statuses are listed in this section). |
 | Flagged item(s) | assessments | Ids of the rows on Flagged_Items that name this unit. |
 
 **Mapping_Coverage**
@@ -466,7 +466,7 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 - R code is parsed by the tool's own reader, not by R. Unusual syntax becomes a *File not read* unit for that expression only. Functions with loops or branches are compared statement by statement; R semantics that the tool's evaluator does not cover (recycling of vectors, matrix products) end as "uses operations the tool cannot evaluate".
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described and not compared; missing values of different kinds are not told apart.
 - The percentage after "AI judgement" is not calibrated.
-- The evaluation so far used invented sample projects and the stand-in `chat()`; results with a real model on a real package are the owner's Phase 12 campaign (chapter 27).
+- The evaluation so far used invented sample projects and the stand-in `chat()`; results with a real model on a real package are still to be measured (section 22).
 
 ---
 
@@ -582,7 +582,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 | `interpret_code` | True | Ask the AI to say in plain words what each function, formula statement, top-level statement and test block does, shown with where it sits in the whole package. Fills the column LLM Interpretation on Chunks_Model. One question per piece of code; switch it off to save the calls. |
 | `agentic_reading` | off | Whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. "off" asks nothing and reads as the built-in rules read; "rules" asks one question per file the rules are unsure about and applies the answer under everything the rules already know. |
-| `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the ablation ladder of tools/recall_at_k.py switches them off one by one. |
+| `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the recall ladder (`develop.recall`) switches them off one by one. |
 
 `agentic_reading` (default `off`): whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. `off` asks nothing; `rules` asks one question per file the rules are unsure about. The sign-off bar for turning it on is `develop.run`, run from cell 5 with `APPENDIX = "sign-off"`; it changes no setting.
 
@@ -614,30 +614,23 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 | You want to add | Where | What must be re-evaluated |
 |---|---|---|
-| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project, or `engine/references/tag_rules.yaml` | `test_reading.py`; the outline of one real document |
-| an R function the comparison should understand | `engine/references/r_function_map.yaml` (neutral name, arguments, domain), `review.to_sympy` and `review.evaluate` | `test_review.py` with new pairs in `engine/tests/equivalence_corpus.yaml`; Reviewer 2 and Reviewer 4 agree the entry |
-| a question type | a prompt under `engine/references/prompts/`, a validator branch in `review.validate_narrow`, a handler in the stand-in | the bad-answers corpus; the token budget for the largest unit |
-| a category | the constants of `core.py`, `review.NEXT_STEPS`, Appendix B | the wording lint; the identity tests |
-| a search signal | `review.search_one`, `review.REASON_TEMPLATES`, the `signals` setting | `tools/recall_at_k.py`: the signal must earn its place on the ablation ladder |
+| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `reading.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
+| an R function the comparison should understand | `reading.R_FUNCTION_MAP_YAML` (neutral name, arguments, domain), `review.to_sympy` and `review.evaluate` | `test_checks.py`, with new pairs in `engine/tests/equivalence_corpus.yaml` |
+| a question type | a prompt in `core.PROMPTS`, a validator branch in `review.validate_narrow`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
+| a category | the constants of `core.py`, `review.NEXT_STEPS`, section 20 | the wording lint; the identity tests |
+| a search signal | `review.search_one`, `review.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
+| a word the search should ignore, or a code-to-prose bridge | `review.STOPWORDS_TEXT`, `review.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
+| a column or a sheet of `Output.xlsx` | `runner.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `runner.py` | `test_runner.py`; the end-to-end tests |
 
-After any change: the whole test suite, `tools/check_docs.py`, `tools/build_manual.py`, the harness (`tools/run_harness.py`), and a new `docs/release_manifest.json` from `tools/make_release_manifest.py`.
+A prompt's text is part of every question id made from it, and recorded answers are found by that id: change a prompt's words and raise its `VERSION` line together, so that no answer to the old question is taken for an answer to the new one.
+
+After any change, see section 23.
 
 ## 22. How the tool was measured
 
-The evaluation dossier is `docs/the tool_0.0.1_Evaluation_Dossier.md`. In short, with the stand-in `chat()` on invented samples: the equivalence corpus of 100 formula pairs (no differing pair is ever reported as agreeing); the seeded-difference harness (`evaluation/harness_F_capital.md`); the recall ladder of the search stage (`evaluation/relatedness_report.md`); the six seeded differences of `F_capital_known`; reproducibility by replay. What is still to be done with the real model on a real package, by the owner, is listed there as well.
+With the stand-in `chat()` on invented samples: an equivalence corpus of 100 formula pairs, in which no differing pair is ever reported as agreeing; the seeded-difference harness (`develop.harness`), in which every seeded difference in a sample ends flagged in an expected category and the clean baseline flags none of its gold clean units; the recall ladder of the search (`develop.recall`); the six seeded differences of `F_capital_known`; and reproducibility by replay from recorded answers. Every measurement appends a row to `engine/tests/history.csv`. What is still to be done is to measure the same with the real model on a real package.
 
-**Line counts.** The plan asks for at least 30 percent of each file to be docstrings, comments and overview. The files are below that share; the numbers are reported here as they are.
-
-| File | Lines | Budget | Docstrings and comments |
-|---|---|---|---|
-| core.py | 450 | 450 | 23% |
-| core.py | 972 | 1100 | 29% |
-| core.py | 438 | 600 | 24% |
-| reading.py | 1453 | 1500 | 19% |
-| reading.py | 1426 | 1500 | 14% |
-| review.py | 1155 | 1500 | 18% |
-| review.py | 1382 | 1500 | 14% |
-| runner.py | 1497 | 1500 | 16% |
+**Line counts.** `python engine/develop.py budgets` prints them. The plan asked for at least 30 percent of each file to be docstrings, comments and overview; the files are below that share, and the numbers are reported as they are rather than padded.
 
 **Dependencies.**
 

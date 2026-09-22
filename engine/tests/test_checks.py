@@ -9,7 +9,7 @@ import reading
 import review
 import runner
 SETTINGS = runner.make_settings()
-NOTATION = reading.load_notation(runner.REFERENCES_DIR)
+NOTATION = reading.load_notation()
 STOP = set()
 
 

@@ -63,7 +63,6 @@ import review
 # ================================================================================================
 # ---------------------------------------------------------------- from verifier5_run_report
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
-REFERENCES_DIR = os.path.join(ENGINE_DIR, "references")
 
 class RunPaused(Exception):
     """The run stopped on purpose and can be resumed. The message tells the person what to do."""
@@ -765,7 +764,7 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
     provenance = core.Provenance(paths.run_id, step["id"], step["name"], step["version"],
                                    created_at=datetime.datetime.now().isoformat(timespec="seconds"))
     options = dict(step.get("with") or {})
-    options.update({"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR, "paths": paths,
+    options.update({"inputs": core.list_input_files(paths.inputs_dir), "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
@@ -822,12 +821,12 @@ def fingerprint_file(path, corner, inputs_dir):
             "bytes": len(data), "sha256": core.sha256_bytes(data), "swhid": core.swhid_content(data)}
 
 def engine_file_hashes():
-    """SHA-256 of every file that makes up the engine (code, pipeline, references), so
-    that an evidence pack names exactly the code that produced it (the same list as in
-    docs/release_manifest.json)."""
+    """SHA-256 of every file that makes up the engine (its code, which now holds its prompts and
+    reference data, the pipeline and the requirements), so that an evidence pack names exactly the
+    code that produced it - the same list as engine/release.json."""
     import glob
     found = {}
-    for pattern in ("*.py", "pipeline.yaml", "requirements.txt", "references/**/*"):
+    for pattern in ("*.py", "pipeline.yaml", "requirements.txt"):
         for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
             if os.path.isfile(path):
                 found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
@@ -1145,10 +1144,146 @@ def check_written_totals(rows, store):
                 "Part 4 of the coverage identity does not hold: the totals counted for the %s corner differ "
                 "from the rows written to the workbook. This is a defect in the tool, not in the model under review." % corner)
 
+# ---------------------------------------------------------------- the workbook layout
+# Every sheet of Output.xlsx in order, and every column of each: its header, its colour group, the
+# field of the row it shows, its width, and whether it is typed by a person (input_text). One line
+# per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, reviewer_input: FFFF00}
+sheets:
+- name: Model_Package_Info
+  columns:
+  - {header: Group, group: identity, field: group, width: 26}
+  - {header: Item, group: identity, field: item, width: 40}
+  - {header: Value, group: assessments, field: value, width: 90}
+- name: Chunks_Canon
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
+  - {header: Level, group: identity, field: level, width: 7}
+  - {header: Section (heading chain), group: identity, field: section, width: 44}
+  - {header: Para no., group: identity, field: para_no, width: 9}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Text, group: methodology, field: text, width: 90, input_text: true}
+  - {header: Source file, group: identity, field: source_file, width: 28}
+  - {header: Cross-references, group: methodology, field: refs_out, width: 24}
+  - {header: Reading note, group: assessments, field: reading_note, width: 40}
+- name: Chunks_Doc
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
+  - {header: Level, group: identity, field: level, width: 7}
+  - {header: Section (heading chain), group: identity, field: section, width: 44}
+  - {header: Para no., group: identity, field: para_no, width: 9}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Text, group: documentation, field: text, width: 90, input_text: true}
+  - {header: Source file, group: identity, field: source_file, width: 28}
+  - {header: Cross-references, group: documentation, field: refs_out, width: 24}
+  - {header: States something checkable, group: assessments, field: checkable, width: 16}
+  - {header: Reading note, group: assessments, field: reading_note, width: 40}
+- name: Chunks_Model
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Use in review, group: reviewer_input, field: scope, width: 14, input_text: true}
+  - {header: Kind, group: identity, field: kind, width: 20}
+  - {header: File, group: identity, field: file, width: 30}
+  - {header: Lines, group: identity, field: lines, width: 10}
+  - {header: Name, group: identity, field: name, width: 24, input_text: true}
+  - {header: Inside, group: identity, field: inside, width: 20}
+  - {header: Text, group: code_text, field: text, width: 80, input_text: true}
+  - {header: LLM Interpretation, group: assessments, field: llm_interpretation, width: 60}
+  - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
+  - {header: Numbers used, group: code_text, field: numbers, width: 20}
+  - {header: Exported, group: identity, field: exported, width: 10}
+  - {header: Reading note, group: assessments, field: reading_note, width: 40}
+- name: Mapping_Model_to_Canon_and_Doc
+  columns:
+  - {header: Model ref, group: identity, field: ref, width: 10}
+  - {header: Kind, group: identity, field: kind, width: 18}
+  - {header: Name, group: identity, field: name, width: 22, input_text: true}
+  - {header: File and lines, group: identity, field: where, width: 26}
+  - {header: Code text, group: code_text, field: text, width: 60, input_text: true}
+  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
+  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
+  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
+  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
+  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
+  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
+  - {header: Doc ref(s), group: documentation, field: doc_refs, width: 14}
+  - {header: Relation (doc), group: documentation, field: doc_relation, width: 22}
+  - {header: How established (doc), group: documentation, field: doc_how, width: 50}
+  - {header: What was searched (doc), group: documentation, field: doc_searched, width: 50}
+  - {header: Why not mapped (doc), group: documentation, field: doc_why_not, width: 40}
+  - {header: Doc text, group: documentation, field: doc_text, width: 60, input_text: true}
+  - {header: Math check, group: assessments, field: math_check, width: 50}
+  - {header: Parameter completeness, group: assessments, field: parameter_completeness, width: 50}
+  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
+  - {header: Documentation consistency, group: assessments, field: documentation_consistency, width: 50}
+  - {header: Hard-coded numbers, group: assessments, field: hard_coded_numbers, width: 44}
+  - {header: Unit test, group: assessments, field: unit_test, width: 34}
+  - {header: Quality notes (AI), group: assessments, field: quality_notes_ai, width: 44}
+  - {header: Overall status, group: assessments, field: status, width: 30}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
+- name: Mapping_Doc_to_Canon_and_Model
+  columns:
+  - {header: Doc ref, group: identity, field: ref, width: 10}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Section (heading chain), group: identity, field: section, width: 40}
+  - {header: Doc text, group: documentation, field: text, width: 60, input_text: true}
+  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
+  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
+  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
+  - {header: What was searched (canon), group: methodology, field: canon_searched, width: 50}
+  - {header: Why not mapped (canon), group: methodology, field: canon_why_not, width: 40}
+  - {header: Canon text, group: methodology, field: canon_text, width: 60, input_text: true}
+  - {header: Model ref(s), group: code_text, field: model_refs, width: 14}
+  - {header: Relation (model), group: code_text, field: model_relation, width: 22}
+  - {header: How established (model), group: code_text, field: model_how, width: 50}
+  - {header: Model text, group: code_text, field: model_text, width: 60, input_text: true}
+  - {header: Value check, group: assessments, field: value_check, width: 50}
+  - {header: Math check, group: assessments, field: math_check, width: 50}
+  - {header: Logic consistency, group: assessments, field: logic_consistency, width: 50}
+  - {header: Parameter note (AI), group: assessments, field: parameter_note_ai, width: 44}
+  - {header: Documentation quality notes, group: assessments, field: quality_notes, width: 44}
+  - {header: Overall status, group: assessments, field: status, width: 30}
+  - {header: Flagged item(s), group: assessments, field: item_ids, width: 30}
+- name: Mapping_Coverage
+  columns:
+  - {header: Corner, group: identity, field: corner, width: 30}
+  - {header: Units in total, group: identity, field: total, width: 12}
+  - {header: Traced to methodology, group: assessments, field: Traced to methodology, width: 14}
+  - {header: Supporting code (justified), group: assessments, field: Supporting code (justified), width: 14}
+  - {header: Unit test, group: assessments, field: Unit test, width: 12}
+  - {header: Narrative - nothing to check, group: assessments, field: Narrative - nothing to check, width: 14}
+  - {header: Not in scope (a person's decision), group: assessments, field: Not in scope (a person's decision), width: 14}
+  - {header: Traced - differences flagged, group: assessments, field: Traced - differences flagged, width: 14}
+  - {header: Traced - check undecided, group: assessments, field: Traced - check undecided, width: 14}
+  - {header: Not traced - for review, group: assessments, field: Not traced - for review, width: 14}
+  - {header: Not assessed - for manual review, group: assessments, field: Not assessed - for manual review, width: 14}
+  - {header: Needs attention, group: assessments, field: needs_attention, width: 12}
+  - {header: How to read this row, group: identity, field: how_to_read, width: 70}
+- name: Flagged_Items
+  columns:
+  - {header: Item id, group: identity, field: item_id, width: 30}
+  - {header: Concerns, group: identity, field: concerns, width: 22}
+  - {header: Category, group: identity, field: category, width: 34}
+  - {header: Unit ref(s), group: identity, field: unit_refs, width: 14}
+  - {header: Item, group: assessments, field: item, width: 44}
+  - {header: What was observed, group: assessments, field: observed, width: 70}
+  - {header: Methodology says, group: methodology, field: methodology_says, width: 50}
+  - {header: Code does, group: code_text, field: code_does, width: 50}
+  - {header: Documentation says, group: documentation, field: documentation_says, width: 50}
+  - {header: Suggested next step, group: assessments, field: suggested_next_step, width: 44}
+  - {header: Status, group: assessments, field: status, width: 18}
+  - {header: Last decision recorded, group: assessments, field: last_decision_recorded, width: 22}
+  - {header: Decision, group: reviewer_input, field: decision, width: 20, input_text: true}
+  - {header: Reviewer, group: reviewer_input, field: reviewer, width: 20, input_text: true}
+  - {header: Role, group: reviewer_input, field: role, width: 20, input_text: true}
+  - {header: Rationale, group: reviewer_input, field: rationale, width: 60, input_text: true}
+'''
+
 def load_layout():
-    """The workbook layout from references/workbook_layout.yaml."""
-    with open(os.path.join(REFERENCES_DIR, "workbook_layout.yaml"), encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+    """The workbook layout: every sheet and every column of Output.xlsx."""
+    return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     """One generic writer for all eight sheets: header row and first column frozen, filter on
@@ -1177,9 +1312,9 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
     fields = [c["field"] for c in columns]
-    for field, words in (("decision", core.DECISION_WORDS), ("scope", core.SCOPE_WORDS)):
-        if field in fields and rows:                 # the drop-downs: Decision on Flagged_Items, Use in review on the Chunks sheets
-            letter = get_column_letter(fields.index(field) + 1)
+    for field_name, words in (("decision", core.DECISION_WORDS), ("scope", core.SCOPE_WORDS)):
+        if field_name in fields and rows:            # the drop-downs: Decision on Flagged_Items, Use in review on the Chunks sheets
+            letter = get_column_letter(fields.index(field_name) + 1)
             choice = DataValidation(type="list", formula1='"%s"' % ",".join(words), allow_blank=True)
             sheet.add_data_validation(choice)
             choice.add("%s2:%s%d" % (letter, letter, len(rows) + 1))
@@ -1502,7 +1637,7 @@ def verify_evidence_pack(paths, settings, live=None):
     installed, recorded = engine_file_hashes(), manifest.get("engine_files", {})
     other = sorted(name for name in set(installed) | set(recorded) if installed.get(name) != recorded.get(name))
     line("The engine files that produced this run are the ones installed here", not other, ", ".join(other[:5]))
-    options = {"inputs": core.list_input_files(paths.inputs_dir), "references_dir": REFERENCES_DIR}
+    options = {"inputs": core.list_input_files(paths.inputs_dir)}
     context = core.StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
     for kind, function in (("chunks_canon", reading.read_methodology), ("chunks_doc", reading.read_documentation),
                            ("model_units", reading.read_package)):

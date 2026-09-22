@@ -484,10 +484,254 @@ def expr_to_text(expr, parent_rank=0):
 # ---------------------------------------------------------------- from verifier0r_reading
 # ---------------------------------------------------------------- prompt machinery (from verifier3_mapping)
 
-def load_prompt(references_dir, question_type):
+# ---------------------------------------------------------------- the prompts
+# Every question the tool asks, as the model sees it: a version line, the system half, the main half
+# with [[UNIT]] and similar places the question builder fills. The text is exact - a question's id is
+# the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
+# version and asks new questions. Enforces: R3, R5, R9
+PROMPTS = {
+    'align-symbols': r'''VERSION 1
+=== SYSTEM ===
+You match symbols used in code to symbols used in an equation. Reply with JSON only. Use only the symbols shown. Each symbol may be used once.
+=== MAIN ===
+QUESTION TYPE: align-symbols
+TASK: Which symbol of the code stands for which symbol of the equation?
+[[UNIT]]
+[[ABOUT]]
+ANSWER FORMAT
+{"alignment":[{"code":"symbol","equation":"symbol"}],"cannot_align":false}
+If the symbols cannot be matched one to one, return {"alignment":[],"cannot_align":true}.
+''',
+    'check-rule': r'''VERSION 1
+=== SYSTEM ===
+You check whether code applies a rule that a passage states. Reply with JSON only. Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: check-rule
+TASK: Does the code apply the rule as stated?
+[[UNIT]]
+[[ABOUT]]
+ANSWER FORMAT
+{"outcome":"applied","quote_from_passage":"exact words of the rule","quote_from_unit":"exact words of the code that applies it, or empty"}
+Allowed outcomes: applied, applied differently, not applied.
+''',
+    'interpret-code': r'''VERSION 1
+=== SYSTEM ===
+You explain what one piece of R code does, in plain words, for a reader who validates models and is not a programmer. You are shown the piece itself and where it sits in the whole package. Say only what the code shows; do not guess at intentions the code does not show. Reply with JSON only. Quote exact characters of the code; do not paraphrase inside the quotation field. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: interpret-code
+TASK: Say what the piece of code does and what it is for within the package, in at most 80 words. Name what it takes in and what it produces. Where it applies a number, a limit or a condition, say so with the number exactly as written. Use what you are told about the package only to say what the piece is for; describe the piece, not the package.
+[[UNIT]]
+[[ABOUT]]
+ANSWER FORMAT
+{"interpretation":"plain words, at most 80 words","quote_from_unit":"exact characters of the piece of code that the interpretation chiefly rests on"}
+''',
+    'judge-doc-to-canon': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-doc-to-canon
+TASK: Which passages of the methodology, if any, does this passage of the documentation correspond to, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"consistent with","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: consistent with, inconsistent with, merely related.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+If the unit states nothing that could be checked (no formula, number, rule or definition), add "states_nothing_checkable": true.
+''',
+    'judge-doc-to-model': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-doc-to-model
+TASK: Which units of the package, if any, does this passage of the documentation describe, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: describes, inconsistent with.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+''',
+    'judge-unit-to-canon': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-unit-to-canon
+TASK: Which passages of the methodology, if any, does this unit of the package correspond to, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"implements","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: implements, partly implements, deviates from, merely related.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+''',
+    'judge-unit-to-doc': r'''VERSION 1
+=== SYSTEM ===
+You compare one item with lettered passages. Reply with JSON only.
+Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
+Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: judge-unit-to-doc
+TASK: Which passages of the documentation, if any, describe this unit of the package, and how?
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
+             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
+ "none_reason":""}
+Allowed relation words: describes, consistent with, inconsistent with.
+If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
+''',
+    'map-table-columns': r'''VERSION 1
+=== SYSTEM ===
+You match the columns of one table to the columns of lettered tables. Reply with JSON only. Use only the letters and the column names shown.
+=== MAIN ===
+QUESTION TYPE: map-table-columns
+TASK: Which lettered table, if any, states the same values as the package table, which column is which, and which column identifies a row?
+[[UNIT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"table":"A","columns":[{"package":"column name","other":"column name"}],"key":{"package":"column name","other":"column name"}}
+If no table corresponds, return {"table":"NONE","reason":"one plain sentence"}.
+''',
+    'package-plan': r'''VERSION 2
+=== SYSTEM ===
+THE READER'S PROCEDURE
+1. Unpack the package - a tarball, a ZIP, or a source folder put in unpacked - refusing any member that breaks the limits; where it is not an R package, say so. 2. Work out which reader each member gets from where it lies and what it is; where the built-in tests give a member none, ask which existing reader should take it and apply the answer. 3. Parse R source into functions, objects and formula statements. 4. Decode stored data into tables of values. 5. Read help pages and vignettes. 6. Tie each roxygen block to what it documents. 7. Number every unit in a fixed order.
+
+QUALITY RULES THE READER WORKS UNDER
+- Every non-blank line of every member that holds text lies inside a unit, is refused with a reason, or is carried by a unit that says it could not be read. A member the tool cannot read as text is counted as one piece of its own.
+- A reader chosen for a member changes only which existing reader takes it. It never changes how that reader works.
+- Where a member's first lines show assignments and calls it is R code, wherever in the package it lies.
+
+THE READER NEVER
+- Never leave a member of the package out of the account in silence. An open account is written down, and the run goes on.
+- Never write text of your own into an answer about a package. Name only paths you were shown as not placed, and give only readers from the list you were given.
+- Never ask for a member to be skipped: there is no such reader. A file that cannot be made sense of becomes a unit that says so.
+- Never let an answer reach the parsing of R code, the building of expression trees or the decoding of stored data. Reading code is a parse, not an opinion.
+Never execute or evaluate anything from a package. Never import a package to inspect it.
+
+You are given the list of files inside one R package, with how large each is and which reader the built-in tests already give it. For the files those tests leave unplaced you are shown the first few lines. Your task is to say WHICH EXISTING READER should take each unplaced file.
+You choose from a fixed list only. You never write text of your own into an answer: every path you name must be one shown to you as not placed, and every reader you give must be one of the readers listed. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: package-plan
+TASK: Give every file marked NOT PLACED one of the readers below.
+THE FILES IN THE PACKAGE
+[[UNIT]]
+READERS YOU MAY USE
+r-source: R code, to be parsed into functions and objects. Use for a file of R code wherever it lies, including a folder the tests do not expect.
+r-data: stored data to be decoded into a table of values.
+help-page: a written help page for an object (an .Rd page).
+vignette: a longer written piece mixing prose and code.
+table-file: a table of values stored as text, such as comma- or tab-separated rows.
+prose: plain writing with no code and no table in it. Use this when none of the others fits.
+WHAT TO LOOK FOR
+R code usually shows assignments with <- and calls with round brackets. A help page shows braces after a backslash. A vignette opens with a block between two lines of three dashes, or holds fenced code. A table file shows the same separator repeated on every line, with a first line of column names.
+ANSWER FORMAT
+{"readers":{"inst/extra/helpers.R":"r-source","inst/extdata/floors.csv":"table-file"},"why":{"inst/extra/helpers.R":"a short reason in plain words"}}
+Rules on your answer:
+- every key of readers must be a path shown to you above as NOT PLACED;
+- every file marked NOT PLACED must appear in readers: leave none out;
+- every value of readers must be one of the six readers listed above;
+- there is no reader that means skip, ignore or leave unread. A file you cannot make sense of is given "prose", and the reader will say plainly that it could not read it;
+- every key of why, if you give any, must also be a path marked NOT PLACED.
+''',
+    'read-formula-from-prose': r'''VERSION 1
+=== SYSTEM ===
+You read a formula that a paragraph states in words. Reply with JSON only. Use only names that occur in the paragraph. Write the formula with + - * / ^ ( ) and the functions max, min, exp, ln, sqrt.
+=== MAIN ===
+QUESTION TYPE: read-formula-from-prose
+TASK: Write the formula that this paragraph states, as one line of the form name = expression.
+[[UNIT]]
+ANSWER FORMAT
+{"formula":"name = expression","no_formula_stated":false}
+If the paragraph states no formula, return {"formula":"","no_formula_stated":true}.
+''',
+    'second-opinion': r'''VERSION 1
+=== SYSTEM ===
+You look for differences between one item and lettered passages. Reply with JSON only. Use only the letters shown. Quote exact words; do not paraphrase inside quotation fields. Naming no difference is a valid and common answer. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: second-opinion
+TASK: Identify any difference between what the unit does or states and what the passages state.
+[[UNIT]]
+[[ABOUT]]
+PASSAGES
+[[PASSAGES]]
+ANSWER FORMAT
+{"differences":[{"letter":"A","quote_from_passage":"exact words","quote_from_unit":"exact words","what_differs":"one plain sentence"}]}
+If there is no difference, return {"differences":[]}.
+''',
+    'slice-rules': r'''VERSION 2
+=== SYSTEM ===
+THE READER'S PROCEDURE
+1. Detect the format from the content, looking inside a ZIP to tell a Word file from a spreadsheet or a slide deck; refuse a format the tool does not read in plain words with a next step, and never decode binary data as text; convert Markdown, delimited rows, spreadsheets, RTF and LaTeX to markup the walker already reads. 2. Repair what must be repaired and record each repair. 3. Work out what each tag of the file is for; where the built-in rules are unsure, ask what the shape of the file means and apply the answer under everything the rules already know. 4. Read blocks in document order. 5. Infer levels where nesting is flat. 6. Keep each table whole. 7. Read equation markup into linear notation and an expression tree. 8. Hash every chunk.
+
+QUALITY RULES THE READER WORKS UNDER
+- Every smallest piece of text in the file ends in one named class: kept in a unit, kept in a unit's other fields, read into another form, left out under a named rule, or reported as not read. What is in none of them is counted and located on Model_Package_Info.
+- Nothing a unit shows may come from anywhere but the file or a transform named in the code.
+- A heading names the block around it: it usually occurs about as often as that block, holds short text of its own, and opens it. A paragraph holds longer text and does not open the block around it. A tag that holds other tags is a container or a heading, never a paragraph: reading it as a paragraph would make the file say twice what it says once.
+- Where the words of a file are already read correctly and only its shape is in doubt, change the shape and leave the words exactly where they are.
+A table is never split and never merged with its neighbours. A figure or equation that cannot be read is still a chunk. Reading order is stable.
+
+THE READER NEVER
+- Never close the account over a file that yielded nothing and said nothing: a large file with no text and no reason is a file that was not opened.
+- Never leave a piece of the file out of the account in silence. An open account is written down, and the run goes on.
+- Never write text of your own into an answer about a file's shape. Name only tags you were shown, and give only families from the list you were given. There is no way to tell the reader to skip a tag, and no answer may leave a word of the file out of a unit.
+- Never overrule what a person wrote in Inputs/tag_rules.yaml, a schema the tool already ships, or a table whose rows were counted. Speak where the reader guessed, and nowhere else.
+Never execute or evaluate anything from an input. Never skip a block silently. Never keep a document-type declaration.
+
+You are given the SHAPE of one document: a list of the tags it uses and how each behaves, with a few short samples. You never see the document. Your task is to say what each tag is FOR, so that a reader can slice the document into citable units.
+You choose from fixed lists only. You never write text of your own into an answer: every tag you name must be one shown to you, and every family you give must be one of the families listed. Reply with JSON only. Do not rate importance.
+=== MAIN ===
+QUESTION TYPE: slice-rules
+TASK: Give each tag a family, and say which tags are headings of the blocks around them.
+THE SHAPE OF THE FILE
+[[UNIT]]
+FAMILIES YOU MAY USE
+heading: names the section around it, and everything below it belongs under it
+container: holds other blocks and little or no text of its own
+paragraph: a statement, a sentence or a run of prose
+list_container: holds items; list_item: one item of such a list
+These five are the whole list. Tables, rows, cells, captions, figures, equations and inline marks are worked out by the reader itself and are not yours to give; where a tag is one of those it is marked ALREADY READ AS and you should leave it alone.
+WHAT TO LOOK FOR
+A heading usually occurs about as often as the container it names, holds short text of its own, and is the FIRST CHILD of that container. A paragraph holds longer text and is not the first child. A container holds other tags and little or no text of its own.
+A tag marked ALREADY READ AS is one the reader already knows for certain; leave it exactly as it is. A tag marked GUESSED AS is one the reader worked out on the spot and is unsure of: that is where your answer is wanted. A tag marked neither is one the reader has nothing at all to say about.
+ANSWER FORMAT
+{"families":{"tagname":"heading","othertag":"paragraph"},"levels":{"tagname":1},"why":{"tagname":"a short reason in plain words"}}
+Rules on your answer:
+- every key of families, levels and why must be a tag shown to you above;
+- every value of families must be one of the five families listed above;
+- a tag shown as holding other tags may only be heading, container or list_container: reading it as a paragraph would say its contents twice;
+- every value of levels must be a whole number from 1 to 9, and levels may name only tags you called heading;
+- "ignore" is not a family you may use, and there is no way to tell the reader to skip a tag;
+- give a family for every tag you are shown, including ones already read.
+''',
+}
+
+def load_prompt(question_type):
     """A prompt template: its version line, its SYSTEM part and its MAIN part with slots."""
-    with open(os.path.join(references_dir, "prompts", question_type + ".txt"), encoding="utf-8") as handle:
-        text = handle.read()
+    text = PROMPTS[question_type]
     version, rest = text.split("\n", 1)
     system, main = rest.split("=== MAIN ===\n", 1)
     return {"version": version.strip(), "system": system.replace("=== SYSTEM ===\n", "").strip(), "main": main.strip()}
@@ -1289,7 +1533,7 @@ def guided_rules(root, file_name, state, discovered):
         return
     digest = markup_digest(root, state.rules, file_name)
     state.digests.append(digest)
-    prompt = load_prompt(state.references_dir, "slice-rules")
+    prompt = load_prompt("slice-rules")
     question = slice_rules_question(digest, state.rules, prompt, state.settings)
     if question["too_large"]:
         state.notes.append("%s: its shape is too large to ask about, so the built-in rules read it." % file_name)

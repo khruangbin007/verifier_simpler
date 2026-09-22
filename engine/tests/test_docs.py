@@ -38,6 +38,25 @@ class ManualAndCode(unittest.TestCase):
             develop.MANUAL = real
 
 
+    def test_a_path_or_test_file_that_does_not_exist_is_reported(self):
+        """The check caught function names but not paths, so after the restructure the manual
+        named a tools/ folder, a references/ folder and two test files that no longer existed,
+        and still passed. It now checks those too."""
+        with open(develop.MANUAL, encoding="utf-8") as handle:
+            text = handle.read()
+        fake = os.path.join(helpers.scratch(), "Manual.md")
+        with open(fake, "w", encoding="utf-8") as handle:
+            handle.write(text + "\nSee `engine/references/tag_rules.yaml`, `tools/recall_at_k.py` and `test_review.py`.\n")
+        real = develop.MANUAL
+        develop.MANUAL = fake
+        try:
+            problems = " ".join(develop.manual_problems())
+        finally:
+            develop.MANUAL = real
+        for named in ("engine/references/tag_rules.yaml", "tools/recall_at_k.py", "test_review.py"):
+            self.assertIn(named, problems)
+
+
 class Release(unittest.TestCase):
     def test_the_release_manifest_matches_the_files(self):
         self.assertEqual(develop.release(["--check"]), 0, "run python engine/develop.py release as the last step of a change")

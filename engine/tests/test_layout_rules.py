@@ -80,7 +80,7 @@ class StaticWordingLint(unittest.TestCase):
     name the words is the allow-list."""
 
     def lintable_files(self):
-        patterns = ("engine/*.py", "engine/pipeline.yaml", "engine/references/**/*", "docs/*.md", "Verifier.ipynb")
+        patterns = ("engine/*.py", "engine/pipeline.yaml", "docs/*.md", "Verifier.ipynb")
         files = []
         for pattern in patterns:
             files.extend(p for p in glob.glob(os.path.join(helpers.ROOT_DIR, pattern), recursive=True) if os.path.isfile(p))
@@ -97,11 +97,14 @@ class StaticWordingLint(unittest.TestCase):
             self.assertEqual(core.has_banned_wording(text), "", "banned wording in %s" % os.path.relpath(path, helpers.ROOT_DIR))
 
     def test_no_domain_concept_in_engine_prompts_or_stop_words(self):
+        """The prompts, the stop words and the bridge patterns live in the modules that use them,
+        and are checked where they live. Enforces: R9"""
+        import review
         domain_words = re.compile(r"\b(credit|loan|bank|capital|default|dose|dosing|patient|clearance|obligor|mortgage)\b", re.I)
-        for pattern in ("engine/references/prompts/*", "engine/references/stopwords.txt", "engine/references/bridge_patterns.yaml"):
-            for path in glob.glob(os.path.join(helpers.ROOT_DIR, pattern)):
-                with open(path, encoding="utf-8") as handle:
-                    self.assertIsNone(domain_words.search(handle.read()), "domain word in %s" % path)
+        checked = dict(core.PROMPTS, stopwords=review.STOPWORDS_TEXT, bridge_patterns=review.BRIDGE_PATTERNS_YAML)
+        self.assertGreaterEqual(len(checked), 14, "every prompt and both word lists are checked")
+        for name, text in sorted(checked.items()):
+            self.assertIsNone(domain_words.search(text), "domain word in %s" % name)
 
 
 def scan_workbook(test, path):

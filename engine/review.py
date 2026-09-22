@@ -117,16 +117,45 @@ def links_of(graph, ref, corner_prefix):
                     if e["kind"] == "corresponds" and e["source"].startswith(corner_prefix)]
 
 # ---------------------------------------------------------------- words: splitting, stemming, word lists
-def load_word_lists(references_dir):
-    """Stop words, bridge patterns and the neutral words of mathematical functions. All word
-    lists live in references/, where the lint checks them for domain words. Enforces: R9"""
-    with open(os.path.join(references_dir, "stopwords.txt"), encoding="utf-8") as handle:
-        stop = {word for line in handle if not line.startswith("#") for word in line.split()}
-    with open(os.path.join(references_dir, "bridge_patterns.yaml"), encoding="utf-8") as handle:
-        patterns = yaml.safe_load(handle)
-    with open(os.path.join(references_dir, "r_function_map.yaml"), encoding="utf-8") as handle:
-        function_map = yaml.safe_load(handle)
-    return {"stop": stop, "patterns": patterns, "function_map": function_map}
+# ---------------------------------------------------------------- reference data of the search
+# Words too common to say anything about which passage corresponds to which, and the patterns that
+# bridge a code name and a written term (rho_a and "asset correlation"). No domain word may appear
+# in either: the layout lint checks them. Enforces: R9
+STOPWORDS_TEXT = r'''# stopwords.txt - generic function words left out of the word index. One per line.
+# Rule R9: no word of any field of business belongs here.
+a an the and or of to in is are be by for with as at on it this that these those from each which
+was were been being has have had do does did not no nor if then than so such any all some its their
+there here where when while who whom whose what how why can could may might must shall should will would
+into per under over between within without about above below after before during through up down out off
+also only other more most less least very same own both either neither one two
+function return returns returned value values given using used use uses see set sets get gets
+'''
+BRIDGE_PATTERNS_YAML = r'''# bridge_patterns.yaml - generic words the tool uses to recognise where a document ties a short
+# name to a longer phrase. Reviewer 3 owns this file. Rule R9: no word of any field of business.
+definition_verbs: [denotes, represents, stands for, is defined as, means]
+symbol_headers: [symbol, variable, notation, parameter, name, term, abbreviation, column, field]
+description_headers: [description, definition, meaning, explanation, stands for, content]
+glossary_columns: {term: Term, also: Also written as}
+# words that tie a function name to neutral mathematical words (used for the called-functions field)
+function_words:
+  normal_cdf: [cumulative, normal, distribution]
+  normal_inverse: [inverse, normal, quantile]
+  max: [maximum, larger, floor, least]
+  min: [minimum, smaller, cap, capped, most]
+  exp: [exponential]
+  log: [logarithm]
+  sqrt: [square, root]
+  round: [rounded, decimals]
+  piecewise: [condition, otherwise]
+  sum_over: [sum, total]
+'''
+
+def load_word_lists():
+    """Stop words, bridge patterns and the neutral words of mathematical functions. The lint
+    checks every one of these lists for domain words. Enforces: R9"""
+    stop = {word for line in STOPWORDS_TEXT.split("\n") if not line.startswith("#") for word in line.split()}
+    return {"stop": stop, "patterns": yaml.safe_load(BRIDGE_PATTERNS_YAML),
+            "function_map": yaml.safe_load(reading.R_FUNCTION_MAP_YAML)}
 
 def stem(word):
     """A light, rule-based stemmer: plural endings, -ing, -ed, and a doubled last letter.
@@ -527,7 +556,7 @@ def build_graph(ctx):
     """Step 05, build-graph: nodes for every chunk and unit, structural edges,
     cross-references resolved within their own corner, and the bridge vocabulary."""
     canon, doc, units = ctx.read("chunks_canon"), ctx.read("chunks_doc"), ctx.read("model_units")
-    lists = load_word_lists(ctx.options["references_dir"])
+    lists = load_word_lists()
     records = [node_record(c["ref"], c["kind"], c["corner"]) for c in canon + doc]
     records += [node_record(u["ref"], u["kind"], "model") for u in units]
     edges, unresolved = structural_edges(units, ctx.provenance), []
@@ -656,7 +685,7 @@ def in_scope(records, excluded):
 def build_world(ctx, search_pass):
     """Everything the search needs, built once per step: representations of all units and
     chunks, one BM25 index per corner, the bridge vocabulary, anchors and the walk."""
-    settings, lists = ctx.settings, load_word_lists(ctx.options["references_dir"])
+    settings, lists = ctx.settings, load_word_lists()
     trivial = set(settings["trivial_numbers"])
     excluded = excluded_refs(ctx)
     canon, doc, units = (in_scope(ctx.read(kind), excluded) for kind in ("chunks_canon", "chunks_doc", "model_units"))
@@ -833,12 +862,12 @@ def assemble_question(question_type, unit_ref, blocks, passages, prompt, setting
     question["too_large"] = question["estimated_tokens"] > core.prompt_budget(settings, prompt["system"])
     return question
 
-def narrow_question(question_type, unit_ref, blocks, references_dir, settings, passages=(), more=None):
+def narrow_question(question_type, unit_ref, blocks, settings, passages=(), more=None):
     """The narrow questions of the checks (map-table-columns, align-symbols, read-formula-
     from-prose, check-rule): same assembly, same budget, same validators."""
-    return assemble_question(question_type, unit_ref, blocks, list(passages), core.load_prompt(references_dir, question_type), settings, more=more)
+    return assemble_question(question_type, unit_ref, blocks, list(passages), core.load_prompt(question_type), settings, more=more)
 
-def judge_question(source, corner, candidates, world, references_dir, settings):
+def judge_question(source, corner, candidates, world, settings):
     """The judge question of one unit (or documentation passage) and one target corner."""
     is_chunk = source.get("heading_chain") is not None
     question_type = {("canon", False): "judge-unit-to-canon", ("doc", False): "judge-unit-to-doc",
@@ -855,7 +884,7 @@ def judge_question(source, corner, candidates, world, references_dir, settings):
     about = world["documented_by"].get(source["ref"]) or world["documented_by"].get(source.get("parent_ref") or "")
     if about and not is_chunk:
         blocks.append(("WHAT THE PACKAGE SAYS ABOUT IT", core.cut_text(re.sub(r"(?m)^\s*#' ?", "", about["text"]), 1200)))
-    return assemble_question(question_type, source["ref"], blocks, passages, core.load_prompt(references_dir, question_type),
+    return assemble_question(question_type, source["ref"], blocks, passages, core.load_prompt(question_type),
                              settings, planted=decoys, more={"target_corner": corner})
 
 # ---------------------------------------------------------------- validators: code decides what is usable
@@ -1025,7 +1054,7 @@ def package_outline(units, package):
             by_file.setdefault(unit["file"], []).append("stored data %s" % unit["name"])
     return "\n".join(lines + ["%s: %s" % (file, "; ".join(by_file[file])) for file in sorted(by_file)]), described
 
-def interpret_question(unit, functions, outline, described, references_dir, settings):
+def interpret_question(unit, functions, outline, described, settings):
     """The question about one piece of code. The piece is shown whole; around it goes what a
     person would look up to understand it: the function a statement sits inside, the
     documentation the package gives, what calls it and what it calls, the stored data it reads,
@@ -1046,7 +1075,7 @@ def interpret_question(unit, functions, outline, described, references_dir, sett
                            " lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "")
     blocks = [("THE PIECE OF CODE (%s)" % where, cut_code(unit["text"], settings["max_unit_chars"])),
               ("WHERE IT SITS IN THE PACKAGE", "\n\n".join(about))]
-    return narrow_question("interpret-code", unit["ref"], blocks, references_dir, settings, more={"code_text": unit["text"]})
+    return narrow_question("interpret-code", unit["ref"], blocks, settings, more={"code_text": unit["text"]})
 
 def interpret_code(ctx):
     """Step 07a, interpret-code. One question per function, formula statement, top-level
@@ -1062,7 +1091,7 @@ def interpret_code(ctx):
     questions, records = {}, []
     for unit in units:
         if unit["kind"] in INTERPRETED_KINDS and unit["text"].strip():
-            question = interpret_question(unit, functions, outline, described, ctx.options["references_dir"], ctx.settings)
+            question = interpret_question(unit, functions, outline, described, ctx.settings)
             if question["too_large"]:
                 records.append({"unit_ref": unit["ref"], "interpretation": "", "question_id": "", "note": "Not asked: the question was too large to ask."})
             else:
@@ -1098,7 +1127,7 @@ def judge_links(ctx):
             grouped.setdefault((candidate["unit_ref"], candidate["target_corner"]), []).append(candidate)
     questions, skipped = {}, []
     for (unit_ref, corner) in sorted(grouped):
-        question = judge_question(sources[unit_ref], corner, grouped[(unit_ref, corner)], world, ctx.options["references_dir"], settings)
+        question = judge_question(sources[unit_ref], corner, grouped[(unit_ref, corner)], world, settings)
         if question["too_large"]:
             skipped.append({"unit_ref": unit_ref, "target_corner": corner, "reason": "the question was too large to ask"})
         else:
@@ -1155,7 +1184,7 @@ def second_opinions(ctx, follow_ups, sources, world):
         text = core.cut_text(source["text"], int(ctx.settings["max_unit_chars"]))
         passages = [(ref, passage_label(pool[ref]), passage_text(pool[ref], ctx.settings)) for ref in sorted(set(targets))]
         question = assemble_question("second-opinion", unit_ref, [("UNIT (%s)" % passage_label(source), text)], passages,
-                                     core.load_prompt(ctx.options["references_dir"], "second-opinion"), ctx.settings, more={"target_corner": corner})
+                                     core.load_prompt("second-opinion"), ctx.settings, more={"target_corner": corner})
         if not question["too_large"]:
             questions[question["question_id"]] = question
     answers, opinions = ctx.ask(list(questions.values())), []
@@ -1599,8 +1628,8 @@ def check_mathematics(ctx):
     documents; every documentation equation against the methodology equation it is linked
     to. Alignment is settled first (by code, then by the validated align-symbols answer)
     and only then are the two sides compared. Enforces: R3, R4"""
-    world, settings, references = load_world(ctx), ctx.settings, ctx.options["references_dir"]
-    notation, values = reading.load_notation(references), stored_values(world)
+    world, settings = load_world(ctx), ctx.settings
+    notation, values = reading.load_notation(), stored_values(world)
     pairs = [(world["by_ref"][s], world["by_ref"][t]) for (s, t), e in sorted(world["links"].items())
              if s.startswith("M-") and t.startswith("C-") and e["relation"] in CODE_RELATIONS
              and world["by_ref"][s]["kind"] in (core.KIND_FUNCTION, core.KIND_FORMULA)]
@@ -1608,7 +1637,7 @@ def check_mathematics(ctx):
     for _, chunk in pairs:
         if not chunk.get("equation") and chunk["kind"] == "Paragraph" and any(p in chunk["text"].lower() for p in PROSE_FORMULA_PHRASES):
             prose[chunk["ref"]] = narrow_question("read-formula-from-prose", chunk["ref"], [("PARAGRAPH", chunk["text"][:3000])],
-                                                                references, settings, more={"notation": notation})
+                                                                settings, more={"notation": notation})
     answers = ctx.ask([q for q in prose.values() if not q["too_large"]]) if prose else {}
     prose_answers = {}
     for ref, question in prose.items():
@@ -1645,7 +1674,7 @@ def check_mathematics(ctx):
             if form["left_code"] and form["left_stated"]:
                 question = narrow_question(
                     "align-symbols", unit["ref"], [("CODE SYMBOLS", ", ".join(form["left_code"])), ("EQUATION SYMBOLS", ", ".join(form["left_stated"]))],
-                    references, settings, more={"code_symbols": list(form["left_code"]), "equation_symbols": list(form["left_stated"])})
+                    settings, more={"code_symbols": list(form["left_code"]), "equation_symbols": list(form["left_stated"])})
                 form["question_id"] = question["question_id"]
                 questions[question["question_id"]] = question
     answers = ctx.ask(list(questions.values())) if questions else {}
@@ -1851,7 +1880,7 @@ def check_values(ctx):
     tables against methodology tables; numbers written in linked code; numbers in
     documentation passages and roxygen text. All under compare_values. Enforces: R3"""
     world, settings = load_world(ctx), ctx.settings
-    stop = load_word_lists(ctx.options["references_dir"])["stop"]
+    stop = load_word_lists()["stop"]
     trivial, checks, edges = set(settings["trivial_numbers"]), [], []
     chunk_table = lambda chunk: dict(chunk["table"], row_key=[chunk["table"]["header"][0]] if chunk["table"]["header"] else [])
     for unit in world["units"]:                          # 1. stored tables
@@ -1876,7 +1905,7 @@ def check_values(ctx):
             unit, other = world["by_ref"][check["unit_ref"]], world["by_ref"][check["target_ref"]]
             table = world["tables"][unit["ref"]]
             shown = "\n".join(["; ".join(table["header"])] + ["; ".join(row) for row in table["rows"][:3]])
-            question = narrow_question("map-table-columns", unit["ref"], [("PACKAGE TABLE (%s)" % unit["name"], shown)], ctx.options["references_dir"], settings,
+            question = narrow_question("map-table-columns", unit["ref"], [("PACKAGE TABLE (%s)" % unit["name"], shown)], settings,
                                                      passages=[(other["ref"], passage_label(other), passage_text(other, settings))],
                                                      more={"package_header": list(table["header"])})
             question["other_headers"] = {letter: list(world["by_ref"][ref]["table"]["header"]) for letter, ref in question["letters"].items()}
@@ -1982,7 +2011,7 @@ def check_rules(ctx):
     """Step 13, check-rules. For every top-level function (and every formula statement
     outside a function) linked to a passage that states a floor or a cap: code inspection
     first; only when the code shows no such node is the check-rule question asked."""
-    world, settings, references = load_world(ctx), ctx.settings, ctx.options["references_dir"]
+    world, settings = load_world(ctx), ctx.settings
     pending, checks = [], []
     for unit in world["units"]:
         if unit["kind"] not in (core.KIND_FUNCTION, core.KIND_FORMULA) or unit.get("parent_ref"):
@@ -1997,7 +2026,7 @@ def check_rules(ctx):
                 if not where:
                     code_text = cut_code(unit["text"], int(settings["max_unit_chars"]))
                     question = narrow_question("check-rule", unit["ref"], [("UNIT (%s)" % passage_label(unit), code_text),
-                                                             ("RULE AS STATED", sentence)], references, settings, more={"rule_text": sentence, "code_text": code_text})
+                                                             ("RULE AS STATED", sentence)], settings, more={"rule_text": sentence, "code_text": code_text})
                     pending.append((record, question))
                 checks.append(record)
     answers = ctx.ask([q for _, q in pending if not q["too_large"]]) if pending else {}

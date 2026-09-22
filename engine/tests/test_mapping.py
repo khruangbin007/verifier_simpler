@@ -129,7 +129,7 @@ class Search(unittest.TestCase):
 
 class QuestionsAndValidators(unittest.TestCase):
     def question(self):
-        prompt = core.load_prompt(runner.REFERENCES_DIR, "judge-unit-to-canon")
+        prompt = core.load_prompt("judge-unit-to-canon")
         passages = [("C-0009", "3.1.1 Floor, paragraph 1", "The probability of default is never taken below 0.03%."),
                     ("C-0008", "3.1, paragraph 1", "The probability of default is estimated from internal ratings and is reviewed every year."),
                     ("C-0099", "9 Other, paragraph 1", "All parcels are weighed at the counter before they are priced.")]
@@ -158,7 +158,7 @@ class QuestionsAndValidators(unittest.TestCase):
             self.assertEqual(answer is not None, expected == "accepted", case["name"])
 
     def test_narrow_answers_are_validated_too(self):
-        question = review.narrow_question("align-symbols", "M-0001", [("CODE SYMBOLS", "base, rate"), ("EQUATION SYMBOLS", "B, R")], runner.REFERENCES_DIR,
+        question = review.narrow_question("align-symbols", "M-0001", [("CODE SYMBOLS", "base, rate"), ("EQUATION SYMBOLS", "B, R")],
                                            SETTINGS, more={"code_symbols": ["base", "rate"], "equation_symbols": ["B", "R"]})
         good = '{"alignment": [{"code": "base", "equation": "B"}, {"code": "rate", "equation": "R"}], "cannot_align": false}'
         twice = '{"alignment": [{"code": "base", "equation": "B"}, {"code": "rate", "equation": "B"}], "cannot_align": false}'

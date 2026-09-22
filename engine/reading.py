@@ -83,10 +83,118 @@ _TOKEN_RE = re.compile(
     r"|(?P<name>[^\W\d_][\w]*(?:\.[^\W\d_]\w*)*(?:_\{[^{}]+\}|\[[^\[\]]+\])?)"
     r"|(?P<sign><=|>=|[-+*/^(),=<>\u221a]))")
 
-def load_notation(references_dir):
-    """The names the tool reads as functions in a written formula, from r_function_map.yaml."""
-    with open(os.path.join(references_dir, "r_function_map.yaml"), encoding="utf-8") as handle:
-        return yaml.safe_load(handle)["notation"]
+# ---------------------------------------------------------------- reference data of the reader
+# The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
+# schemes, the phrases that make a statement checkable. An analyst's Inputs/tag_rules.yaml is laid
+# over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
+# caller that changes the rules it was given changes only its own copy. Enforces: R9
+TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
+# Reviewer 1 owns this file. A project can override any part of it with Inputs/tag_rules.yaml
+# (same layout; a family given there replaces the family given here).
+# Tag names are compared in lower case and without their namespace prefix.
+# A tag that is in no family is read as a paragraph (or, when it only wraps other blocks,
+# as a container) and is reported on Model_Package_Info, so that it can be added here.
+families:
+  heading:        [h1, h2, h3, h4, h5, h6, title, heading, head-line, sectiontitle]
+  container:      [html, body, div, section, sect, sect1, sect2, sect3, sect4, sect5, chapter, part,
+                   article, document, doc, annex, appendix, subsection, subsubsection, main, document-root]
+  paragraph:      [p, para, paragraph, text, blockquote, pre, dd, dt]
+  list_container: [ul, ol, list, itemizedlist, orderedlist, dl]
+  list_item:      [li, item, listitem]
+  table:          [table, informaltable, tbl]
+  table_part:     [thead, tbody, tfoot, tgroup, colgroup, col]
+  row:            [tr, row]
+  header_cell:    [th]
+  cell:           [td, entry, cell]
+  figure:         [img, image, figure, graphic, mediaobject, svg, object, chart, imagedata]
+  equation:       [math, equation, omath, omathpara, formula, informalequation]
+  caption:        [caption, figcaption, legend]
+  inline:         [a, b, i, u, em, strong, span, font, sub, sup, br, code, tt, small, big, emphasis, xref, o:p]
+  ignore:         [head, script, style, meta, link, toc, index, nav, xml]
+# Attributes that hold the numbering of a heading as written ("3.1").
+numbering_attributes: [number, num, label, n]
+# Numbering schemes, tried in this order. The first one that matches the start of a heading
+# names its scheme. "dotted" numbers give their depth directly; every other scheme gets the
+# level at which it first appeared (one deeper than the heading before it).
+numbering_schemes:
+  - {name: annex,          pattern: '^(?:Annex|Appendix|Annexe|Anhang)\s+([A-Z0-9]+)[.:]?(?=\s|$)'}
+  - {name: dotted,         pattern: '^(\d+(?:\.\d+)+)\.?(?=\s|$)'}
+  - {name: number,         pattern: '^(\d+)[.)]?(?=\s|$)'}
+  - {name: upper_roman,    pattern: '^([IVXLC]+)\.(?=\s|$)'}
+  - {name: upper_letter,   pattern: '^([A-Z])[.)](?=\s|$)'}
+  - {name: bracket_roman,  pattern: '^\(([ivxlc]+)\)(?=\s|$)'}
+  - {name: bracket_letter, pattern: '^\(([a-z])\)(?=\s|$)'}
+# Words that start a cross-reference as written ("see Table 3", "section 4.2").
+cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
+# A documentation passage "states something checkable" when it holds a number, a formula,
+# or one of these phrases. Narrative passages get the clean status "Narrative - nothing to check".
+checkable_phrases: [is calculated, is computed, is set to, equals, is defined as, is floored, is capped,
+                    at least, at most, not exceed, no less than, no more than, minimum, maximum,
+                    must, shall, is applied, are applied, is multiplied, is divided, rounded, per cent, percent]
+'''
+
+# The notation of R's mathematical functions: how each is written in the tool's linear notation and
+# which of its arguments are the operands. Shared with review.py, which reads it for its word lists.
+R_FUNCTION_MAP_YAML = r'''# r_function_map.yaml - how names in R code and in written formulas map to the tool's neutral
+# function names. Reviewers 1, 2 and 4 read this file.
+#
+# notation: names that the tool reads as a FUNCTION when a written formula shows name( ... ).
+#   Any other name followed by "(" could be a product or a function; the tool does not guess and
+#   marks the formula "could not be read".
+notation:
+  functions:
+    N: normal_cdf
+    "\u03a6": normal_cdf
+    Phi: normal_cdf
+    ln: log
+    log: log
+    exp: exp
+    sqrt: sqrt
+    max: max
+    min: min
+    abs: abs
+    sum_over: sum_over
+    piecewise: piecewise
+  inverse:                      # name^-1( ... ) is read as the inverse function
+    normal_cdf: normal_inverse
+# r_functions: R function -> neutral name, with the argument order the tool relies on and the
+#   domain in which the neutral function can be evaluated (used to draw valid sample points).
+r_functions:
+  pnorm:  {neutral: normal_cdf,     arguments: [q],      only_defaults: [mean, sd, lower.tail, log.p]}
+  qnorm:  {neutral: normal_inverse, arguments: [p],      only_defaults: [mean, sd, lower.tail, log.p]}
+  exp:    {neutral: exp,            arguments: [x]}
+  log:    {neutral: log,            arguments: [x],      only_defaults: [base]}
+  log1p:  {neutral: log1p,          arguments: [x]}
+  expm1:  {neutral: expm1,          arguments: [x]}
+  sqrt:   {neutral: sqrt,           arguments: [x]}
+  abs:    {neutral: abs,            arguments: [x]}
+  max:    {neutral: max,            variadic: true}
+  min:    {neutral: min,            variadic: true}
+  pmax:   {neutral: max,            variadic: true}
+  pmin:   {neutral: min,            variadic: true}
+  ifelse: {neutral: piecewise,      arguments: [test, "yes", "no"]}
+  sum:    {neutral: sum_over,       variadic: true}
+  round:  {neutral: round,          arguments: [x, digits], optional: 1}
+  floor:  {neutral: floor,          arguments: [x]}
+  ceiling: {neutral: ceiling,       arguments: [x]}
+# domains: where each neutral function has a value (open intervals; null means unbounded).
+domains:
+  normal_cdf:     {argument: [null, null]}
+  normal_inverse: {argument: [0, 1]}
+  log:            {argument: [0, null]}
+  log1p:          {argument: [-1, null]}
+  sqrt:           {argument: [0, null]}
+  exp:            {argument: [null, 50]}
+# plumbing: calls that mark a statement as supporting code by syntax (no formula in it).
+plumbing_calls: [stop, warning, message, stopifnot, print, cat, library, require, requireNamespace,
+                 missing, is.null, is.numeric, is.character, is.na, match.arg, invisible, on.exit,
+                 tryCatch, suppressWarnings, inherits, class, structure, names, length, nrow, ncol,
+                 seq_len, seq_along, vapply, lapply, sapply, data, utils::data, format, paste, paste0, sprintf]
+'''
+
+def load_notation():
+    """The names the tool reads as functions in a written formula."""
+    return yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]
 
 def tokenize_formula(text):
     """Cut a written formula into numbers, names and signs. Anything else makes it unreadable."""
@@ -569,10 +677,9 @@ def parse_markup(text, file_name, repairs, tolerant_only=False):
     return reader.finish()
 
 # ---------------------------------------------------------------- tag rules and the block walker
-def load_tag_rules(references_dir, override_path=None):
-    """The default tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml."""
-    with open(os.path.join(references_dir, "tag_rules.yaml"), encoding="utf-8") as handle:
-        rules = yaml.safe_load(handle)
+def load_tag_rules(override_path=None):
+    """The shipped tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml."""
+    rules = yaml.safe_load(TAG_RULES_YAML)
     rules["shipped_tags"] = sorted(str(tag).lower() for tags in rules["families"].values() for tag in tags)
     analyst_families = {}
     if override_path:
@@ -638,7 +745,6 @@ class WalkState:
     lent_numbering: str = ""                       # a number a container carries for the heading inside it
     ask: object = None                             # the asker, where a guided reading is turned on
     settings: dict = field(default_factory=dict)
-    references_dir: str = ""
     digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
     guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     folder: str = ""                               # where the file being read stands, so a picture beside it can be found
@@ -1434,8 +1540,8 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
 def read_corner(ctx, corner, input_key, label):
     """Read every file of one corner, in file-name order, into chunks numbered in reading order."""
     options = ctx.options
-    rules = load_tag_rules(options["references_dir"], options["inputs"].get("tag_rules"))
-    notation = load_notation(options["references_dir"])
+    rules = load_tag_rules(options["inputs"].get("tag_rules"))
+    notation = load_notation()
     chunks, repairs, info_rows, outline, accounts, digests, read_as_what = [], [], [], [], [], [], []
     root = (options["inputs"].get("roots") or {}).get(input_key)
     for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
@@ -1443,7 +1549,7 @@ def read_corner(ctx, corner, input_key, label):
     for path in options["inputs"][input_key]:
         file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
-        state.ask, state.settings, state.references_dir = ctx.ask, ctx.settings, options["references_dir"]
+        state.ask, state.settings = ctx.ask, ctx.settings
         try:
             found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
         except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
@@ -2790,7 +2896,7 @@ def package_plan(ctx, files, placed, package_name):
     if not unplaced or ctx.ask is None or ctx.settings.get("agentic_reading") == "off":
         return {}, [], []
     digest = core.manifest_digest(files, placed, safe_text, package_name)
-    prompt = core.load_prompt(ctx.options["references_dir"], "package-plan")
+    prompt = core.load_prompt("package-plan")
     question = core.package_plan_question(digest, prompt, ctx.settings)
     if question["too_large"]:
         return {}, [digest], ["The list of files in the package is too large to ask about, so the built-in tests read it."]
@@ -2823,8 +2929,7 @@ def read_package(ctx):
         return core.StepResult({}, {"units": 0}, ["The package could not be opened: %s." % core.reason_for(problem)])
     tarballs = archives or tarballs
     files = strip_top_folder(files)
-    with open(os.path.join(ctx.options["references_dir"], "r_function_map.yaml"), encoding="utf-8") as handle:
-        function_map = yaml.safe_load(handle)
+    function_map = yaml.safe_load(R_FUNCTION_MAP_YAML)
     description = read_description(core.decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
     namespace = read_namespace(core.decode_text(files["NAMESPACE"])) if "NAMESPACE" in files else None
     context = {"function_map": function_map, "notation": function_map["notation"], "namespace": namespace,
