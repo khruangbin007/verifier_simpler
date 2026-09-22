@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - runner.py - the run: its folder, its record, the model calls, the workbook and
+Verifier 0.0.3 - runner.py - the run: its folder, its record, the model calls, the workbook and
 the report. For Reviewer 5.
 
 WHAT THIS FILE DOES
@@ -61,7 +61,7 @@ import reading
 import review
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier5_run_report
+# ---------------------------------------------------------------- the run: its folder, its record and its two deliverables
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class RunPaused(Exception):

@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - reading.py - reading the methodology, the model documentation and the model
+Verifier 0.0.3 - reading.py - reading the methodology, the model documentation and the model
 package into units. For Reviewer 1 (documents) and Reviewer 2 (the package).
 
 WHAT THIS FILE DOES
@@ -70,7 +70,7 @@ import yaml
 import core
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier1_documents
+# ---------------------------------------------------------------- the methodology and the documentation, read into units
 class NotReadable(Exception):
     """A formula or a file that the tool cannot read. The message is a plain reason for the analyst."""
 
@@ -1682,7 +1682,7 @@ def read_documentation(ctx):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier2_package
+# ---------------------------------------------------------------- the model package, read into units
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
 PARSER_NAME = "the tool R reader 0.0.1"
 
@@ -3358,7 +3358,7 @@ def trace_dataflow(ctx):
     and what it is computed from, every call with its arguments matched to their parameters, every column
     a dplyr verb creates, every stored table, file and hard-coded number, and the gaps code cannot follow.
     Proposes the final outputs: exported functions nothing in the package calls, and those its tests and
-    vignettes call. Enforces: R2, R4, R7"""
+    vignettes call. Enforces: R2, R4, R7, R14"""
     flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"])
     records = flow.run()
     count = lambda kind: sum(1 for r in records if r.get("kind") == kind)
@@ -3375,7 +3375,7 @@ def walk_dataflow(records, function):
     own arguments: (leaves, loops, functions reached). A parameter of a called function is what the call
     passed it there, or its default; a parameter of the function the walk began in is a raw input. A
     leaf is where the flow starts: such a parameter, a stored table, a file, a number, a column nothing
-    creates, or a name from outside the package. A function already being walked is a loop. Enforces: R2"""
+    creates, or a name from outside the package. A function already being walked is a loop. Enforces: R2, R14"""
     nodes = {r["node"]: r for r in records if r["record_type"] == "node"}
     leaves, loops, reached, seen = set(), set(), {function}, set()
     def visit(node_id, frames):

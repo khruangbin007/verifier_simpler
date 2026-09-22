@@ -1,6 +1,6 @@
 # Verifier — the manual
 
-**Version 0.0.2, September 2026.** One document for everyone: the person who runs a review, the person who reads its output, the person who reviews the code, and the person who maintains it. Part I is for everyone. Part II is for whoever runs a review. Part III is for whoever reads the code. Part IV is reference.
+**Version 0.0.3, September 2026.** One document for everyone: the person who runs a review, the person who reads its output, the person who reviews the code, and the person who maintains it. Part I is for everyone. Part II is for whoever runs a review. Part III is for whoever reads the code. Part IV is reference.
 
 ---
 
@@ -55,6 +55,7 @@ Twelve rules were set at the start and one was added when reading was rebuilt. E
 | R11 | Five flat modules, one-way imports, plain code, line budgets. The notebook is built from code and never edited by hand. |
 | R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, read into another form, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
+| R14 | The map is exhaustive and verifiable. Every step of the Model Implementation Map is parsed from the code or quotes it word for word; every model unit is a step of the map, belongs to one, or is in the branch of units no final output reaches; every step ends at a named raw input; and what the tool cannot follow is a named gap, never a silence. |
 
 **The wording rule.** The tool rates nothing. Words that grade how serious something is, and the two policy terms that classify an observation, never appear in anything the tool produces, because grading and classifying are decisions of the validation policy and of people, not of a tool. The tool says what it observed, where, and what a sensible next step would be. The list of words lives in one place in `core.py`, and a test scans the engine, the workbook, the report and this manual for them on every build.
 
@@ -206,7 +207,20 @@ Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.d
 
 Eight sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
 
-**How to read one row of a mapping sheet.** From left to right: what the unit is (blue identity columns and its text), what it was linked to in the methodology (green) and in the other corner, with the relation and **how the link was established**, then the assessment columns, then *Overall status* and the ids of its flagged items. Several values in one cell stand on separate lines, each prefixed with its reference. Text taken from your inputs or from the model is always shown in quotation marks with its citation.
+| Sheet | What it holds |
+|---|---|
+| `Model_Package_Info` | what was read and what was not, each file's content account, the coverage identity, the run's progress |
+| `Chunks_Canon` | every unit of the methodology, with its place in the outline |
+| `Chunks_Doc` | every unit of the documentation, with what it was linked to, what was searched, its checks, its status and its flagged items |
+| `Chunks_Model` | every unit of the model package, with the AI's interpretation, its status and its flagged items |
+| `Concepts` | one row per concept of the model, with every form it is written in and where |
+| `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, with the three branches |
+| `Mapping_Coverage` | one row per final output and one per corner: what is covered and what is not |
+| `Flagged_Items` | every question for a person, with its evidence and the four yellow columns for your determination |
+
+**How to read one row of the map.** From left to right: where the step sits (its Map ID, how deep it is, and the step itself, indented under the step it feeds), what it is (its role, the function it belongs to, the variable it sets and the variables it is computed from), where it comes from (its model unit and the code as written), and what the review made of it (its concepts, the methodology and documentation it is linked to, its checks, its status and its flagged items), ending with how the step was established. A unit's checks, status and flagged items are shown once, on its first row.
+
+**How to read one row of `Chunks_Doc`.** What the passage is (blue identity columns and its text), what it was linked to in the methodology and in the model, with the relation and **how established**, what was searched for it and why it was not linked, then its checks, its status and its flagged items. Several values in one cell stand on separate lines, each prefixed with its reference. Text taken from your inputs or from the model is always shown in quotation marks with its citation.
 
 **"How established"** starts with one of a small set of phrases: *Parsed from the files*; *AI judgement (64%)*; *Symbolic check: agrees*; *Numerical check: agrees (200 points)*; *Numerical check: differs*; *Value check: ...*; *Table matched by headers and row keys*; *Recorded by a person*. After an AI judgement you also see why the passage was proposed, for example "shares the words floor, probability; shares the rare number 0.0003".
 

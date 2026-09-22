@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - review.py - what corresponds to what, and what differs. For Reviewer 3
+Verifier 0.0.3 - review.py - what corresponds to what, and what differs. For Reviewer 3
 (mapping) and Reviewer 4 (checks).
 
 WHAT THIS FILE DOES
@@ -54,7 +54,7 @@ import core
 import reading
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier3_mapping
+# ---------------------------------------------------------------- mapping: what corresponds to what
 LEDGER_VOLATILE = ("created_at", "run_id")
 CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model": "the package"}
 
@@ -976,7 +976,7 @@ def map_implementation(ctx):
     """Step 07d, map-implementation, the skill: the Tracer resolves the gaps on the path from each final
     output, turn by turn, within map_hops_max turns a gap and map_calls_max questions in all; the Namer
     names each step; the Auditor, code alone, says what is traced, what is open and what no output
-    reaches. Without a model the gaps stay named and the steps unnamed. Enforces: R2, R3, R4, R5"""
+    reaches. Without a model the gaps stay named and the steps unnamed. Enforces: R2, R3, R4, R5, R14"""
     flow, units, settings = ctx.read("dataflow"), ctx.read("model_units"), ctx.settings
     if not flow:
         return core.StepResult(messages=["No data flow was traced, so there is nothing to map."])
@@ -1745,7 +1745,7 @@ def second_opinions(ctx, follow_ups, sources, world):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier4_checks
+# ---------------------------------------------------------------- the checks, the statuses and the flagged items
 SKILL_VERSIONS = {"check-mathematics": "0.0.1", "check-values": "0.0.1", "check-rules": "0.0.1",
                   "check-package-docs": "0.0.1", "account-coverage": "0.0.1"}
 

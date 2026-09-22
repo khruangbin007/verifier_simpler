@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - core.py - what every other module stands on. For every reviewer.
+Verifier 0.0.3 - core.py - what every other module stands on. For every reviewer.
 
 WHAT THIS FILE DOES
   Three layers, in one file because each is small and all three are needed before a single
@@ -58,8 +58,8 @@ import unicodedata
 import zipfile
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier0_shared
-ENGINE_VERSION = "0.0.2"
+# ---------------------------------------------------------------- the contracts: what every record is, and the words the tool may use
+ENGINE_VERSION = "0.0.3"
 GENESIS_HASH = "0" * 64
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
@@ -482,8 +482,8 @@ def expr_to_text(expr, parent_rank=0):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier0r_reading
-# ---------------------------------------------------------------- prompt machinery (from verifier3_mapping)
+# ---------------------------------------------------------------- the reading floor
+# ---------------------------------------------------------------- prompt machinery: one question, its budget and its id
 
 # ---------------------------------------------------------------- the prompts
 # Every question the tool asks, as the model sees it: a version line, the system half, the main half
@@ -813,7 +813,7 @@ def cut_text(text, limit, keep_words=()):
     piece = text[start:start + limit]
     return ("[... cut ...] " if start else "") + piece + (" [... cut ...]" if start + limit < len(text) else "")
 
-# ---------------------------------------------------------------- answer machinery (from verifier3_mapping)
+# ---------------------------------------------------------------- answer machinery: reading a reply, strictly
 def last_json_object(text):
     """The last balanced {...} object in a text, or None. Braces inside strings are skipped."""
     end = text.rfind("}")
@@ -840,7 +840,7 @@ def strict_json(text):
         return dict(pairs)
     return json.loads(text, object_pairs_hook=no_repeats)
 
-# ---------------------------------------------------------------- element helpers (from verifier1_documents)
+# ---------------------------------------------------------------- element helpers
 def local_name(tag):
     """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
     if not isinstance(tag, str):
@@ -861,7 +861,7 @@ def child_named(element, name):
             return child
     return None
 
-# ---------------------------------------------------------------- baseline slicing (from verifier1_documents)
+# ---------------------------------------------------------------- baseline slicing: what a document's shape says
 def attribute_text(element, names, digits_too=False):
     """The first of the named attributes that holds text worth reading, with its name. A bare
     number is no heading, so it is passed over unless digits_too."""
@@ -1682,7 +1682,7 @@ def validate_package_plan(question, answer, rejected):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- from verifier1f_formats
+# ---------------------------------------------------------------- the front door: what a file is, and how it becomes markup
 # ---------------------------------------------------------------- what a file is
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")

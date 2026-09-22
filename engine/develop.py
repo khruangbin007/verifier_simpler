@@ -1,5 +1,5 @@
 """
-Verifier 0.0.2 - develop.py - everything that is about the tool rather than about a run: how it
+Verifier 0.0.3 - develop.py - everything that is about the tool rather than about a run: how it
 is measured, released, checked against its own manual, and how the notebook is built.
 For whoever maintains the tool.
 
@@ -730,7 +730,7 @@ def report_lines(found, samples, label):
     stamp = datetime.date.today().isoformat()
     standin = "stand-in" in label
     lines = ["# Reading report: does guided reading earn its place?", "",
-             "**Measured %s, engine 0.0.2, phase R6, with %s.**" % (stamp, label), ""]
+             "**Measured %s, engine %s, with %s.**" % (stamp, core.ENGINE_VERSION, label), ""]
     if standin:
         lines += ["> **This run used the stand-in, not a model.** The stand-in reads the digest and applies",
                   "> the rule the prompt describes. It shows the machinery is sound and the vocabularies are",
@@ -1055,7 +1055,7 @@ def manual_problems():
     for setting in sorted(runner.DEFAULT_SETTINGS):
         if setting not in text:
             found.append("setting '%s' is not explained in the manual" % setting)
-    for rule in ("R%d" % n for n in range(1, 14)):
+    for rule in ("R%d" % n for n in range(1, 15)):
         if not re.search(r"\| %s \|" % rule, text):
             found.append("design rule %s has no row in the manual" % rule)
     for step in runner.load_pipeline()["steps"]:
