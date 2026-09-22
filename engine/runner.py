@@ -85,7 +85,7 @@ DEFAULT_SETTINGS = {
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True, "agentic_reading": "off",
     "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
     "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
-    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_with_ai": True}
+    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -1100,7 +1100,7 @@ def implementation_map(store, settings=None):
     for item in store.read("flagged_items"):
         for ref in item["unit_refs"]:
             items.setdefault(ref, []).append(item["item_id"])
-    rows, shown, decision_shown, unit_shown = [], {}, set(), set()
+    rows, shown, decision_shown, unit_shown, cut = [], {}, set(), set(), []
 
     def model_ref(node):
         if node["kind"] == "call":
@@ -1171,14 +1171,26 @@ def implementation_map(store, settings=None):
             return [(s, frames, "parsed from the code") for s in node["from"]]
         return []
 
+    by_function = (settings or DEFAULT_SETTINGS)["map_granularity"] == "function"
+
+    def folds(node, child_frames):
+        """A parameter of a called function is never a row of its own: its row is what the call gave it.
+        Asked for a map by function, a value or a column folds too - unless nothing feeds it, when it is a
+        raw input and stays."""
+        if node.get("kind") == "argument":
+            return child_frames[-1][1] is not None and node.get("function") == child_frames[-1][0]
+        return by_function and node.get("kind") in ("value", "column") and bool(node.get("from"))
+
     def folded(kids, depth=0):
-        """A parameter of a called function is not a row of its own: its row is what the call gave it, and
-        'given to f's parameter p' goes to How established. One level fewer for every call."""
+        """What a folded step gave goes to its children, and where it came from to How established: one
+        level fewer for every call, and for every value where the map is asked for by function."""
         out = []
         for child, child_frames, child_how in kids:
             node = nodes.get(child, {})
-            if depth < 50 and node.get("kind") == "argument" and child_frames[-1][1] is not None and node.get("function") == child_frames[-1][0]:
-                out += [(inner, inner_frames, "%s; given to %s's parameter %s" % (inner_how, node["function"], node["name"]))
+            if depth < 50 and folds(node, child_frames):
+                through = ("given to %s's parameter %s" % (node["function"], node["name"]) if node["kind"] == "argument"
+                           else "through %s, %s" % (node["kind"], node["name"]))
+                out += [(inner, inner_frames, "%s; %s" % (inner_how, through))
                         for inner, inner_frames, inner_how in folded(children(child, child_frames), depth + 1)]
             else:
                 out.append((child, child_frames, child_how))
@@ -1193,6 +1205,15 @@ def implementation_map(store, settings=None):
             rows.append({"map_id": map_id, "level": level, "step": "see %s" % shown[key], "role": "The same step as %s" % shown[key],
                          "function": node.get("function", ""), "variable": node["name"], "model_ref": "", "code": "", "concepts": "",
                          "methodology": "", "documentation": "", "checks": "", "searched": "", "status": "", "flagged": "", "how": how, "related": "", "final_output": ""})
+            return
+        if len(rows) >= int((settings or DEFAULT_SETTINGS)["map_rows_max"]):
+            if not cut:
+                cut.append(True)
+                rows.append({"map_id": map_id, "level": level, "step": "the map was cut here", "role": "Cut at %d rows" % len(rows),
+                             "function": "", "variable": "", "model_ref": "", "code": "", "concepts": "", "methodology": "", "documentation": "",
+                             "checks": "", "searched": "", "status": "", "flagged": "",
+                             "how": "the setting map_rows_max stopped the map here; ask for a map by function (map_granularity) or raise it",
+                             "related": "", "final_output": ""})
             return
         shown[key] = map_id
         row = row_for(node_id, level, map_id, how, frames)

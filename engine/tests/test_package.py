@@ -10,6 +10,7 @@ import reading
 import review
 import runner
 import build_samples
+import develop
 
 R_SNIPPETS = (          # what real R code looks like; every snippet must parse without a "not read" part
     "f <- function(x, ...) UseMethod('f')", "x <- if (a > b) a else b", "for (i in seq_len(n)) { s <- s + i }",
@@ -456,6 +457,63 @@ class ImplementationMapSheet(unittest.TestCase):
         self.assertTrue({"cond_pd", "floor_pd", "asset_correlation"} <= calls)
         self.assertTrue(any(row["step"] == "the number 0.999" and "default" in row["how"] for row in tree), "q takes its default there")
         self.assertFalse([row for row in tree if "open gap" in row["how"]])
+
+
+class MapSignOff(unittest.TestCase):
+    """Stage 8: the bar the map's agents must meet on a real gateway, and the two levers for a large
+    package. The bar is reported with the stand-in and only met against a model."""
+
+    def test_with_the_stand_in_every_test_holds_and_the_bar_says_it_is_not_met(self):
+        import standin_chat
+        text = develop.map_report(standin_chat.chat_well_behaved, samples=("J_pipeline",), label="the stand-in")
+        self.assertEqual(text.count("- **HELD**"), 4, text)
+        self.assertIn("reported but NOT met", text)
+        self.assertIn("map-sign-off", text, "and it says where to run it for real")
+
+    def test_a_model_that_invents_links_or_grades_steps_does_not_meet_the_bar(self):
+        """The rehearsal: a bar that cannot fail is worth nothing. This model declares a link quoting code
+        that is not there and names steps in graded words; the validators refuse both, so nothing it said
+        reaches the map - and the bar must show that the agents did not do their work."""
+        import json
+        import re
+        import standin_chat
+        def misbehaving(system_prompt, main_prompt, history=()):
+            if "QUESTION TYPE: trace-gap" in main_prompt:
+                return {"answer": json.dumps({"action": "declare_edge",
+                                              "args": {"value": "steps", "from": ["rating_scale"], "quote": "steps <- invented(code)"}})}
+            if "QUESTION TYPE: name-steps" in main_prompt:
+                shown = re.findall(r"^\[(S\d+)\]", main_prompt, re.M)
+                return {"answer": json.dumps({"names": {step: "a critical error needing urgent attention" for step in shown}})}
+            return standin_chat.chat_well_behaved(system_prompt, main_prompt)
+        text = develop.map_report(misbehaving, samples=("J_pipeline",), label="a misbehaving model")
+        self.assertIn("**The bar is NOT met.**", text)
+        not_held = [line for line in text.split("\n") if line.startswith("- **NOT HELD**")]
+        self.assertTrue(any("questions refused" in line for line in not_held), not_held)
+        self.assertTrue(any("answer key" in line for line in not_held), "the gaps on the path went untraced")
+
+    def test_a_map_by_function_is_shallower_and_keeps_every_raw_input(self):
+        import standin_chat
+        maps = {}
+        for granularity in ("statement", "function"):
+            paths, settings, _ = helpers.run_sample("J_pipeline", chat=standin_chat.chat_well_behaved,
+                                                    settings={"map_granularity": granularity})
+            rows = runner.implementation_map(runner.open_store(paths, settings), settings)
+            maps[granularity] = [row for row in rows if not row["map_id"].startswith("9")]
+        raw = lambda rows: sorted(row["step"] for row in rows if row["role"].startswith("Raw input"))
+        self.assertEqual(raw(maps["function"]), raw(maps["statement"]), "the same raw inputs, however fine the map")
+        self.assertLess(len(maps["function"]), len(maps["statement"]))
+        self.assertLess(max(row["level"] for row in maps["function"]), max(row["level"] for row in maps["statement"]))
+        self.assertFalse([row for row in maps["function"] if row["role"] in ("Intermediate value", "Column") and row["code"]],
+                         "values and columns fold into the calls")
+
+    def test_a_map_that_would_run_away_is_cut_and_says_so(self):
+        import standin_chat
+        paths, settings, _ = helpers.run_sample("J_pipeline", chat=standin_chat.chat_well_behaved, settings={"map_rows_max": 20})
+        rows = runner.implementation_map(runner.open_store(paths, settings), settings)
+        cut = [row for row in rows if row["role"].startswith("Cut at")]
+        self.assertEqual(len(cut), 1)
+        self.assertIn("map_granularity", cut[0]["how"], "and it says how to ask for a smaller map")
+        self.assertLessEqual(len([row for row in rows if not row["map_id"].startswith("9")]), 21)
 
 
 if __name__ == "__main__":
