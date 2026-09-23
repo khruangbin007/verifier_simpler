@@ -1,6 +1,16 @@
-# Docling and all it brings - PyTorch, pandas 2, transformers - installed by cell 1 into a folder of its
+# Docling and what it brings - PyTorch, pandas 2, transformers - installed by cell 1 into a folder of its
 # own, never into the runtime's packages: Docling runs in a process of its own, so the runtime keeps its
 # pandas, numpy and pyarrow as they are.
+# Docling's standard set without its OCR engine (the tool reads documents without OCR), and OpenCV - which
+# Docling's table model needs - held below 4.13: from 4.13 its wheels carry a copy of Red Hat's OpenSSL whose
+# FIPS self-test fails, which stops the process on a FIPS-mode cluster; 4.12 carries a plain OpenSSL 1.1.1w.
 # Installed from PyPI. PyTorch from PyPI brings its GPU libraries - several GB, which a cluster without a GPU
 # leaves unused.
-docling>=2.129
+docling-slim[convert-core,format-pdf,format-docx,format-html,format-markdown,format-pptx,format-xlsx,format-email,format-latex,feat-chunking,models-local]>=2.129
+httpx
+polyfactory
+python-dotenv
+rich
+typer
+websockets
+opencv-python-headless>=4.10,<4.13

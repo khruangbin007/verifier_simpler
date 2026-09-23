@@ -799,6 +799,36 @@ def no_network(event, args):                     # before anything is imported: 
     if event == "socket.connect" and isinstance(args[1], tuple) and args[1] and args[1][0] not in local:
         raise OSError("the Docling process makes no network connection (%s was asked for)" % (args[1][0],))
 sys.addaudithook(no_network)
+
+def refused_opencv():
+    """On a FIPS-mode machine, the OpenCV about to be loaded when it carries an OpenSSL with Red Hat's FIPS self-test
+    (OpenCV 4.13 on): that self-test fails for a copy inside a wheel and stops the whole process. OpenCV 4.12 carries
+    a plain OpenSSL and is loaded. Returns the refused library, or ""."""
+    import glob, importlib.util, os
+    try:
+        fips = open("/proc/sys/crypto/fips_enabled").read().strip() == "1"
+    except OSError:
+        fips = False
+    if not (fips or os.environ.get("OPENSSL_FORCE_FIPS_MODE")):
+        return ""
+    spec = importlib.util.find_spec("cv2")
+    folder = os.path.dirname(os.path.dirname(spec.origin)) if spec and spec.origin else ""
+    for library in glob.glob(os.path.join(folder, "opencv*.libs", "libcrypto*")) if folder else []:
+        with open(library, "rb") as handle:
+            if b"crypto/fips/fips.c" in handle.read():
+                return library
+    return ""
+
+class NoOpenCV:                                  # a refused OpenCV: its import fails - PDF tables need it, and say so - instead of
+    def __init__(self, library):                 # its OpenSSL stopping the process and every file with it
+        self.library = library
+    def find_spec(self, name, path=None, target=None):
+        if name == "cv2" or name.startswith("cv2."):
+            raise ImportError("this OpenCV carries an OpenSSL whose FIPS self-test fails on this machine (%s): Docling's folder "
+                              "needs opencv-python-headless below 4.13 - run cell 1" % self.library.rsplit("/", 1)[-1])
+        return None
+if refused_opencv():
+    sys.meta_path.insert(0, NoOpenCV(refused_opencv()))
 request = json.load(open(sys.argv[1], encoding="utf-8"))
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat, DocumentStream
@@ -809,7 +839,14 @@ options.heading_hierarchy_options = HeadingHierarchyOptions(enabled=True)   # a 
 convert = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}).convert
 chunk, kinds = HierarchicalChunker().chunk, request["kinds"]
 label = lambda item: str(getattr(item.label, "value", item.label))
-answer = {"version": importlib.metadata.version("docling"), "files": []}
+def version_of(*names):
+    for name in names:
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return ""
+answer = {"version": version_of("docling-slim", "docling"), "files": []}
 for name, path in request["files"]:
     try:
         with open(path, "rb") as handle:
@@ -843,12 +880,26 @@ def docling_environment(folder):
         environment["PYTHONPATH"] = folder + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else "")
     return environment
 
+def docling_requirements():
+    """engine/requirements-docling.txt, and the fingerprint of what it asks for."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements-docling.txt")
+    return path, file_sha256(path)
+
 def docling_ready():
-    """Where Docling runs from: its own folder, or "" when the runtime itself carries it; None when it is nowhere yet."""
+    """Where Docling runs from: its own folder, or "" when the runtime itself carries it; None when it is nowhere yet.
+    A folder installed from other requirements than today's is out of date: it counts as nowhere, and is made again."""
     if "path" not in DOCLING_HOME:
         for folder in (docling_folder(), ""):         # its own folder first: the runtime's copy, if any, may not fit
             if folder and not os.path.isdir(folder):
                 continue
+            if folder:
+                try:
+                    with open(os.path.join(folder, ".requirements-sha256")) as handle:
+                        current = handle.read().strip() == docling_requirements()[1]
+                except OSError:
+                    current = False
+                if not current:
+                    continue
             probe = subprocess.run([sys.executable, "-s", "-c", "import docling, docling_core"], env=docling_environment(folder),
                                    capture_output=True, text=True, timeout=600)
             if probe.returncode == 0:
@@ -857,13 +908,19 @@ def docling_ready():
     return DOCLING_HOME.get("path")
 
 def docling_install():
-    """Install Docling from PyPI into its own folder - never into the runtime's packages. Returns what pip said when
-    it failed, else ""."""
-    requirements = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements-docling.txt")
-    done = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "--target", docling_folder(), "-r", requirements,
-                           "--index-url", PYPI], capture_output=True, text=True)
+    """Install Docling from PyPI into its own folder - never into the runtime's packages - made anew: pip adds to a
+    folder but never takes out what the requirements no longer ask for. Returns what pip said when it failed, else ""."""
+    requirements, fingerprint = docling_requirements()
+    folder = docling_folder()
+    shutil.rmtree(folder, ignore_errors=True)
+    done = subprocess.run([sys.executable, "-m", "pip", "install", "--target", folder, "-r", requirements, "--index-url", PYPI],
+                          capture_output=True, text=True)
     DOCLING_HOME.clear()
-    return done.stderr if done.returncode else ""
+    if done.returncode:
+        return done.stderr
+    with open(os.path.join(folder, ".requirements-sha256"), "w") as handle:
+        handle.write(fingerprint)
+    return ""
 
 def docling_read(pages):
     """Every page of a corner read by ONE Docling process - its models are loaded once - into
