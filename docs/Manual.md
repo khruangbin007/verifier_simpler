@@ -12,13 +12,13 @@ A model comes with three things: a **methodology** that says what it should do, 
 
 It does not run the model. It does not judge whether the methodology is sound. It rates nothing: no grade, no score, no verdict. It shows what was read, how the model computes what it returns, and what is covered; a person decides what it means.
 
-It is not tied to any sector. The methodology can be about anything the package computes. Nothing in the code, its vocabulary or its prompts assumes a field; what it knows about a project's language comes from the project's own files and, optionally, a glossary the analyst supplies.
+It is not tied to any sector. The methodology can be about anything the package computes. Nothing in the code or its vocabulary assumes a field; what it knows about a project comes from the project's own files.
 
 **What comes out.** One run produces a folder with two deliverables and a record:
 
 ```
 Run_2026-09-22_1430/
-  Output.xlsx               six sheets: what was read, how the model computes what it returns, what is covered
+  Output.xlsx               five sheets: what was read, and how the model computes what it returns
   _audit/
     Audit_Log.xlsx          the record: the run, every step, every record, every exchange with the model
 ```
@@ -29,8 +29,8 @@ The record is what makes the run an **evidence pack**: from that workbook alone,
 
 1. **Put the files in.** A project folder has three input folders: the methodology, the package, the documentation. Almost any format works (section 6).
 2. **Read.** The tool reads every file into small citable units — a paragraph, a table, a formula, a function — each with its place in the document and a fingerprint of its content. No model is involved yet. You are shown the outline it found and asked to confirm it.
-3. **Map and link.** The tool maps how the model computes what it returns, from each final output down to its rawest inputs, with flowR reading the R code. It then links the passages of the methodology and the documentation to the model: the model chooses among candidates code proposes and must quote each word for word, or its answer is refused.
-4. **Read.** `Output.xlsx` shows everything that was read, the map, and what is covered.
+3. **Map.** The tool maps how the model computes what it returns, from each final output down to its rawest inputs, with flowR reading the R code. No step of a review asks your model anything.
+4. **Read.** `Output.xlsx` shows everything that was read, and the map.
 5. **Keep.** The run folder is the evidence pack.
 
 ## 3. Design rules
@@ -41,13 +41,13 @@ Fourteen rules, each enforced by named code: its docstring says so (`Enforces: R
 |---|---|
 | R1 | The tool shows; people decide. No rating of seriousness. The policy terms never appear in anything the tool produces or names. |
 | R2 | Closed accounting. Every unit read is one row of its sheet, and no row is anything else; this identity is checked on every run. A file, a step or a call that fails is written down, and the run goes on. |
-| R3 | The model's opinion is never the last word. Answers are validated by code; a failed or rejected call leaves the unit unlinked and never stops a run. |
-| R4 | Every link says how it was established, shows its evidence and carries provenance. Every citation can be re-verified by hash. |
+| R3 | The model's opinion is never the last word: a review asks the model nothing, and everything the workbook shows is read and parsed by code. |
+| R4 | Every record carries its provenance - the step, its version and the run - and every unit can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
 | R6 | Inputs are never modified. A run writes only inside its own folder. |
 | R7 | Nothing taken from an input or from the model is ever executed or evaluated: no R, no evaluation of text, no unpickling, no string parsing by a symbolic library, safe reading of archives, safe loading of YAML only. |
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
-| R9 | No domain concept in the engine, its vocabulary or its prompts. Domain flavour lives in sample data and in the optional glossary. |
+| R9 | No domain concept in the engine or its vocabulary. Domain flavour lives in the inputs alone. |
 | R10 | Plain language outward. No internal names, no technical traces, whole numbers shown as whole numbers, in anything an analyst reads. |
 | R11 | One engine file, plain code. The notebook's four cells are calls into it and hold no code of their own but the organisation's `chat()`. |
 | R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
@@ -58,25 +58,7 @@ Fourteen rules, each enforced by named code: its docstring says so (`Enforces: R
 
 ## 4. Vocabulary
 
-Every wording the tool records for a link, a refusal or a piece that could not be read comes from one list in `verifier.py`; the tables below are that list.
-
-**Relations, as recorded**
-
-| Wording |
-|---|
-| Implements |
-| Partly implements |
-| Differs from |
-| Same topic (not implemented here) |
-| Describes |
-| Consistent with |
-
-**How a link was established**
-
-| Wording |
-|---|
-| Parsed from the files |
-| AI judgement ({confidence}%) |
+Every wording the tool shows for a kind of unit, a kind of chunk or a piece that could not be read comes from one list in `verifier.py`; the tables below are that list.
 
 **Kinds of model unit**
 
@@ -113,23 +95,11 @@ The rows of Chunks_Model never overlap, and each is a whole piece of code: a rox
 | the equation is an image |
 | the equation could not be read |
 
-**Why an answer of the model could not be used**
-
-| Wording |
-|---|
-| it could not be read |
-| it named a passage that was not shown |
-| it quoted words that are not in the text |
-| it accepted a planted control passage |
-| it contradicted itself |
-| it repeated an action it had already taken |
-
 **Fixed cell texts**
 
 | Wording |
 |---|
 | Not run yet |
-| The AI's wording is not displayed here; the full text is in the audit records. |
 
 ---
 
@@ -143,7 +113,7 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 |---|---|---|
 | **cell 1** | `verifier.setup(dbutils)`: makes the widgets, installs a package only if one the engine imports is missing, gets flowR ready, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
 | **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | when the gateway or your id changes |
-| **cell 3** | `verifier.review()`: reads every input file, maps how the model computes what it returns, and links the passages of the three inputs, your model judging each link. Prints what each step did | after a token expires, a cluster restarts, or you add an input: finished steps are never repeated |
+| **cell 3** | `verifier.review()`: reads every input file and maps how the model computes what it returns. Prints what each step did | after the cluster restarts, or you add an input: finished steps are never repeated |
 | **cell 4** | `verifier.verify()`: checks the finished run folder against its own record | after any run |
 
 **The widgets.** Eight: the endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the name recorded against the run; the model id (04) and project date (05); a package index (06), used only if a package must be installed; how many calls at once (07); and the token cap (08). Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
@@ -168,13 +138,11 @@ Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.d
 
 **SVG pictures.** An SVG holds its text as text, so the tool reads a chart or a table drawn as a picture without guessing: every word comes from the picture's own `<text>` elements. Text that stands in a grid of at least two rows of the same width becomes a table, with the first row as its header; anything else becomes a figure whose words are the picture's labels in reading order. Where the methodology's XML refers to a picture beside it — `<figure src="floors.svg">` — that figure takes the picture's table or labels as its own, under the caption the XML gives. Only a picture in the same folder as the document, or a folder inside it, is followed; a missing picture or a path that leaves the folder stays a plain figure.
 
-**Optional.** `Inputs/glossary.xlsx` names the project's own terms, so that the search for corresponding passages knows that two words mean one thing. `Inputs/tag_rules.yaml` tells the reader what the tags of an unfamiliar XML schema are for, and always wins over what the tool would work out.
-
 **Only R is read as code.** A package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 
 ## 7. Reading `Output.xlsx`
 
-Six sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
+Five sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
 
 | Sheet | What it holds |
 |---|---|
@@ -183,7 +151,6 @@ Six sheets, always in this order; a sheet whose step has not run yet shows its h
 | `Chunks_Doc` | every unit of the documentation, with its place in the outline |
 | `Chunks_Model` | every unit of the model package: each a whole piece of code, as written |
 | `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, one row per variable |
-| `Mapping_Coverage` | one row per final output and one per corner: what is covered and what is not |
 
 **How to read one row of the map.** One row is one variable: where it sits (the Map ID, a column per level, and how deep it is), the variable itself with the code as written, the function that defines it with its unit, and what it is computed from — each of those a row beneath it. Section 8 describes the sheet in full.
 
@@ -227,25 +194,14 @@ Six sheets, always in this order; a sheet whose step has not run yet shows its h
 | Lines | identity |  |
 | Text | code text |  |
 
-**Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets held one row per model unit and one per documentation unit, with what each was linked to. The Model Implementation Map now shows each model unit in its place in the computation, and `Mapping_Coverage` what is covered, so those two sheets are gone.
-
-**Mapping_Coverage**, read off the map. One row for each final output: how many steps it takes and how deep they run, what it rests on — arguments, columns of the data, stored tables, files and hard-coded numbers — and how many of its steps a methodology passage is linked to (*Covered*) and how many are not. Then one row for each corner, each read the way that corner needs:
-
-| Row | Covered | Not covered |
-|---|---|---|
-| Model units | units a final output reaches: a row of the map, or the roxygen, help page, test or statement belonging to one | the units no final output reaches: dead code, a second way in, a function only the tests call |
-| Methodology passages | passages a unit on the map is linked to | passages stating a number, formula or rule that no step implements. The rest state nothing to implement |
-| Documentation passages | passages a unit on the map is linked to | passages describing nothing in the map |
-
-Every number on this sheet is counted from the rows written to the map and to the Chunks sheets, so the sheet and the map always agree. The coverage identity is checked separately, by counting the statuses on `Chunks_Model` and `Chunks_Doc` against what the step account-coverage counted.
-
+**Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets held one row per model unit and one per documentation unit, with what each was linked to. The Model Implementation Map now shows each model unit in its place in the computation, so those two sheets are gone.
 
 ## 8. The Model Implementation Map
 
 
 **The Model Implementation Map.** The sheet `Model_Implementation_Map` shows how the model computes what it returns, and nothing else: only what a calculation reaches is on it. One row is one variable. Reading a row from left to right: where it sits (the Map ID, one column per level — `MapID1`, `MapID2`, … — so any level can be filtered, and a parent leaves the deeper columns empty; the columns fold away with the + above them), then **Output Variable**, the one variable that row is about, with the code as written; then **Function Name**, the function that defines it, with its model unit; then **Arguments**, what the variable is computed from, separated by semicolons. Every name in Arguments is the Output Variable of a row directly beneath it, so a value can be followed down to the raw inputs it rests on: an argument of the final output, a column of the data given, a stored table, a file, or a hard-coded number, each a row with no function of its own. A reference is a link: clicking a `M-` reference opens that unit's row on `Chunks_Model`. The rows are grouped, each parent above its members, so a branch opens and closes with the + and − at the left; Excel groups eight levels deep and a deeper row is indented instead.
 
-A called function is entered with the arguments that call gives it, so what it computes inside stands under the value it produces, and a parameter is never a row of its own: the row is the argument the call gave it. A function that calls itself stops there, keeping what the call is given. What no final output reaches is **not on this sheet**: dead code, a second way in, a function only the tests call, the methodology no step implements and the documentation describing nothing in the map are all counted on `Mapping_Coverage`, where each has its row.
+A called function is entered with the arguments that call gives it, so what it computes inside stands under the value it produces, and a parameter is never a row of its own: the row is the argument the call gave it. A function that calls itself stops there, keeping what the call is given. What no final output reaches is **not on this sheet**: dead code, a second way in, and a function only the tests call are not rows of the map.
 
 **What each row's code is.** A final output's row shows the whole function that assembles it; every other row shows only its own code: an assignment shows its statement, and a named element of a list or a column a verb creates shows `name = value` alone, not the statement it sits in. Every named element of a list is a row, one holding only `NA` as much as any other. A row nothing computes - an argument of a final output, a column of the data given, a stored table, a file, a hard-coded number - is where a calculation starts: its Output Variable says so, `tie_inputs (terminal input)`, and its code is empty.
 
@@ -289,18 +245,17 @@ A called function is entered with the arguments that call gives it, so what it c
 
 ## 14. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the search and the judgement of every link, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
 ## 15. The pipeline
 
-Four steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, and only a function the engine offers may be named.
+Three steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, and only a function the engine offers may be named.
 
 | Step | Name | What it does |
 |---|---|---|
 | 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
 | 03 | build-map | by code alone: the graph, and the data flow of the package (read by flowR) |
-| 04 | link-units | two passes of search and judgement: candidates by code, then the model's judgement on each |
 
 **How the data flow is read.** The package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3). flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places code cannot follow, recorded as gaps. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
 
@@ -308,9 +263,7 @@ A step that carries out several parts keeps them in order, and a later part read
 
 ## 16. How the model is used, and held
 
-The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each. Every answer is validated by `verifier.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit unlinked. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
-
-Every exchange is recorded in `_audit/Audit_Log.xlsx`, prompt and reply.
+A review asks the model nothing. Cell 2 asks your `chat()` one question, to check the gateway answers; what the workbook shows - the reading, the map, every row - is made by code alone.
 
 ## 17. Reading, and the content account
 
@@ -330,46 +283,17 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `k_candidates` | 12 | How many passages are shown to the judge for one unit and corner. |
 | `concurrency_limit` | 4 | How many questions are asked at the same time. |
 | `token_cap` | 40000 | The gateway's limit for one call, in tokens. |
-| `answer_reserve` | 1500 | Tokens kept free for the answer. |
-| `thinking_reserve` | 0 | Tokens kept free for a model that writes out its reasoning first. |
-| `safety_margin` | 0.15 | Share of the remaining room left unused, because tokens are estimated. |
-| `prompt_target_tokens` | 6000 | The size a prompt should stay below even when the cap allows more. |
-| `max_attempts` | 3 | Attempts per question before it ends as failed. |
-| `breaker_after_failures` | 8 | Failed calls in a row after which the run pauses itself. |
-| `retry_wait_seconds` | 2.0 | Waiting time before a retry; it grows with every attempt. |
-| `token_wait` | wait | wait: workers wait for a fresh token (modes A and B). stop: the run stops and is resumed (mode C). |
-| `foreground_minutes` | 0.0 | Time box of a foreground run; 0 means none. |
-| `sync_every_calls` | 100 | Call records are written and copied to the Workspace after this many questions. |
-| `llm_file_roll_mb` | 25.0 | Size at which a new file of call records is started. |
-| `second_opinion` | unchecked_only | When the second, oppositely framed question is asked: unchecked_only, all or none. |
-| `judge_supporting_code` | False | Also send supporting code by syntax to the search and the judge. |
 | `max_parameter_cells` | 5000 | A stored object with more cells is profiled and not compared. |
 | `max_parameter_columns` | 50 | A stored object with more columns is profiled and not compared. |
 | `protect_sheets` | True | Lock every cell except the yellow ones (filtering stays allowed; no password). |
-| `system_prompt_prefix` |  | Text put in front of every system prompt, for example a switch that turns written-out reasoning off. |
-| `strip_patterns` | ['(?s)<think>.*?</think>', '(?s)<thought>.*?</thought>', '(?s)<\\/channel\\/>thought.*?<\\/channel\\/>'] | Patterns of thought blocks that are removed from an answer before it is read. |
-| `numeric_points` | 200 | Sample points of the numerical check. |
-| `numeric_seed` | 20260917 | The seed of the sample points; recorded in every check. |
-| `min_valid_points` | 50 | Fewer valid points than this leave a check undecided. |
-| `relative_tolerance` | 1e-09 | Two results agree when they differ by less than this, relative to their size. |
 | `trivial_numbers` | ['0', '1', '2', '-1', '10', '100'] | Numbers that are not looked up in the methodology. |
 | `bm25_k1` | 1.2 | Text ranking: how fast repeated words stop counting. |
 | `bm25_b` | 0.75 | Text ranking: how much long passages are scaled down. |
-| `anchor_max_share` | 0.1 | An anchor that more than this share of all units mention is dropped. |
-| `walk_restart` | 0.25 | Restart probability of the walk over units and anchors. |
-| `walk_rounds` | 30 | Rounds of the walk; fixed, so that it is deterministic. |
-| `heading_anchor_cap` | 0.5 | The most a shared section title can weigh. |
-| `rrf_constant` | 60 | The constant of reciprocal rank fusion. |
-| `reserved_places` | 2 | Places of the shortlist kept for candidates that only the anchors or propagation found. |
-| `max_unit_chars` | 3000 | A longer unit is cut around its formula lines before it is shown to the model. |
-| `max_passage_chars` | 1100 | A longer passage is cut around the matched words. |
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
 | `reviewer_id` |  | Who runs the notebook; recorded against the run. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
-| `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use. |
 
 `map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting.
 
@@ -378,12 +302,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | You want to add | Where |
 |---|---|
 | a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` |
-| a question type | a prompt in `verifier.PROMPTS`, a validator in `verifier.validate_answer` |
-| a search signal | `verifier.search_one`, `verifier.REASON_TEMPLATES`, the `signals` setting |
-| a word the search should ignore, or a code-to-prose bridge | `verifier.STOPWORDS_TEXT`, `verifier.BRIDGE_PATTERNS_YAML` |
 | a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` |
-
-A prompt's text is part of every question id made from it, and recorded answers are found by that id: change a prompt's words and raise its `VERSION` line together, so that no answer to the old question is taken for an answer to the new one.
 
 After any change, see section 23.
 
@@ -395,7 +314,7 @@ After any change, see section 23.
 |---|---|---|
 | openpyxl>=3.1 | required | Output.xlsx and the record of a run |
 | PyYAML>=6.0 | required | the pipeline and the tool's own rule files |
-| numpy>=1.24 | required | reading stored data and the search's own arithmetic |
+| numpy>=1.24 | required | reading stored data |
 | rdata>=1.0 | required | reads stored R data without running R |
 | pdfplumber>=0.10 | optional | PDF text and tables |
 | pypdf>=4.0 | optional | a second PDF reader |
@@ -404,4 +323,4 @@ After any change, see section 23.
 
 ## 23. Maintaining the tool
 
-Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 21). A prompt's words and its `VERSION` line change together. After a change, run a review on a project you know and compare its `Output.xlsx` with the one before: every sheet should differ only where the change meant it to.
+Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 21). After a change, run a review on a project you know and compare its `Output.xlsx` with the one before: every sheet should differ only where the change meant it to.

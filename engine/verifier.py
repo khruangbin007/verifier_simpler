@@ -63,21 +63,11 @@ ENGINE_VERSION = "0.0.3"
 GENESIS_HASH = "0" * 64
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
-RELATION_WORDING = {  # the word allowed in a prompt -> the wording shown in the workbook
-    "implements": "Implements", "partly implements": "Partly implements",
-    "deviates from": "Differs from", "merely related": "Same topic (not implemented here)",
-    "describes": "Describes", "consistent with": "Consistent with",
-    "inconsistent with": "Differs from"}
 LINKING_RELATIONS = ("Implements", "Partly implements", "Differs from", "Describes", "Consistent with")
 HOW_PARSED = "Parsed from the files"
-HOW_AI = "AI judgement ({confidence}%)"
 NOT_RUN_YET = "Not run yet"
 
 UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
-REJECTION_REASONS = (
-    "it could not be read", "it named a passage that was not shown",
-    "it quoted words that are not in the text", "it accepted a planted control passage",
-    "it contradicted itself", "it repeated an action it had already taken")
 
 KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL = "Function", "Formula statement", "Top-level statement"
 KIND_TEST, KIND_TABLE, KIND_OBJECT = "Test block", "Parameter table", "Parameter object"
@@ -86,7 +76,6 @@ KIND_COMPILED, KIND_NOT_READ, KIND_OTHER = "Compiled code", "File not read", "Ot
 UNIT_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST, KIND_TABLE, KIND_OBJECT,
               KIND_ROXYGEN, KIND_HELP, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
 CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
-AI_WORDING_NOT_SHOWN = ("The AI's wording is not displayed here; the full text is in the audit records.")
 
 # This one assignment has to name the words the tool may never use; nothing else in the engine may.
 # These terminologies CAN BE USED ONLY by HUMAN reviewers/validators. Machines cannot make these determinations.
@@ -170,17 +159,11 @@ class Edge:
     relation: str = ""; confidence: Optional[int] = None
     evidence: dict = field(default_factory=dict); record_type: str = "edge"
 
-@dataclass(frozen=True)
-class Candidate:
-    """A passage the search stage proposes for a unit, with the reason in plain words."""
-    unit_ref: str; target_ref: str; target_corner: str; rank: int; fused_score: float
-    signals: dict; reason: str; path: tuple = (); suggestion_only: bool = False
-    search_pass: int = 1
 
 @dataclass
 class StepContext:
     """What every step function receives. It never contains the access token."""
-    settings: dict; options: dict; read: Callable; ask: Optional[Callable]
+    settings: dict; options: dict; read: Callable
     work_dir: str; note: Callable; provenance: Optional[Provenance] = None
 
 @dataclass
@@ -378,27 +361,8 @@ class Expr:
     op: str; name: Optional[str] = None; value: Optional[str] = None; args: tuple = ()
     span: Optional[tuple] = None
 
-def expr_from_dict(record):
-    """Rebuild a tree that was read back from _audit as plain JSON."""
-    if record is None:
-        return None
-    args = tuple(expr_from_dict(arg) for arg in record.get("args") or ())
-    span = tuple(record["span"]) if record.get("span") else None
-    return Expr(record["op"], record.get("name"), record.get("value"), args, span)
 
-def expr_walk(expr):
-    """Every node of a tree, parents before children."""
-    yield expr
-    for arg in expr.args:
-        yield from expr_walk(arg)
 
-def expr_symbols(expr):
-    """The distinct symbols of a tree, in order of first appearance."""
-    seen = []
-    for node in expr_walk(expr):
-        if node.op == "sym" and node.name not in seen:
-            seen.append(node.name)
-    return tuple(seen)
 
 _INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
 
@@ -436,143 +400,14 @@ def expr_to_text(expr, parent_rank=0):
 # with [[UNIT]] and similar places the question builder fills. The text is exact - a question's id is
 # the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
 # version and asks new questions. Enforces: R3, R5, R9
-PROMPTS = {
-    'judge-doc-to-canon': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-doc-to-canon
-TASK: Which passages of the methodology, if any, does this passage of the documentation correspond to, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"consistent with","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: consistent with, inconsistent with, merely related.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-If the unit states nothing that could be checked (no formula, number, rule or definition), add "states_nothing_checkable": true.
-''',
-    'judge-doc-to-model': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-doc-to-model
-TASK: Which units of the package, if any, does this passage of the documentation describe, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: describes, inconsistent with.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-''',
-    'judge-unit-to-canon': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-unit-to-canon
-TASK: Which passages of the methodology, if any, does this unit of the package correspond to, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"implements","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: implements, partly implements, deviates from, merely related.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-''',
-    'judge-unit-to-doc': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-unit-to-doc
-TASK: Which passages of the documentation, if any, describe this unit of the package, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: describes, consistent with, inconsistent with.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-''',
-}
 
 
-def load_prompt(question_type):
-    """A prompt template: its version line, its SYSTEM part and its MAIN part with slots."""
-    text = PROMPTS[question_type]
-    version, rest = text.split("\n", 1)
-    system, main = rest.split("=== MAIN ===\n", 1)
-    return {"version": version.strip(), "system": system.replace("=== SYSTEM ===\n", "").strip(), "main": main.strip()}
 
-def estimate_tokens(prose, code=""):
-    """No tokenizer can be installed, so tokens are estimated from characters, on the safe
-    side: one token per 3.2 characters of prose and per 2.5 characters of code and numbers."""
-    return int(len(prose) / 3.2 + len(code) / 2.5) + 1
 
-def prompt_budget(settings, system_prompt):
-    """Tokens available for the main prompt: the smaller of the target size (long prompts are
-    answered badly) and what the cap leaves after all reserves."""
-    room = settings["token_cap"] - settings["answer_reserve"] - settings["thinking_reserve"] - estimate_tokens(system_prompt)
-    return min(int(settings["prompt_target_tokens"]), int(room * (1 - settings["safety_margin"])))
 
-def cut_text(text, limit, keep_words=()):
-    """Cut a long text to `limit` characters around the first of `keep_words` it contains (the
-    matched region), marking the cuts; lines stay whole where possible."""
-    if len(text) <= limit:
-        return text
-    lowered = text.lower()
-    hits = [lowered.find(word.lower()) for word in keep_words if word and lowered.find(word.lower()) >= 0]
-    centre = min(hits) if hits else 0
-    start = max(0, min(centre - limit // 3, len(text) - limit))
-    piece = text[start:start + limit]
-    return ("[... cut ...] " if start else "") + piece + (" [... cut ...]" if start + limit < len(text) else "")
 
 # ---------------------------------------------------------------- answer machinery: reading a reply, strictly
-def last_json_object(text):
-    """The last balanced {...} object in a text, or None. Braces inside strings are skipped."""
-    end = text.rfind("}")
-    while end >= 0:
-        depth, in_string, position = 0, False, end
-        while position >= 0:
-            char = text[position]
-            if char == '"' and (position == 0 or text[position - 1] != "\\"):
-                in_string = not in_string
-            elif not in_string:
-                depth += 1 if char == "}" else -1 if char == "{" else 0
-                if depth == 0:
-                    return text[position:end + 1]
-            position -= 1
-        end = text.rfind("}", 0, end)
-    return None
 
-def strict_json(text):
-    """Strict parsing: no repair of malformed JSON, and a repeated key is refused."""
-    def no_repeats(pairs):
-        keys = [key for key, _ in pairs]
-        if len(keys) != len(set(keys)):
-            raise ValueError("repeated key")
-        return dict(pairs)
-    return json.loads(text, object_pairs_hook=no_repeats)
 
 # ---------------------------------------------------------------- element helpers
 def local_name(tag):
@@ -2324,7 +2159,6 @@ class WalkState:
     atoms: list = field(default_factory=list)      # the smallest pieces of text the file holds, counted from the file itself
     dropped: list = field(default_factory=list)    # text left out under a named rule, kept so the account can show it
     lent_numbering: str = ""                       # a number a container carries for the heading inside it
-    ask: object = None                             # the asker, where a guided reading is turned on
     settings: dict = field(default_factory=dict)
     guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     folder: str = ""                               # where the file being read stands, so a picture beside it can be found
@@ -3170,7 +3004,7 @@ def read_corner(ctx, corner, input_key, label):
             info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
             continue
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
-        state.ask, state.settings = ctx.ask, ctx.settings
+        state.settings = ctx.settings
         state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
         try:
             found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
@@ -5073,7 +4907,6 @@ def decided_outputs(records, decisions):
 # ================================================================================================
 # ---------------------------------------------------------------- mapping: what corresponds to what
 LEDGER_VOLATILE = ("created_at", "run_id")
-CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model": "the package"}
 
 # ---------------------------------------------------------------- the ledger and the graph in memory
 def node_record(ref, node_kind, corner):
@@ -5096,23 +4929,8 @@ def graph_version_id(records):
     """G- and the first twelve characters of the ledger's head hash."""
     return "G-" + chain_head(records)[:12]
 
-def load_graph(records):
-    """The ledger as two adjacency dictionaries: outgoing and incoming edges per node."""
-    graph = {"nodes": {}, "out": {}, "in": {}}
-    for record in records:
-        if record["record_type"] == "node":
-            graph["nodes"][record["ref"]] = record
-        else:
-            graph["out"].setdefault(record["source"], []).append(record)
-            graph["in"].setdefault(record["target"], []).append(record)
-    return graph
 
 
-def links_of(graph, ref, corner_prefix):
-    """The `corresponds` edges of a unit into one corner ("C", "D" or "M"), in ledger order."""
-    edges = [e for e in graph["out"].get(ref, []) if e["kind"] == "corresponds" and e["target"].startswith(corner_prefix)]
-    return edges + [dict(e, target=e["source"]) for e in graph["in"].get(ref, [])
-                    if e["kind"] == "corresponds" and e["source"].startswith(corner_prefix)]
 
 # ---------------------------------------------------------------- words: splitting, stemming, word lists
 # ---------------------------------------------------------------- reference data of the search
@@ -5185,100 +5003,15 @@ def shown(words):
     """Index words as an analyst should see them: as first written, not as stems."""
     return [AS_WRITTEN.get(word, word) for word in words]
 
-def symbols_in(text):
-    """Short symbols a passage uses: single letters and Greek names standing alone, short
-    capital abbreviations, and names with a subscript."""
-    found = re.findall(r"(?<![\w.])([A-Za-z\u0370-\u03ff]{1,4}(?:_\{?\w+\}?|\[\w+\])?)(?![\w(])", text or "")
-    keep = []
-    for symbol in found:
-        plain = normalise_symbol(symbol)
-        if symbol.isupper() or len(symbol) == 1 or "_" in symbol or plain in GREEK or symbol in GREEK.values():
-            if symbol.lower() not in ("a", "i"):
-                keep.append(plain)
-    return list(dict.fromkeys(keep))
 
-def numbers_in(text, trivial):
-    """The non-trivial numbers of a text, as normalised values ("12.5%" gives 0.125)."""
-    return list(dict.fromkeys(n["value"] for n in find_numbers(text or "") if n["value"] not in trivial))
 
 # ---------------------------------------------------------------- what is indexed for each unit
-FIELD_WEIGHTS = {"name": 3, "heading": 3, "about": 2, "caption": 2, "symbols": 2, "body": 1, "calls": 1}
 
-def chunk_fields(chunk, lists, trivial):
-    """The named fields of a methodology or documentation chunk (plan 2.6)."""
-    table = chunk.get("table") or {}
-    table_words = " ".join(table.get("header", [])) + " " + " ".join(row[0] for row in table.get("rows", []) if row)
-    return {"fields": {"heading": split_words(" ".join(chunk["heading_chain"][-2:]), lists["stop"]),
-                       "caption": split_words(chunk.get("caption", "") + " " + table_words, lists["stop"]),
-                       "body": split_words(chunk["text"], lists["stop"])},
-            "symbols": symbols_in(chunk["text"]) + list((chunk.get("equation") or {}).get("expression") and
-                       sorted(expr_symbols(expr_from_dict(chunk["equation"]["expression"]))) or []),
-            "numbers": numbers_in(chunk["text"], trivial), "identifiers": re.findall(r"\b[a-z]+(?:[_.][a-z0-9]+)+\b", chunk["text"])}
 
-def unit_fields(unit, units_by_ref, documented_by, lists, trivial):
-    """The named fields of a model unit: name words, what the package says about it (roxygen
-    of the object or of the function it sits in), comments, symbols, numbers, the neutral
-    words of the mathematical functions it calls, and string literals."""
-    code = unit.get("code") or {}
-    about_unit = documented_by.get(unit["ref"])
-    about = about_unit["text"] if about_unit else ""
-    parent_block = documented_by.get(unit.get("parent_ref") or "")
-    if parent_block and not about_unit:                  # a statement takes only the @param lines of the symbols it uses
-        used = set(code.get("symbols_read", ())) | set(code.get("symbols_written", ()))
-        about = " ".join(tag["text"] for tag in parent_block["roxygen"]["tags"] if tag["tag"] == "param" and tag["name"] in used)
-    if unit.get("roxygen") or unit.get("helppage") or unit["kind"] == KIND_VIGNETTE:
-        about = unit["text"]
-    comments = " ".join(re.findall(r"#(?!')\s*(.*)", unit["text"])) if code else ""
-    neutral = [word for call in code.get("calls", ()) for word in
-               lists["patterns"]["function_words"].get((lists["function_map"]["r_functions"].get(call) or {}).get("neutral", ""), [])]
-    data = unit.get("data") or {}
-    columns = " ".join(data.get("columns", ()))
-    body = comments + " " + " ".join(code.get("strings", ())) + " " + (unit["text"] if data else "")
-    symbols = [normalise_symbol(s) for s in tuple(code.get("symbols_read", ())) + tuple(code.get("symbols_written", ()))]
-    return {"fields": {"name": split_words(unit["name"] + " " + unit.get("inside", "") + " " + columns, lists["stop"]),
-                       "about": split_words(re.sub(r"#'|@\w+|\\\w+", " ", about), lists["stop"]),
-                       "body": split_words(body, lists["stop"]), "calls": [stem(word) for word in neutral]},
-            "symbols": list(dict.fromkeys(symbols)),
-            "numbers": list(dict.fromkeys([n["value"] for n in code.get("numbers", ()) if n["value"] not in trivial] +
-                                          numbers_in(about + " " + (unit["text"] if data else ""), trivial))),
-            "identifiers": [unit["name"]] if code and unit["name"] else []}
 
 # ---------------------------------------------------------------- S1: field-aware BM25 (the only text-ranking formula)
-def build_index(documents):
-    """documents: {ref: {"fields": {field: [words]}}}. Term frequencies are weighted by field;
-    the length of a document is its weighted number of words."""
-    index = {"tf": {}, "length": {}, "df": {}, "n": len(documents)}
-    for ref in sorted(documents):
-        weighted = {}
-        for field_name, words in documents[ref]["fields"].items():
-            for word in words:
-                weighted[word] = weighted.get(word, 0) + FIELD_WEIGHTS.get(field_name, 1)
-        index["tf"][ref], index["length"][ref] = weighted, sum(weighted.values())
-        for word in weighted:
-            index["df"][word] = index["df"].get(word, 0) + 1
-    index["average_length"] = (sum(index["length"].values()) / len(documents)) if documents else 0.0
-    return index
 
-def bm25_scores(index, query_weights, k1, b):
-    """BM25 with the usual constants k1 and b. query_weights: {word: weight}; a bridged word
-    seen only once in the inputs counts half. Returns {ref: (score, matched words)}."""
-    scores = {}
-    for word in sorted(query_weights):
-        df = index["df"].get(word)
-        if not df:
-            continue
-        idf = math.log(1 + (index["n"] - df + 0.5) / (df + 0.5))
-        for ref, weighted in index["tf"].items():
-            tf = weighted.get(word)
-            if tf:
-                norm = tf + k1 * (1 - b + b * index["length"][ref] / (index["average_length"] or 1.0))
-                score, words = scores.get(ref, (0.0, []))
-                scores[ref] = (score + query_weights[word] * idf * tf * (k1 + 1) / norm, words + [word])
-    return scores
 
-def ranked(scores):
-    """References by falling score; ties break by reference. Enforces: R5"""
-    return [ref for ref, _ in sorted(scores.items(), key=lambda item: (-item[1][0] if isinstance(item[1], tuple) else -item[1], item[0]))]
 
 # ---------------------------------------------------------------- S2: the bridge vocabulary
 def initials_match(short, words):
@@ -5360,14 +5093,6 @@ def harvest_bridge(canon, doc, units, lists, glossary_path):
         entry["patterns"].append(pattern)
     return [merged[key] for key in sorted(merged)]
 
-def expansions_for(representation, bridge_by_term):
-    """The bridge entries that apply to a unit: by its symbols and by its name words."""
-    found = []
-    for term in list(representation["symbols"]) + representation["fields"].get("name", []) + representation.get("identifiers", []):
-        for entry in bridge_by_term.get(normalise_symbol(term), []):
-            if entry not in found:
-                found.append(entry)
-    return found
 
 # ---------------------------------------------------------------- S3: explicit references as written
 def resolve_reference(reference, chunks):
@@ -5389,134 +5114,20 @@ def resolve_reference(reference, chunks):
     return matches
 
 # ---------------------------------------------------------------- S4: rare shared anchors and the restart random walk
-def anchors_of(representation, heading_words, scope):
-    """The anchors one unit or chunk mentions, as (kind, key) pairs. A symbol is scoped by
-    `scope` (symbol -> key of the section that defines it) where a definition is known."""
-    anchors = [("number", value) for value in representation["numbers"]]
-    anchors += [("symbol", scope.get(symbol, symbol)) for symbol in representation["symbols"]]
-    anchors += [("identifier", name) for name in representation.get("identifiers", [])]
-    anchors += [("term", word) for word in representation.get("terms", [])]
-    if heading_words:
-        anchors.append(("heading", " ".join(heading_words)))
-    return list(dict.fromkeys(anchors))
 
-def anchor_weights(mentions, settings):
-    """Weight of an anchor = 1 / log(1 + number of units that mention it). An anchor that
-    more than `anchor_max_share` of all units mention is dropped; an anchor only one unit
-    mentions joins nothing and is dropped too; heading anchors are capped so that a section
-    title shared by many passages cannot dominate."""
-    total = len({ref for refs in mentions.values() for ref in refs})
-    weights = {}
-    for anchor, refs in mentions.items():
-        if len(refs) < 2 or len(refs) > max(2, settings["anchor_max_share"] * total):
-            continue
-        weight = 1.0 / math.log(1 + len(refs))
-        weights[anchor] = min(weight, settings["heading_anchor_cap"]) if anchor[0] == "heading" else weight
-    return weights
 
-def restart_walk(mentions, weights, starts, settings):
-    """A random walk over the two-sided graph of units and anchors that keeps restarting at the
-    unit (personalised PageRank): fixed restart probability and a fixed number of rounds, so
-    it is deterministic. Returns {start: {ref: closeness}}."""
-    import numpy
-    from scipy import sparse
-    refs = sorted({ref for anchor in weights for ref in mentions[anchor]})
-    anchors = sorted(weights)
-    position = {ref: i for i, ref in enumerate(refs)}
-    rows, columns, values = [], [], []
-    for column, anchor in enumerate(anchors):
-        for ref in mentions[anchor]:
-            rows.append(position[ref])
-            columns.append(len(refs) + column)
-            values.append(weights[anchor])
-    size = len(refs) + len(anchors)
-    if not values:
-        return {start: {} for start in starts}
-    matrix = sparse.coo_matrix((values + values, (rows + columns, columns + rows)), shape=(size, size)).tocsr()
-    degree = numpy.asarray(matrix.sum(axis=0)).ravel()
-    degree[degree == 0] = 1.0
-    transition = matrix.multiply(1.0 / degree).tocsr()               # each column sums to one: hubs pass on little
-    results, restart = {}, settings["walk_restart"]
-    for start in starts:
-        if start not in position:
-            results[start] = {}
-            continue
-        home = numpy.zeros(size)
-        home[position[start]] = 1.0
-        state = home.copy()
-        for _ in range(int(settings["walk_rounds"])):
-            state = (1 - restart) * transition.dot(state) + restart * home
-        results[start] = {ref: float(state[position[ref]]) for ref in refs if ref != start and state[position[ref]] > 1e-9}
-    return results
 
 # ---------------------------------------------------------------- S6: signatures (re-order only) and table shape
-def formula_signature(expression):
-    """What a formula is made of, whatever its symbols are called: operators, neutral
-    function names with their number of arguments, and non-trivial constants."""
-    parts = {}
-    for node in expr_walk(expr_from_dict(expression)):
-        if node.op in ("sym", "eq"):
-            continue
-        key = "%s/%d" % (node.name, len(node.args)) if node.op == "call" else node.value if node.op == "num" else node.op
-        if key not in ("0", "1", "2"):
-            parts[key] = parts.get(key, 0) + 1
-    return parts
 
 def overlap(left, right):
     """Weighted overlap of two multisets, between 0 and 1."""
     shared_count = sum(min(count, right.get(key, 0)) for key, count in left.items())
     return shared_count / max(1, max(sum(left.values()), sum(right.values())))
 
-def table_shape_score(table, chunk_table, stop):
-    """How alike two tables are: shared header words, shared row keys and shared values at
-    printed precision. The package table comes from parameter_tables; the other from a chunk."""
-    header_a = set(split_words(" ".join(table["header"]), stop))
-    header_b = set(split_words(" ".join(chunk_table.get("header", [])), stop))
-    keys_a = {row[0].strip().lower() for row in table["rows"] if row}
-    keys_b = {row[0].strip().lower() for row in chunk_table.get("rows", []) if row}
-    values_a = {n["value"] for row in table["rows"] for cell in row for n in find_numbers(cell)}
-    values_b = {n["value"] for row in chunk_table.get("rows", []) for cell in row for n in find_numbers(cell)}
-    share = lambda a, b: len(a & b) / max(1, min(len(a), len(b)))
-    return share(header_a, header_b) + share(keys_a, keys_b) + share(values_a, values_b)
 
 # ---------------------------------------------------------------- fusion and reasons
-REASON_TEMPLATES = {      # every phrase the search stage can put into "How established"
-    "fields": "shares the words {detail}",
-    "bridge": "{detail}",
-    "references": "it is cited as written ({detail})",
-    "anchors": "shares the rare {detail}",
-    "signatures": "its formula has a similar structure",
-    "table shape": "its table has similar headers, row keys or values",
-    "propagation": "inherited from {detail}"}
-SIGNAL_ORDER = ("references", "fields", "bridge", "anchors", "table shape", "signatures", "propagation")
 
-def fuse(rankings, settings, cited=(), reserve_from=("anchors", "propagation")):
-    """Reciprocal rank fusion: score = sum over signals of 1 / (60 + rank). Only ranks are
-    combined, so no signal's raw scale matters. Explicitly cited chunks are always included (up to
-    three); ties break by reference. Enforces: R5"""
-    constant, k = settings["rrf_constant"], int(settings["k_candidates"])
-    scores, ranks = {}, {}
-    for signal in SIGNAL_ORDER:
-        refs = rankings.get(signal, [])
-        if signal == "signatures":                       # used to re-order, never alone
-            refs = [ref for ref in refs if ref in scores]
-        weight = 1.0
-        for rank, ref in enumerate(refs, start=1):
-            scores[ref] = scores.get(ref, 0.0) + weight / (constant + rank)
-            ranks.setdefault(ref, {})[signal] = rank
-    ordered = sorted(scores, key=lambda ref: (-scores[ref], ref))
-    must = list(dict.fromkeys(list(cited)[:3]))
-    reserved = [ref for signal in reserve_from for ref in rankings.get(signal, []) if "fields" not in ranks.get(ref, {})]
-    must += [ref for ref in dict.fromkeys(reserved) if ref not in must][:int(settings["reserved_places"])]
-    shortlist = [ref for ref in ordered if ref not in must][:max(0, k - len(must))] + must
-    shortlist.sort(key=lambda ref: (-scores.get(ref, 0.0), ref))
-    return [(ref, scores.get(ref, 0.0), ranks.get(ref, {})) for ref in shortlist]
 
-def reason_text(signals, details):
-    """The plain reason of one candidate, assembled from the signals that proposed it."""
-    phrases = [REASON_TEMPLATES[signal].format(detail=details.get(signal, "")) for signal in SIGNAL_ORDER
-               if signal in signals and (details.get(signal) or "{detail}" not in REASON_TEMPLATES[signal])]
-    return "Proposed because: " + "; ".join(phrases) if phrases else "Proposed by rank only"
 
 
 
@@ -5610,374 +5221,31 @@ def build_graph(ctx):
                              ["Graph version %s." % graph_version_id(ctx.read("graph_ledger") + ledger)])
 
 # ---------------------------------------------------------------- step 06: find-candidates
-SEARCHED_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TABLE, KIND_OBJECT, KIND_VIGNETTE)
 
-def is_searched(unit, settings):
-    """Which model units look for passages. Test blocks, files that were not read, package
-    files without code, and (unless the setting says otherwise) supporting code by syntax
-    are not sent to the search or to the judge; roxygen blocks and help pages take the
-    tracing of the object they document."""
-    if unit["kind"] not in SEARCHED_KINDS:
-        return False
-    if unit.get("data") and not unit["data"]["assessable"]:
-        return False
-    code = unit.get("code") or {}
-    return not code.get("plumbing") or bool(settings["judge_supporting_code"])
 
-def searched_text(representation, expansions, corner, proposed):
-    """The "What was searched" sentence of one unit and corner."""
-    words = list(dict.fromkeys(representation["fields"].get("name", []) + representation["fields"].get("heading", [])))[:8]
-    if not words:
-        words = list(dict.fromkeys(representation["fields"].get("body", [])))[:8]
-    listed = []
-    for word in words:
-        entry = next((e for e in expansions if stem(e["term"].lower()) == word or e["term"] == word), None)
-        listed.append("%s (%s)" % (AS_WRITTEN.get(word, word), entry["phrase"]) if entry else AS_WRITTEN.get(word, word))
-    parts = ["Searched %s for: %s" % (CORNER_NAMES[corner], ", ".join(listed) or "no usable words")]
-    if representation["symbols"]:
-        parts.append("symbols " + ", ".join(representation["symbols"][:8]))
-    if representation["numbers"]:
-        parts.append("numbers " + ", ".join(representation["numbers"][:8]))
-    return "; ".join(parts) + ". %d passage(s) proposed." % proposed
 
-def search_one(source_ref, representation, corner, world, settings):
-    """All signals for one unit and one target corner, fused into a shortlist of candidates."""
-    targets, index, enabled = world["targets"][corner], world["index"][corner], settings["signals"]
-    rankings, details = {}, {}
-    query = {word: 1.0 for words in representation["fields"].values() for word in words}
-    expansions = expansions_for(representation, world["bridge_by_term"]) if "bridge" in enabled else []
-    if "fields" in enabled:
-        scores = bm25_scores(index, query, settings["bm25_k1"], settings["bm25_b"])
-        rankings["fields"] = ranked(scores)
-        details["fields"] = {ref: ", ".join(dict.fromkeys(shown(words[:4]))) for ref, (score, words) in scores.items()}
-    if expansions:
-        bridged = {word: (1.0 if e["count"] > 1 else 0.5) for e in expansions for word in e["words"] if word not in query}
-        scores = bm25_scores(index, bridged, settings["bm25_k1"], settings["bm25_b"])
-        rankings["bridge"] = ranked(scores)
-        for ref, (score, words) in scores.items():
-            entry = next(e for e in expansions if set(e["words"]) & set(words))
-            details.setdefault("bridge", {})[ref] = "'%s' is described as '%s' (%s), which this passage mentions" % (
-                entry["term_as_written"], entry["phrase"], entry["sources"][0])
-    cited = []
-    if "references" in enabled:
-        for reference in representation.get("references", ()):
-            for ref in resolve_reference(reference, targets.values()):
-                cited.append(ref)
-                details.setdefault("references", {})[ref] = reference
-        rankings["references"] = list(dict.fromkeys(cited))
-    if "anchors" in enabled:
-        closeness = world["walk"].get(source_ref, {})
-        rankings["anchors"] = ranked({ref: score for ref, score in closeness.items() if ref in targets})[:2 * int(settings["k_candidates"])]
-        own = set(world["anchors"].get(source_ref, ()))
-        for ref in rankings["anchors"]:
-            common = sorted(own & set(world["anchors"].get(ref, ())), key=lambda a: (-world["weights"].get(a, 0), a))
-            common = [a for a in common if a in world["weights"]]
-            if common:
-                details.setdefault("anchors", {})[ref] = " and ".join("%s %s" % (kind, key.split("@")[0]) for kind, key in common[:2])
-    if "signatures" in enabled and representation.get("signature"):
-        alike = {ref: overlap(representation["signature"], world["signatures"][ref]) for ref in targets if ref in world["signatures"]}
-        rankings["signatures"] = ranked({ref: score for ref, score in alike.items() if score >= 0.5})
-    if representation.get("table"):
-        shapes = {ref: table_shape_score(representation["table"], targets[ref]["table"], world["lists"]["stop"])
-                  for ref in targets if targets[ref].get("table")}
-        rankings["table shape"] = ranked({ref: score for ref, score in shapes.items() if score >= 1.0})
-    if "propagation" in enabled:
-        inherited = world["propagated"].get((source_ref, corner), [])
-        rankings["propagation"] = [ref for ref, _ in inherited]
-        details["propagation"] = dict(inherited)
-    fused = fuse(rankings, settings, cited)
-    candidates = []
-    for rank, (ref, score, signals) in enumerate(fused, start=1):
-        reason = reason_text(signals, {signal: details.get(signal, {}).get(ref, "") for signal in signals})
-        candidates.append(Candidate(source_ref, ref, corner, rank, round(score, 6), signals, reason,
-                                           suggestion_only="propagation" in signals and len(signals) == 1,
-                                           search_pass=world["search_pass"]))
-    ranked_anywhere = sorted({ref for refs in rankings.values() for ref in refs})
-    record = {"unit_ref": source_ref, "target_corner": corner, "search_pass": world["search_pass"],
-              "query_fields": representation["fields"], "expansions": [(e["term"], e["words"], e["sources"][0]) for e in expansions],
-              "anchors_used": [list(a) for a in world["anchors"].get(source_ref, ()) if a in world["weights"]][:20],
-              "per_signal": {signal: len(refs) for signal, refs in rankings.items()}, "shortlist": [c.target_ref for c in candidates],
-              "ranked_anywhere": ranked_anywhere, "searched_text": searched_text(representation, expansions, corner, len(candidates)),
-              "note": "" if candidates else "Nothing in %s shares a word, a symbol, a number or a citation with this unit." % CORNER_NAMES[corner]}
-    return candidates, record
 
-def build_world(ctx, search_pass):
-    """Everything the search needs, built once per step: representations of all units and
-    chunks, one BM25 index per corner, the bridge vocabulary, anchors and the walk."""
-    settings, lists = ctx.settings, load_word_lists()
-    trivial = set(settings["trivial_numbers"])
-    canon, doc, units = (ctx.read(kind) for kind in ("chunks_canon", "chunks_doc", "model_units"))
-    tables = {t["unit_ref"]: t for t in ctx.read("parameter_tables")}
-    by_ref = {u["ref"]: u for u in units}
-    documented_by = {u["roxygen"]["documents_ref"]: u for u in units if u.get("roxygen") and u["roxygen"]["documents_ref"]}
-    representations = {}
-    for chunk in canon + doc:
-        representations[chunk["ref"]] = dict(chunk_fields(chunk, lists, trivial), references=chunk.get("refs_out", ()),
-                                             heading=split_words(" ".join(chunk["heading_chain"][-1:]), lists["stop"]))
-        equation = chunk.get("equation") or {}
-        if equation.get("expression"):
-            representations[chunk["ref"]]["signature"] = formula_signature(equation["expression"])
-    for unit in units:
-        representation = unit_fields(unit, by_ref, documented_by, lists, trivial)
-        about = documented_by.get(unit["ref"])
-        representation["references"] = cross_references(unit["text"] + " " + (about["text"] if about else ""),
-                                                                        {"cross_reference_labels": ["Table", "Figure", "Section", "Equation", "Annex", "Appendix"]})
-        expression = (unit.get("code") or {}).get("expression") or (unit.get("code") or {}).get("composed")
-        if expression:
-            representation["signature"] = formula_signature(expression)
-        if unit["ref"] in tables:
-            representation["table"] = tables[unit["ref"]]
-        representations[unit["ref"]] = representation
-    bridge_by_term = {}
-    for entry in ctx.read("bridge_vocabulary"):
-        bridge_by_term.setdefault(entry["term"], []).append(entry)
-    definitions = {}
-    for entries in bridge_by_term.values():
-        for entry in entries:
-            for source in entry["sources"]:
-                if source[:2] in ("C-", "D-"):
-                    definitions.setdefault(entry["term"], set()).add(source)
-    scope = {term: "%s@%s" % (term, sorted(sources)[0]) for term, sources in definitions.items() if len(sources) == 1}
-    anchors, mentions = {}, {}
-    for ref, representation in representations.items():
-        anchors[ref] = anchors_of(representation, representation.get("heading"), scope)
-        for anchor in anchors[ref]:
-            mentions.setdefault(anchor, []).append(ref)
-    weights = anchor_weights(mentions, settings)
-    searched = [u["ref"] for u in units if is_searched(u, settings)] + [c["ref"] for c in doc if c.get("checkable")]
-    walk = restart_walk(mentions, weights, searched, settings) if "anchors" in settings["signals"] else {}
-    targets = {"canon": {c["ref"]: c for c in canon}, "doc": {c["ref"]: c for c in doc},
-               "model": {u["ref"]: u for u in units if is_searched(u, settings)}}
-    index = {corner: build_index({ref: representations[ref] for ref in targets[corner]}) for corner in targets}
-    signatures = {ref: r["signature"] for ref, r in representations.items() if r.get("signature")}
-    return {"representations": representations, "targets": targets, "index": index, "bridge_by_term": bridge_by_term,
-            "anchors": anchors, "weights": weights, "walk": walk, "signatures": signatures, "lists": lists,
-            "units": units, "doc": doc, "canon": canon, "propagated": {}, "search_pass": search_pass}
 
-def propagated_candidates(world, graph):
-    """S5, pass 2 only. Once the judge accepted that a function corresponds to a passage, the
-    statements inside it, the functions it calls, the data it reads and its tests inherit
-    that passage, and the tables the passage cites, as SUGGESTIONS. Never as links."""
-    inherited = {}
-    names = {u["ref"]: "%s %s" % (u["kind"].lower(), u["name"]) for u in world["units"]}
-    for unit in world["units"]:
-        accepted = [e for e in links_of(graph, unit["ref"], "C") + links_of(graph, unit["ref"], "D") if e["relation"] in LINKING_RELATIONS]
-        if unit["kind"] != KIND_FUNCTION or not accepted:
-            continue
-        heirs = [e["target"] for e in graph["out"].get(unit["ref"], []) if e["kind"] in ("contains", "calls", "reads_data", "tested_by")]
-        for edge in accepted:
-            corner = "canon" if edge["target"].startswith("C") else "doc"
-            cited = [e["target"] for e in graph["out"].get(edge["target"], []) if e["kind"] == "cross_reference"]
-            for heir in heirs:
-                for target in [edge["target"]] + cited:
-                    detail = "%s (%s), which the AI judged to correspond to %s" % (unit["ref"], names[unit["ref"]], edge["target"])
-                    inherited.setdefault((heir, corner), []).append((target, detail))
-    return inherited
 
-def find_candidates(ctx):
-    """Step 06 (pass 1) and step 08 (pass 2), find-candidates. Pass 1 searches for every
-    searched model unit in the methodology and the documentation, and for every checkable
-    documentation passage in the methodology. Pass 2 searches again, with propagation, only
-    for units still without a methodology link, and looks in the package for documentation
-    passages still without any link. Every search leaves a search record. Enforces: R2"""
-    search_pass = int(ctx.options.get("pass", 1))
-    world = build_world(ctx, search_pass)
-    graph = load_graph(ctx.read("graph_ledger"))
-    jobs = []
-    if search_pass == 1:
-        jobs += [(u["ref"], corner) for u in world["units"] if is_searched(u, ctx.settings) for corner in ("canon", "doc")]
-        jobs += [(c["ref"], "canon") for c in world["doc"] if c.get("checkable")]
-    else:
-        world["propagated"] = propagated_candidates(world, graph)
-        linked = lambda ref, prefix: any(e["relation"] in LINKING_RELATIONS for e in links_of(graph, ref, prefix))
-        jobs += [(ref, corner) for (ref, corner) in sorted(world["propagated"]) if not linked(ref, "C" if corner == "canon" else "D")
-                 and ref in world["targets"]["model"]]
-        jobs += [(c["ref"], "model") for c in world["doc"] if c.get("checkable") and not linked(c["ref"], "C") and not linked(c["ref"], "M")]
-    candidates, records = [], []
-    for source_ref, corner in jobs:
-        found, record = search_one(source_ref, world["representations"][source_ref], corner, world, ctx.settings)
-        candidates.extend(found)
-        records.append(record)
-    return StepResult({"candidates": candidates, "search_records": records},
-                             {"searches": len(jobs), "candidates": len(candidates),
-                              "searches without any proposal": sum(1 for r in records if not r["shortlist"])}, [])
 
 # ---------------------------------------------------------------- questions for the AI
-def cut_code(text, limit):
-    """Cut a long function around its formula lines: the header, then every line that
-    computes something with two lines of context, until the limit is reached."""
-    if len(text) <= limit:
-        return text
-    lines = text.split("\n")
-    wanted = {0, 1, len(lines) - 1}
-    for number, line in enumerate(lines):
-        if re.search(r"(<-|=).*[-+*/^]|\b(pnorm|qnorm|exp|log|sqrt|pmax|pmin|max|min)\(", line):
-            wanted.update(range(max(0, number - 2), min(len(lines), number + 3)))
-    kept, size, previous = [], 0, -1
-    for number in sorted(wanted):
-        if size + len(lines[number]) > limit:
-            break
-        if number != previous + 1:
-            kept.append("# [... lines cut ...]")
-        kept.append(lines[number])
-        size, previous = size + len(lines[number]) + 1, number
-    return "\n".join(kept)
-
-def passage_text(node, settings, keep_words=()):
-    """How a chunk or a unit is shown as a lettered passage. A table is never pasted whole:
-    its header, three rows and its dimensions."""
-    table = node.get("table")
-    if table and table.get("header") is not None and node.get("kind") == "Table":
-        rows = table.get("rows", [])
-        shown = ["; ".join(table["header"])] + ["; ".join(row) for row in rows[:3]]
-        return "\n".join(shown) + "\n(table of %d rows and %d columns%s)" % (
-            len(rows), len(table["header"]), "; caption: " + node["caption"] if node.get("caption") else "")
-    if node.get("code") is not None or node.get("file"):
-        return cut_code(node["text"], int(settings["max_passage_chars"]))
-    return cut_text(node["text"], int(settings["max_passage_chars"]), keep_words)
-
-def passage_label(node):
-    """The heading line of a lettered passage: where it stands, never its reference."""
-    if node.get("heading_chain") is not None:
-        place = " > ".join(node["heading_chain"][-3:]) or node["source_file"]
-        return "%s, %s%s" % (place, node["kind"].lower(), " %d" % node["para_no"] if node.get("para_no") else "")
-    lines = "lines %d-%d" % tuple(node["lines"]) if node.get("lines") else ""
-    return "%s `%s`, %s %s" % (node["kind"].lower(), node["name"], node["file"], lines)
-
-def letters_for(count):
-    """A, B, ... Z, AA, AB, ... for the passages of one question."""
-    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    return [alphabet[i] if i < 26 else alphabet[i // 26 - 1] + alphabet[i % 26] for i in range(count)]
-
-def choose_decoys(unit_ref, shortlist, never, pool, anchors, count):
-    """Planted control passages: chosen by a hash of the unit reference (never at random) from
-    passages that share no anchor with the unit and appear nowhere in its rankings."""
-    own = set(anchors.get(unit_ref, ()))
-    eligible = [ref for ref in sorted(pool) if ref not in never and ref not in shortlist
-                and not own & set(anchors.get(ref, ())) and len(pool[ref].get("text", "")) > 40]
-    eligible.sort(key=lambda ref: hashlib.sha256((unit_ref + ref).encode("utf-8")).hexdigest())
-    return eligible[:count]
-
-def assemble_question(question_type, unit_ref, blocks, passages, prompt, settings, planted=(), more=None):
-    """Put one question together. blocks: [(label line, text)]; passages: [(ref, label, text)].
-    Passages are lettered in an order derived from a hash, never by score, so position
-    carries no hint. The question id is the hash of the full prompt. Enforces: R5"""
-    ordered = sorted(passages, key=lambda p: hashlib.sha256((unit_ref + "|" + p[0]).encode("utf-8")).hexdigest())
-    letters = dict(zip(letters_for(len(ordered)), ordered))
-    shown = "\n".join("[%s] %s\n<<<\n%s\n>>>" % (letter, label, text) for letter, (ref, label, text) in letters.items())
-    main = prompt["main"].replace("[[PASSAGES]]", shown)
-    for slot, (label, text) in zip(("[[UNIT]]", "[[ABOUT]]"), list(blocks) + [("", "")]):
-        main = main.replace(slot, "%s\n<<<\n%s\n>>>" % (label, text) if label else "")
-    main = re.sub(r"\n{2,}", "\n", main)
-    question = {"question_type": question_type, "unit_ref": unit_ref, "system_prompt": prompt["system"], "main_prompt": main,
-                "letters": {letter: ref for letter, (ref, _, _) in letters.items()},
-                "planted": [letter for letter, (ref, _, _) in letters.items() if ref in planted],
-                "passage_texts": {letter: text for letter, (_, _, text) in letters.items()},
-                "unit_text": "\n".join(text for _, text in blocks), "strip_patterns": list(settings["strip_patterns"]),
-                "estimated_tokens": estimate_tokens(main, blocks[0][1] if blocks else ""),
-                "question_id": sha256_text(prompt["version"] + "\n" + prompt["system"] + "\n" + main)}
-    question.update(more or {})
-    question["too_large"] = question["estimated_tokens"] > prompt_budget(settings, prompt["system"])
-    return question
 
 
-def judge_question(source, corner, candidates, world, settings):
-    """The judge question of one unit (or documentation passage) and one target corner."""
-    is_chunk = source.get("heading_chain") is not None
-    question_type = {("canon", False): "judge-unit-to-canon", ("doc", False): "judge-unit-to-doc",
-                     ("canon", True): "judge-doc-to-canon", ("model", True): "judge-doc-to-model"}[(corner, is_chunk)]
-    pool = world["targets"][corner]
-    shortlist = [c["target_ref"] for c in candidates]
-    record = next((r for r in world["search_records"] if r["unit_ref"] == source["ref"] and r["target_corner"] == corner), {})
-    decoys = choose_decoys(source["ref"], shortlist, set(record.get("ranked_anywhere", ())), pool, world["anchors"],
-                           1 if len(shortlist) < 6 else 2)
-    words = [word for words in world["representations"][source["ref"]]["fields"].values() for word in words]
-    passages = [(ref, passage_label(pool[ref]), passage_text(pool[ref], settings, words)) for ref in shortlist + decoys]
-    unit_text = cut_text(source["text"], int(settings["max_unit_chars"])) if is_chunk else cut_code(source["text"], int(settings["max_unit_chars"]))
-    blocks = [("UNIT (%s)" % passage_label(source), unit_text)]
-    about = world["documented_by"].get(source["ref"]) or world["documented_by"].get(source.get("parent_ref") or "")
-    if about and not is_chunk:
-        blocks.append(("WHAT THE PACKAGE SAYS ABOUT IT", cut_text(re.sub(r"(?m)^\s*#' ?", "", about["text"]), 1200)))
-    return assemble_question(question_type, source["ref"], blocks, passages, load_prompt(question_type),
-                             settings, planted=decoys, more={"target_corner": corner})
+
+
+
+
+
 
 # ---------------------------------------------------------------- validators: code decides what is usable
-class Rejected(Exception):
-    """An answer that cannot be used. The message is one reason from the fixed plain list."""
 
 
-def check_quote(quote, text, required=True):
-    """A quotation must be verbatim after white-space normalisation, contiguous, without an
-    ellipsis, and of a sensible length."""
-    quote = normalise_text(quote if isinstance(quote, str) else "")
-    if not quote and not required:
-        return
-    flat = normalise_text(text)
-    if len(quote) < 4 or len(quote) > 400 or "..." in quote or "\u2026" in quote or quote not in flat:
-        raise Rejected(REJECTION_REASONS[2])
-
-JUDGE_RELATIONS = {"judge-unit-to-canon": ("implements", "partly implements", "deviates from", "merely related"),
-                   "judge-unit-to-doc": ("describes", "consistent with", "inconsistent with"),
-                   "judge-doc-to-canon": ("consistent with", "inconsistent with", "merely related"),
-                   "judge-doc-to-model": ("describes", "inconsistent with")}
-
-def validate_judge(question, answer):
-    """The answer to a judge question: its shape, the letters it names, its quotations, planted passages, self-contradiction."""
-    allowed = {"matches", "none_reason", "states_nothing_checkable"}
-    if not isinstance(answer.get("matches"), list) or set(answer) - allowed:
-        raise Rejected(REJECTION_REASONS[0])
-    for match in answer["matches"]:
-        confidence = match.get("confidence") if isinstance(match, dict) else None
-        if not isinstance(match, dict) or set(match) - {"letter", "relation", "confidence", "quote_from_passage", "quote_from_unit"} \
-                or match.get("relation") not in JUDGE_RELATIONS[question["question_type"]] \
-                or isinstance(confidence, bool) or not isinstance(confidence, int) or not 0 <= confidence <= 100:
-            raise Rejected(REJECTION_REASONS[0])
-        if match.get("letter") not in question["letters"]:
-            raise Rejected(REJECTION_REASONS[1])
-    for match in answer["matches"]:
-        check_quote(match.get("quote_from_passage"), question["passage_texts"][match["letter"]])
-        check_quote(match.get("quote_from_unit"), question["unit_text"])
-    if any(match["letter"] in question["planted"] and match["relation"] != "merely related" for match in answer["matches"]):
-        raise Rejected(REJECTION_REASONS[3])
-    if answer["matches"] and str(answer.get("none_reason") or "").strip():
-        raise Rejected(REJECTION_REASONS[4])
 
 
-def validate_answer(question, text):
-    """The validators, in a fixed order: remove any thought block and code fence; take the last
-    balanced JSON object; parse it strictly; check its shape, its letters, its quotations,
-    the planted passages and self-contradiction. Returns ("accepted", answer) or
-    ("rejected: <one reason from the fixed list>", None). Enforces: R3"""
-    try:
-        if not isinstance(text, str) or not text.strip():
-            raise Rejected(REJECTION_REASONS[0])
-        for pattern in question.get("strip_patterns", ()):
-            text = re.sub(pattern, "", text)
-        text = re.sub(r"```[a-zA-Z]*", "", text)
-        found = last_json_object(text)
-        try:
-            answer = strict_json(found) if found else None
-        except ValueError:
-            answer = None
-        if not isinstance(answer, dict):
-            raise Rejected(REJECTION_REASONS[0])
-        if question["question_type"] in JUDGE_RELATIONS:
-            validate_judge(question, answer)
-        else:                                                  # a question the tool no longer asks
-            raise Rejected(REJECTION_REASONS[0])
-    except Rejected as problem:
-        return "rejected: %s" % problem, None
-    return "accepted", answer
 
-_NOT_SHOWN = re.compile(r"\b(%s)\b" % "|".join(("sev" "er(e|ity)", "crit" "ical", "maj" "or", "min" "or", "err" "ors?", "find" "ings?",
-                        "mater" "ial(ity)?", "(high|medium|low)[- ](risk|priority|impact|rating)", "non-?compl" "ian(t|ce)", "breach")), re.I)
 
-def shown_ai_text(text):
-    """Text written by the model passes the same plain-language filter as the tool's own wording:
-    if it rates seriousness or uses a policy term, a fixed sentence is shown instead and the
-    full text stays in the audit records."""
-    text = normalise_text(str(text or ""))[:300]
-    return AI_WORDING_NOT_SHOWN if _NOT_SHOWN.search(text) else text
+
+
 
 # ---------------------------------------------------------------- steps 07 and 09: judge-links
 
@@ -5986,61 +5254,6 @@ def shown_ai_text(text):
 
 
 
-def judge_links(ctx):
-    """Steps 07 and 09, judge-links. Builds one question per unit and corner, asks them
-    through ask(), and turns ACCEPTED answers into `corresponds` edges with the relation
-    word, the confidence, both quotations and the proposal reason. Rejected answers leave
-    the unit without a link and are recorded for account-coverage. Enforces: R3, R4"""
-    search_pass, settings = int(ctx.options.get("pass", 1)), ctx.settings
-    world = build_world(ctx, search_pass)
-    world["search_records"] = [r for r in ctx.read("search_records") if r["search_pass"] == search_pass]
-    world["documented_by"] = {u["roxygen"]["documents_ref"]: u for u in world["units"] if u.get("roxygen") and u["roxygen"]["documents_ref"]}
-    sources = dict(world["targets"]["model"], **{c["ref"]: c for c in world["doc"]})
-    grouped = {}
-    for candidate in ctx.read("candidates"):
-        if candidate["search_pass"] == search_pass:
-            grouped.setdefault((candidate["unit_ref"], candidate["target_corner"]), []).append(candidate)
-    questions, skipped = {}, []
-    for (unit_ref, corner) in sorted(grouped):
-        question = judge_question(sources[unit_ref], corner, grouped[(unit_ref, corner)], world, settings)
-        if question["too_large"]:
-            skipped.append({"unit_ref": unit_ref, "target_corner": corner, "reason": "the question was too large to ask"})
-        else:
-            questions[question["question_id"]] = question
-    answers = ctx.ask(list(questions.values())) if questions else {}
-    edges, problems, records = [], list(skipped), []
-    for question_id in sorted(questions):
-        question, final = questions[question_id], answers.get(question_id)
-        unit_ref, corner = question["unit_ref"], question["target_corner"]
-        shown = len(question["letters"])
-        if final is None or final["outcome"] != "accepted":
-            reason = (final or {}).get("outcome", "failed: no answer was obtained").split(": ", 1)[-1]
-            problems.append({"unit_ref": unit_ref, "target_corner": corner, "reason": reason, "question_id": question_id})
-            records.append({"unit_ref": unit_ref, "target_corner": corner, "search_pass": search_pass,
-                            "note": "%d passages were shown to the AI. Its answer could not be used: %s." % (shown, reason)})
-            continue
-        answer = final["answer"]
-        accepted = [m for m in answer["matches"] if m["letter"] not in question["planted"]]
-        reasons = {c["target_ref"]: c["reason"] for c in grouped[(unit_ref, corner)]}
-        for match in accepted:
-            target = question["letters"][match["letter"]]
-            how = HOW_AI.format(confidence=match["confidence"])
-            provenance = to_plain(ctx.provenance)
-            provenance.update(prompt_hash=question_id, response_hash=final["response_hash"])
-            edges.append(dict(to_plain(Edge(unit_ref, target, "corresponds", how, ctx.provenance,
-                         relation=RELATION_WORDING[match["relation"]], confidence=match["confidence"],
-                         evidence={"how_text": "%s. %s" % (how, reasons.get(target, "")), "question_id": question_id,
-                                   "quote_from_passage": match["quote_from_passage"], "quote_from_unit": match["quote_from_unit"],
-                                   "search_pass": search_pass})), provenance=provenance))
-        linked = [m for m in accepted if RELATION_WORDING[m["relation"]] in LINKING_RELATIONS]
-        note = "" if linked else "%d passages were shown to the AI. None accepted: %s" % (
-            shown, "the AI's reason was \u201c%s\u201d" % shown_ai_text(answer.get("none_reason")) if answer.get("none_reason")
-            else "the AI only saw passages on the same topic")
-        records.append({"unit_ref": unit_ref, "target_corner": corner, "search_pass": search_pass, "note": note})
-    ledger = ledger_records(ctx.read("graph_ledger"), edges)
-    return StepResult({"graph_ledger": ledger, "judgement_problems": problems, "search_records": records},
-                             {"questions": len(questions), "links recorded": len(edges), "answers not usable": len(problems) - len(skipped),
-                              "questions too large to ask": len(skipped)}, [])
 
 
 
@@ -6057,22 +5270,19 @@ def linked(world, ref, prefix, relations=LINKING_RELATIONS):
 # ---------------------------------------------------------------- the run: its folder, its record and its two deliverables
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-class RunPaused(Exception):
-    """The run stopped on purpose and can be resumed. The message tells the person what to do."""
 
 # ---------------------------------------------------------------- settings (allow-list)
 DEFAULT_SETTINGS = {
-    "k_candidates": 12, "concurrency_limit": 4, "token_cap": 40000, "answer_reserve": 1500,
-    "thinking_reserve": 0, "safety_margin": 0.15, "prompt_target_tokens": 6000,
-    "max_attempts": 3, "breaker_after_failures": 8, "retry_wait_seconds": 2.0, "token_wait": "wait", "foreground_minutes": 600.0,
-    "sync_every_calls": 100, "judge_supporting_code": False,
+    "concurrency_limit": 4, "token_cap": 40000, 
+    
+    
+    
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
-    "system_prompt_prefix": "", "strip_patterns": [r"(?s)<think>.*?</think>", r"(?s)<thought>.*?</thought>",
-                                                   r"(?s)<\|channel\|>thought.*?<\|channel\|>"], "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
-    "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
-    "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
-    "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"], "map_granularity": "statement", "map_rows_max": 5000}
+    "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
+    
+    
+    "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
+    "map_granularity": "statement", "map_rows_max": 5000}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -6481,123 +5691,13 @@ def call_chat(chat, system_prompt, main_prompt, live):
         return ChatOutcome(None, "truncated", seen, meta)
     return ChatOutcome(live.redact(text), "", "", meta)
 
-@dataclass
-class AskState:
-    """What the workers of one run share: the pause and stop switches, the consecutive-
-    failure count of the circuit breaker, and the generation of the token that failed."""
-    control: dict = field(default_factory=lambda: {"pause": False, "stop": False})
-    consecutive_failures: int = 0; failed_generation: int = -1; waiting_for_token: bool = False
-    deadline: float = 0.0; calls_made: int = 0
-    lock: threading.Lock = field(default_factory=threading.Lock)
 
-def wait_until_allowed(state, live, settings, sleep):
-    """Called before every call. Blocks while the run is paused or while a fresh token is
-    awaited; raises RunPaused when the run must stop by itself (mode C, stop switch)."""
-    while True:
-        if state.control.get("stop"):
-            raise RunPaused("The run was stopped on request. Run the cell again to resume.")
-        if state.deadline and time.time() > state.deadline:
-            raise RunPaused("The time box of this foreground run is over. Paste a fresh token "
-                            "and run the cell again; no call will be repeated.")
-        # Only a call the gateway actually refused for authentication makes the run wait for a fresh
-        # token. A token's age alone never does: a run once sat waiting, silently, with a token that
-        # still worked, because it was older than token_lifetime_minutes. Age is shown in cell 4 as a
-        # hint and nothing more.
-        needs_token = state.failed_generation == live.generation
-        state.waiting_for_token = bool(needs_token)
-        if not needs_token and not state.control.get("pause"):
-            return
-        if needs_token and settings["token_wait"] == "stop":
-            raise RunPaused("Paste a fresh token, then run the cell again; no call will be repeated.")
-        sleep(0.05)
 
-def ask_one(question, chat, live, settings, validate, state, sleep):
-    """Ask one question until it has a final outcome. Every attempt is recorded. An
-    authentication-like failure pauses all workers until a fresh token arrives and does
-    not count against the attempts. Enforces: R3"""
-    records, attempt = [], 0
-    system_prompt = settings["system_prompt_prefix"] + question["system_prompt"]
-    while True:
-        wait_until_allowed(state, live, settings, sleep)
-        generation = live.generation
-        started, clock = datetime.datetime.now().isoformat(timespec="seconds"), time.time()
-        with state.lock:
-            state.calls_made += 1
-        outcome_of_call = call_chat(chat, system_prompt, question["main_prompt"], live)
-        answer_text, failure, seen = outcome_of_call
-        attempt += 1
-        outcome, answer = ("failed: " + failure, None) if failure else validate(question, answer_text)
-        with state.lock:
-            state.consecutive_failures = state.consecutive_failures + 1 if failure else 0
-            breaker_open = state.consecutive_failures >= settings["breaker_after_failures"]
-            if failure == "authentication":
-                state.failed_generation = generation
-        final = outcome == "accepted" or (attempt >= settings["max_attempts"] and failure != "authentication")
-        records.append({
-            "question_id": question["question_id"], "question_type": question["question_type"],
-            "unit_ref": question.get("unit_ref", ""), "attempt": len(records) + 1,
-            "letters": question.get("letters", {}), "planted": question.get("planted", []),
-            "prompt_hash": question["question_id"], "response_hash": sha256_text(answer_text or seen),
-            "system_prompt": live.redact(system_prompt), "main_prompt": live.redact(question["main_prompt"]),
-            "response_text": answer_text if answer_text is not None else seen, "outcome": outcome,
-            "answer": answer, "final": final, "started_at": started,
-            "seconds": round(time.time() - clock, 3), "estimated_tokens": question.get("estimated_tokens", 0),
-            "gateway": outcome_of_call.meta})
-        if final:
-            return records
-        if failure == "authentication":
-            attempt -= 1
-        elif breaker_open:
-            raise RunPaused("Many calls in a row failed, so the run paused itself to avoid wasting "
-                            "calls. Check the gateway, then run the cell again to resume.")
-        elif failure:
-            sleep(settings["retry_wait_seconds"] * attempt)
 
-def run_batch(batch, chat, live, settings, validate, state, sleep):
-    """Ask one batch of questions with a thread pool. Results are gathered in the order of
-    the questions, never in the order threads finished. Enforces: R5"""
-    finished, paused = {}, None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(settings["concurrency_limit"]))) as pool:
-        futures = [(q["question_id"], pool.submit(ask_one, q, chat, live, settings, validate, state, sleep))
-                   for q in batch]
-        for question_id, future in futures:
-            try:
-                finished[question_id] = future.result()
-            except RunPaused as pause:
-                paused = paused or pause
-                state.control["stop"] = True           # let the other workers end after their call
-    if paused:
-        state.control["stop"] = False
-    return finished, paused
 
-def make_asker(chat, live, store, settings, validate, state=None, sleep=time.sleep):
-    """Build ask(), the only place chat() is ever called. ask(questions) returns a dictionary
-    question id -> final record. A question that already has a final record in this run is
-    never asked again, which is what makes resume safe. Enforces: R3, R5"""
-    state = state or AskState()
-    if settings["foreground_minutes"]:
-        state.deadline = time.time() + 60.0 * settings["foreground_minutes"]
-
-    def ask(questions):
-        done = {r["question_id"]: r for r in store.read_calls() if r.get("final")}
-        unique = {q["question_id"]: q for q in questions}
-        todo = [unique[qid] for qid in sorted(unique) if qid not in done]
-        size = max(1, int(settings["sync_every_calls"]))
-        for start in range(0, len(todo), size):
-            finished, paused = run_batch(todo[start:start + size], chat, live, settings, validate, state, sleep)
-            records = [r for qid in sorted(finished) for r in finished[qid]]
-            store.append_calls(records)
-            store.sync()
-            done.update({r["question_id"]: r for r in records if r["final"]})
-            if paused:
-                raise paused
-        return {qid: done[qid] for qid in unique if qid in done}
-    ask.state = state
-    return ask
 
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("read-inputs", "read-with-ai", "link-units")   # the consolidated steps that may ask the model
 def load_pipeline(engine_dir=ENGINE_DIR):
     """Read pipeline.yaml and refuse anything that is not a known step carried out by a known
     function. A step is named, versioned and mapped to its function in the one file; only
@@ -6628,13 +5728,12 @@ def update_manifest(store, changes):
 
 
 
-def run_pipeline(paths, settings, chat=None, live=None, stop_after="", state=None, sleep=time.sleep):
+def run_pipeline(paths, settings, stop_after=""):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
     the run continues at the first step without one. A human step stops the run and says
     what the person should do. Returns {"state", "message", "steps_run"}."""
     store = open_store(paths, settings)
     pipeline = load_pipeline()
-    live = live or LiveValues()
     done = {record["step_id"] for record in store.read("step_records")}
     steps_run = []
     for step in pipeline["steps"]:
@@ -6642,11 +5741,7 @@ def run_pipeline(paths, settings, chat=None, live=None, stop_after="", state=Non
             break
         if step["id"] in done:
             continue
-        try:
-            run_step(step, store, paths, settings, chat, live, state, sleep)
-        except RunPaused as pause:
-            store.sync()
-            return {"state": "paused", "message": str(pause), "steps_run": steps_run}
+        run_step(step, store, paths, settings)
         steps_run.append(step["name"])
         if stop_after and step["id"] == stop_after:
             break
@@ -6654,13 +5749,10 @@ def run_pipeline(paths, settings, chat=None, live=None, stop_after="", state=Non
     rebuild_outputs(store, paths, settings, message)
     return {"state": "finished", "message": message, "steps_run": steps_run}
 
-def run_step(step, store, paths, settings, chat, live, state, sleep):
+def run_step(step, store, paths, settings):
     """Build the context, call the step function, write what it returns, record the step,
     rebuild the outputs and sync. Steps never touch the store themselves."""
     notes = []
-    ask = None
-    if step["name"] in CHAT_STEPS and chat is not None:
-        ask = make_asker(chat, live, store, settings, validate_answer, state, sleep)
     provenance = Provenance(paths.run_id, step["id"], step["name"], step["version"],
                                    created_at=datetime.datetime.now().isoformat(timespec="seconds"))
     options = dict(step.get("with") or {})
@@ -6668,13 +5760,11 @@ def run_step(step, store, paths, settings, chat, live, state, sleep):
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
-    context = StepContext(settings, options, store.read, ask, work_dir, notes.append, provenance)
+    context = StepContext(settings, options, store.read, work_dir, notes.append, provenance)
     function = STEP_FUNCTIONS[step["carried_out_by"]]
     started = time.time()
     try:
         result = function(context)
-    except RunPaused:
-        raise                                        # a pause is how a run waits for a person; it is not a failure
     except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
         result = StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
     for kind in sorted(result.records):
@@ -6810,7 +5900,7 @@ def run_identity(store, paths):
             "graph_version_id": "G-" + chain_head(ledger)[:12] if ledger else ""}
 
 def rows_package_info(store, paths, settings, progress):
-    """The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls."""
+    """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
     identity, rows = run_identity(store, paths), []
     def add(group, item, value):
         rows.append({"group": group, "item": item, "value": value})
@@ -6839,8 +5929,6 @@ def rows_package_info(store, paths, settings, progress):
     for name in sorted(repairs):
         kinds = sorted(set(repairs[name]))
         add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
-    for label, value in call_statistics(store):
-        add("AI calls", label, value)
     return rows
 
 
@@ -6852,10 +5940,6 @@ MAP_ROLES = {"return": "Final output", "value": "Intermediate value", "column": 
 MAP_OUTLINE_MAX = 7          # Excel groups rows eight levels deep (outline levels 0 to 7); deeper rows are indented only
 MAP_ID_COLUMNS = 12          # the Map ID, one column per level, for filtering; a deeper level joins the last column
 
-def covering_unit(units, file, line):
-    """The most specific model unit whose lines hold a line of a file: a statement before its function."""
-    found = [u for u in units if u.get("file") == file and u.get("lines") and u["lines"][0] <= line <= u["lines"][-1]]
-    return min(found, key=lambda u: (u["lines"][-1] - u["lines"][0], u["ref"]))["ref"] if found else ""
 
 def implementation_map(store, settings=None):
     """The rows of Model_Implementation_Map: one row per value the model computes, from each final output
@@ -6863,7 +5947,7 @@ def implementation_map(store, settings=None):
     these arguments - and every argument is a row of its own beneath it, where it is the variable. A called
     function is entered with that call's own arguments, and what it computes inside stands under the value
     it produces. Nothing that is not part of a calculation appears: what no final output reaches is not a
-    row of this sheet, it is counted on Mapping_Coverage. Enforces: R2, R4, R14"""
+    row of this sheet. Enforces: R2, R4, R14"""
     flow = store.read("dataflow")
     if not flow:
         return []
@@ -6880,15 +5964,6 @@ def implementation_map(store, settings=None):
         is the function, and the value it returns - the last tie_outputs, say - is that row's child."""
         return node.get("function", "") if node["kind"] == "return" else node["name"]
 
-    def ref_of(node):
-        if node["kind"] in ("stored data", "file"):
-            return node.get("unit_ref", "")
-        function = node.get("function")
-        if function in functions:
-            if node["kind"] == "argument":
-                return functions[function]["ref"]
-            return covering_unit(units, functions[function]["file"], node["line"]) or functions[function]["ref"]
-        return ""
 
     def function_of(node):
         """The function that defines this value: for what a function returns, that function; otherwise the
@@ -6966,7 +6041,7 @@ def implementation_map(store, settings=None):
         kids = children(node, frames)
         variable = variable_of(node)
         name, ref = function_of(node)
-        row = dict(blank_row(), map_id=map_id, level=level, output_variable=variable, ov_ref=ref_of(node),
+        row = dict(blank_row(), map_id=map_id, level=level, output_variable=variable, 
                    ov_code=node.get("code") or node.get("file") or "", 
                    function_name=name, fn_ref=ref, role=MAP_ROLES.get(node["kind"], node["kind"]),
                    arguments="; ".join(dict.fromkeys(variable_of(nodes[child]) for child, _ in kids if child in nodes)))
@@ -6993,58 +6068,11 @@ def implementation_map(store, settings=None):
 
 def blank_row():
     """Every column of the map, empty: a row fills the ones it has."""
-    row = {"map_id": "", "level": 0, "output_variable": "", "ov_ref": "", "ov_code": "",
+    row = {"map_id": "", "level": 0, "output_variable": "", "ov_code": "",
            "function_name": "", "fn_ref": "", "arguments": "", "role": ""}
     row.update({"id%d" % number: "" for number in range(1, MAP_ID_COLUMNS + 1)})
     return row
 
-def not_on_the_map(store, map_rows, settings=None):
-    """What no calculation reaches, counted for Mapping_Coverage and never shown on the map: the model
-    units no final output reaches, the methodology no step implements, and the documentation describing
-    nothing in the map. A methodology passage counts as implemented when a step of the map is linked to
-    it, or when every non-trivial number it states is a value the map uses - hard-coded in a step, or held
-    in a table or file it reads. Enforces: R2, R14"""
-    units, flow = store.read("model_units"), store.read("dataflow")
-    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
-    functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-    outputs, _, not_reached = decided_outputs(flow, {}) if flow else ([], {}, [])
-    reached = {name for name in functions if name not in not_reached}
-    on_map = {row["ov_ref"] for row in map_rows if row["ov_ref"]} | {row["fn_ref"] for row in map_rows if row["fn_ref"]}
-    links, generated = {}, []
-    for edge in store.read("graph_ledger"):
-        if edge["record_type"] != "edge":
-            continue
-        source, target = edge["source"], edge["target"]
-        if edge["kind"] == "corresponds":
-            unit = source if source.startswith("M-") else target
-            links.setdefault(unit, []).append(target if unit == source else source)
-        elif edge["kind"] in ("documents", "tested_by", "generated_from"):
-            generated.append((source, target))
-    for name in reached:                                          # the roxygen, help pages, tests and statements of a step
-        home = functions[name]
-        on_map |= {u["ref"] for u in units if u.get("file") == home["file"] and u.get("lines")
-                   and home["lines"][0] <= u["lines"][0] and u["lines"][-1] <= home["lines"][-1]}
-    for _ in range(3):                                            # what documents or tests a unit on the map belongs with it
-        on_map |= {other for pair in generated for other in pair if set(pair) & on_map}
-    linked = {other for unit in on_map for other in links.get(unit, [])}
-    trivial = {Decimal(str(number)) for number in (settings or DEFAULT_SETTINGS)["trivial_numbers"]}
-    used = {Decimal(node["name"]) for node in nodes.values() if node["kind"] == "number" and node.get("function") in reached}
-    tables_read = {node["name"] for node in nodes.values() if node["kind"] in ("stored data", "file")}
-    for table in store.read("parameter_tables"):
-        if table["object_name"] in tables_read:
-            used |= {Decimal(parse_number(str(cell))["value"]) for record in table["rows"] for cell in record
-                     if parse_number(str(cell))}
-    rules = load_tag_rules()
-    def by_values(chunk):
-        stated = {Decimal(number["value"]) for number in find_numbers(chunk["text"])} - trivial
-        return bool(stated) and stated <= used
-    checkable = lambda chunk: states_something_checkable(
-        {"type": chunk["kind"].lower(), "text": chunk["text"], "not_read_reason": chunk.get("not_read_reason", "")}, rules)
-    return {"model_units": [u["ref"] for u in units if u["ref"] not in on_map],
-            "methodology": [c["ref"] for c in store.read("chunks_canon") if c["ref"] not in linked and checkable(c) and not by_values(c)],
-            "documentation": [c["ref"] for c in store.read("chunks_doc") if c["ref"] not in linked],
-            "on_map": on_map, "linked": linked, "final_outputs": outputs,
-            "linked_units": {unit for unit in on_map if links.get(unit)}}
 
 def rows_chunks(chunks):
     """The rows of Chunks_Canon and Chunks_Doc."""
@@ -7059,56 +6087,14 @@ def rows_model_units(units):
 
 
 
-def coverage_rows(store, map_rows, model_rows, doc_rows, settings=None):
-    """Mapping_Coverage, counted from the map and from what the map does not reach. One row per final
-    output: how many values it takes, how deep, and what it rests on by kind. Then one row per corner,
-    each read the way that corner needs: of the model units, how many a final output reaches; of the
-    methodology and the documentation, how many a unit on the map is linked to. Enforces: R2, R10"""
-    missing = not_on_the_map(store, map_rows, settings) if store.read("dataflow") else {
-        "model_units": [], "methodology": [], "documentation": [], "on_map": set(), "linked": set(),
-        "linked_units": set(), "final_outputs": []}
-    branches = {}
-    for row in map_rows:
-        branches.setdefault(row["map_id"].split(".")[0], []).append(row)
-    rows = []
-    for position, output in enumerate(missing["final_outputs"], start=1):
-        shown = branches.get("%02d" % position, [])
-        if not shown:
-            continue
-        role = lambda start: sum(1 for row in shown if row["role"].startswith(start))
-        rows.append({"row": "%02d %s (final output)" % (position, output), "counts_what": "values computed on the way to %s" % output,
-                     "total": len(shown), "covered": sum(1 for row in shown if row["ov_ref"] in missing["linked_units"]),
-                     "not_covered": sum(1 for row in shown if row["ov_ref"] not in missing["linked_units"]),
-                     "depth": max(row["level"] for row in shown), "in_arguments": role("Raw input: argument"),
-                     "in_columns": role("Raw input: column"), "in_tables": role("Raw input: stored data"),
-                     "in_files": role("Raw input: file"), "in_numbers": role("Raw input: hard-coded"),
-                     "how_to_read": "A row of the map is one variable, computed by one function from the arguments beneath it. "
-                                    "Covered = variables whose unit a methodology passage is linked to."})
-    model_units = {row["ref"] for row in model_rows}
-    canon, doc_refs = store.read("chunks_canon"), {row["ref"] for row in doc_rows}
-    for label, counts_what, total, covered, not_covered, how in (
-            ("Model units (one row each on Chunks_Model)", "units of the model package", len(model_units),
-             len(model_units) - len(missing["model_units"]), len(missing["model_units"]),
-             "Covered = units a final output reaches: a row of the map, or the roxygen, help page, test or statement "
-             "belonging to one; not covered = the units no final output reaches, which the map does not show."),
-            ("Methodology passages", "passages of the methodology", len(canon),
-             len({c["ref"] for c in canon} & missing["linked"]), len(missing["methodology"]),
-             "Covered = passages a unit on the map is linked to; not covered = passages that state a number, formula or "
-             "rule that no step implements. The rest state nothing to implement."),
-            ("Documentation passages", "passages of the model documentation", len(doc_refs),
-             len(doc_refs & missing["linked"]), len(missing["documentation"]),
-             "Covered = passages a unit on the map is linked to; not covered = passages describing nothing in the map.")):
-        rows.append({"row": label, "counts_what": counts_what, "total": total, "covered": covered,
-                     "not_covered": not_covered, "how_to_read": how})
-    return rows
 
 def sheet_rows(store, paths, settings, progress):
-    """The rows of all six sheets, by sheet name."""
+    """The rows of all five sheets, by sheet name."""
     mapped = implementation_map(store, settings)
     model_rows, doc_rows = rows_model_units(store.read("model_units")), rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
             "Chunks_Canon": rows_chunks(store.read("chunks_canon")), "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
-            "Model_Implementation_Map": mapped, "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows, settings)}
+            "Model_Implementation_Map": mapped}
 
 def check_written_totals(rows, store):
     """The identity of the workbook: every unit read is one row of its sheet, and no row is anything
@@ -7173,20 +6159,6 @@ sheets:
   - {header: Function Name, group: identity, field: function_name, width: 24}
   - {header: Function Name - Model Ref, group: assessments, field: fn_ref, width: 16, links_to: Chunks_Model}
   - {header: Arguments, group: assessments, field: arguments, width: 46}
-- name: Mapping_Coverage
-  columns:
-  - {header: What is counted, group: identity, field: row, width: 40}
-  - {header: Each row counts, group: identity, field: counts_what, width: 34}
-  - {header: In total, group: assessments, field: total, width: 10}
-  - {header: Covered, group: assessments, field: covered, width: 10}
-  - {header: Not covered, group: assessments, field: not_covered, width: 12}
-  - {header: 'Rests on: arguments', group: assessments, field: in_arguments, width: 12}
-  - {header: 'Rests on: columns of the data', group: assessments, field: in_columns, width: 14}
-  - {header: 'Rests on: stored tables', group: assessments, field: in_tables, width: 12}
-  - {header: 'Rests on: files', group: assessments, field: in_files, width: 10}
-  - {header: 'Rests on: hard-coded numbers', group: assessments, field: in_numbers, width: 14}
-  - {header: Deepest level, group: assessments, field: depth, width: 10}
-  - {header: How to read this row, group: assessments, field: how_to_read, width: 70}
 '''
 
 def load_layout():
@@ -7242,7 +6214,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
         sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsx on local disk from the record of the run. All six sheets always
+    """Build Output.xlsx on local disk from the record of the run. All five sheets always
     exist; a sheet whose step has not run shows its header only."""
     import openpyxl
     layout = load_layout()
@@ -7265,26 +6237,6 @@ def file_sha256(path):
     with open(path, "rb") as handle:
         return sha256_bytes(handle.read())
 
-def call_statistics(store):
-    """The AI call statistics shown on Model_Package_Info and in the report's annex."""
-    calls = store.read_calls()
-    if not calls:
-        return [("Questions asked", "No question has been asked yet")]
-    final = [c for c in calls if c.get("final")]
-    rejected = {}
-    for call in final:
-        if call["outcome"].startswith("rejected"):
-            rejected[call["outcome"]] = rejected.get(call["outcome"], 0) + 1
-    with_planted = [c for c in final if c.get("planted")]
-    seconds = sorted(c["seconds"] for c in calls)
-    rows = [("Questions asked", len(final)), ("Attempts made", len(calls)),
-            ("Answers accepted", sum(1 for c in final if c["outcome"] == "accepted")),
-            ("Questions that stayed without an answer", sum(1 for c in final if c["outcome"].startswith("failed")))]
-    rows += [("Answers %s" % reason, count) for reason, count in sorted(rejected.items())]
-    planted = sum(1 for c in with_planted if c["outcome"] == "rejected: " + REJECTION_REASONS[3])
-    rows.append(("Answers that accepted a planted control passage", "%d of %d questions that held one" % (planted, len(with_planted))))
-    rows.append(("Median seconds per call", plain_number(seconds[len(seconds) // 2], 3)))
-    return rows
 
 def progress_text(store, waiting_message):
     """Where the run stands, in one or two plain sentences."""
@@ -7412,12 +6364,6 @@ def build_map(ctx):
     return combine(ctx, build_graph, trace_dataflow)
 
 
-def link_units(ctx):
-    """Step 06, link-units: two passes of search and judgement - candidates by code, then the model's
-    judgement on each, twice, so that a link found in the first pass can carry the second. Enforces: R3"""
-    each = lambda number: (lambda inner: combine(dataclasses.replace(inner, options=dict(inner.options, **{"pass": number})),
-                                                 find_candidates, judge_links))
-    return combine(ctx, each(1), each(2))
 
 STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
     "read_methodology": read_methodology,
@@ -7425,12 +6371,9 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "read_package": read_package,
     "build_graph": build_graph,
     "trace_dataflow": trace_dataflow,
-    "find_candidates": find_candidates,
-    "judge_links": judge_links,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,
-    "build_map": build_map,
-    "link_units": link_units}
+    "build_map": build_map}
 
 # ---------------------------------------------------------------- the notebook: four cells, each one call
 # Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
@@ -7599,18 +6542,17 @@ def open_current():
         paths = NOTEBOOK["paths"] = open_run(NOTEBOOK["projects"], model_id, project)   # a new session starts a new run
     return paths
 
-def review(foreground_minutes=600):
-    """Cell 3: read the inputs, map how the model computes what it returns, and run the model steps, in
-    this cell; then say what each step did. A step already finished is never repeated."""
-    if NOTEBOOK["dbutils"] is None or NOTEBOOK["chat"] is None:
-        print("Run cell 1, then cell 2, first: this cell uses the chat() that cell 2 checked.")
+def review():
+    """Cell 3: read the inputs and map how the model computes what it returns, in this cell; then say
+    what each step did. A step already finished is never repeated."""
+    if NOTEBOOK["dbutils"] is None:
+        print("Run cell 1 first.")
         return
     paths = open_current()
     if paths is None:
         return
-    settings = dict(notebook_settings(), foreground_minutes=float(foreground_minutes))
-    state = AskState()
-    result = NOTEBOOK["result"] = run_pipeline(paths, settings, chat=NOTEBOOK["chat"], live=NOTEBOOK["live"] or LiveValues(), state=state)
+    settings = notebook_settings()
+    result = NOTEBOOK["result"] = run_pipeline(paths, settings)
     print(result["message"])
     store = open_store(paths, settings)
     print("\nWhat each step did:")
@@ -7618,14 +6560,9 @@ def review(foreground_minutes=600):
         print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
         for message in record["messages"]:
             print("      " + message)
-    for label, value in call_statistics(store):
-        print("  %-52s %s" % (label, value))
-    if state.waiting_for_token:
-        print("\nWAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and")
-        print("run this cell again; the steps already finished are not repeated.")
     print("\nRun folder:", paths.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Model_Implementation_Map")
-    print("how the model computes what it returns, and Mapping_Coverage what is covered.")
+    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, and Model_Implementation_Map")
+    print("how the model computes what it returns.")
     print("Then run cell 4 to check the run folder against its own record.")
 
 def verify():

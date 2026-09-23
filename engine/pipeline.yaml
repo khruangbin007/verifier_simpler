@@ -1,4 +1,4 @@
-# The pipeline: four steps, in order. Each is named, versioned, and carried out either by a person or by
+# The pipeline: three steps, in order. Each is named, versioned, and carried out either by a person or by
 # one function named here. Only functions listed in STEP_FUNCTIONS of the engine may be named; nothing is
 # loaded by path. A step's version is part of the provenance of every record it writes, so a change to how
 # a step works is a change to its version here.
@@ -16,7 +16,3 @@ steps:
   name: build-map
   version: 0.0.1
   carried_out_by: build_map
-- id: '04'
-  name: link-units
-  version: 0.0.1
-  carried_out_by: link_units
