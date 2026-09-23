@@ -59,11 +59,8 @@ from xml.sax.saxutils import escape
 # ================================================================================================
 # ---------------------------------------------------------------- the contracts: what every record is, and the words the tool may use
 ENGINE_VERSION = "0.0.3"
-GENESIS_HASH = "0" * 64
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
-HOW_PARSED = "Parsed from the files"
-NOT_RUN_YET = "Not run yet"
 
 UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
 
@@ -107,7 +104,7 @@ class Chunk:
     ref: str; corner: str; source_file: str; kind: str; level: int; heading_chain: tuple
     numbering: str; text: str; locator: str; content_hash: str
     table: Optional[TableData] = None; equation: Optional[EquationData] = None
-    refs_out: tuple = (); numbering_reconstructed: bool = False
+    numbering_reconstructed: bool = False
     caption: str = ""; not_read_reason: str = ""; para_label: str = ""   # para_label: the number the document itself gives ("36.")
 
 @dataclass(frozen=True)
@@ -148,12 +145,6 @@ class Provenance:
     run_id: str; step_id: str; step: str; step_version: str; engine_version: str = ENGINE_VERSION
     prompt_hash: Optional[str] = None; response_hash: Optional[str] = None
 
-@dataclass(frozen=True)
-class Edge:
-    """A recorded connection between two nodes of the graph. Never changed once written."""
-    source: str; target: str; kind: str; how: str; provenance: Provenance
-    relation: str = ""; confidence: Optional[int] = None
-    evidence: dict = field(default_factory=dict); record_type: str = "edge"
 
 
 @dataclass
@@ -208,40 +199,7 @@ def make_ref(prefix, number):
     """make_ref("C", 9) gives "C-0009". Numbers follow reading order."""
     return "%s-%04d" % (prefix, number)
 
-def strip_volatile(value, volatile):
-    """A copy of a record without the named keys, at any depth (time stamps, run id)."""
-    if isinstance(value, dict):
-        return {k: strip_volatile(v, volatile) for k, v in value.items() if k not in volatile}
-    if isinstance(value, list):
-        return [strip_volatile(v, volatile) for v in value]
-    return value
 
-def chain_records(prev_hash, records, volatile=()):
-    """Give each record the hash of the one before it and its own hash. The last hash
-    then identifies the whole list: changing, removing or re-ordering any record
-    changes it. Keys named in `volatile` are left out of the hash. Enforces: R4, R5"""
-    chained = []
-    for record in records:
-        body = {k: v for k, v in to_plain(record).items() if k not in ("prev_hash", "record_hash")}
-        body["prev_hash"] = prev_hash
-        body["record_hash"] = sha256_text(canonical_json(strip_volatile(body, volatile)))
-        prev_hash = body["record_hash"]
-        chained.append(body)
-    return chained
-def verify_chain(records, volatile=()):
-    """Re-compute a chain. Returns (True, -1, "") or (False, position, plain reason)."""
-    prev_hash = GENESIS_HASH
-    for position, record in enumerate(records):
-        if record.get("prev_hash") != prev_hash:
-            return False, position, "record %d does not follow the record before it" % (position + 1)
-        body = {k: v for k, v in record.items() if k != "record_hash"}
-        if sha256_text(canonical_json(strip_volatile(body, volatile))) != record.get("record_hash"):
-            return False, position, "record %d has been changed" % (position + 1)
-        prev_hash = record["record_hash"]
-    return True, -1, ""
-def chain_head(records):
-    """The hash of the last record of a chain, or the fixed starting value for an empty one."""
-    return records[-1]["record_hash"] if records else GENESIS_HASH
 
 # ---------------------------------------------------------------- numbers
 # A number as prose writes it. Thousands may be grouped with commas in groups of exactly three
@@ -2771,11 +2729,6 @@ def blocks_from_pdf_text_only(data, file_name, state):
 
 # ---------------------------------------------------------------- levels, references, chunks
 
-def cross_references(text, rules):
-    """Cross-references as written: "Table 3", "section 4.2", "Annex A"."""
-    labels = "|".join(re.escape(label) for label in rules["cross_reference_labels"])
-    found = re.findall(r"\b((?:%s)\s+(?:[A-Z]\b|\d+(?:\.\d+)*[a-z]?|\([a-z0-9]+\)))" % labels, text or "", re.IGNORECASE)
-    return tuple(dict.fromkeys(normalise_text(reference) for reference in found))
 
 
 KIND_OF_BLOCK = {"paragraph": "Paragraph", "list_item": "Paragraph", "table": "Table", "figure": "Figure",
@@ -2838,7 +2791,7 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             ref=make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
             kind=kind, level=levels[-1] if levels else 0, heading_chain=tuple(chain), numbering=section_numbering,
             text=text, locator=block["locator"], content_hash=content_hash(text + block.get("image_sha256", "")),
-            table=block["table"], equation=equation, refs_out=cross_references(text + " " + block["caption"], state.rules),
+            table=block["table"], equation=equation,
             numbering_reconstructed=bool(chain) and block_is_under_reconstructed(blocks, block),
             caption=block["caption"], not_read_reason=block["not_read_reason"],
             para_label=block["numbering"] if kind == "Paragraph" else ""))
@@ -2852,7 +2805,6 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             kind="Paragraph", level=block["level"], heading_chain=(), numbering=block["numbering"],
             text=block["text"], locator=block["locator"],
             content_hash=content_hash(block["text"]), table=None, equation=None,
-            refs_out=cross_references(block["text"], state.rules),
             numbering_reconstructed=False, caption="", not_read_reason="",
             para_label=block["numbering"]))
     return chunks
@@ -4665,28 +4617,11 @@ def decided_outputs(records, decisions):
 # the map: how the model computes what it returns
 # ================================================================================================
 # ---------------------------------------------------------------- the graph and the map
-LEDGER_VOLATILE = ("created_at", "run_id")
 
 # ---------------------------------------------------------------- the ledger and the graph in memory
-def node_record(ref, node_kind, corner):
-    """The ledger record of one node."""
-    return {"record_type": "node", "ref": ref, "node_kind": node_kind, "corner": corner}
-
-def ledger_records(existing, new_records):
-    """Chain new records onto the ledger. Nodes come first (by reference), then edges sorted
-    by source, target and kind, never in the order threads finished, so the same content
-    always gives the same graph version id. There is no function that edits or removes a
-    record: a later contradiction is a NEW edge. Enforces: R4, R5"""
-    plain = [to_plain(record) for record in new_records]
-    nodes = sorted((r for r in plain if r["record_type"] == "node"), key=lambda r: r["ref"])
-    edges = sorted((r for r in plain if r["record_type"] == "edge"),
-                   key=lambda r: (r["source"], r["target"], r["kind"], r.get("relation", ""), r.get("how", "")))
-    return chain_records(chain_head(existing), nodes + edges, LEDGER_VOLATILE)
 
 
-def graph_version_id(records):
-    """G- and the first twelve characters of the ledger's head hash."""
-    return "G-" + chain_head(records)[:12]
+
 
 
 # ---------------------------------------------------------------- words: splitting, stemming, word lists
@@ -4698,23 +4633,6 @@ def graph_version_id(records):
 
 
 # ---------------------------------------------------------------- S3: explicit references as written
-def resolve_reference(reference, chunks):
-    """"Table 3", "section 4.2", "Annex B" as written, resolved among `chunks` (one corner):
-    tables, figures and equations by the label at the start of their caption, sections by
-    their numbering as written. Several matches are all returned; none gives an empty list."""
-    label, _, number = reference.partition(" ")
-    label, number = label.lower().rstrip("s"), number.strip("().").lower()
-    matches = []
-    for chunk in chunks:
-        caption = (chunk.get("caption") or "").lower()
-        if label in ("table", "figure", "equation") and chunk["kind"].lower() == label:
-            if re.match(r"%s\s+\(?%s\)?(?!\w)(?!\.\d)" % (label, re.escape(number)), caption):
-                matches.append(chunk["ref"])
-        elif label in ("section", "paragraph", "chapter", "annex", "appendix"):
-            written = (chunk.get("numbering") or "").lower().rstrip(".")
-            if written == number or written in ("%s %s" % (label, number), "annex %s" % number, "appendix %s" % number):
-                matches.append(chunk["ref"])
-    return matches
 
 
 # ---------------------------------------------------------------- the skill map-implementation: the implementation map's agents
@@ -4727,60 +4645,7 @@ def resolve_reference(reference, chunks):
 
 
 # ---------------------------------------------------------------- step 05: build-graph
-def structural_edges(units, provenance):
-    """Edges the readers established: contains, calls, tested_by, documents, generated_from,
-    reads_data. All are parsed from the files, none comes from the AI."""
-    functions = {u["name"]: u["ref"] for u in units if u["kind"] == KIND_FUNCTION and not u["inside"]}
-    data_units = {u["name"]: u["ref"] for u in units if u.get("data")}
-    edges = []
-    def add(source, target, kind, evidence=None):
-        edges.append(Edge(source, target, kind, HOW_PARSED, provenance, evidence=evidence or {}))
-    for unit in units:
-        code = unit.get("code") or {}
-        if unit.get("parent_ref"):
-            add(unit["parent_ref"], unit["ref"], "contains")
-        for name in code.get("calls", ()):
-            if name in functions and functions[name] != unit["ref"] and unit["kind"] in (KIND_FUNCTION, KIND_TEST):
-                add(functions[name] if unit["kind"] == KIND_TEST else unit["ref"],
-                    unit["ref"] if unit["kind"] == KIND_TEST else functions[name],
-                    "tested_by" if unit["kind"] == KIND_TEST else "calls")
-        for read in code.get("reads_data", ()):
-            if read["object"] in data_units:
-                add(unit["ref"], data_units[read["object"]], "reads_data", dict(read))
-        if unit.get("roxygen") and unit["roxygen"]["documents_ref"] not in (None, unit["ref"]):   # a row does not document itself
-            add(unit["ref"], unit["roxygen"]["documents_ref"], "documents")
-        page = unit.get("helppage")
-        if page:
-            if page["generated_from_ref"]:
-                add(unit["ref"], page["generated_from_ref"], "generated_from")
-            target = functions.get(page["rd_name"]) or data_units.get(page["rd_name"])
-            if target:
-                add(unit["ref"], target, "documents")
-    return edges
 
-def build_graph(ctx):
-    """Part of step 03, build-map: nodes for every chunk and unit, structural edges, and the
-    cross-references resolved within their own corner."""
-    canon, doc, units = ctx.read("chunks_canon"), ctx.read("chunks_doc"), ctx.read("model_units")
-    records = [node_record(c["ref"], c["kind"], c["corner"]) for c in canon + doc]
-    records += [node_record(u["ref"], u["kind"], "model") for u in units]
-    edges, unresolved = structural_edges(units, ctx.provenance), []
-    for corner_chunks in (canon, doc):
-        for chunk in corner_chunks:
-            same_file = [c for c in corner_chunks if c["source_file"] == chunk["source_file"]]
-            for reference in chunk.get("refs_out", ()):
-                targets = [ref for ref in resolve_reference(reference, same_file) if ref != chunk["ref"]]
-                for target in targets:
-                    edges.append(Edge(chunk["ref"], target, "cross_reference", HOW_PARSED, ctx.provenance,
-                                             evidence={"as_written": reference}))
-                own_caption = (chunk.get("caption") or "").lower().startswith(reference.lower())
-                if not targets and not own_caption:
-                    unresolved.append({"unit_ref": chunk["ref"], "reference": reference,
-                                       "note": "'%s' is cited here but could not be found in %s" % (reference, chunk["source_file"])})
-    ledger = ledger_records(ctx.read("graph_ledger"), records + edges)
-    return StepResult({"graph_ledger": ledger},
-                             {"nodes": len(records), "edges": len(edges)},
-                             ["Graph version %s." % graph_version_id(ctx.read("graph_ledger") + ledger)])
 
 
 # ---------------------------------------------------------------- what each piece of code does, in plain words
@@ -5297,10 +5162,8 @@ def plain_cell(value, input_text, store):
 
 def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
-    ledger = store.read("graph_ledger")
     return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id,
-            "engine_version": ENGINE_VERSION,
-            "graph_version_id": "G-" + chain_head(ledger)[:12] if ledger else ""}
+            "engine_version": ENGINE_VERSION}
 
 def rows_package_info(store, paths, settings, progress):
     """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
@@ -5312,7 +5175,6 @@ def rows_package_info(store, paths, settings, progress):
     add("Identity", "Run", identity["run_id"])
     add("Identity", "Run progress", progress)
     add("Identity", "Engine version", identity["engine_version"])
-    add("Identity", "Graph version id", identity["graph_version_id"] or NOT_RUN_YET)
     manifest = (store.read("run_manifest") or [{}])[0]
     if manifest.get("engine_files"):
         add("Identity", "Engine files fingerprint", sha256_text(canonical_json(manifest["engine_files"]))[:16] +
@@ -5714,8 +5576,6 @@ def verify_evidence_pack(paths, settings, live=None):
         recorded = {r["ref"]: r["content_hash"] for r in store.read(kind)}
         differing = sorted(ref for ref in set(fresh) | set(recorded) if fresh.get(ref) != recorded.get(ref))
         line("Re-reading the inputs gives the recorded content hashes (%s)" % kind, not differing, ", ".join(differing[:5]))
-    ledger_ok, position, _ = verify_chain(store.read("graph_ledger"), LEDGER_VOLATILE)
-    line("The graph ledger chain verifies", ledger_ok, "" if ledger_ok else "record %d no longer verifies" % (position + 1))
     written = {kind: len(store.read(kind)) for kind in ("chunks_canon", "chunks_doc", "model_units")}
     line("Every unit read is in the record", all(written.values()),
          ", ".join("%s: %d" % pair for pair in sorted(written.items())))
@@ -5758,16 +5618,14 @@ def read_inputs(ctx):
     return combine(ctx, read_methodology, read_documentation, read_package)
 
 def build_map(ctx):
-    """Step 03, build-map: by code alone, before any model call - the graph of what the files say about
-    each other, and the data flow of the package. Enforces: R2, R4, R14"""
-    return combine(ctx, build_graph, trace_dataflow)
+    """Step 03, build-map: the data flow of the package, read by flowR. Enforces: R2, R4, R14"""
+    return trace_dataflow(ctx)
 
 
 STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
     "read_methodology": read_methodology,
     "read_documentation": read_documentation,
     "read_package": read_package,
-    "build_graph": build_graph,
     "trace_dataflow": trace_dataflow,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,

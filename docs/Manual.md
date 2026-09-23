@@ -95,11 +95,6 @@ The rows of Chunks_Model never overlap, and each is a whole piece of code: a rox
 | the equation is an image |
 | the equation could not be read |
 
-**Fixed cell texts**
-
-| Wording |
-|---|
-| Not run yet |
 
 ---
 
@@ -209,7 +204,7 @@ A called function is entered with the arguments that call gives it, so what it c
 
 ## 11. The run folder as an evidence pack
 
-`_audit/Audit_Log.xlsx` is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that the graph's hash chain verifies, that every unit read is in the record, that `Output.xlsx` carries this run's ids and fingerprints, and that no access token was written anywhere in the folder.
+`_audit/Audit_Log.xlsx` is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsx` carries this run's ids and fingerprints, and that no access token was written anywhere in the folder.
 
 ## 12. When something goes wrong
 
@@ -255,7 +250,7 @@ Three steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, 
 |---|---|---|
 | 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
-| 03 | build-map | by code alone: the graph, and the data flow of the package (read by flowR) |
+| 03 | build-map | the data flow of the package, read by flowR |
 
 **How the data flow is read.** The package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3). flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places code cannot follow, recorded as gaps. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
 
