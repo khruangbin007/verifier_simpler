@@ -106,7 +106,7 @@ def has_banned_wording(text):
 @dataclass(frozen=True)
 class TableData:
     """A table kept whole: header cells, body rows, and which column identifies a row."""
-    header: tuple = (); rows: tuple = (); row_key: str = ""; column_types: tuple = ()
+    header: tuple = (); rows: tuple = (); row_key: str = ""
 
 @dataclass(frozen=True)
 class EquationData:
@@ -134,16 +134,13 @@ class CodeDetail:
 @dataclass(frozen=True)
 class ParameterDataDetail:
     """The profile of one stored data object. The cell values live in parameter_tables."""
-    object_name: str; container_file: str; r_class: tuple = (); r_type: str = ""
-    dims: tuple = (); attributes: dict = field(default_factory=dict); columns: tuple = ()
-    row_keys: tuple = (); n_cells: int = 0; canonical_value_hash: str = ""
-    decoded_by: str = ""; assessable: bool = True; not_assessable_reason: Optional[str] = None
+    object_name: str; container_file: str; dims: tuple = (); columns: tuple = ()
+    assessable: bool = True; not_assessable_reason: Optional[str] = None
 
 @dataclass(frozen=True)
 class RoxygenDetail:
-    """A roxygen block: what it documents, its tags with their lines, and its formulas."""
+    """A roxygen block: what it documents, and its tags with their lines."""
     documents_ref: Optional[str] = None; documents_name: str = ""; tags: tuple = ()
-    formulas: tuple = ()
 
 @dataclass(frozen=True)
 class HelpPageDetail:
@@ -440,32 +437,6 @@ def expr_to_text(expr, parent_rank=0):
 # the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
 # version and asks new questions. Enforces: R3, R5, R9
 PROMPTS = {
-    'trace-gap': r'''VERSION 1
-=== SYSTEM ===
-You trace how an R package computes its values, one step at a time. You are given one place in its code that the tool could not follow by reading it, what the tool already knows about that function, and a list of actions. Each turn you choose exactly one action; the tool carries it out and shows you what it found. Once you know what the value at that place is computed from, you declare it, copying the code that shows it word for word. You never use a name that is not in the code, never write code of your own, and you stop when the place is traced or when the code cannot tell. Reply with JSON only. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: trace-gap
-[[UNIT]]
-THE ACTIONS
-open_unit {"ref": "M-0012"}: shows the code of a unit of the package
-statements_setting {"function": "f", "name": "x"}: shows the statements of f that set x, and what each is computed from
-callers_of {"function": "f"}: shows every call of f in the package, with what each call gives each parameter
-return_of {"function": "f"}: shows what f returns is computed from
-columns_of {"table": "t"}: shows the columns of a stored table
-declare_edge {"value": "x", "from": ["a", "b"], "quote": "code copied word for word"}: records that x is computed from a and b; the quote must be code of the function at this place, or of a unit you opened, and must contain x and every name in from
-declare_input {"name": "x", "kind": "argument", "quote": "code copied word for word"}: records that x comes from outside the computation; kind is one of argument, stored data, file, hard-coded number, from outside
-done {"because": "a few words"}: the place is traced
-give_up {"because": "a few words"}: the code cannot tell
-[[ABOUT]]
-ANSWER FORMAT
-{"action": "declare_edge", "args": {"value": "total", "from": ["price", "count"], "quote": "total <- price * count"}}
-Rules on your answer:
-- exactly one action from the list above, with its arguments;
-- every ref, function, table and name must be one the tool has shown you;
-- a quote must be copied from the code word for word;
-- never repeat an action you have already taken;
-- end with done once you have declared what the value is computed from, or with give_up.
-''',
     'judge-doc-to-canon': r'''VERSION 1
 === SYSTEM ===
 You compare one item with lettered passages. Reply with JSON only.
@@ -2355,7 +2326,6 @@ class WalkState:
     lent_numbering: str = ""                       # a number a container carries for the heading inside it
     ask: object = None                             # the asker, where a guided reading is turned on
     settings: dict = field(default_factory=dict)
-    digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
     guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     folder: str = ""                               # where the file being read stands, so a picture beside it can be found
     svgs: dict = field(default_factory=dict)       # the corner's SVG files, by lower-case name and by name without .svg
@@ -2522,14 +2492,11 @@ def table_from_rows(rows, locator, caption=""):
         display = "\n".join(lines)
     else:
         display = "\n".join("; ".join(row[:max((i for i, cell in enumerate(row) if cell), default=0) + 1]) for row in rows)
-    types = []
-    for column in range(width):
-        values = [row[column] for row in body if row[column]]
-        numeric = values and all(find_numbers(v) and len(find_numbers(v)) == 1 and
-                                 len(re.sub(r"[\d.,%\s+-]|bps?|basis points?", "", v)) == 0 for v in values)
-        types.append("number" if numeric else "text")
-    row_key = header[0] if header and types and types[0] == "text" else ""
-    table = TableData(tuple(header), tuple(tuple(row) for row in body), row_key, tuple(types))
+    first = [row[0] for row in body if row[0]] if width else []     # a first column of words keys the rows
+    numeric = first and all(find_numbers(v) and len(find_numbers(v)) == 1 and
+                            len(re.sub(r"[\d.,%\s+-]|bps?|basis points?", "", v)) == 0 for v in first)
+    row_key = header[0] if header and width and not numeric else ""
+    table = TableData(tuple(header), tuple(tuple(row) for row in body), row_key)
     return new_block("table", "", locator, table=table, caption=caption, display=display)
 
 PICTURE_READER = []                     # the OCR engine, looked for once: [engine] or [None]
@@ -3118,21 +3085,6 @@ def block_is_under_reconstructed(blocks, block):
             above = candidate
     return bool(above and above["reconstructed"])
 
-def outline_lines(chunks):
-    """The indented outline an analyst compares with the document's own table of contents:
-    one line per section, with its range of references and the number of units in it."""
-    sections = {}
-    for chunk in chunks:
-        for depth in range(0 if not chunk.heading_chain else 1, len(chunk.heading_chain) + 1):
-            key = (chunk.source_file, chunk.heading_chain[:depth])     # the section and every section above it
-            entry = sections.setdefault(key, {"depth": depth, "first": chunk.ref, "count": 0})
-            entry["last"], entry["count"] = chunk.ref, entry["count"] + 1
-    lines = []
-    for (source_file, chain), entry in sections.items():
-        title = chain[-1] if chain else "(text before the first heading of %s)" % source_file
-        lines.append("%s%s   [%s to %s, %d units]" % ("    " * max(0, entry["depth"] - 1), title,
-                                                      entry["first"], entry["last"], entry["count"]))
-    return lines
 
 # ---------------------------------------------------------------- the two steps
 def atoms_of_file(data, found, file_name, state, repairs):
@@ -3199,7 +3151,7 @@ def read_corner(ctx, corner, input_key, label):
     options = ctx.options
     rules = load_tag_rules(options["inputs"].get("tag_rules"))
     notation = load_notation()
-    chunks, repairs, info_rows, outline, accounts, digests, read_as_what = [], [], [], [], [], [], []
+    chunks, repairs, info_rows, accounts, read_as_what = [], [], [], [], []
     root = (options["inputs"].get("roots") or {}).get(input_key)
     for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
         info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
@@ -3232,7 +3184,6 @@ def read_corner(ctx, corner, input_key, label):
         for tag in sorted(state.guided):
             info_rows.append({"group": label, "item": "%s: how it was read" % file_name,
                               "value": "<%s> was read as %s on the model's proposal." % (tag, state.guided[tag])})
-        digests.extend(state.digests)
         found_account = account(file_name, state.atoms, plain, state.dropped,
                                         marks_of_rendering(plain)
                                         + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING],
@@ -3255,7 +3206,6 @@ def read_corner(ctx, corner, input_key, label):
                               "Unrecognised tag '%s', %d times, read as %s%s. "
                               "It can be added to Inputs/tag_rules.yaml."
                               % (tag, seen["count"], seen.get("family") or seen.get("read_as"), because)})
-    outline.append({"corner": corner, "lines": outline_lines(chunks)})
     kind = "chunks_canon" if corner == "canon" else "chunks_doc"
     unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)
     messages = ["%d units read from %d file(s)." % (len(chunks), len(options["inputs"][input_key]))]
@@ -3271,13 +3221,12 @@ def read_corner(ctx, corner, input_key, label):
     if skipped:
         messages.append("%d file(s) in the folder were left out; Model_Package_Info lists them." % len(skipped))
     if unreadable:
-        messages.append("%d equation(s) could not be read and will be raised for a person." % unreadable)
+        messages.append("%d equation(s) could not be read." % unreadable)
     open_accounts = [one for one in accounts if not one["closed"]]
     if open_accounts:
         messages.append("The content account is open on %d file(s); Model_Package_Info says what could not be placed."
                         % len(open_accounts))
-    return StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows, "outline": outline,
-                              "content_accounts": accounts, "shape_digests": digests},
+    return StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows},
                              {"units": len(chunks), "repairs": len(repairs),
                               "content account open on": len(open_accounts)}, messages)
 
@@ -4143,15 +4092,6 @@ def roxygen_units(path, source_lines, parsed, context):
                 current["text"] = (current["text"] + "\n" + line).strip("\n")
         tags.append(current)
         tags = [tag for tag in tags if tag["tag"] != "description" or tag["text"].strip()]
-        formulas = []
-        text = "\n".join(block_lines)
-        for found in re.finditer(r"\\d?eqn(?=\{)", text):
-            latex, _ = braces_content(text, found.end())
-            try:
-                equation = read_equation("latex", latex_to_linear(latex), context["notation"])
-            except NotReadable as problem:
-                equation = EquationData("latex", latex, False, str(problem), None, "")
-            formulas.append(dict(to_plain(equation), line=first + 1 + text[:found.start()].count("\n")))
         follower = next((r for r in parsed if not isinstance(r, tuple) and r.line >= number + 1), None)
         documents = ""
         if follower is not None:
@@ -4161,7 +4101,7 @@ def roxygen_units(path, source_lines, parsed, context):
             elif follower.kind == "str":
                 documents = follower.value
         documents = documents or next((tag["text"].split()[0] for tag in tags if tag["tag"] == "name" and tag["text"]), "")
-        detail = {"documents_ref": None, "documents_name": documents, "tags": tuple(tags), "formulas": tuple(formulas)}
+        detail = {"documents_ref": None, "documents_name": documents, "tags": tuple(tags)}
         units.append(draft(KIND_ROXYGEN, path, (first + 1, number), documents, "\n".join(source_lines[first:number]),
                            roxygen=detail))
     return units
@@ -4306,29 +4246,7 @@ def table_of(value):
         return ["value"], [[cell_text(value)]], "single value"
     return None
 
-def column_kind(cells):
-    """Is a column made of numbers, of text, or of both?"""
-    values = [cell for cell in cells if cell != "NA"]
-    if values and all(re.fullmatch(r"-?\d+", cell) for cell in values):
-        return "integer"
-    if values and all(re.fullmatch(r"-?\d+(\.\d+)?|-?Inf", cell) for cell in values):
-        return "decimal"
-    return "logical" if values and all(cell in ("TRUE", "FALSE") for cell in values) else "text"
 
-def row_key_columns(header, rows, kinds):
-    """How a row is identified: real row names if present; otherwise the left-most single
-    column, or the smallest left-most combination of up to three non-numeric columns, whose
-    values are unique; otherwise the row number. The choice is shown in the workbook."""
-    import itertools
-    if header and header[0] in ("(row name)", "name", "path"):
-        return (header[0],)
-    candidates = [i for i, kind in enumerate(kinds) if kind in ("text", "logical")]
-    for size in (1, 2, 3):
-        for combination in itertools.combinations(candidates, size):
-            seen = {tuple(row[i] for i in combination) for row in rows}
-            if len(seen) == len(rows) and rows:
-                return tuple(header[i] for i in combination)
-    return ()
 
 def table_display(header, rows):
     """The one-cell display form: at most 50 rows, always below Excel's limit for one cell."""
@@ -4338,30 +4256,23 @@ def table_display(header, rows):
     text = "\n".join(shown)
     return text if len(text) < 30000 else text[:30000] + "\n... (cut here; the full table is in the audit files)"
 
-def data_object_unit(name, value, path, settings, decoded_by):
+def data_object_unit(name, value, path, settings):
     """One stored object to a unit and, when it is assessable, its full values."""
     found = table_of(value)
     if found is None:
         described = "An object of Python type %s after decoding; it has no tabular meaning, so it is described and not compared." % type(value).__name__
-        detail = {"object_name": name, "container_file": path, "r_class": (), "r_type": type(value).__name__, "dims": (),
-                  "attributes": {}, "columns": (), "row_keys": (), "n_cells": 0, "canonical_value_hash": "",
-                  "decoded_by": decoded_by, "assessable": False,
+        detail = {"object_name": name, "container_file": path, "dims": (), "columns": (), "assessable": False,
                   "not_assessable_reason": "it is not a table, a vector or a list of short values"}
         return draft(KIND_OBJECT, path, None, name, described, data=detail), None
     header, rows, shape = found
-    kinds = [column_kind([row[i] for row in rows]) for i in range(len(header))]
     n_cells = len(rows) * len(header)
-    value_hash = sha256_text("\x1f".join(header + [cell for row in rows for cell in row]))
     too_large = n_cells > settings["max_parameter_cells"] or len(header) > settings["max_parameter_columns"]
     reason = "too large to be a parameter table (%d cells); it looks like a dataset" % n_cells if too_large else None
-    keys = row_key_columns(header, rows, kinds)
-    detail = {"object_name": name, "container_file": path, "r_class": (shape,), "r_type": shape,
-              "dims": (len(rows), len(header)), "attributes": {}, "columns": tuple(zip(header, kinds)), "row_keys": keys,
-              "n_cells": n_cells, "canonical_value_hash": value_hash, "decoded_by": decoded_by,
+    detail = {"object_name": name, "container_file": path, "dims": (len(rows), len(header)), "columns": tuple(header),
               "assessable": not too_large, "not_assessable_reason": reason}
     kind = KIND_OBJECT if shape == "list" else KIND_TABLE
     unit = draft(kind, path, None, name, table_display(header, rows), data=detail)
-    values = None if too_large else {"object_name": name, "header": header, "rows": rows, "row_key": list(keys), "column_types": kinds}
+    values = None if too_large else {"object_name": name, "header": header, "rows": rows}
     return unit, values
 
 def decode_data_file(path, data, settings):
@@ -4394,7 +4305,7 @@ def decode_data_file(path, data, settings):
     objects = converted if container.startswith("several") and isinstance(converted, dict) else {stem: converted}
     units, tables = [], []
     for name in objects:
-        unit, values = data_object_unit(str(name), objects[name], path, settings, decoded_by)
+        unit, values = data_object_unit(str(name), objects[name], path, settings)
         units.append(unit)
         if values:
             tables.append(values)
@@ -4406,7 +4317,7 @@ def data_object_unit_from_rows(name, header, rows, path, settings):
     import pandas
     width = len(header)
     frame = pandas.DataFrame([list(row) + [""] * (width - len(row)) for row in rows], columns=header)
-    return data_object_unit(name, frame, path, settings, "the standard csv reader")
+    return data_object_unit(name, frame, path, settings)
 
 # ---------------------------------------------------------------- which code reads which data
 def data_reads(function_node, formals, data_names, data_files):
@@ -4583,7 +4494,7 @@ def read_package(ctx):
     def rank(path):
         top = path.split("/")[0].lower()
         return (order.index(top) if top in order else len(order), path)
-    chosen, digests, plan_notes = {}, [], []
+    chosen, plan_notes = {}, []
     drafts, facts = [], {"data": []}
     for path in sorted(files, key=rank):
         drafts.extend(file_units(path, files[path], context, facts, chosen.get(path, "")))
@@ -4638,7 +4549,7 @@ def read_package(ctx):
         messages.append("The content account of the package is open; Model_Package_Info says what could not be placed.")
     info["rows"].extend({"group": "The package", "item": "how it was read", "value": note} for note in plan_notes)
     return StepResult({"model_units": units, "parameter_tables": tables, "package_info": [info],
-                              "content_accounts": [account], "shape_digests": digests},
+                              },
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)
 
 # ---------------------------------------------------------------- the data flow of a package: the implementation map's backbone
@@ -4972,7 +4883,7 @@ class Dataflow:
     def table_node(self, name):
         table = self.tables[name]
         return self.node("data:%s" % name, "stored data", name, file=table["data"].get("container_file", ""), unit_ref=table["ref"],
-                         columns=[column for column, _ in table["data"].get("columns") or []])
+                         columns=list(table["data"].get("columns") or []))
 
     def call(self, node, env, masked, first=None):
         name = (node.get("functionName") or {}).get("lexeme", "")
@@ -5124,51 +5035,6 @@ def trace_dataflow(ctx):
                            ["Traced %d functions: %d values, %d calls, %d columns; %d gaps for the agents. Proposed final outputs: %s."
                             % (len(flow.functions), count("value"), count("call"), count("column"), len(gaps), ", ".join(roots["proposed"]) or "none")])
 
-def walk_dataflow(records, function):
-    """Everything the value a function returns is computed from, followed into every call with that call's
-    own arguments: (leaves, loops, functions reached). A parameter of a called function is what the call
-    passed it there, or its default; a parameter of the function the walk began in is a raw input. A
-    leaf is where the flow starts: such a parameter, a stored table, a file, a number, a column nothing
-    creates, or a name from outside the package. A function already being walked is a loop. Enforces: R2, R14"""
-    nodes = {r["node"]: r for r in records if r["record_type"] == "node"}
-    leaves, loops, reached, seen = set(), set(), {function}, set()
-    def visit(node_id, frames):
-        key = (node_id, tuple(frame for frame, _ in frames))
-        if key in seen:
-            return
-        seen.add(key)
-        node = nodes.get(node_id)
-        if node is None or node["kind"] in ("stored data", "file", "number", "outside"):
-            leaves.add(node_id)
-            return
-        if node["kind"] == "call":
-            if node["callee"] in (frame for frame, _ in frames):
-                loops.add(node_id)                           # a loop stops the descent, not what the call is given
-                for source in node["from"]:
-                    if source != "%s:return" % node["callee"]:
-                        visit(source, frames)
-                return
-            reached.add(node["callee"])
-            visit("%s:return" % node["callee"], frames + [(node["callee"], node["bindings"])])
-            return
-        if node["kind"] == "argument" and node["function"] == frames[-1][0]:
-            bound = frames[-1][1]
-            if bound is None:
-                leaves.add(node_id)                          # a parameter of the final output: a raw input
-                return
-            given = bound.get(node["name"], ["default"])
-            for source in (node.get("default_from") or [] if given == ["default"] else given):
-                visit(source, frames if given == ["default"] else frames[:-1])
-            if given == ["default"] and not node.get("default_from"):
-                leaves.add(node_id)
-            return
-        if node["kind"] == "column" and not node["from"]:
-            leaves.add(node_id)                              # a column no verb creates: it came in with the data
-            return
-        for source in node["from"]:
-            visit(source, frames)
-    visit("%s:return" % function, [(function, None)])
-    return leaves, loops, reached
 
 def decided_outputs(records, decisions):
     """The final outputs a run works from, and why each is one: code's proposal, then a person's decisions
@@ -5366,7 +5232,7 @@ def unit_fields(unit, units_by_ref, documented_by, lists, trivial):
     neutral = [word for call in code.get("calls", ()) for word in
                lists["patterns"]["function_words"].get((lists["function_map"]["r_functions"].get(call) or {}).get("neutral", ""), [])]
     data = unit.get("data") or {}
-    columns = " ".join(name for name, _ in data.get("columns", ()))
+    columns = " ".join(data.get("columns", ()))
     body = comments + " " + " ".join(code.get("strings", ())) + " " + (unit["text"] if data else "")
     symbols = [normalise_symbol(s) for s in tuple(code.get("symbols_read", ())) + tuple(code.get("symbols_written", ()))]
     return {"fields": {"name": split_words(unit["name"] + " " + unit.get("inside", "") + " " + columns, lists["stop"]),
@@ -5669,12 +5535,6 @@ def reason_text(signals, details):
 
 
 
-def verbatim(words, text):
-    """The words exactly as the text writes them, found without regard to upper or lower case or the
-    width of a space; None where the text does not hold them. What is kept is always the text's."""
-    pattern = r"(?<![A-Za-z0-9])" + r"\s+".join(re.escape(w) for w in (words or "").split()) + r"(?![A-Za-z0-9])"
-    found = re.search(pattern, text or "", re.I) if (words or "").strip() else None
-    return found.group(0) if found else None
 
 
 
@@ -5686,148 +5546,10 @@ def verbatim(words, text):
 # word and use only names that code holds. Each turn is a question of its own, recorded, so a run replays
 # without a model. The Namer gives each step a plain name, outside the accounting. The Auditor is code.
 # The model chooses; code executes. Enforces: R3, R4, R5
-MAP_ACTIONS = ("open_unit", "statements_setting", "callers_of", "return_of", "columns_of", "declare_edge", "declare_input", "done", "give_up")
-INPUT_KINDS = ("argument", "stored data", "file", "hard-coded number", "from outside")
 
-class MapTools:
-    """What the Tracer can ask to see, answered by code from the traced flow and the units."""
-    def __init__(self, flow, units):
-        self.nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
-        self.units = {u["ref"]: u for u in units}
-        self.functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-        self.tables = {r["name"]: r for r in self.nodes.values() if r["kind"] == "stored data"}
 
-    def label(self, node_id):
-        return self.nodes.get(node_id, {}).get("name", node_id)
 
-    def sources(self, record):
-        return ", ".join(self.label(s) for s in record["from"]) or "nothing the tool could see"
 
-    def show(self, action, args):
-        if action == "open_unit":
-            return cut_text(self.units[args["ref"]]["text"], 3000)
-        if action == "statements_setting":
-            found = [r for r in self.nodes.values() if r["name"] == args["name"] and r["kind"] in ("value", "column")
-                     and (r.get("function") == args["function"] or args["function"] in r.get("created_in", []))]
-            return "\n".join("line %d: %s  (computed from: %s)" % (r["line"], r["code"], self.sources(r)) for r in found) or \
-                "No statement of %s sets %s that the tool could see." % (args["function"], args["name"])
-        if action == "callers_of":
-            calls = [r for r in self.nodes.values() if r["kind"] == "call" and r["callee"] == args["function"]]
-            return "\n".join("in %s, line %d: %s  (%s)" % (r["function"], r["line"], r["code"], "; ".join(
-                "%s = %s" % (formal, ", ".join(self.label(s) for s in given)) for formal, given in r["bindings"].items())) for r in calls) or \
-                "Nothing in the package calls %s." % args["function"]
-        if action == "return_of":
-            record = self.nodes.get("%s:return" % args["function"])
-            return "%s returns what is computed from: %s" % (args["function"], self.sources(record)) if record else "The tool could not read %s." % args["function"]
-        if action == "columns_of":
-            return "%s has the columns: %s" % (args["table"], ", ".join(self.tables[args["table"]].get("columns") or []))
-        return "Recorded."
-
-def trace_question(state, tools, settings):
-    """One turn of the Tracer: the gap, what the tool knows of its function, the names it may use, and
-    every action taken so far with what it showed."""
-    gap, function = state["gap"], state["gap"]["function"]
-    known = [r for r in tools.nodes.values() if r.get("function") == function and r["kind"] in ("value", "argument", "return")]
-    listing = "\n".join("  %s (%s): computed from %s" % (r["name"], r["kind"], tools.sources(r)) for r in known)
-    place = ("function %s (%s), line %d: %s\ncode at this place: %s\n\nTHE WHOLE FUNCTION\n%s\n\n"
-             "WHAT THE TOOL KNOWS OF THIS FUNCTION\n%s\n\nTHE PACKAGE\nfunctions: %s\nstored tables: %s") % (
-        function, gap["function_ref"], gap["line"], gap["why"], gap["code"], tools.functions[function]["text"], listing or "  nothing",
-        ", ".join("%s (%s)" % (name, unit["ref"]) for name, unit in sorted(tools.functions.items())), ", ".join(sorted(tools.tables)) or "none")
-    history = "\n".join("%d. %s %s\n   the tool showed: %s" % (number, hop["action"], json.dumps(hop["args"], sort_keys=True), hop["shown"])
-                        for number, hop in enumerate(state["hops"], start=1)) or "Nothing yet: this is the first action."
-    texts = [tools.functions[function]["text"]] + [tools.units[ref]["text"] for ref in state["opened"]]
-    # a block needs its label: the assembler drops a block without one, which sent the model a question with no gap in it
-    return narrow_question("trace-gap", gap["function_ref"], [("THE PLACE THE TOOL COULD NOT FOLLOW", place), ("WHAT HAPPENED SO FAR", history)], settings,
-                           more={"texts": texts, "refs": sorted(tools.units), "functions": sorted(tools.functions),
-                                 "tables": sorted(tools.tables), "taken": [[hop["action"], hop["args"]] for hop in state["hops"]]})
-
-def validate_trace(question, answer):
-    """One action of the Tracer. It must be one of the list, with the arguments that action takes; every
-    unit, function and table must be the package's; a quote must be in the code shown word for word and
-    must hold every name the action declares, so no link rests on a name the model made up; and no
-    action may be taken twice. Enforces: R3"""
-    action, args = answer.get("action"), answer.get("args")
-    if action not in MAP_ACTIONS or not isinstance(args, dict):
-        raise Rejected(REJECTION_REASONS[0])
-    if [action, args] in question["taken"]:
-        raise Rejected(REJECTION_REASONS[5])
-    text = lambda key: args.get(key) if isinstance(args.get(key), str) and args.get(key).strip() else None
-    if action == "open_unit" and args.get("ref") not in question["refs"]:
-        raise Rejected(REJECTION_REASONS[1])
-    if action in ("statements_setting", "callers_of", "return_of") and args.get("function") not in question["functions"]:
-        raise Rejected(REJECTION_REASONS[1])
-    if action == "statements_setting" and not text("name"):
-        raise Rejected(REJECTION_REASONS[0])
-    if action == "columns_of" and args.get("table") not in question["tables"]:
-        raise Rejected(REJECTION_REASONS[1])
-    if action in ("declare_edge", "declare_input"):
-        names = [args.get("value")] + list(args.get("from") or []) if action == "declare_edge" else [args.get("name")]
-        if not text("quote") or not all(isinstance(n, str) and n.strip() for n in names) or \
-           (action == "declare_edge" and not args.get("from")) or (action == "declare_input" and args.get("kind") not in INPUT_KINDS):
-            raise Rejected(REJECTION_REASONS[0])
-        squash = lambda words: re.sub(r"\s+", " ", words).strip()
-        if not any(squash(args["quote"]) in squash(code) for code in question["texts"]):
-            raise Rejected(REJECTION_REASONS[2])
-        if not all(re.search(r"(?<![\w.$])%s(?![\w.])" % re.escape(n.strip()), args["quote"]) for n in names):
-            raise Rejected(REJECTION_REASONS[1])
-    if action in ("done", "give_up") and not text("because"):
-        raise Rejected(REJECTION_REASONS[0])
-
-def map_implementation(ctx):
-    """Step 07d, map-implementation, the skill: the Tracer resolves the gaps on the path from each final
-    output, turn by turn, within map_hops_max turns a gap and map_calls_max questions in all; the
-    Auditor, code alone, says what is traced, what is open and what no output
-    reaches. Without a model the gaps stay named and the steps unnamed. Enforces: R2, R3, R4, R5, R14"""
-    flow, units, settings = ctx.read("dataflow"), ctx.read("model_units"), ctx.settings
-    if not flow:
-        return StepResult(messages=["No data flow was traced, so there is nothing to map."])
-    outputs, _, not_reached = decided_outputs(flow, {})
-    reached = set()
-    for output in outputs:
-        reached |= walk_dataflow(flow, output)[2]
-    tools, gaps = MapTools(flow, units), [g for g in flow if g["record_type"] == "gap"]
-    states = [{"gap": g, "hops": [], "edges": [], "inputs": [], "status": "", "opened": []} for g in gaps if g["function"] in reached]
-    budget, asked = int(settings["map_calls_max"]), 0
-    use_ai = ctx.ask is not None and settings["map_with_ai"]
-    for _ in range(int(settings["map_hops_max"]) if use_ai else 0):
-        turn = [state for state in states if not state["status"]][:max(0, budget - asked)]
-        if not turn:
-            break
-        questions = [trace_question(state, tools, settings) for state in turn]
-        asked += len(questions)
-        answers = ctx.ask([q for q in questions if not q["too_large"]])
-        for question, state in zip(questions, turn):
-            final = answers.get(question["question_id"])
-            if final is None or final["outcome"] != "accepted":
-                state["status"] = "the AI's answer could not be used: %s" % (final or {}).get("outcome", "not asked, the question was too large").split(": ", 1)[-1]
-                continue
-            action, args = final["answer"]["action"], final["answer"]["args"]
-            shown = tools.show(action, args)
-            state["hops"].append({"action": action, "args": args, "shown": cut_text(shown, 600), "question_id": question["question_id"]})
-            if action == "open_unit" and args["ref"] not in state["opened"]:
-                state["opened"].append(args["ref"])
-            elif action == "declare_edge":
-                state["edges"].append({"value": args["value"], "from": list(args["from"]), "quote": args["quote"]})
-            elif action == "declare_input":
-                state["inputs"].append({"name": args["name"], "kind": args["kind"], "quote": args["quote"]})
-            elif action == "done":
-                state["status"] = "traced: %s" % args["because"]
-            elif action == "give_up":
-                state["status"] = "the code cannot tell: %s" % args["because"]
-    for state in states:
-        state["status"] = state["status"] or ("not asked: no model" if not use_ai else "stopped at the limit of %d turns" % int(settings["map_hops_max"])
-                                              if len(state["hops"]) >= int(settings["map_hops_max"]) else "stopped at the limit of %d questions" % budget)
-    traced = [s for s in states if s["status"].startswith("traced")]
-    audit = {"final_outputs": outputs, "functions reached": sorted(reached), "not reached": not_reached,
-             "gaps": len(gaps), "gaps on the path": len(states), "gaps traced": len(traced),
-             "gaps open": [{"function": s["gap"]["function"], "line": s["gap"]["line"], "status": s["status"]} for s in states if s not in traced],
-             "gaps not reached": [{"function": g["function"], "line": g["line"], "why": g["why"]} for g in gaps if g["function"] not in reached],
-             "loops": sorted({loop for output in outputs for loop in walk_dataflow(flow, output)[1]}), "questions": asked}
-    traces = [{"gap": s["gap"], "hops": s["hops"], "edges": s["edges"], "inputs": s["inputs"], "status": s["status"]} for s in states]
-    return StepResult({"map_traces": traces, "map_audit": [audit]},
-                           {"gaps on the path": len(states), "gaps traced": len(traced)},
-                           ["Final outputs %s: %d gaps on the path, %d traced by the AI; %d gaps in functions no output reaches."
-                            % (", ".join(outputs), len(states), len(traced), len(audit["gaps not reached"]))])
 
 # ---------------------------------------------------------------- step 05: build-graph
 def structural_edges(units, provenance):
@@ -6158,9 +5880,6 @@ def assemble_question(question_type, unit_ref, blocks, passages, prompt, setting
     question["too_large"] = question["estimated_tokens"] > prompt_budget(settings, prompt["system"])
     return question
 
-def narrow_question(question_type, unit_ref, blocks, settings, passages=(), more=None):
-    """A question with one prompt of its own, assembled within the token budget as every other is."""
-    return assemble_question(question_type, unit_ref, blocks, list(passages), load_prompt(question_type), settings, more=more)
 
 def judge_question(source, corner, candidates, world, settings):
     """The judge question of one unit (or documentation passage) and one target corner."""
@@ -6242,9 +5961,7 @@ def validate_answer(question, text):
             answer = None
         if not isinstance(answer, dict):
             raise Rejected(REJECTION_REASONS[0])
-        if question["question_type"] == "trace-gap":
-            validate_trace(question, answer)
-        elif question["question_type"] in JUDGE_RELATIONS:
+        if question["question_type"] in JUDGE_RELATIONS:
             validate_judge(question, answer)
         else:                                                  # a question the tool no longer asks
             raise Rejected(REJECTION_REASONS[0])
@@ -6291,7 +6008,7 @@ def judge_links(ctx):
         else:
             questions[question["question_id"]] = question
     answers = ctx.ask(list(questions.values())) if questions else {}
-    edges, problems, records, doc_judgements = [], list(skipped), [], []
+    edges, problems, records = [], list(skipped), []
     for question_id in sorted(questions):
         question, final = questions[question_id], answers.get(question_id)
         unit_ref, corner = question["unit_ref"], question["target_corner"]
@@ -6303,8 +6020,6 @@ def judge_links(ctx):
                             "note": "%d passages were shown to the AI. Its answer could not be used: %s." % (shown, reason)})
             continue
         answer = final["answer"]
-        if answer.get("states_nothing_checkable"):
-            doc_judgements.append({"unit_ref": unit_ref, "states_nothing_checkable": True, "question_id": question_id})
         accepted = [m for m in answer["matches"] if m["letter"] not in question["planted"]]
         reasons = {c["target_ref"]: c["reason"] for c in grouped[(unit_ref, corner)]}
         for match in accepted:
@@ -6323,8 +6038,7 @@ def judge_links(ctx):
             else "the AI only saw passages on the same topic")
         records.append({"unit_ref": unit_ref, "target_corner": corner, "search_pass": search_pass, "note": note})
     ledger = ledger_records(ctx.read("graph_ledger"), edges)
-    return StepResult({"graph_ledger": ledger, "judgement_problems": problems, "search_records": records,
-                              "doc_judgements": doc_judgements},
+    return StepResult({"graph_ledger": ledger, "judgement_problems": problems, "search_records": records},
                              {"questions": len(questions), "links recorded": len(edges), "answers not usable": len(problems) - len(skipped),
                               "questions too large to ask": len(skipped)}, [])
 
@@ -6350,8 +6064,7 @@ class RunPaused(Exception):
 DEFAULT_SETTINGS = {
     "k_candidates": 12, "concurrency_limit": 4, "token_cap": 40000, "answer_reserve": 1500,
     "thinking_reserve": 0, "safety_margin": 0.15, "prompt_target_tokens": 6000,
-    "max_attempts": 3, "breaker_after_failures": 8, "retry_wait_seconds": 2.0,
-    "token_lifetime_minutes": 14.0, "token_wait": "wait", "foreground_minutes": 600.0,
+    "max_attempts": 3, "breaker_after_failures": 8, "retry_wait_seconds": 2.0, "token_wait": "wait", "foreground_minutes": 600.0,
     "sync_every_calls": 100, "judge_supporting_code": False,
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "system_prompt_prefix": "", "strip_patterns": [r"(?s)<think>.*?</think>", r"(?s)<thought>.*?</thought>",
@@ -6359,8 +6072,7 @@ DEFAULT_SETTINGS = {
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
-    "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"],
-    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
+    "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"], "map_granularity": "statement", "map_rows_max": 5000}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -6883,26 +6595,6 @@ def make_asker(chat, live, store, settings, validate, state=None, sleep=time.sle
     ask.state = state
     return ask
 
-def replay_chat(call_records):
-    """A chat() that answers from the recorded answers of an earlier run. Running the
-    pipeline with it must reproduce the same graph version id, statuses and items, which
-    is what reproducibility means for a model that samples its answers. Enforces: R5"""
-    recorded = {}
-    for record in call_records:
-        recorded.setdefault((record["system_prompt"], record["main_prompt"]), []).append(record["response_text"])
-    position = {}
-    lock = threading.Lock()
-
-    def chat(system_prompt, main_prompt):
-        key = (system_prompt, main_prompt)
-        with lock:
-            index = position.get(key, 0)
-            position[key] = index + 1
-        answers = recorded.get(key)
-        if not answers:
-            return {"status": "no recorded answer for this prompt"}
-        return {"answer": answers[min(index, len(answers) - 1)]}
-    return chat
 
 # ---------------------------------------------------------------- the pipeline runner
 CHAT_STEPS = ("read-inputs", "read-with-ai", "link-units")   # the consolidated steps that may ask the model
@@ -7087,11 +6779,6 @@ CUT_NOTE = " ... (cut here; the full text is in the audit files)"
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
 
-def quoted(text, citation=""):
-    """Text taken from an input or from the AI is always shown visibly quoted, with its
-    citation. The wording rules apply to the tool's own words, not to quotations. Enforces: R1"""
-    inner = (text or "").replace("\u201c", '"').replace("\u201d", '"')
-    return "\u201c%s\u201d%s" % (inner, " (%s)" % citation if citation else "")
 
 def plain_cell(value, input_text, store):
     """The last gate before a cell is written. the tool's own words must be free of Python
@@ -7724,9 +7411,6 @@ def build_map(ctx):
     each other, and the data flow of the package. Enforces: R2, R4, R14"""
     return combine(ctx, build_graph, trace_dataflow)
 
-def read_with_ai(ctx):
-    """Step 04, read-with-ai: the map's agents closing the gaps code named. Enforces: R3, R5"""
-    return combine(ctx, map_implementation)
 
 def link_units(ctx):
     """Step 06, link-units: two passes of search and judgement - candidates by code, then the model's
@@ -7741,13 +7425,11 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "read_package": read_package,
     "build_graph": build_graph,
     "trace_dataflow": trace_dataflow,
-    "map_implementation": map_implementation,
     "find_candidates": find_candidates,
     "judge_links": judge_links,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,
     "build_map": build_map,
-    "read_with_ai": read_with_ai,
     "link_units": link_units}
 
 # ---------------------------------------------------------------- the notebook: four cells, each one call

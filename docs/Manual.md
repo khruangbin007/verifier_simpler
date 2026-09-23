@@ -143,7 +143,7 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 |---|---|---|
 | **cell 1** | `verifier.setup(dbutils)`: makes the widgets, installs a package only if one the engine imports is missing, gets flowR ready, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
 | **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | when the gateway or your id changes |
-| **cell 3** | `verifier.review()`: reads every input file, maps how the model computes what it returns, asks your model to close the gaps code could not follow, and links the passages of the three inputs. Prints what each step did | after a token expires, a cluster restarts, or you add an input: finished steps are never repeated |
+| **cell 3** | `verifier.review()`: reads every input file, maps how the model computes what it returns, and links the passages of the three inputs, your model judging each link. Prints what each step did | after a token expires, a cluster restarts, or you add an input: finished steps are never repeated |
 | **cell 4** | `verifier.verify()`: checks the finished run folder against its own record | after any run |
 
 **The widgets.** Eight: the endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the name recorded against the run; the model id (04) and project date (05); a package index (06), used only if a package must be installed; how many calls at once (07); and the token cap (08). Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
@@ -289,29 +289,28 @@ A called function is entered with the arguments that call gives it, so what it c
 
 ## 14. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the search and the judgement of every link, the map's agents, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the search and the judgement of every link, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
 ## 15. The pipeline
 
-Five steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, and only a function the engine offers may be named.
+Four steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, and only a function the engine offers may be named.
 
 | Step | Name | What it does |
 |---|---|---|
 | 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
 | 03 | build-map | by code alone: the graph, and the data flow of the package (read by flowR) |
-| 04 | read-with-ai | the map's agents closing the gaps code named |
-| 05 | link-units | two passes of search and judgement: candidates by code, then the model's judgement on each |
+| 04 | link-units | two passes of search and judgement: candidates by code, then the model's judgement on each |
 
-**How the data flow is read.** The package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3). flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places left as gaps for the model's agents. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
+**How the data flow is read.** The package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3). flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places code cannot follow, recorded as gaps. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
 
 A step that carries out several parts keeps them in order, and a later part reads what the earlier ones have just recorded, as it would if each were still a step of its own.
 
 ## 16. How the model is used, and held
 
-The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each; and, for the map's agents, which of a fixed list of actions to take next, quoting the code each link rests on. Every answer is validated by `verifier.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit unlinked. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
+The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each. Every answer is validated by `verifier.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit unlinked. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
 
-Every exchange is recorded, and `verifier.replay_chat` answers from the record, so that a run can be reproduced without a model and its graph version compared.
+Every exchange is recorded in `_audit/Audit_Log.xlsx`, prompt and reply.
 
 ## 17. Reading, and the content account
 
@@ -341,7 +340,6 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `max_attempts` | 3 | Attempts per question before it ends as failed. |
 | `breaker_after_failures` | 8 | Failed calls in a row after which the run pauses itself. |
 | `retry_wait_seconds` | 2.0 | Waiting time before a retry; it grows with every attempt. |
-| `token_lifetime_minutes` | 14.0 | Age at which a token is treated as run out and a fresh one is awaited. |
 | `token_wait` | wait | wait: workers wait for a fresh token (modes A and B). stop: the run stops and is resumed (mode C). |
 | `foreground_minutes` | 0.0 | Time box of a foreground run; 0 means none. |
 | `sync_every_calls` | 100 | Call records are written and copied to the Workspace after this many questions. |
@@ -373,7 +371,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 | `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use. |
 
-`map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting. `map_hops_max` (default 8): the most turns the Tracer takes on one gap. `map_calls_max` (default 200): the most questions the map's agents ask in one run, the Tracer's and the Namer's together. `map_with_ai` (default true): whether the map's agents are asked at all.
+`map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting.
 
 ## 21. Extending the tool safely
 
