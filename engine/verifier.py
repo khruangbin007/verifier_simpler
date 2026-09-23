@@ -8,10 +8,10 @@ up as questions for a person. One deliverable: Output.xlsx. Everything a run doe
 replays from its record without a model.
 
 The file is one piece of engineering in four parts, in dependency order:
-  the contracts, the prompts, the reading floor and the front door
+  the contracts, the reading floor and the front door
   reading the methodology, the documentation and the model package
-  what corresponds to what, what differs, and the map's agents
-  the run: its folder, its record, the model calls and Output.xlsx
+  the map: how the model computes what it returns
+  the run: its folder, its record and Output.xlsx
 """
 import bz2
 import concurrent.futures
@@ -55,15 +55,13 @@ from xml.sax.saxutils import escape
 
 
 # ================================================================================================
-# the contracts, the prompts, the reading floor and the front door
-# ================================================================================================
+# the contracts, the reading floor and the front door
 # ================================================================================================
 # ---------------------------------------------------------------- the contracts: what every record is, and the words the tool may use
 ENGINE_VERSION = "0.0.3"
 GENESIS_HASH = "0" * 64
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
-LINKING_RELATIONS = ("Implements", "Partly implements", "Differs from", "Describes", "Consistent with")
 HOW_PARSED = "Parsed from the files"
 NOT_RUN_YET = "Not run yet"
 
@@ -101,28 +99,26 @@ class TableData:
 class EquationData:
     """An equation as found: its source form, whether the tool could read it, and its tree."""
     source_form: str = ""; linear: str = ""; readable: bool = False
-    not_readable_reason: str = ""; expression: Optional[dict] = None; image_sha256: str = ""
+    not_readable_reason: str = ""; image_sha256: str = ""
 
 @dataclass(frozen=True)
 class Chunk:
     """One citable unit of a document: a paragraph, a table, a figure or an equation."""
     ref: str; corner: str; source_file: str; kind: str; level: int; heading_chain: tuple
-    numbering: str; para_no: Optional[int]; text: str; locator: str; content_hash: str
+    numbering: str; text: str; locator: str; content_hash: str
     table: Optional[TableData] = None; equation: Optional[EquationData] = None
-    refs_out: tuple = (); checkable: Optional[bool] = None; numbering_reconstructed: bool = False
+    refs_out: tuple = (); numbering_reconstructed: bool = False
     caption: str = ""; not_read_reason: str = ""; para_label: str = ""   # para_label: the number the document itself gives ("36.")
 
 @dataclass(frozen=True)
 class CodeDetail:
     """What the R reader learned about a function or a statement, without running it."""
-    formals: tuple = (); calls: tuple = (); symbols_read: tuple = (); symbols_written: tuple = ()
-    numbers: tuple = (); strings: tuple = (); exported: Optional[bool] = None
-    expression: Optional[dict] = None; reads_data: tuple = (); plumbing: bool = False
-    plumbing_reason: str = ""; composed: Optional[dict] = None; not_composed_reason: str = ""
+    formals: tuple = (); calls: tuple = (); symbols_written: tuple = (); exported: Optional[bool] = None
+    reads_data: tuple = ()
 
 @dataclass(frozen=True)
 class ParameterDataDetail:
-    """The profile of one stored data object. The cell values live in parameter_tables."""
+    """The profile of one stored data object."""
     object_name: str; container_file: str; dims: tuple = (); columns: tuple = ()
     assessable: bool = True; not_assessable_reason: Optional[str] = None
 
@@ -150,7 +146,7 @@ class ModelUnit:
 class Provenance:
     """Which run and step produced a record, at which version, and from which AI exchange if any."""
     run_id: str; step_id: str; step: str; step_version: str; engine_version: str = ENGINE_VERSION
-    prompt_hash: Optional[str] = None; response_hash: Optional[str] = None; created_at: str = ""
+    prompt_hash: Optional[str] = None; response_hash: Optional[str] = None
 
 @dataclass(frozen=True)
 class Edge:
@@ -362,8 +358,6 @@ class Expr:
     span: Optional[tuple] = None
 
 
-
-
 _INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
 
 def expr_to_text(expr, parent_rank=0):
@@ -392,21 +386,12 @@ def expr_to_text(expr, parent_rank=0):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- the reading floor
-# ---------------------------------------------------------------- prompt machinery: one question, its budget and its id
 
 # ---------------------------------------------------------------- the prompts
 # Every question the tool asks, as the model sees it: a version line, the system half, the main half
 # with [[UNIT]] and similar places the question builder fills. The text is exact - a question's id is
 # the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
 # version and asks new questions. Enforces: R3, R5, R9
-
-
-
-
-
-
-# ---------------------------------------------------------------- answer machinery: reading a reply, strictly
 
 
 # ---------------------------------------------------------------- element helpers
@@ -948,17 +933,8 @@ def account_of_package(files, units, refused, is_text_file):
 # Enforces: R13
 
 
-
-
-
-
-
 # Families discovery does not guess at: it counts the widths of the rows and refuses to call
 # something a table unless the counting holds up. A proposal may not overturn them.
-
-
-# ---------------------------------------------------------------- asking about the shape of a file
-
 
 
 # ---------------------------------------------------------------- asking how to read a package
@@ -970,13 +946,11 @@ def account_of_package(files, units, refused, is_text_file):
 # ABOUT the code, not a parse OF it. Enforces: R7, R13
 
 
-
-
-
-
-
 # ================================================================================================
+# ---------------------------------------------------------------- the reading floor
+
 # ---------------------------------------------------------------- the front door: what a file is, and how it becomes markup
+
 # ---------------------------------------------------------------- what a file is
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")
@@ -1318,7 +1292,6 @@ def latex_to_markup(text):
     return "<document>%s</document>" % "".join(out)
 
 
-
 def svg_texts(root):
     """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
     a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
@@ -1486,7 +1459,6 @@ def list_input_files(inputs_dir):
 # ================================================================================================
 # reading the methodology, the documentation and the model package
 # ================================================================================================
-# ================================================================================================
 # ---------------------------------------------------------------- the methodology and the documentation, read into units
 class NotReadable(Exception):
     """A formula or a file that the tool cannot read. The message is a plain reason for the analyst."""
@@ -1502,7 +1474,7 @@ _TOKEN_RE = re.compile(
 
 # ---------------------------------------------------------------- reference data of the reader
 # The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
-# schemes, the phrases that make a statement checkable. An analyst's Inputs/tag_rules.yaml is laid
+# schemes. An analyst's Inputs/tag_rules.yaml is laid
 # over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
 # caller that changes the rules it was given changes only its own copy. Enforces: R9
 TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
@@ -1543,10 +1515,6 @@ numbering_schemes:
   - {name: bracket_letter, pattern: '^\(([a-z])\)(?=\s|$)'}
 # Words that start a cross-reference as written ("see Table 3", "section 4.2").
 cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
-# A documentation passage "states something checkable" when it holds a number, a formula,
-checkable_phrases: [is calculated, is computed, is set to, equals, is defined as, is floored, is capped,
-                    at least, at most, not exceed, no less than, no more than, minimum, maximum,
-                    must, shall, is applied, are applied, is multiplied, is divided, rounded, per cent, percent]
 '''
 
 # The notation of R's mathematical functions: how each is written in the tool's linear notation and
@@ -1601,11 +1569,6 @@ domains:
   log1p:          {argument: [-1, null]}
   sqrt:           {argument: [0, null]}
   exp:            {argument: [null, 50]}
-# plumbing: calls that mark a statement as supporting code by syntax (no formula in it).
-plumbing_calls: [stop, warning, message, stopifnot, print, cat, library, require, requireNamespace,
-                 missing, is.null, is.numeric, is.character, is.na, match.arg, invisible, on.exit,
-                 tryCatch, suppressWarnings, inherits, class, structure, names, length, nrow, ncol,
-                 seq_len, seq_along, vapply, lapply, sapply, data, utils::data, format, paste, paste0, sprintf]
 '''
 
 def load_notation():
@@ -1778,12 +1741,12 @@ def read_equation(source_form, linear, notation, image_sha256=""):
     linear = normalise_text(linear)
     if not linear:
         reason = UNDECIDED_REASONS[0] if image_sha256 or source_form == "image" else "no formula text was found"
-        return EquationData(source_form, "", False, reason, None, image_sha256)
+        return EquationData(source_form, "", False, reason, image_sha256)
     try:
         tree = parse_formula(linear, notation, implicit_product=source_form in ("omml", "mathml", "latex"))
     except NotReadable as problem:
-        return EquationData(source_form, linear, False, str(problem), None, image_sha256)
-    return EquationData(source_form, expr_to_text(tree), True, "", to_plain(tree), image_sha256)
+        return EquationData(source_form, linear, False, str(problem), image_sha256)
+    return EquationData(source_form, expr_to_text(tree), True, "", image_sha256)
 
 _INLINE_FORMULA_RE = re.compile(r"(?<![\w.])([^\W\d_][\w.\[\]{}]*)\s*=\s*([^=;]+)")
 
@@ -1800,7 +1763,7 @@ def inline_formula(text, notation):
             tree = parse_formula("%s = %s" % (match.group(1), right), notation)
         except NotReadable:
             continue
-        return EquationData("inline", expr_to_text(tree), True, "", to_plain(tree), "")
+        return EquationData("inline", expr_to_text(tree), True, "", "")
     return None
 
 # ---------------------------------------------------------------- equation markup -> linear notation
@@ -2339,8 +2302,8 @@ OCR_NOTE = "Words read from the picture by OCR (a machine reading: check it agai
 def read_picture(data, state):
     """The words in a picture, read by OCR, as lines to show under the Figure; "" when there are
     none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside
-    the package, so nothing is fetched when it runs). The words help a person and the search to
-    find the picture. They are never evidence: a machine misreads digits, so a Figure still ends
+    the package, so nothing is fetched when it runs). The words help a person find the
+    picture. They are never evidence: a machine misreads digits, so a Figure still ends
     "for manual review" whatever was read. A missing reader is said once per file. Enforces: R2"""
     if not PICTURE_READER:
         try:
@@ -2477,7 +2440,7 @@ def equation_block(element, here, state):
             linear = latex_to_linear(written) if "\\" in written else written
             equation = read_equation("latex" if "\\" in written else "inline", linear, state.notation)
         except NotReadable as problem:
-            equation = EquationData("latex", written, False, str(problem), None, "")
+            equation = EquationData("latex", written, False, str(problem), "")
     label = picture.get("alt") if picture is not None and picture.get("alt") else ""
     text = equation.linear or label or "Equation shown as a picture"
     return new_block("equation", text, here, equation=equation)
@@ -2774,7 +2737,7 @@ def blocks_from_pdf(data, file_name, state):
             elif title:
                 kind, more = "heading", {"level_hint": None if numbered else -int(round(entry["size"] * 2)) + (0 if entry["size"] > body_size * 1.08 else 1)}
             elif dense > 0.25 and len(text.split()) <= 12:
-                kind, more = "equation", {"equation": EquationData("pdf", text, False, UNDECIDED_REASONS[1], None, "")}
+                kind, more = "equation", {"equation": EquationData("pdf", text, False, UNDECIDED_REASONS[1], "")}
             elif bullet:
                 kind, more, text = "list_item", {"marker": LIST_MARKER}, text[bullet.end():]
             elif (near and open_block["block"]["type"] in ("paragraph", "list_item")) or over_the_page:
@@ -2814,16 +2777,6 @@ def cross_references(text, rules):
     found = re.findall(r"\b((?:%s)\s+(?:[A-Z]\b|\d+(?:\.\d+)*[a-z]?|\([a-z0-9]+\)))" % labels, text or "", re.IGNORECASE)
     return tuple(dict.fromkeys(normalise_text(reference) for reference in found))
 
-def states_something_checkable(block, rules):
-    """Does a documentation passage state something that can be checked against the methodology
-    or the code: a number, a formula, a table, or a phrase from the rules file?"""
-    if block["type"] in ("table", "equation"):
-        return True
-    if block["type"] == "figure" or block["not_read_reason"]:
-        return None
-    lowered = block["text"].lower()
-    return bool(find_numbers(block["text"]) or "=" in lowered or
-                any(phrase in lowered for phrase in rules["checkable_phrases"]))
 
 KIND_OF_BLOCK = {"paragraph": "Paragraph", "list_item": "Paragraph", "table": "Table", "figure": "Figure",
                  "equation": "Equation"}
@@ -2851,7 +2804,7 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
     """Blocks to chunks. A heading is not a chunk of its own: it becomes part of the heading
     chain of everything below it. Paragraph numbers restart under every heading. Enforces: R2, R4"""
     prefix = "C" if corner == "canon" else "D"
-    chunks, chain, levels, paragraph_number, section_numbering = [], [], [], 0, ""
+    chunks, chain, levels, section_numbering = [], [], [], ""
     carried, empty = [], []                          # (heading block, anything under it yet), and those with nothing
     for block in fold_lists(infer_levels(blocks, state.rules)):
         if block["type"] == "heading":
@@ -2868,7 +2821,7 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             levels.append(block["level"])
             chain.append(block["text"])
             carried.append((block, False))
-            paragraph_number, section_numbering = 0, block["numbering"]
+            section_numbering = block["numbering"]
             # The number belongs to the heading whether the document wrote it (num="1.") or Word
             # left it to be counted back. Without it a citation to "section 2" can be resolved
             # against nothing, and the number itself reaches no unit at all. Enforces: R13
@@ -2878,18 +2831,14 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
         carried = [(was, True) for was, _ in carried]
         kind = KIND_OF_BLOCK[block["type"]]
         text = block.get("display") or block["text"]
-        if kind == "Paragraph" and not block["not_read_reason"]:
-            paragraph_number += 1
         equation = block["equation"]
         if kind == "Paragraph" and equation is None:
             equation = inline_formula(text, state.notation)
         chunks.append(Chunk(
             ref=make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
             kind=kind, level=levels[-1] if levels else 0, heading_chain=tuple(chain), numbering=section_numbering,
-            para_no=paragraph_number if kind == "Paragraph" and not block["not_read_reason"] else None,
             text=text, locator=block["locator"], content_hash=content_hash(text + block.get("image_sha256", "")),
             table=block["table"], equation=equation, refs_out=cross_references(text + " " + block["caption"], state.rules),
-            checkable=states_something_checkable(block, state.rules) if corner == "doc" else None,
             numbering_reconstructed=bool(chain) and block_is_under_reconstructed(blocks, block),
             caption=block["caption"], not_read_reason=block["not_read_reason"],
             para_label=block["numbering"] if kind == "Paragraph" else ""))
@@ -2901,10 +2850,9 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
         chunks.append(Chunk(
             ref=make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
             kind="Paragraph", level=block["level"], heading_chain=(), numbering=block["numbering"],
-            para_no=None, text=block["text"], locator=block["locator"],
+            text=block["text"], locator=block["locator"],
             content_hash=content_hash(block["text"]), table=None, equation=None,
             refs_out=cross_references(block["text"], state.rules),
-            checkable=states_something_checkable(block, state.rules) if corner == "doc" else None,
             numbering_reconstructed=False, caption="", not_read_reason="",
             para_label=block["numbering"]))
     return chunks
@@ -3510,8 +3458,6 @@ COMPARISON_SIGNS = ("==", "!=", "<", ">", "<=", ">=")
 CONSTANT_NAMES = ("TRUE", "FALSE", "NULL", "NA", "NA_integer_", "NA_real_", "NA_character_", "Inf", "NaN",
                   "T", "F", "break", "next", "...")
 
-class CannotConvert(Exception):
-    """A piece of code that cannot become a formula tree. The message is a plain reason."""
 
 def walk(node):
     """Every node of a tree, parents first."""
@@ -3591,9 +3537,8 @@ def has_arithmetic(node, function_map, trivial):
     return False
 
 def code_facts(node, skip_inner_functions=True):
-    """Calls, symbols read and written, numbers and strings of a piece of code, in order of
-    appearance. Nested function definitions are left to their own units."""
-    calls, read, written, numbers, strings = [], [], [], [], []
+    """The functions a piece of code calls and the names it assigns, in order of appearance."""
+    calls, written = [], []
     def visit(inner, top):
         if inner.kind == "function" and not top and skip_inner_functions:
             return
@@ -3612,115 +3557,12 @@ def code_facts(node, skip_inner_functions=True):
         if inner.kind in ("dollar", "ns"):
             visit(inner.args[0], False) if inner.kind == "dollar" else None
             return
-        if inner.kind == "name" and inner.value not in CONSTANT_NAMES:
-            read.append(inner.value)
-        elif inner.kind == "num":
-            numbers.append(number_token(inner))
-        elif inner.kind == "str":
-            strings.append(inner.value)
         for child in inner.args:
             visit(child, False)
     visit(node, True)
     unique = lambda values: tuple(dict.fromkeys(values))
-    return {"calls": unique(calls), "symbols_read": unique(read), "symbols_written": unique(written),
-            "numbers": tuple(numbers), "strings": unique(strings)}
+    return {"calls": unique(calls), "symbols_written": unique(written)}
 
-# ---------------------------------------------------------------- from R code to a formula tree
-SIGN_TO_OP = {"+": "add", "-": "sub", "*": "mul", "/": "div", "^": "pow"}
-
-def to_expr(node, function_map, known):
-    """One R expression to the tool's neutral formula tree, through r_function_map.yaml. `known`
-    holds local variables already assigned in the same function: they are substituted, so a
-    change three lines above the return still reaches the comparison. Anything the tool cannot
-    evaluate raises CannotConvert; nothing is guessed and nothing is run. Enforces: R7"""
-    kind = node.kind
-    if kind == "num":
-        return Expr("num", value=number_token(node)["value"])
-    if kind == "name":
-        if node.value in known:
-            return known[node.value]
-        if node.value in CONSTANT_NAMES:
-            raise CannotConvert("it uses the constant %s" % node.value)
-        return Expr("sym", name=normalise_symbol(node.value))
-    if kind == "paren" or (kind == "block" and len(node.args) == 1):
-        return to_expr(node.args[0], function_map, known)
-    if kind == "unary" and node.value in ("-", "+"):
-        inner = to_expr(node.args[0], function_map, known)
-        return Expr("neg", args=(inner,)) if node.value == "-" else inner
-    if kind == "binary" and node.value in SIGN_TO_OP:
-        return Expr(SIGN_TO_OP[node.value], args=tuple(to_expr(arg, function_map, known) for arg in node.args))
-    if kind == "binary" and node.value in COMPARISON_SIGNS:
-        return Expr("cmp", name=node.value, args=tuple(to_expr(arg, function_map, known) for arg in node.args))
-    if kind == "if" and len(node.args) == 3:
-        return Expr("piecewise", args=tuple(to_expr(arg, function_map, known) for arg in node.args))
-    if kind == "dollar" and node.args[0].kind == "name":
-        return Expr("sym", name="%s$%s" % (node.args[0].value, node.args[1].value))
-    if kind == "index" and node.args[0].kind == "name" and node.args[-1].kind == "str" and len(node.args) == 3:
-        return Expr("sym", name="%s$%s" % (node.args[0].value, node.args[-1].value))   # table[rows, "column"]
-    if kind == "call":
-        return call_to_expr(node, function_map, known)
-    raise CannotConvert("it uses '%s', which the tool cannot turn into a formula" % unparse(node)[:40])
-
-def call_to_expr(node, function_map, known):
-    """A call in R to the neutral expression tree, through r_function_map.yaml; anything else cannot be converted."""
-    name = callee_name(node)
-    if name == "return" and len(node.args) == 2:
-        return to_expr(node.args[1], function_map, known)
-    entry = function_map["r_functions"].get(name)
-    if entry is None:
-        raise CannotConvert("it calls %s(), which the tool cannot evaluate" % (name or "a computed function"))
-    expected = entry.get("arguments", [])
-    placed, extra = {}, []
-    for argument_name, argument in zip(node.names, node.args[1:]):
-        if argument_name == "na.rm" or argument.kind == "missing":
-            continue
-        if argument_name in entry.get("only_defaults", []) or (argument_name and argument_name not in expected):
-            raise CannotConvert("it calls %s() with '%s', which the tool does not evaluate" % (name, argument_name))
-        if argument_name:
-            placed[expected.index(argument_name)] = argument
-        else:
-            extra.append(argument)
-    ordered = []
-    for position in range(len(placed) + len(extra)):
-        ordered.append(placed[position] if position in placed else extra.pop(0))
-    enough = len(expected) - entry.get("optional", 0) <= len(ordered) <= len(expected)
-    if not entry.get("variadic") and not enough:
-        raise CannotConvert("it calls %s() with %d argument(s) where the tool knows it with %d"
-                            % (name, len(ordered), len(expected)))
-    return Expr("call", name=entry["neutral"], args=tuple(to_expr(arg, function_map, known) for arg in ordered))
-
-def is_guard(node, function_map):
-    """An argument check that does not change the value: stop(...), stopifnot(...), or an `if`
-    without `else` whose body only holds such calls."""
-    if node.kind == "call":
-        return callee_name(node) in function_map["plumbing_calls"]
-    if node.kind == "if" and len(node.args) == 2:
-        body = node.args[1]
-        return all(is_guard(statement, function_map) for statement in (body.args if body.kind == "block" else (body,)))
-    return False
-
-def compose_function(function_node, function_map):
-    """The value a straight-line function returns, as one formula in its arguments: local
-    assignments are substituted in order. Branches that assign, loops and anything the tool
-    cannot evaluate raise CannotConvert ("the function could not be composed")."""
-    body = function_node.args[-1]
-    statements = body.args if body.kind == "block" else (body,)
-    known, result = {}, None
-    for position, statement in enumerate(statements):
-        parts = assignment_parts(statement)
-        if parts and parts[0].kind == "name" and parts[1].kind != "function":
-            known[parts[0].value] = result = to_expr(parts[1], function_map, known)
-        elif statement.kind == "call" and callee_name(statement) == "return":
-            return to_expr(statement, function_map, known), known
-        elif position == len(statements) - 1:
-            result = to_expr(statement, function_map, known)
-        elif is_guard(statement, function_map):
-            continue
-        else:
-            raise CannotConvert("it has steps that the tool cannot follow in a straight line")
-    if result is None:
-        raise CannotConvert("it returns nothing that the tool can follow")
-    return result, known
 
 # ---------------------------------------------------------------- units from R source
 def draft(kind, path, lines, name, text, **more):
@@ -3732,80 +3574,20 @@ def draft(kind, path, lines, name, text, **more):
     return unit
 
 def code_detail(node, function_map, settings, **more):
-    """The facts about a piece of code that later steps use: symbols, numbers, calls, strings, expression."""
+    """The facts about a piece of code that later steps use: its calls, what it assigns, what it reads."""
     facts = code_facts(node)
-    return dict(facts, formals=(), exported=None, expression=None, reads_data=(), plumbing=False,
-                plumbing_reason="", composed=None, not_composed_reason="", **more)
+    return dict(facts, formals=(), exported=None, reads_data=(), **more)
 
-def formula_statements(function_node, function_name, parent_key, path, source_lines, context):
-    """The formula statements inside one function: assignments, return(...) calls and the last
-    expression, when they compute something. Statements at the top of the body also get
-    their composed form, with the local variables before them substituted."""
-    function_map, trivial = context["function_map"], context["trivial"]
-    body = function_node.args[-1]
-    top_statements = body.args if body.kind == "block" else (body,)
-    units, known = [], {}
-    def visit(statement, at_top, is_last):
-        if statement.kind in ("block", "if", "for", "while", "repeat"):
-            inner = statement.args if statement.kind == "block" else statement.args[1 if statement.kind in ("if", "for", "while") else 0:]
-            for position, child in enumerate(inner):
-                visit(child, False, is_last and statement.kind == "block" and position == len(inner) - 1)
-            return
-        parts = assignment_parts(statement)
-        value = parts[1] if parts else statement
-        if value.kind == "function":
-            return
-        returned = statement.kind == "call" and callee_name(statement) == "return"
-        if not (parts or returned or is_last) or not has_arithmetic(value, function_map, trivial) or is_guard(statement, function_map):
-            return
-        target = parts[0].value if parts and parts[0].kind == "name" else function_name
-        detail = code_detail(statement, function_map, context["settings"])
-        for form, table in (("expression", {}), ("composed", known if at_top else None)):
-            if table is None:
-                detail["not_composed_reason"] = "the statement sits inside a branch or a loop"
-                continue
-            try:
-                tree = to_expr(value, function_map, table)
-                detail[form] = to_plain(Expr("eq", args=(Expr("sym", name=normalise_symbol(target)), tree)))
-            except CannotConvert as problem:
-                detail["not_composed_reason"] = str(problem)
-        lines = (statement.line, statement.end_line)
-        units.append(draft(KIND_FORMULA, path, lines, target, "\n".join(source_lines[lines[0] - 1:lines[1]]),
-                           inside=function_name, parent_key=parent_key, code=detail, node=statement))
-    for position, statement in enumerate(top_statements):
-        visit(statement, True, position == len(top_statements) - 1)
-        parts = assignment_parts(statement)
-        if parts and parts[0].kind == "name" and parts[1].kind != "function":
-            try:
-                known[parts[0].value] = to_expr(parts[1], function_map, known)
-            except CannotConvert:
-                known.pop(parts[0].value, None)
-    return units
 
 def function_units(name, function_node, lines, path, source_lines, context, inside="", parent_key=None):
-    """A function, the formula statements inside it, and any functions defined inside it."""
+    """A function, as one unit: what is written inside it is part of it."""
     function_map = context["function_map"]
     formals = tuple((formal, unparse(default)) for formal, default in zip(function_node.names, function_node.args[:-1]))
     detail = code_detail(function_node, function_map, context["settings"], )
     detail.update(formals=formals, exported=is_exported(name, context["namespace"]) if not inside else False)
-    try:
-        tree, _ = compose_function(function_node, function_map)
-        detail["composed"] = to_plain(Expr("eq", args=(Expr("sym", name=normalise_symbol(name)), tree)))
-    except CannotConvert as problem:
-        detail["not_composed_reason"] = str(problem)
-    computes = any(has_arithmetic(part, function_map, context["trivial"]) for part in function_node.args if part.kind != "missing")
-    if not computes:                                     # the body AND the defaults: a non-trivial default is never "supporting"
-        detail.update(plumbing=True, plumbing_reason="no arithmetic and no number other than the trivial ones: it only "
-                                                     "checks, converts or passes values on")
     unit = draft(KIND_FUNCTION, path, lines, name, "\n".join(source_lines[lines[0] - 1:lines[1]]),
                  inside=inside, parent_key=parent_key, code=detail, node=function_node)
-    units = [unit] + formula_statements(function_node, name, unit["key"], path, source_lines, context)
-    for inner in walk(function_node.args[-1]):
-        parts = assignment_parts(inner)
-        if parts and parts[1].kind == "function" and parts[0].kind == "name":
-            units.extend(function_units(parts[0].value, parts[1], (inner.line, inner.end_line), path, source_lines,
-                                        context, inside=name, parent_key=unit["key"]))
-    return units
+    return [unit]
 
 def statement_units(node, path, source_lines, context, in_tests):
     """The unit(s) of one top-level expression."""
@@ -3819,14 +3601,8 @@ def statement_units(node, path, source_lines, context, in_tests):
         return [draft(KIND_TEST, path, lines, label, text, code=code_detail(node, function_map, context["settings"]), node=node)]
     detail = code_detail(node, function_map, context["settings"])
     if parts and parts[0].kind == "name" and has_arithmetic(parts[1], function_map, context["trivial"]):
-        try:
-            tree = to_expr(parts[1], function_map, {})
-            detail["expression"] = to_plain(Expr("eq", args=(Expr("sym", name=normalise_symbol(parts[0].value)), tree)))
-        except CannotConvert as problem:
-            detail["not_composed_reason"] = str(problem)
         return [draft(KIND_FORMULA, path, lines, parts[0].value, text, code=detail, node=node)]
     kind = KIND_TEST if in_tests and node.kind == "call" and callee_name(node).startswith("expect_") else KIND_TOPLEVEL
-    detail.update(plumbing=True, plumbing_reason="a statement without arithmetic (it loads, declares or sets something up)")
     name = parts[0].value if parts and parts[0].kind in ("name", "str") else (callee_name(node) if node.kind == "call" else "")
     return [draft(kind, path, lines, name, text, code=detail, node=node)]
 
@@ -4081,7 +3857,6 @@ def table_of(value):
     return None
 
 
-
 def table_display(header, rows):
     """The one-cell display form: at most 50 rows, always below Excel's limit for one cell."""
     shown = ["; ".join(header)] + ["; ".join(row) for row in rows[:50]]
@@ -4106,21 +3881,19 @@ def data_object_unit(name, value, path, settings):
               "assessable": not too_large, "not_assessable_reason": reason}
     kind = KIND_OBJECT if shape == "list" else KIND_TABLE
     unit = draft(kind, path, None, name, table_display(header, rows), data=detail)
-    values = None if too_large else {"object_name": name, "header": header, "rows": rows}
-    return unit, values
+    return unit
 
 def decode_data_file(path, data, settings):
     """Decode one stored-data file without R. The file is parsed by `rdata`, which evaluates
     nothing; a function or another language object inside it is described, never called.
-    Returns (units, full-value records, facts for Model_Package_Info). Enforces: R7"""
+    Returns (units, the fact for Model_Package_Info). Enforces: R7"""
     cap = int(settings["max_file_mb"] * 1024 * 1024)
     stem = os.path.splitext(os.path.basename(path))[0]
     if path.lower().endswith((".csv", ".tsv")):
         delimiter = "\t" if path.lower().endswith(".tsv") else ","
         table = [row for row in csv.reader(io.StringIO(decode_text(data)), delimiter=delimiter) if row]
         frame_header, frame_rows = (table[0], table[1:]) if table else ([], [])
-        unit, values = data_object_unit_from_rows(stem, frame_header, frame_rows, path, settings)
-        return [unit], [values] if values else [], "%s: text table" % path
+        return [data_object_unit_from_rows(stem, frame_header, frame_rows, path, settings)], "%s: text table" % path
     try:
         raw, method = expand(data, cap)
         import rdata
@@ -4135,16 +3908,11 @@ def decode_data_file(path, data, settings):
     except Exception as problem:                                   # any failure means: not decoded, never lost
         reason = str(problem) if isinstance(problem, NotParsed) else "the file could not be decoded as R data"
         unit = draft(KIND_NOT_READ, path, None, stem, "", read_problem="This data file was not read: %s." % reason)
-        return [unit], [], "%s: not decoded (%s)" % (path, type(problem).__name__ if not isinstance(problem, NotParsed) else reason)
+        return [unit], "%s: not decoded (%s)" % (path, type(problem).__name__ if not isinstance(problem, NotParsed) else reason)
     objects = converted if container.startswith("several") and isinstance(converted, dict) else {stem: converted}
-    units, tables = [], []
-    for name in objects:
-        unit, values = data_object_unit(str(name), objects[name], path, settings)
-        units.append(unit)
-        if values:
-            tables.append(values)
+    units = [data_object_unit(str(name), objects[name], path, settings) for name in objects]
     fact = "%s: %s, %s layout, %s compression, %d object(s), decoded by %s" % (path, container, layout, method, len(units), decoded_by)
-    return units, tables, fact
+    return units, fact
 
 def data_object_unit_from_rows(name, header, rows, path, settings):
     """A unit for a table given as header and rows (delimited text files under data/ or inst/extdata/)."""
@@ -4215,13 +3983,11 @@ def file_units(path, data, context, facts, reader=""):
             if reader == "vignette":
                 return vignette_units(path, text, context)
             if reader in ("r-data", "table-file"):
-                units, tables, fact = decode_data_file(path, data, context["settings"])
-                context["tables"].extend(tables)
+                units, fact = decode_data_file(path, data, context["settings"])
                 facts["data"].append(fact)
                 return units
     if is_data_file(path):
-        units, tables, fact = decode_data_file(path, data, context["settings"])
-        context["tables"].extend(tables)
+        units, fact = decode_data_file(path, data, context["settings"])
         facts["data"].append(fact)
         return units
     if lowered.startswith("src/"):
@@ -4303,7 +4069,6 @@ def package_rows(description, namespace, units, facts, refused):
     return [{"group": group, "item": item, "value": value} for group, item, value in rows if value != ""]
 
 
-
 def read_package(ctx):
     """Step 04, read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
     data, man/, tests/, vignettes/, the rest; by name inside each), so references are stable
@@ -4323,7 +4088,7 @@ def read_package(ctx):
     description = read_description(decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
     namespace = read_namespace(decode_text(files["NAMESPACE"])) if "NAMESPACE" in files else None
     context = {"function_map": function_map, "notation": function_map["notation"], "namespace": namespace,
-               "trivial": set(ctx.settings["trivial_numbers"]), "settings": ctx.settings, "tables": []}
+               "trivial": set(ctx.settings["trivial_numbers"]), "settings": ctx.settings}
     order = ("description", "namespace", "r", "data", "inst", "man", "tests", "vignettes")
     def rank(path):
         top = path.split("/")[0].lower()
@@ -4344,11 +4109,6 @@ def read_package(ctx):
     link_documentation_units(drafts)
     hashes = {path: sha256_bytes(data) for path, data in files.items()}
     units, refs = finalise_units(drafts, hashes)
-    tables = []
-    for unit in units:
-        if unit.data and unit.data.assessable:
-            values = next(t for t in context["tables"] if t["object_name"] == unit.name)
-            tables.append(dict(values, unit_ref=unit.ref))
     inventory = [{"file": path, "bytes": len(files[path]), "sha256": hashes[path], "swhid": swhid_content(files[path])}
                  for path in sorted(files)]
     for entry in inventory:                              # for identity part 3: the lines that must lie inside a unit
@@ -4382,7 +4142,7 @@ def read_package(ctx):
     if not account["closed"]:
         messages.append("The content account of the package is open; Model_Package_Info says what could not be placed.")
     info["rows"].extend({"group": "The package", "item": "how it was read", "value": note} for note in plan_notes)
-    return StepResult({"model_units": units, "parameter_tables": tables, "package_info": [info],
+    return StepResult({"model_units": units, "package_info": [info],
                               },
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)
 
@@ -4902,10 +4662,9 @@ def decided_outputs(records, decisions):
 
 
 # ================================================================================================
-# what corresponds to what, what differs, and the map's agents
+# the map: how the model computes what it returns
 # ================================================================================================
-# ================================================================================================
-# ---------------------------------------------------------------- mapping: what corresponds to what
+# ---------------------------------------------------------------- the graph and the map
 LEDGER_VOLATILE = ("created_at", "run_id")
 
 # ---------------------------------------------------------------- the ledger and the graph in memory
@@ -4930,168 +4689,12 @@ def graph_version_id(records):
     return "G-" + chain_head(records)[:12]
 
 
-
-
 # ---------------------------------------------------------------- words: splitting, stemming, word lists
-# ---------------------------------------------------------------- reference data of the search
-# Words too common to say anything about which passage corresponds to which, and the patterns that
-# bridge a code name and a written term (rho_a and "asset correlation"). No domain word may appear
-# in either: the layout lint checks them. Enforces: R9
-STOPWORDS_TEXT = r'''# stopwords.txt - generic function words left out of the word index. One per line.
-# Rule R9: no word of any field of business belongs here.
-a an the and or of to in is are be by for with as at on it this that these those from each which
-was were been being has have had do does did not no nor if then than so such any all some its their
-there here where when while who whom whose what how why can could may might must shall should will would
-into per under over between within without about above below after before during through up down out off
-also only other more most less least very same own both either neither one two
-function return returns returned value values given using used use uses see set sets get gets
-'''
-BRIDGE_PATTERNS_YAML = r'''# bridge_patterns.yaml - generic words the tool uses to recognise where a document ties a short
-# name to a longer phrase. Reviewer 3 owns this file. Rule R9: no word of any field of business.
-definition_verbs: [denotes, represents, stands for, is defined as, means]
-symbol_headers: [symbol, variable, notation, parameter, name, term, abbreviation, column, field]
-description_headers: [description, definition, meaning, explanation, stands for, content]
-glossary_columns: {term: Term, also: Also written as}
-# words that tie a function name to neutral mathematical words (used for the called-functions field)
-function_words:
-  normal_cdf: [cumulative, normal, distribution]
-  normal_inverse: [inverse, normal, quantile]
-  max: [maximum, larger, floor, least]
-  min: [minimum, smaller, cap, capped, most]
-  exp: [exponential]
-  log: [logarithm]
-  sqrt: [square, root]
-  round: [rounded, decimals]
-  piecewise: [condition, otherwise]
-  sum_over: [sum, total]
-'''
-
-def load_word_lists():
-    """Stop words, bridge patterns and the neutral words of mathematical functions. The lint
-    checks every one of these lists for domain words. Enforces: R9"""
-    stop = {word for line in STOPWORDS_TEXT.split("\n") if not line.startswith("#") for word in line.split()}
-    return {"stop": stop, "patterns": yaml.safe_load(BRIDGE_PATTERNS_YAML),
-            "function_map": yaml.safe_load(R_FUNCTION_MAP_YAML)}
-
-def stem(word):
-    """A light, rule-based stemmer: plural endings, -ing, -ed, and a doubled last letter.
-    Deliberately weak: a wrong merge costs more than a missed one."""
-    for ending, replacement in (("ies", "y"), ("ied", "y"), ("sses", "ss"), ("ing", ""), ("ed", ""), ("es", "e"), ("s", "")):
-        if word.endswith(ending) and len(word) - len(ending) >= 3 and not word.endswith(("ss", "us", "is")):
-            word = word[:len(word) - len(ending)] + replacement
-            break
-    if len(word) > 3 and word[-1] == word[-2] and word[-1] not in "lsz":
-        word = word[:-1]
-    return word[:-1] if len(word) > 4 and word.endswith("e") else word
-
-AS_WRITTEN = {}      # stem -> the first word seen with that stem; used only to show words to analysts
-
-def split_words(text, stop):
-    """Text or identifiers to index words: split at anything that is not a letter or digit,
-    at underscores, dots and capital letters inside a name; lower-case; drop stop words,
-    single characters and pure numbers; stem."""
-    words = []
-    for piece in re.findall(r"[^\W_]+", text or ""):
-        for part in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[^\W\d_]+|\d+", piece):
-            lowered = part.lower()
-            if len(lowered) > 1 and not lowered.isdigit() and lowered not in stop:
-                words.append(stem(lowered))
-                AS_WRITTEN.setdefault(words[-1], lowered)
-    return words
-
-def shown(words):
-    """Index words as an analyst should see them: as first written, not as stems."""
-    return [AS_WRITTEN.get(word, word) for word in words]
 
 
 
-# ---------------------------------------------------------------- what is indexed for each unit
 
 
-
-# ---------------------------------------------------------------- S1: field-aware BM25 (the only text-ranking formula)
-
-
-
-# ---------------------------------------------------------------- S2: the bridge vocabulary
-def initials_match(short, words):
-    """Do the letters of an abbreviation appear, in order, as initials of the long form?
-    Guards against reading "(see Table 3)" as an abbreviation."""
-    letters = [c for c in short.lower() if c.isalpha()]
-    initials = [w[0].lower() for w in words if w]
-    position = 0
-    for letter in letters:
-        while position < len(initials) and initials[position] != letter:
-            position += 1
-        if position == len(initials):
-            return False
-        position += 1
-    return bool(letters)
-
-def harvest_text(text, source, patterns):
-    """Bridge entries from one text: "long form (ABBR)", "ABBR (long form)", "where X denotes
-    ...", "let X be ...". Returns (term, phrase, source, pattern name) tuples."""
-    entries = []
-    for found in re.finditer(r"((?:[A-Za-z][\w-]*\s+){1,6}[A-Za-z][\w-]*)\s+\(([A-Za-z\u0370-\u03ff][\w]{0,9})\)", text):
-        words = found.group(1).split()
-        for start in range(len(words) - 1, -1, -1):
-            if initials_match(found.group(2), words[start:]) and len(words[start:]) <= len(found.group(2)) + 2:
-                entries.append((found.group(2), " ".join(words[start:]), source, "long form (short form)"))
-                break
-    for found in re.finditer(r"\b([A-Z][A-Za-z0-9_]{1,9})\s+\(([a-z][^()]{3,60})\)", text):
-        if initials_match(found.group(1), found.group(2).split()):
-            entries.append((found.group(1), found.group(2), source, "short form (long form)"))
-    verbs = "|".join(re.escape(verb) for verb in patterns["definition_verbs"])
-    for found in re.finditer(r"(?:\bwhere|,|\band)\s+(\S{1,12})\s+(?:%s|is)\s+(?:the\s+|an?\s+)?([^,.;()]{3,60})" % verbs, text):
-        if len(found.group(1)) <= 4 or "_" in found.group(1):
-            entries.append((found.group(1), found.group(2).strip(), source, "where ... denotes"))
-    for found in re.finditer(r"\b[Ll]et\s+(\S{1,12})\s+be\s+(?:the\s+|an?\s+)?([^,.;()]{3,60})", text):
-        entries.append((found.group(1), found.group(2).strip(), source, "let ... be"))
-    return entries
-
-def harvest_bridge(canon, doc, units, lists, glossary_path):
-    """The bridge vocabulary of this project, harvested from its own inputs: documents,
-    symbol tables, roxygen @param and @return lines, column descriptions of data blocks,
-    comments of the form "# x: phrase", and the optional Inputs/glossary.xlsx. Every entry
-    records where it was seen and how often; entries seen once count half."""
-    patterns, raw = lists["patterns"], []
-    for chunk in canon + doc:
-        raw.extend(harvest_text(chunk["text"], chunk["ref"], patterns))
-        table = chunk.get("table") or {}
-        header = [cell.lower() for cell in table.get("header", [])]
-        if len(header) >= 2 and header[0] in patterns["symbol_headers"] and any(h in patterns["description_headers"] for h in header[1:]):
-            described = next(i for i, h in enumerate(header) if h in patterns["description_headers"])
-            raw.extend((row[0], row[described], chunk["ref"], "table of symbols") for row in table["rows"] if row[0] and row[described])
-    for unit in units:
-        roxygen = unit.get("roxygen")
-        if roxygen:
-            for tag in roxygen["tags"]:
-                if tag["tag"] == "param" and tag["name"] and tag["text"]:
-                    raw.extend((name, tag["text"], "%s@param:%s" % (unit["ref"], name), "roxygen @param") for name in tag["name"].split(","))
-                elif tag["tag"] == "return" and tag["text"] and roxygen["documents_name"]:
-                    raw.append((roxygen["documents_name"], tag["text"], unit["ref"] + "@return", "roxygen @return"))
-            for found in re.finditer(r"\\item\{([^{}]+)\}\{([^{}]+)\}", unit["text"]):
-                raw.append((found.group(1), found.group(2), unit["ref"], "column description"))
-        if unit.get("code"):
-            for found in re.finditer(r"#(?!')\s*([A-Za-z][\w.]{0,20})\s*:\s+([^\n]{3,60})", unit["text"]):
-                raw.append((found.group(1), found.group(2).strip(), unit["ref"], "code comment"))
-    if glossary_path:
-        import openpyxl
-        sheet = openpyxl.load_workbook(glossary_path, read_only=True).worksheets[0]
-        for row in list(sheet.iter_rows(values_only=True))[1:]:
-            if row and row[0] and len(row) > 1 and row[1]:
-                raw.extend([(str(row[0]), str(row[1]), "glossary.xlsx", "glossary"), (str(row[1]), str(row[0]), "glossary.xlsx", "glossary")])
-    merged = {}
-    for term, phrase, source, pattern in raw:
-        key = (normalise_symbol(term.strip()), " ".join(split_words(phrase, lists["stop"])))
-        if not key[1]:
-            continue
-        entry = merged.setdefault(key, {"term": key[0], "term_as_written": term.strip(), "phrase": normalise_text(phrase)[:80],
-                                        "words": key[1].split(), "sources": [], "patterns": [], "count": 0})
-        entry["count"] += 1
-        entry["sources"].append(source)
-        entry["patterns"].append(pattern)
-    return [merged[key] for key in sorted(merged)]
 
 
 # ---------------------------------------------------------------- S3: explicit references as written
@@ -5113,42 +4716,6 @@ def resolve_reference(reference, chunks):
                 matches.append(chunk["ref"])
     return matches
 
-# ---------------------------------------------------------------- S4: rare shared anchors and the restart random walk
-
-
-
-# ---------------------------------------------------------------- S6: signatures (re-order only) and table shape
-
-def overlap(left, right):
-    """Weighted overlap of two multisets, between 0 and 1."""
-    shared_count = sum(min(count, right.get(key, 0)) for key, count in left.items())
-    return shared_count / max(1, max(sum(left.values()), sum(right.values())))
-
-
-# ---------------------------------------------------------------- fusion and reasons
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # ---------------------------------------------------------------- the skill map-implementation: the implementation map's agents
 # Code traced the data flow (step 05a); these agents work only where it stopped. The Tracer is given one
@@ -5157,9 +4724,6 @@ def overlap(left, right):
 # word and use only names that code holds. Each turn is a question of its own, recorded, so a run replays
 # without a model. The Namer gives each step a plain name, outside the accounting. The Auditor is code.
 # The model chooses; code executes. Enforces: R3, R4, R5
-
-
-
 
 
 # ---------------------------------------------------------------- step 05: build-graph
@@ -5195,10 +4759,9 @@ def structural_edges(units, provenance):
     return edges
 
 def build_graph(ctx):
-    """Step 05, build-graph: nodes for every chunk and unit, structural edges,
-    cross-references resolved within their own corner, and the bridge vocabulary."""
+    """Part of step 03, build-map: nodes for every chunk and unit, structural edges, and the
+    cross-references resolved within their own corner."""
     canon, doc, units = ctx.read("chunks_canon"), ctx.read("chunks_doc"), ctx.read("model_units")
-    lists = load_word_lists()
     records = [node_record(c["ref"], c["kind"], c["corner"]) for c in canon + doc]
     records += [node_record(u["ref"], u["kind"], "model") for u in units]
     edges, unresolved = structural_edges(units, ctx.provenance), []
@@ -5214,58 +4777,20 @@ def build_graph(ctx):
                 if not targets and not own_caption:
                     unresolved.append({"unit_ref": chunk["ref"], "reference": reference,
                                        "note": "'%s' is cited here but could not be found in %s" % (reference, chunk["source_file"])})
-    bridge = harvest_bridge(canon, doc, units, lists, ctx.options["inputs"].get("glossary"))
     ledger = ledger_records(ctx.read("graph_ledger"), records + edges)
-    return StepResult({"graph_ledger": ledger, "bridge_vocabulary": bridge, "unresolved_references": unresolved},
-                             {"nodes": len(records), "edges": len(edges), "bridge entries": len(bridge)},
+    return StepResult({"graph_ledger": ledger},
+                             {"nodes": len(records), "edges": len(edges)},
                              ["Graph version %s." % graph_version_id(ctx.read("graph_ledger") + ledger)])
 
-# ---------------------------------------------------------------- step 06: find-candidates
-
-
-
-
-
-
-
-# ---------------------------------------------------------------- questions for the AI
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------- validators: code decides what is usable
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------- steps 07 and 09: judge-links
 
 # ---------------------------------------------------------------- what each piece of code does, in plain words
 
 
-
-
-
-
-
 # ================================================================================================
-# ---------------------------------------------------------------- what a unit was linked to
+# ---------------------------------------------------------------- a fault inside the tool
 class EngineFault(Exception):
     """The tool found itself inconsistent. Never raised about the model under review. Enforces: R2"""
 
-def linked(world, ref, prefix, relations=LINKING_RELATIONS):
-    """Every unit of one corner that a unit is linked to, by a link the model accepted."""
-    return [other for other, link in world["links"].get(ref, {}).items()
-            if other.startswith(prefix) and link["relation"] in relations]
 
 # ---------------------------------------------------------------- the run: its folder, its record and its two deliverables
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -5571,130 +5096,11 @@ def open_store(paths, settings):
     return OPEN_STORES[key]
 
 # ---------------------------------------------------------------- the wrapper around chat()
-AUTH_WORDS = ("401", "403", "unauthor", "expired", "forbidden", "invalid token", "authentication", "credential")
-OVERLOAD_WORDS = ("429", "502", "503", "504", "overload", "rate limit", "too many", "timeout", "timed out", "busy")
 
-def classify_failure(text):
-    """Sort a failure into a class by the words it contains (probe P-13 matches these lists to
-    what the real gateway returns). call_chat adds one more class of its own, "truncated"."""
-    lowered = (text or "").lower()
-    if any(word in lowered for word in AUTH_WORDS):
-        return "authentication"
-    if any(word in lowered for word in OVERLOAD_WORDS):
-        return "overload"
-    return "other"
-
-class ChatOutcome(tuple):
-    """What one call to chat() came to. It unpacks as the three values the rest of the tool has
-    always read - (answer text or None, failure class or "", what was seen with tokens
-    removed) - and carries the gateway's own record of the call as .meta, so that adding
-    metadata did not change a single existing call site."""
-
-    def __new__(cls, answer, failure, seen, meta=None):
-        outcome = super().__new__(cls, (answer, failure, seen))
-        outcome.meta = dict(meta or {})
-        return outcome
-
-    answer = property(lambda self: self[0])
-    failure = property(lambda self: self[1])
-    seen = property(lambda self: self[2])
 
 # Fields of the gateway's reply that are worth keeping in the audit record. The reply also
 # echoes the prompts back (query, defaultprompt, source) and those are dropped: the tool already
 # stores the prompts it sent, and an echo would double the size of every call record.
-META_FIELDS = ("chat_id", "thread_id", "prompt_id", "datetime", "user_id", "intent")
-RESPONSE_META_FIELDS = ("id", "model", "created", "system_fingerprint", "service_tier")
-USAGE_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
-
-def first_choice(response):
-    """The first choice of an OpenAI-shaped reply, or an empty dictionary."""
-    nested = response.get("response") if isinstance(response.get("response"), dict) else {}
-    choices = nested.get("choices")
-    return choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
-
-def chat_metadata(response):
-    """What the gateway said about the call itself: which conversation it belonged to, which
-    model answered, how many tokens it took and why it stopped. Kept for the audit record so
-    that a run can be accounted for afterwards; none of it reaches a status or a check."""
-    meta = {name: response[name] for name in META_FIELDS if response.get(name) not in (None, "")}
-    nested = response.get("response") if isinstance(response.get("response"), dict) else {}
-    meta.update({name: nested[name] for name in RESPONSE_META_FIELDS if nested.get(name) not in (None, "")})
-    usage = nested.get("usage") if isinstance(nested.get("usage"), dict) else {}
-    meta.update({name: usage[name] for name in USAGE_FIELDS if isinstance(usage.get(name), int)})
-    choice = first_choice(response)
-    if choice.get("finish_reason"):
-        meta["finish_reason"] = choice["finish_reason"]
-    return meta
-
-def answer_text_of(response):
-    """The generated text. The gateway puts it under "answer"; if that key is missing or
-    empty, the same text is read from the OpenAI-shaped part of the reply, so that a
-    gateway that only fills one of the two is still usable."""
-    if isinstance(response.get("answer"), str) and response["answer"].strip():
-        return response["answer"]
-    content = first_choice(response).get("message", {})
-    content = content.get("content") if isinstance(content, dict) else None
-    return content if isinstance(content, str) and content.strip() else None
-
-def summarise_response(response, live):
-    """A failed reply, shortened for the audit record: the fields that say what went wrong,
-    without the echoed prompts. Falls back to the whole reply when it has no known shape."""
-    if not isinstance(response, dict):
-        return live.redact(json.dumps(response, default=str)[:2000])
-    keep = ("status", "code", "message", "detail", "reason", "answer", "finish_reason")
-    kept = {name: response[name] for name in keep if name in response}
-    kept.update(chat_metadata(response))
-    if not kept:
-        kept = {name: value for name, value in response.items()
-                if name not in ("query", "defaultprompt", "source", "documents", "history")}
-    return live.redact(json.dumps(kept, default=str)[:2000])
-
-def accepts_history(chat):
-    """Whether the analyst's chat() takes the third `history` argument. The real gateway cell
-    has the signature chat(SystemPrompt, MainPrompt, history=[]); the stand-in and the older
-    cell take two arguments. The tool works with either and never depends on which."""
-    try:
-        parameters = inspect.signature(chat).parameters
-    except (TypeError, ValueError):
-        return False
-    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
-        return "history" in parameters
-    positional = [p for p in parameters.values()
-                  if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-    return "history" in parameters or len(positional) >= 3
-
-def call_chat(chat, system_prompt, main_prompt, live):
-    """Call chat() once and bring every way a failure can surface (an exception; a dictionary
-    that carries a status or code; a dictionary with no answer in either place; an answer the
-    model was cut off in the middle of) into one shape. Returns a ChatOutcome, which unpacks
-    as (answer, failure, seen).
-
-    History is always sent empty. Every question the tool asks is self-contained and is asked in
-    its own call, so nothing the model said about an earlier unit may colour the next one;
-    an empty history is also what makes a question repeatable. Enforces: R5"""
-    try:
-        response = chat(system_prompt, main_prompt, []) if accepts_history(chat) else chat(system_prompt, main_prompt)
-    except Exception as problem:                     # shape 1: chat() raised
-        seen = live.redact("%s: %s" % (type(problem).__name__, problem))
-        return ChatOutcome(None, classify_failure(seen), seen)
-    if isinstance(response, str):                    # a gateway that returns the text alone
-        response = {"answer": response}
-    if not isinstance(response, dict):
-        seen = live.redact(json.dumps(response, default=str)[:2000])
-        return ChatOutcome(None, classify_failure(seen), seen)
-    meta, text = chat_metadata(response), answer_text_of(response)
-    if text is None:                                 # shapes 2 and 3: a reply with no answer
-        seen = summarise_response(response, live)
-        return ChatOutcome(None, classify_failure(seen), seen, meta)
-    if meta.get("finish_reason") == "length":        # shape 4: the answer stops in mid-air
-        seen = "the model was cut off at the token limit; the answer is incomplete"
-        return ChatOutcome(None, "truncated", seen, meta)
-    return ChatOutcome(live.redact(text), "", "", meta)
-
-
-
-
-
 
 
 # ---------------------------------------------------------------- the pipeline runner
@@ -5727,7 +5133,6 @@ def update_manifest(store, changes):
     return manifest
 
 
-
 def run_pipeline(paths, settings, stop_after=""):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
     the run continues at the first step without one. A human step stops the run and says
@@ -5753,8 +5158,7 @@ def run_step(step, store, paths, settings):
     """Build the context, call the step function, write what it returns, record the step,
     rebuild the outputs and sync. Steps never touch the store themselves."""
     notes = []
-    provenance = Provenance(paths.run_id, step["id"], step["name"], step["version"],
-                                   created_at=datetime.datetime.now().isoformat(timespec="seconds"))
+    provenance = Provenance(paths.run_id, step["id"], step["name"], step["version"])
     options = dict(step.get("with") or {})
     options.update({"inputs": list_input_files(paths.inputs_dir), "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
@@ -5891,7 +5295,6 @@ def plain_cell(value, input_text, store):
     return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
 
 
-
 def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
     ledger = store.read("graph_ledger")
@@ -5930,8 +5333,6 @@ def rows_package_info(store, paths, settings, progress):
         kinds = sorted(set(repairs[name]))
         add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
     return rows
-
-
 
 
 MAP_ROLES = {"return": "Final output", "value": "Intermediate value", "column": "Column", "argument": "Parameter",
@@ -6084,8 +5485,6 @@ def rows_model_units(units):
     """The rows of Chunks_Model: each a whole piece of code, as written."""
     return [{"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"],
              "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""} for u in units]
-
-
 
 
 def sheet_rows(store, paths, settings, progress):
@@ -6362,7 +5761,6 @@ def build_map(ctx):
     """Step 03, build-map: by code alone, before any model call - the graph of what the files say about
     each other, and the data flow of the package. Enforces: R2, R4, R14"""
     return combine(ctx, build_graph, trace_dataflow)
-
 
 
 STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
