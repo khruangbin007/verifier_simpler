@@ -4805,6 +4805,7 @@ FLOWR_VERSION = "2.15.8"
 FLOWR_SHA256 = "39e1b9e5e4fab67f76204dbf6856d32e9e7f2a36132b1323e02cc8e3392436e4"
 FLOWR_URL = "https://github.com/flowr-analysis/flowr-r-adapter/releases/download/flowr-v{0}/flowr-{0}-linux-x64.tar.gz"
 READS, CALLS, BINDS = 1, 4, 16          # flowR's edge bits: reads, calls, defines-on-call; any other bit is ignored
+FLOWR_ANSWER_MAX = 200 * 1024 * 1024    # flowR answers ~64 KB of JSON per line of R, and Python needs ~8x that to read it
 
 def flowr_ready(source=""):
     """flowR's folder, fetched once from source - a staged archive, such as one in a Volume - or from the
@@ -4824,8 +4825,10 @@ def flowr_ready(source=""):
     os.chmod(os.path.join(folder, "flowr"), 0o755)
     return folder
 
-def flowr_read(folder, text):
-    """flowR's syntax tree of one R source, indexed by id, and its edges as {id: [(target, bits)]}."""
+def flowr_read(folder, text, prefix=""):
+    """flowR's syntax tree of one R source, indexed by id, and its edges as {id: [(target, bits)]}; every
+    id carries the prefix, so that the answers for several sources can stand side by side. An answer too
+    large to read safely is refused before it is read: loading it would take the driver's memory."""
     with tempfile.TemporaryDirectory() as work:
         source, answer = os.path.join(work, "package.R"), os.path.join(work, "answer.json")
         with open(source, "w", encoding="utf-8") as handle:
@@ -4836,19 +4839,22 @@ def flowr_read(folder, text):
                             "--engine.tree-sitter.tree-sitter-wasm-path", os.path.join(folder, "tree-sitter.wasm"), "--execute",
                             ':query* [{"type":"dataflow"},{"type":"normalized-ast"}] file://' + source],
                            stdout=sink, stderr=subprocess.DEVNULL, cwd=work, timeout=900)
+        if os.path.getsize(answer) > FLOWR_ANSWER_MAX:
+            raise ValueError("flowR's answer is %d MB, too large to read safely" % (os.path.getsize(answer) // 2 ** 20))
         with open(answer, encoding="utf-8") as handle:
             said = handle.read()
     if "{" not in said:
         raise RuntimeError("flowR gave no answer for the package's R code.")
     found = json.JSONDecoder().raw_decode(said[said.index("{"):])[0]
     tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
-    edges = {str(s): [(str(t), e["types"]) for t, e in targets] for s, targets in found["dataflow"]["graph"]["edgeInformation"]}
+    edges = {prefix + str(s): [(prefix + str(t), e["types"]) for t, e in targets] for s, targets in found["dataflow"]["graph"]["edgeInformation"]}
     nodes, stack = {}, [(tree, None)]
     while stack:                                   # every node once, with its parent; no recursion, so no depth limit
         node, up = stack.pop()
         if isinstance(node, dict):
             if "type" in node and "info" in node:
-                node["up"], up = up, str(node["info"]["id"])
+                node["info"]["id"] = prefix + str(node["info"]["id"])
+                node["up"], up = up, node["info"]["id"]
                 nodes[up] = node
             stack += [(value, up) for key, value in node.items() if key not in ("info", "location", "lexeme", "up")]
         elif isinstance(node, list):
@@ -4867,12 +4873,17 @@ class Dataflow:
         self.units, self.trivial = units, set(trivial)
         self.functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
         self.tables = {u["data"]["object_name"]: u for u in units if (u.get("data") or {}).get("object_name")}
-        self.nodes, self.records, self.at, text = {}, [], [], []
-        for unit in sorted(self.functions.values(), key=lambda u: u["ref"]):   # the package's functions, one source
-            lines = unit["text"].split("\n")
-            self.at += [(unit["name"], number) for number in range(1, len(lines) + 1)] + [(None, 0)]
-            text += lines + [""]
-        self.tree, self.edges = flowr_read(folder or flowr_ready(), "\n".join(text)) if text else ({}, {})
+        self.nodes, self.records, self.tree, self.edges, self.unit_of, self.unread = {}, [], {}, {}, {}, {}
+        for number, unit in enumerate(sorted(self.functions.values(), key=lambda u: u["ref"])):
+            prefix = "%d:" % number             # one function at a time: memory is bounded by the largest function,
+            self.unit_of[prefix] = unit["name"]  # not by the package - the whole package at once took a driver down
+            try:
+                tree, edges = flowr_read(folder or flowr_ready(), unit["text"], prefix)
+            except (ValueError, KeyError, OSError, subprocess.SubprocessError) as problem:
+                self.unread[unit["name"]] = "flowR could not read it: %s" % problem
+                continue
+            self.tree.update(tree)
+            self.edges.update(edges)
         named = lambda n: (n["lhs"].get("lexeme") or "").strip("`")          # an operator is defined as `%||%`
         self.defs = {str(n["rhs"]["info"]["id"]): named(n) for n in self.tree.values()
                      if n["type"] == "RBinaryOp" and n.get("rhs", {}).get("type") == "RFunctionDefinition"
@@ -4882,8 +4893,7 @@ class Dataflow:
     def place(self, node):
         """(function, first line, last line) of a node, the lines counted in its function's own unit."""
         where = node["info"].get("fullRange") or node.get("location") or [0, 0, 0, 0]
-        first, last = self.at[max(where[0], 1) - 1], self.at[max(where[2], 1) - 1]
-        return first[0], first[1], last[1] if last[0] == first[0] else first[1]
+        return self.unit_of[node["info"]["id"].split(":")[0] + ":"], max(where[0], 1), max(where[2], where[0], 1)
 
     def owner(self, node_id):
         while node_id and node_id not in self.defs:
@@ -4931,7 +4941,7 @@ class Dataflow:
         if fdef is None:
             self.records.append({"record_type": "gap", "function": name, "function_ref": self.functions[name]["ref"],
                                  "line": self.functions[name]["lines"][0], "code": self.functions[name]["text"].split("\n")[0],
-                                 "why": "the function could not be read"})
+                                 "why": self.unread.get(name, "the function could not be read")})
             return
         function = self.tree[fdef]
         for parameter in function.get("parameters") or []:
@@ -5089,7 +5099,8 @@ class Dataflow:
                     table = self.nodes[self.table_node(value["lexeme"])]
                     joined += [self.node("column:%s" % c, "column", c, env, node, [table["node"]]) for c in table["columns"] if c not in keys]
             return joined
-        callee = next((self.defs[t] for t, bits in self.edges.get(str(node["info"]["id"]), []) if bits & CALLS and t in self.defs), None)
+        callee = next((self.defs[t] for t, bits in self.edges.get(str(node["info"]["id"]), []) if bits & CALLS and t in self.defs),
+                      name if name in self.functions else None)   # another function of the package: by its name
         if callee is None and name in APPLIERS:                     # map(x, f): a package function handed over by name
             handed = [v["lexeme"] for v in values if v and v["type"] == "RSymbol" and v["lexeme"] in self.functions]
             return [self.record_call(f, env, node, [], []) for f in handed] + [s for v in values if not (v and v["type"] == "RSymbol"

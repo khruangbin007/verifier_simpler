@@ -115,3 +115,5 @@ map-bar,2026-09-23,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=1
 map-bar,2026-09-23,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=1 steps=137
 map-bar,2026-09-23,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=137
 map-measure,2026-09-23,J_pipeline,no model,calls_between_package_functions=7/7 columns_a_dplyr_verb_creates=12/12 documentation_describing_nothing_in_the_=1/1 final_outputs_and_not_reached_functions_=4/4 gaps_named=2/2 gaps_on_the_path_traced_by_the_agents=1/1 methodology_no_step_implements=1/1 no_more_in_those_two_counts_than_the_ans=1/1 raw_inputs_arguments_of_a_final_output=2/2 raw_inputs_columns_of_an_argument=3/3 raw_inputs_files=1/1 raw_inputs_hard_coded_numbers=5/5 raw_inputs_stored_data=4/4 values_within_a_function=8/8
+map-bar,2026-09-23,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=1 steps=137
+map-bar,2026-09-23,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=137
