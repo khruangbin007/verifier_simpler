@@ -284,18 +284,17 @@ class RunnerAndWorkbook(unittest.TestCase):
     def setUpClass(cls):
         cls.projects = os.path.join(helpers.scratch(), "Projects")
         cls.paths = runner.open_run(cls.projects, "DEMO", scratch_root=helpers.scratch())
-        cls.settings = runner.make_settings({"require_outline_confirmation": True})
+        cls.settings = runner.make_settings({})
         cls.first = runner.run_pipeline(cls.paths, cls.settings, chat=standin_chat.chat)
 
-    def test_run_stops_at_the_human_step_and_resumes_after_confirmation(self):
-        self.assertEqual(self.first["state"], "waiting for a person")
-        self.assertIn("cell 4", self.first["message"])
-        self.assertEqual(self.first["steps_run"][-1], "build-map", "before the person: reading, the graph, and the concepts code finds")
-        runner.confirm_outline(self.paths, self.settings, "reviewer-1")
+    def test_a_run_goes_from_end_to_end_and_repeats_no_finished_step(self):
+        """There is no person in the middle of a run: it reads, maps, asks the model and judges, and a
+        second call carries on where the first stopped rather than doing anything twice."""
+        self.assertEqual(self.first["state"], "finished", self.first)
+        self.assertEqual(self.first["steps_run"],
+                         ["prepare-run", "read-inputs", "build-map", "read-with-ai", "link-units"])
         second = runner.run_pipeline(self.paths, self.settings, chat=standin_chat.chat)
-        self.assertNotIn("prepare-run", second["steps_run"], "a finished step was repeated")
-        self.assertEqual(second["steps_run"], ["read-with-ai", "link-units"],
-                         "after the person: what the AI reads, then the search and the judgement of every link")
+        self.assertEqual(second["steps_run"], [], "a finished step was repeated")
 
     def test_pipeline_refuses_an_unknown_function_and_an_unversioned_step(self):
         """pipeline.yaml is the one place a step is named, versioned and mapped to its function.

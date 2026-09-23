@@ -6797,8 +6797,8 @@ DEFAULT_SETTINGS = {
     "k_candidates": 12, "concurrency_limit": 4, "token_cap": 40000, "answer_reserve": 1500,
     "thinking_reserve": 0, "safety_margin": 0.15, "prompt_target_tokens": 6000,
     "max_attempts": 3, "breaker_after_failures": 8, "retry_wait_seconds": 2.0,
-    "token_lifetime_minutes": 14.0, "token_wait": "wait", "foreground_minutes": 0.0,
-    "sync_every_calls": 100, "require_outline_confirmation": True, "judge_supporting_code": False,
+    "token_lifetime_minutes": 14.0, "token_wait": "wait", "foreground_minutes": 600.0,
+    "sync_every_calls": 100, "judge_supporting_code": False,
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "system_prompt_prefix": "", "strip_patterns": [r"(?s)<think>.*?</think>", r"(?s)<thought>.*?</thought>",
                                                    r"(?s)<\|channel\|>thought.*?<\|channel\|>"], "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
@@ -7353,10 +7353,6 @@ def replay_chat(call_records):
 
 # ---------------------------------------------------------------- the pipeline runner
 CHAT_STEPS = ("read-inputs", "read-with-ai", "link-units")   # the consolidated steps that may ask the model
-HUMAN_MESSAGES = {
-    "confirm-outline": "Waiting for a person: check Level and Section (heading chain) on Chunks_Canon "
-                       "against the methodology's own outline, then run cell 4 to confirm."}
-
 def load_pipeline(engine_dir=ENGINE_DIR):
     """Read pipeline.yaml and refuse anything that is not a known step carried out by a known
     function. A step is named, versioned and mapped to its function in the one file; only
@@ -7385,28 +7381,9 @@ def update_manifest(store, changes):
     store.append("run_manifest", [manifest])
     return manifest
 
-def confirm_outline(paths, settings, reviewer):
-    """Record that a person has checked the outline of the methodology (notebook cell 4), and say which
-    final outputs the run will map. Nothing is typed into the workbook here: every unit is reviewed, and
-    the final outputs are the ones code proposes."""
-    store = open_store(paths, settings)
-    now = datetime.datetime.now().isoformat(timespec="seconds")
-    update_manifest(store, {"outline_confirmed_by": reviewer or "not named", "outline_confirmed_at": now})
-    store.sync()
-    said = ["Recorded: the outline was confirmed by %s." % (reviewer or "a person who gave no name")]
-    flow = store.read("dataflow")
-    if flow:
-        outputs, how, _ = decided_outputs(flow, {})
-        said.append("Final outputs: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
-    return "\n".join(said)
 
-def human_step_open(step, store, settings):
-    """Is this human step still waiting for its person? The only one is confirming the outline."""
-    manifest = (store.read("run_manifest") or [{}])[0]
-    return settings["require_outline_confirmation"] and not manifest.get("outline_confirmed_by")
 
-def run_pipeline(paths, settings, chat=None, live=None, stop_after="",
-                 state=None, keep_alive=None, sleep=time.sleep):
+def run_pipeline(paths, settings, chat=None, live=None, stop_after="", state=None, sleep=time.sleep):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
     the run continues at the first step without one. A human step stops the run and says
     what the person should do. Returns {"state", "message", "steps_run"}."""
@@ -7420,20 +7397,12 @@ def run_pipeline(paths, settings, chat=None, live=None, stop_after="",
             break
         if step["id"] in done:
             continue
-        if step.get("human"):
-            if human_step_open(step, store, settings):
-                rebuild_outputs(store, paths, settings, HUMAN_MESSAGES[step["name"]])
-                return {"state": "waiting for a person", "message": HUMAN_MESSAGES[step["name"]], "steps_run": steps_run}
-            record_step(store, step, StepResult(), 0.0)
-            continue
         try:
             run_step(step, store, paths, settings, chat, live, state, sleep)
         except RunPaused as pause:
             store.sync()
             return {"state": "paused", "message": str(pause), "steps_run": steps_run}
         steps_run.append(step["name"])
-        if keep_alive:
-            keep_alive()
         if stop_after and step["id"] == stop_after:
             break
     message = "Every step has run." if not stop_after else "Stopped after step %s as asked." % stop_after
@@ -7625,8 +7594,6 @@ def rows_package_info(store, paths, settings, progress):
         add("Inputs", entry["file"], "SHA-256 %s (%d bytes)" % (entry["sha256"], entry["bytes"]))
     for change in manifest.get("changes_since_previous_run", []):
         add("Inputs", "Changed since run %s" % manifest.get("previous_run", ""), change)
-    if manifest.get("outline_confirmed_by"):
-        add("Review", "Methodology outline confirmed by", manifest["outline_confirmed_by"])
     for info in store.read("package_info"):
         for row in info.get("rows", []):
             add(row["group"], row["item"], row["value"])

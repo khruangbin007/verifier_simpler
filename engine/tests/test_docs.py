@@ -64,14 +64,14 @@ class Notebook(unittest.TestCase):
         with open(built, encoding="utf-8") as fresh, open(develop.NOTEBOOK, encoding="utf-8") as committed:
             self.assertEqual(committed.read(), fresh.read(), "run python engine/develop.py notebook")
 
-    def test_five_cells_that_each_parse_and_say_which_they_are(self):
+    def test_four_cells_that_each_parse_and_say_which_they_are(self):
         import ast
         with open(develop.NOTEBOOK, encoding="utf-8") as handle:
             cells = ["".join(cell["source"]) for cell in json.load(handle)["cells"]]
-        self.assertEqual(len(cells), 5)
+        self.assertEqual(len(cells), 4)
         for number, source in enumerate(cells, start=1):
             ast.parse(source)
-            self.assertIn("Cell %d of 5" % number, source.split("\n")[0])
+            self.assertIn("Cell %d of 4" % number, source.split("\n")[0])
 
 
 class EngineMap(unittest.TestCase):

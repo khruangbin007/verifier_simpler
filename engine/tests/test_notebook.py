@@ -88,9 +88,12 @@ class NotebookCells(unittest.TestCase):
             sent.append({"url": url, "json": json, "headers": headers})
             return Reply()
 
-        space = {"live": live_values.get, "__name__": "notebook"}
+        import types
+        widgets = types.SimpleNamespace(get=lambda name: {"projects_dir": helpers.scratch(), "model_id": "NBCHAT",
+                                                          "project": "2026-01-01"}.get(name, ""))
+        space = {"live": live_values.get, "verifier": runner, "w": widgets, "os": os, "__name__": "notebook"}
         with mock.patch("requests.post", post), contextlib.redirect_stdout(io.StringIO()):
-            exec(compile(source.replace("USE_STANDIN = False", "USE_STANDIN = False\nACTIVE_CHAT = None"), "cell 2", "exec"), space)
+            exec(compile(source, "cell 2", "exec"), space)
             live_values.update("https://gateway.example/chat", "tok-SECOND", "mel_lorenzo")
             self.assertEqual(space["chat"]("system text", "main text"), {"answer": "OK"})
         request = sent[-1]
@@ -100,65 +103,9 @@ class NotebookCells(unittest.TestCase):
         self.assertEqual(request["json"]["optionalParameter"]["DefaultPrompt"], "system text")
         self.assertEqual(request["url"], "https://gateway.example/chat")
 
-    def test_the_sign_off_appendix_uses_the_real_chat_and_changes_nothing(self):
-        source = self.cells()[4]
-        self.assertIn("develop.run(ACTIVE_CHAT, LIVE", source)
-        self.assertNotIn('agentic_reading"] =', source)
-
-    def test_cell_4_in_the_background_with_an_old_token_runs_to_the_person(self):
-        """The default mode, A: the run works in a background thread. Found in use: a token older
-        than token_lifetime_minutes made the worker wait, silently, for a fresh one before its first
-        call - though the token still worked - so no link, status or flagged item ever appeared.
-        Age alone no longer blocks; only a call the gateway refuses does. And an error inside the
-        worker is shown by cell 4 instead of dying with the thread."""
+    def test_the_four_cells_run_from_setup_to_verification(self):
         cells = self.cells()
-        projects = helpers.scratch()
-        values = {"model_id": "NBBG", "projects_dir": projects, "llm_token": "tok-OLD-BUT-GOOD", "llm_endpoint": "https://x",
-                  "reviewer_id": "analyst.two", "project": "", "run": "", "jfrog_index_url": "",
-                  "concurrency_limit": "4", "token_cap": "40000", "scratch_dir": ""}
-        space = {"dbutils": FakeDbutils(values), "__name__": "notebook"}
-
-        def run_cell(number, replace=None):
-            source = cells[number - 1]
-            for old, new in (replace or {}).items():
-                source = source.replace(old, new)
-            printed = io.StringIO()
-            with contextlib.redirect_stdout(printed):
-                exec(compile(source, "cell %d" % number, "exec"), space)
-            return printed.getvalue()
-
-        previous = os.getcwd()
-        os.chdir(helpers.ROOT_DIR)
-        try:
-            run_cell(1, {"HOME = notebook_folder()": "HOME = %r" % helpers.ROOT_DIR})
-            run_cell(2, {"USE_STANDIN = False": "USE_STANDIN = True"})
-            run_cell(3)
-            project_dir = os.path.join(projects, "NBBG", sorted(os.listdir(os.path.join(projects, "NBBG")))[0])
-            shutil.rmtree(os.path.join(project_dir, "Inputs"))
-            shutil.copytree(os.path.join(helpers.SAMPLES_DIR, "A_minimal", "Inputs"), os.path.join(project_dir, "Inputs"))
-            run_cell(3)
-            space["LIVE"].set_at -= 3600                 # the token was pasted an hour ago, and still works
-            run_cell(4)
-            space["WORKER"].join(timeout=300)
-            self.assertFalse(space["WORKER"].is_alive(), "the background run should finish, not wait for a fresh token")
-            self.assertEqual(space["RESULT"].get("state"), "finished", space["RESULT"])
-            shown = run_cell(4)
-            self.assertIn("not working at the moment", shown)
-            self.assertNotIn("WAITING FOR A FRESH TOKEN", shown)
-            store = space["verifier"].open_store(space["PATHS"], space["SETTINGS"])
-            self.assertTrue(store.read_calls(), "the model steps made their calls")
-            self.assertTrue(store.read("graph_ledger"), "the links were recorded")
-        finally:
-            os.chdir(previous)
-
-    def test_an_error_inside_the_background_run_is_shown_by_cell_4(self):
-        source = self.cells()[3]
-        self.assertIn('RESULT.update(state="failed"', source)
-        self.assertIn("THE RUN STOPPED WITH A PROBLEM", source)
-
-    def test_the_cells_run_from_setup_to_verification_with_the_stand_in(self):
-        cells = self.cells()
-        self.assertEqual(len(cells), 5)
+        self.assertEqual(len(cells), 4)
         projects = helpers.scratch()
         values = {"model_id": "NBTEST", "projects_dir": projects, "llm_token": "tok-SECRET-123", "llm_endpoint": "https://x",
                   "reviewer_id": "analyst.one", "project": "", "run": "",
@@ -182,29 +129,22 @@ class NotebookCells(unittest.TestCase):
             self.assertIn("engine", shown)
             self.assertNotIn("tok-SECRET-123", shown, "the token is never printed")
             self.assertIn("14 characters", shown)
-            self.assertIn("stand-in", run_cell(2, {"USE_STANDIN = False": "USE_STANDIN = True"}))
-            self.assertIn("Run cell 3 first", run_cell(4), "cell 4 before cell 3 says what to do instead of raising NameError")
+            # the notebook carries no stand-in; the test puts one in place of the organisation's chat()
+            stand_in = "import standin_chat\nchat = standin_chat.chat\nACTIVE_CHAT = chat"
+            self.assertIn("PUT YOUR FILES IN THESE THREE FOLDERS",
+                          run_cell(2, {"ACTIVE_CHAT = chat": stand_in}), "cell 2 names the folders")
+            self.assertIn("Run cell 3 first", run_cell(4), "cell 4 before cell 3 says what to do instead of raising")
             self.assertIn("Put the files in", run_cell(3))
             project_dir = os.path.join(projects, "NBTEST", sorted(os.listdir(os.path.join(projects, "NBTEST")))[0])
             shutil.rmtree(os.path.join(project_dir, "Inputs"))
             shutil.copytree(os.path.join(helpers.SAMPLES_DIR, "A_minimal", "Inputs"), os.path.join(project_dir, "Inputs"))
             shown = run_cell(3)
-            self.assertIn("Outline of the methodology", shown)
-            self.assertIn("Final outputs code proposes:", shown)
-            self.assertIn("Read as:", shown)
-            self.assertIn("Waiting for a person", space["RESULT"]["message"], "cell 3 stops at the outline for a person")
-            import openpyxl
-            book_path = os.path.join(space["PATHS"].run_dir, "Output.xlsx")
-            book = openpyxl.load_workbook(book_path)
-            sheet = book["Chunks_Doc"]
-            header = [cell.value for cell in sheet[1]]
-            book.save(book_path)
-            shown = run_cell(4, {'MODE = "A"': 'MODE = "C"'})
-            self.assertIn("confirmed by analyst.one", shown)
-            self.assertIn("Final outputs:", shown)
-            self.assertIn("link-units", run_cell(4, {'MODE = "A"': 'MODE = "C"'}), "a second run of cell 4 shows the status")
-            shown = run_cell(5)
-            store = space["verifier"].open_store(space["PATHS"], space["SETTINGS"])
+            self.assertIn("What each step did:", shown)
+            self.assertIn("link-units", shown, "cell 3 runs the model steps as well as the reading")
+            self.assertIn("Run folder:", shown)
+            self.assertEqual(space["RESULT"]["state"], "finished", space["RESULT"])
+            self.assertIn("step 05", run_cell(3), "running cell 3 again shows the steps and repeats none")
+            shown = run_cell(4)
             self.assertIn("Verifying the evidence pack", shown)
             self.assertNotIn("differs", shown.lower().split("verifying the evidence pack")[1])
             for line in shown.split("\n"):

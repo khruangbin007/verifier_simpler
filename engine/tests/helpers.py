@@ -86,7 +86,7 @@ def run_sample(sample, chat=None, settings=None, stop_after=""):
     import standin_chat
     projects = scratch()
     copy_sample(sample, projects, "SAMPLE", "2026-09-18")
-    settings = runner.make_settings(dict({"require_outline_confirmation": False}, **(settings or {})))
+    settings = runner.make_settings(dict({}, **(settings or {})))
     paths = runner.open_run(projects, "SAMPLE", "2026-09-18", scratch_root=scratch())
     result = runner.run_pipeline(paths, settings, chat=chat or standin_chat.chat_well_behaved, stop_after=stop_after)
     return paths, settings, result
@@ -104,7 +104,7 @@ def accounts_of_sample(sample, stop_after="04"):
     import standin_chat
     projects = scratch()
     copy_sample(sample, projects, "LEDGER", "2026-09-18")
-    settings = runner.make_settings({"require_outline_confirmation": False})
+    settings = runner.make_settings({})
     paths = runner.open_run(projects, "LEDGER", "2026-09-18", scratch_root=scratch())
     runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after=stop_after)
     return runner.open_store(paths, settings).read("content_accounts")

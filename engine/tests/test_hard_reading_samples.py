@@ -52,7 +52,7 @@ def reading_of(sample):
     import standin_chat
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "HARD", "2026-09-18")
-    settings = runner.make_settings({"require_outline_confirmation": False})
+    settings = runner.make_settings({})
     paths = runner.open_run(projects, "HARD", "2026-09-18", scratch_root=helpers.scratch())
     runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after="04")
     store = runner.open_store(paths, settings)

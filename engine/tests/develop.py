@@ -273,7 +273,7 @@ def run_once(sample, replaced, chat):
     for relative, data in replaced.items():
         with open(os.path.join(inputs, relative), "wb") as handle:
             handle.write(data)
-    settings = runner.make_settings({"require_outline_confirmation": False})
+    settings = runner.make_settings({})
     paths = runner.open_run(projects, "HARNESS", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_harness_local_"))
     runner.run_pipeline(paths, settings, chat=chat)
     store = runner.open_store(paths, settings)
@@ -318,7 +318,7 @@ KS = (3, 5, 12)
 def shortlists(sample, signals):
     projects = tempfile.mkdtemp(prefix="verifier_recall_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "RECALL", "2026-01-01", "Inputs"))
-    settings = runner.make_settings({"require_outline_confirmation": False, "signals": signals})
+    settings = runner.make_settings({"signals": signals})
     paths = runner.open_run(projects, "RECALL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_recall_local_"))
     runner.run_pipeline(paths, settings, chat=None, stop_after="06")
     store = runner.open_store(paths, settings)
@@ -369,7 +369,7 @@ def trial_run(sample, chat, live, concurrency):
     """Steps 01 to 08 on a fresh copy of the sample. Returns the accepted links, the call records and the seconds used."""
     projects = tempfile.mkdtemp(prefix="verifier_trial_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "TRIAL", "2026-01-01", "Inputs"))
-    settings = runner.make_settings({"require_outline_confirmation": False, "concurrency_limit": concurrency})
+    settings = runner.make_settings({"concurrency_limit": concurrency})
     paths = runner.open_run(projects, "TRIAL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_trial_local_"))
     started = datetime.datetime.now()
     runner.run_pipeline(paths, settings, chat=chat, live=live, stop_after="08")
@@ -584,7 +584,7 @@ def one_run(sample, mode, chat, live):
     import helpers
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "R6", "2026-09-18")
-    settings = runner.make_settings({"require_outline_confirmation": False, "agentic_reading": mode})
+    settings = runner.make_settings({"agentic_reading": mode})
     paths = runner.open_run(projects, "R6", "2026-09-18", scratch_root=helpers.scratch())
     runner.run_pipeline(paths, settings, chat=chat, live=live, stop_after="04")
     store = runner.open_store(paths, settings)
@@ -875,7 +875,7 @@ def map_run(sample, chat, live=None, settings=None):
     import helpers
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "BAR", "2026-01-01")
-    run_settings = runner.make_settings(dict({"require_outline_confirmation": False}, **(settings or {})))
+    run_settings = runner.make_settings(dict({}, **(settings or {})))
     paths = runner.open_run(projects, "BAR", "2026-01-01", scratch_root=helpers.scratch())
     runner.run_pipeline(paths, run_settings, chat=chat, live=live, stop_after="07d")
     store = runner.open_store(paths, run_settings)
@@ -1001,7 +1001,7 @@ def check_docs():
 
 # ================================================================================================
 # ---------------------------------------------------------------- the notebook, five cells
-CELL_1 = r'''# ===== Cell 1 of 5 - set up: widgets, packages, the engine =====
+CELL_1 = r'''# ===== Cell 1 of 4 - set up: widgets, packages, the engine =====
 # Run this first, and run it again after anything restarts Python. It is safe to run any number of times.
 import importlib, importlib.metadata, importlib.util, os, re, subprocess, sys, tempfile
 
@@ -1119,15 +1119,21 @@ else:
             print("  %-11s not installed%s" % (name, "" if name in ("pdfplumber", "pypdf") else " - run this cell again"))
     token = LIVE.get("llm_token")
     print("Endpoint set:", bool(LIVE.get("llm_endpoint")), "| token:", ("%d characters, pasted %.1f minutes ago" % (len(token), LIVE.token_age_minutes())) if token else "none pasted yet")
+    print("")
+    print("THE ENGINE IS READY. What happens next:")
+    print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
+    print("  Cell 3  read the inputs and run the review; it prints what each step did.")
+    print("  Cell 4  check the finished run folder against its own record.")
+    print("Widgets 01 to 03 carry the endpoint, the token and your user id; widget 04 the model id, 05 the")
+    print("project date, 07 the projects folder. Paste a fresh token into widget 02 at any time - it is read")
+    print("at the moment each call is made, so a run already working picks it up.")
     print("Next: cell 2.")
 '''
 
-CELL_2 = r'''# ===== Cell 2 of 5 - your chat() =====
-# Paste your organisation's chat() below, or leave USE_STANDIN = True to try the notebook without a model.
-# chat(system_prompt, main_prompt) must return {"answer": "<the model's reply>"}. Read the endpoint, token and
-# user id with live("...") INSIDE the function, so that a fresh token pasted into the widget is used mid-run.
-USE_STANDIN = False
-
+CELL_2 = r'''# ===== Cell 2 of 4 - your chat(), and where your files go =====
+# Paste your organisation's chat() below. It must return {"answer": "<the model's reply>"}. Read the endpoint,
+# token and user id with live("...") INSIDE the function, so that a fresh token pasted into the widget is
+# used mid-run. This cell asks it one question, then makes the project's Inputs folders and names them.
 import requests
 
 def chat(SystemPrompt, MainPrompt, history=[]):
@@ -1156,153 +1162,72 @@ def chat(SystemPrompt, MainPrompt, history=[]):
     response.raise_for_status()
     return response.json()          # the engine reads the reply from "answer", or from an OpenAI-shaped "choices"
 
-if USE_STANDIN:
-    import standin_chat
-    ACTIVE_CHAT = standin_chat.chat
-    print("Using the stand-in: no model is called; answers are made up from the prompt, for trying the notebook only.")
+ACTIVE_CHAT = chat
+try:
+    reply = ACTIVE_CHAT("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
+    print("chat() answered:", str(reply)[:60])
+except Exception as problem:
+    print("chat() did not answer (%s: %s). Check widgets 01, 02 and 03, then run this cell again."
+          % (type(problem).__name__, problem))
 else:
-    ACTIVE_CHAT = chat
-    try:
-        reply = ACTIVE_CHAT("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
-        print("chat() answered:", reply[:60], "| Next: cell 3.")
-    except Exception as problem:
-        print("chat() did not answer (%s: %s). Check widgets 01 to 03, or set USE_STANDIN = True to try without a model." % (type(problem).__name__, str(problem)[:120]))
+    project_dir, missing = verifier.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
+    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
+    for _, folder, note in verifier.INPUT_FOLDERS:
+        print("  %s" % os.path.join(project_dir, "Inputs", folder))
+        print("      %s" % note)
+    print("\nOne methodology file, the model package as it ships (.tar.gz, .zip or the unpacked folder), and the")
+    print("model documentation. A folder with nothing in it stops the run and says so, rather than reading around it.")
+    if missing:
+        print("\nStill empty: " + "; ".join(missing))
+    else:
+        print("\nAll three folders have files in them. Next: cell 3.")
 '''
 
-CELL_3 = r'''# ===== Cell 3 of 5 - read the inputs (no model involved) =====
-# Makes the project folder if it is new, tells you what to put where, reads every input file, and shows
-# the outline of the methodology for you to check before any model call is spent.
+CELL_3 = r'''# ===== Cell 3 of 4 - read the inputs and run the review =====
+# Reads every input file, maps how the model computes what it returns, then asks your model to interpret the
+# code, name the concepts, close the gaps code could not follow, and judge every link. It runs here, in this
+# cell, and prints what each step did. A step that has already finished is never repeated: run the cell again
+# after a token expires or a cluster restarts and it carries on where it stopped.
+FOREGROUND_MINUTES = 600      # how long this cell may work before it stops by itself and asks you to run it again
+
 PATHS = open_current()
 if PATHS is not None:
-    SETTINGS = current_settings()
-    RESULT = verifier.run_pipeline(PATHS, SETTINGS, chat=None, live=LIVE, stop_after="06")
+    SETTINGS = dict(current_settings(), foreground_minutes=float(FOREGROUND_MINUTES))
+    STATE = verifier.AskState()
+    RESULT = verifier.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT, live=LIVE, state=STATE)
     print(RESULT["message"])
     store = verifier.open_store(PATHS, SETTINGS)
-    for outline in store.read("outline"):
-        if outline["corner"] == "canon":
-            print("\nOutline of the methodology as it was read (first 60 lines):\n" + "\n".join(outline["lines"][:60]))
+    print("\nWhat each step did:")
     for record in store.read("step_records"):
+        print("  step %s %-14s %s" % (record["step_id"], record["name"],
+                                      ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
         for message in record["messages"]:
-            if message.startswith(("Read as:", "Not read:")) or "left out" in message or "R package" in message:
-                print("  " + message)
-    flow = store.read("dataflow")
-    if flow:
-        outputs, how, _ = verifier.decided_outputs(flow, {})
-        print("\nFinal outputs code proposes: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
-    concepts, _ = verifier.latest_concepts(store.read)
-    print("\nConcepts found by code: %d (sheet Concepts). The model refines them after you confirm the outline." % len(concepts))
-    print("Run folder:", PATHS.run_dir)
-    print("Open Output.xlsx there. The three Chunks sheets show everything that was read; Model_Package_Info what was not.")
-    print("into the run folder before cell 4. If the outline is right, go to cell 4; if not, fix the input and run this cell again.")
-'''
-
-CELL_4 = r'''# ===== Cell 4 of 5 - confirm the outline, then run the model steps and the checks =====
-# First run: records that you confirmed the outline, then starts the model steps in the background.
-# Run it again at any time to see where the run stands. Set PAUSE or STOP to True and run it to pause or stop.
-OUTLINE_CONFIRMED = True      # set False if you have not checked the outline in cell 3
-PAUSE, STOP = False, False
-MODE = "A"                    # "A": background thread. "C": foreground, stops by itself after FOREGROUND_MINUTES.
-FOREGROUND_MINUTES = 12
-import threading
-
-def keep_alive():
-    """A trivial Spark action so the cluster does not shut down mid-run - in its own thread, so that
-    a slow or stuck Spark call can never hold the review up."""
-    def touch():
-        try:
-            spark.range(1).count()
-        except Exception:
-            pass
-    threading.Thread(target=touch, daemon=True).start()
-
-def work():
-    """The run itself. Whatever goes wrong is written into RESULT, where cell 4 shows it: a thread
-    that dies otherwise dies in silence, and the run just looks idle."""
-    import traceback
-    try:
-        settings = dict(SETTINGS, foreground_minutes=FOREGROUND_MINUTES if MODE == "C" else 0.0, token_wait="stop" if MODE == "C" else "wait")
-        RESULT.update(verifier.run_pipeline(PATHS, verifier.make_settings({k: v for k, v in settings.items() if v != verifier.DEFAULT_SETTINGS.get(k)}),
-                                          chat=ACTIVE_CHAT, live=LIVE, state=STATE, keep_alive=keep_alive))
-    except Exception as problem:
-        RESULT.update(state="failed", message="The run stopped: %s: %s" % (type(problem).__name__, problem),
-                      details=traceback.format_exc())
-
-RESULT = globals().get("RESULT") or {}
-
-if "PATHS" not in globals() or PATHS is None:
-    PATHS = open_current()
-    SETTINGS = current_settings() if PATHS is not None else None
-if PATHS is None:
-    print("Cell 3 has not read the inputs yet. Run cell 3 first.")
-elif "STATE" not in globals():
-    store = verifier.open_store(PATHS, SETTINGS)
-    if not OUTLINE_CONFIRMED:
-        print("Check the outline in cell 3 first, then set OUTLINE_CONFIRMED = True.")
-    else:
-        print(verifier.confirm_outline(PATHS, SETTINGS, w.get("reviewer_id")))
-        STATE = verifier.AskState()
-        if MODE == "C":
-            work(); print(RESULT["message"])
-        else:
-            WORKER = threading.Thread(target=work, name="verifier-run", daemon=True); WORKER.start()
-            print("The run works in the background. Run this cell again to see where it stands; paste a fresh token into widget 02 whenever it asks.")
-else:
-    store = verifier.open_store(PATHS, SETTINGS)
-    STATE.control["pause"], STATE.control["stop"] = PAUSE, STOP
-    print(verifier.progress_text(store, RESULT.get("message", "")))
-    for record in store.read("step_records"):
-        print("  step %s %-22s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted(record["counts"].items()))))
+            print("      " + message)
     for label, value in verifier.call_statistics(store):
         print("  %-52s %s" % (label, value))
-    print("Token pasted %.1f minutes ago." % LIVE.token_age_minutes())
     if STATE.waiting_for_token:
-        print("WAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and run cell 1; the run goes on by itself.")
-    alive = "WORKER" in globals() and WORKER.is_alive()
-    if RESULT.get("state") == "failed":
-        print("THE RUN STOPPED WITH A PROBLEM:", RESULT["message"])
-        print(RESULT.get("details", "")[-1500:])
-        print("Fix what it says, then set STATE aside (del STATE) and run this cell again; finished steps are not repeated.")
-    elif alive:
-        print("The run is working in the background. Run this cell again to see progress.")
-    else:
-        print("The run is not working at the moment:", RESULT.get("message", "no message yet"), "| When it waits for a person, go to cell 5.")
+        print("\nWAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and")
+        print("run this cell again; the steps already finished are not repeated.")
+    print("\nRun folder:", PATHS.run_dir)
+    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Concepts the model's own")
+    print("names, Model_Implementation_Map how it computes what it returns, and Mapping_Coverage what is covered.")
+    print("Then run cell 4 to check the run folder against its own record.")
 '''
 
-CELL_5 = r'''# ===== Cell 5 of 5 - finish: verify the evidence pack =====
-# Run this when the run has finished, to check the run folder against its own record: the inputs are the
-# files that were read, the engine is the one that produced it, re-reading gives the same content, the
-# graph chain verifies, and no access token was written anywhere in the folder.
-# APPENDIX runs a maintainer's check instead: "probe" (a new cluster), "sanity" (the sample projects with
-# the stand-in), "sign-off" (guided reading against your real chat()), or "map-sign-off" (the
-# implementation map's agents against your real chat()).
-APPENDIX = ""
-
-if APPENDIX:
-    import develop, standin_chat
-    if APPENDIX == "probe":
-        print(develop.run_probe(w.get("projects_dir"), chat=ACTIVE_CHAT, live=LIVE))
-    elif APPENDIX == "sanity":
-        import datetime, shutil, tempfile
-        demo = tempfile.mkdtemp(prefix="verifier_sanity_")
-        shutil.copytree(os.path.join(HOME, "engine", "tests", "sample_projects", "A_minimal", "Inputs"), os.path.join(demo, "SANITY", datetime.date.today().isoformat(), "Inputs"))
-        demo_paths = verifier.open_run(demo, "SANITY")
-        print(verifier.run_pipeline(demo_paths, verifier.make_settings({"require_outline_confirmation": False}), chat=standin_chat.chat)["message"])
-        print("Open", os.path.join(demo_paths.run_dir, "Output.xlsx"))
-    elif APPENDIX == "sign-off":
-        print(develop.run(ACTIVE_CHAT, LIVE, label="the real model"))
-    elif APPENDIX == "map-sign-off":
-        print(develop.map_report(ACTIVE_CHAT, LIVE, label="the real model"))
-elif "PATHS" not in globals() or PATHS is None:
-    print("Cell 3 has not read the inputs yet. Run cells 3 and 4 first.")
+CELL_4 = r'''# ===== Cell 4 of 4 - check the run folder against its own record =====
+# The inputs are the files that were read, the engine is the one that produced the run, re-reading the inputs
+# gives the same content, the graph chain verifies, and no access token was written anywhere in the folder.
+if "PATHS" not in globals() or PATHS is None:
+    print("Cell 3 has not read the inputs yet. Run cell 3 first.")
 else:
     SETTINGS = current_settings()
-    RESULT = verifier.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE)
-    print(RESULT["message"])
-    print("\nVerifying the evidence pack:")
+    print("Verifying the evidence pack:")
     for what, verdict, detail in verifier.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
-        print("  %-34s %-10s %s" % (what, verdict, detail))
-    print("\nRun folder:", PATHS.run_dir, "- Output.xlsx and Validation_Report.docx are the deliverables; _audit/ holds the record.")
+        print("  %-62s %-16s %s" % (what, verdict, detail))
+    print("\nRun folder:", PATHS.run_dir, "- Output.xlsx is the deliverable; _audit/Audit_Log.xlsx is the record")
+    print("of the run: every step, every record, and every exchange with the model.")
 '''
+
 
 
 # ====================================================================================
@@ -1503,9 +1428,9 @@ def build_engine_map(target=None):
     return target, len(facts), len(tree)
 
 def build_notebook(target=NOTEBOOK):
-    """The notebook, five cells, written from the sources above so that it is never edited by hand."""
+    """The notebook, four cells, written from the sources above so that it is never edited by hand."""
     cells = [{"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": text.splitlines(keepends=True)}
-             for text in (CELL_1, CELL_2, CELL_3, CELL_4, CELL_5)]
+             for text in (CELL_1, CELL_2, CELL_3, CELL_4)]
     notebook = {"cells": cells, "metadata": {"language_info": {"name": "python"},
                                              "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
                 "nbformat": 4, "nbformat_minor": 5}
@@ -1529,7 +1454,7 @@ if __name__ == "__main__":
         where, functions, rows = build_engine_map()
         print("%s: %d functions, %d rows of the tree" % (where, functions, rows))
     if what == "notebook":
-        print(build_notebook(), "with 5 cells")
+        print(build_notebook(), "with 4 cells")
     if what == "recall":
         recall(sys.argv[2:] or ["A_minimal", "F_capital"])
     if what == "map-bar":

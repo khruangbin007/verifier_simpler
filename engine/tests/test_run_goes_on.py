@@ -27,7 +27,7 @@ def a_run(replace=None):
     try:
         projects = helpers.scratch()
         helpers.copy_sample("A_minimal", projects, "GOESON", "2026-09-21")
-        settings = runner.make_settings({"require_outline_confirmation": False})
+        settings = runner.make_settings({})
         paths = runner.open_run(projects, "GOESON", "2026-09-21", scratch_root=helpers.scratch())
         outcome = runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved)
         return outcome, paths, runner.open_store(paths, settings).read("step_records")
