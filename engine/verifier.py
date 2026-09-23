@@ -88,7 +88,7 @@ UNIT_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST, KIND_TABLE,
 CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
 AI_WORDING_NOT_SHOWN = ("The AI's wording is not displayed here; the full text is in the audit records.")
 
-# The lint (tests/test_layout_rules.py) skips this one assignment, which has to name the words.
+# This one assignment has to name the words the tool may never use; nothing else in the engine may.
 # These terminologies CAN BE USED ONLY by HUMAN reviewers/validators. Machines cannot make these determinations.
 BANNED_WORDING_PATTERNS = (
     r"\bfindings?\b", r"\berrors?\b", r"\bseverity\b", r"\bsevere\b", r"\bcritical\b",
@@ -819,7 +819,6 @@ def without_page_furniture(lines, pages, state, file_name):
 # smallest countable pieces of the file are counted independently of the reader that read it,
 # and every one of them has to end in a named class.
 
-ATOM_CLASSES = ("in unit text", "relocated", "rewritten", "declared drop", "not read", "unaccounted")
 
 # An atom found in one of these places is not expected word for word in a unit, and why.
 # "rewritten" is the class R1 added to the plan's four: an equation is not lost and not carried
@@ -5226,9 +5225,6 @@ def ledger_records(existing, new_records):
                    key=lambda r: (r["source"], r["target"], r["kind"], r.get("relation", ""), r.get("how", "")))
     return chain_records(chain_head(existing), nodes + edges, LEDGER_VOLATILE)
 
-def verify_ledger(records):
-    """True when no record of the ledger was edited, removed or re-ordered."""
-    return verify_chain(records, LEDGER_VOLATILE)
 
 def graph_version_id(records):
     """G- and the first twelve characters of the ledger's head hash."""
@@ -5245,23 +5241,6 @@ def load_graph(records):
             graph["in"].setdefault(record["target"], []).append(record)
     return graph
 
-def find_path(graph, start, is_goal, allowed_kinds=None, max_hops=4):
-    """Breadth-first walk over typed edges in either direction, at most `max_hops` long.
-    Returns the list of (edge, node reached) hops of the first shortest path, or None."""
-    frontier, seen = [(start, [])], {start}
-    for _ in range(max_hops):
-        following = []
-        for node, path in frontier:
-            steps = [(e, e["target"]) for e in graph["out"].get(node, [])] + [(e, e["source"]) for e in graph["in"].get(node, [])]
-            for edge, reached in sorted(steps, key=lambda step: (step[1], step[0]["kind"])):
-                if reached in seen or (allowed_kinds and edge["kind"] not in allowed_kinds):
-                    continue
-                seen.add(reached)
-                if is_goal(reached):
-                    return path + [(edge, reached)]
-                following.append((reached, path + [(edge, reached)]))
-        frontier = following
-    return None
 
 def links_of(graph, ref, corner_prefix):
     """The `corresponds` edges of a unit into one corner ("C", "D" or "M"), in ledger order."""
@@ -6286,7 +6265,6 @@ def shown_ai_text(text):
 # ---------------------------------------------------------------- steps 07 and 09: judge-links
 
 # ---------------------------------------------------------------- what each piece of code does, in plain words
-INTERPRETED_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST)
 
 
 

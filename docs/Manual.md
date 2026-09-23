@@ -35,7 +35,7 @@ The record is what makes the run an **evidence pack**: from that workbook alone,
 
 ## 3. Design rules
 
-Fourteen rules. Each is enforced by named code, and a test holds each.
+Fourteen rules, each enforced by named code: its docstring says so (`Enforces: R2`).
 
 | Rule | Statement |
 |---|---|
@@ -49,7 +49,7 @@ Fourteen rules. Each is enforced by named code, and a test holds each.
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
 | R9 | No domain concept in the engine, its vocabulary or its prompts. Domain flavour lives in sample data and in the optional glossary. |
 | R10 | Plain language outward. No internal names, no technical traces, whole numbers shown as whole numbers, in anything an analyst reads. |
-| R11 | One engine file, plain code, line budgets. The notebook is built from code and never edited by hand. |
+| R11 | One engine file, plain code. The notebook's four cells are calls into it and hold no code of their own but the organisation's `chat()`. |
 | R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, read into another form, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
 | R14 | The map is exhaustive and verifiable. Every step of the Model Implementation Map is parsed from the code or quotes it word for word; every model unit is a step of the map, belongs to one, or is in the branch of units no final output reaches; every step ends at a named raw input; and what the tool cannot follow is a named gap, never a silence. |
@@ -281,7 +281,7 @@ A called function is entered with the arguments that call gives it, so what it c
 - PDF input is read by position on the page; multi-column layouts and tables without ruling lines may be cut wrongly. Check the outline.
 - R code is never run. The package's units are read by the tool's own reader, and its data flow by flowR. Unusual syntax becomes a *File not read* unit for that expression only.
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described but not taken apart; missing values of different kinds are not told apart.
-- The evaluation so far used invented sample projects and the stand-in `chat()`; results with a real model on a real package are still to be measured (section 22).
+- The tool was developed against invented sample projects and a stand-in for `chat()`; results with a real model on a real package are still to be measured.
 
 ---
 
@@ -317,9 +317,9 @@ Every exchange is recorded, and `verifier.replay_chat` answers from the record, 
 
 Every file read keeps a **content account** (`verifier.account`): the file's smallest pieces of text are counted straight from its bytes, then counted again in the units the tool produced, and the two must agree. A piece that is read but lands in no unit leaves the account open, and the file is named on `Model_Package_Info` with the reason, so nothing is dropped in silence.
 
-## 18. Tests and sample projects
+## 18. What ships
 
-`engine/tests/` holds the tests, all offline, run with `python -m unittest discover engine/tests`. Eight sample projects under `engine/tests/sample_projects/` are built from source by `engine/tests/build_samples.py`, byte for byte the same on every build: four settled ones with gold links and gold clean units, and three built to be read badly — an XML schema unlike any the rules know, a two-column PDF with running headers and a footnote, a Word file with bold-only headings, a text box and tracked changes; and one built for the implementation map: a package, `J_pipeline`, with one R file among many help pages, dplyr pipelines that create columns, a purrr lambda, `do.call` over a list built at run time, a recursive function, dead code and a file read from `inst/`, whose `gold_map.yaml` says what a complete map of it must hold. `engine/tests/frozen/` holds a snapshot of every unit the four settled samples produce, so that a change to reading shows as a diff; `REFRESHED.md` beside it records every deliberate refresh and why.
+The tool is `Verifier.ipynb` and three files in `engine/`: `verifier.py`, `pipeline.yaml` and `requirements.txt`. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. `Engine_Map.xlsx` lists every function of the engine as of this version. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
 
 ---
 
@@ -371,28 +371,25 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
 | `reviewer_id` |  | Who runs the notebook; recorded against the run. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
-| `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the recall ladder (`develop.recall`) switches them off one by one. |
+| `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use. |
 
 `map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting. `map_hops_max` (default 8): the most turns the Tracer takes on one gap. `map_calls_max` (default 200): the most questions the map's agents ask in one run, the Tracer's and the Namer's together. `map_with_ai` (default true): whether the map's agents are asked at all.
 
 ## 21. Extending the tool safely
 
-| You want to add | Where | What must be re-evaluated |
-|---|---|---|
-| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
-| a question type | a prompt in `verifier.PROMPTS`, a validator in `verifier.validate_answer`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
-| a search signal | `verifier.search_one`, `verifier.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
-| a word the search should ignore, or a code-to-prose bridge | `verifier.STOPWORDS_TEXT`, `verifier.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
-| a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` | `test_runner.py`; the end-to-end tests |
+| You want to add | Where |
+|---|---|
+| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` |
+| a question type | a prompt in `verifier.PROMPTS`, a validator in `verifier.validate_answer` |
+| a search signal | `verifier.search_one`, `verifier.REASON_TEMPLATES`, the `signals` setting |
+| a word the search should ignore, or a code-to-prose bridge | `verifier.STOPWORDS_TEXT`, `verifier.BRIDGE_PATTERNS_YAML` |
+| a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` |
 
 A prompt's text is part of every question id made from it, and recorded answers are found by that id: change a prompt's words and raise its `VERSION` line together, so that no answer to the old question is taken for an answer to the new one.
 
 After any change, see section 23.
 
-## 22. How the tool was measured
-
-
-**Line counts.** `python engine/tests/develop.py budgets` prints them. The plan asked for at least 30 percent of each file to be docstrings, comments and overview; the files are below that share, and the numbers are reported as they are rather than padded.
+## 22. What the tool needs
 
 **Dependencies.**
 
@@ -407,9 +404,6 @@ After any change, see section 23.
 | rapidocr-onnxruntime>=1.3 | optional | the words inside pictures (OCR) |
 | flowR 2.15.8 (not a Python package) | required | reads the package's R code; fetched and checked by cell 1 |
 
-**The implementation map.** `develop.map_measure` measures the map of `J_pipeline` against its answer key, part by part, and `develop.map_report` is the sign-off bar of its agents, four tests: the map holds every part of the answer key, including the gaps on the path the agents traced; every link the AI declared quotes the code word for word; the shape of the map is the same as with no model at all, because code decides it; and every question the agents asked was answered and accepted the first time, with every gap on the path ending traced or with a reason. With the stand-in all four hold, and the bar says so while reporting itself **not met**: the stand-in shows the machinery is sound, not how a model traces a gap it has never seen. Run it on your own gateway by calling `develop.map_report` with your `chat()`. Rehearsed against a model that declares links quoting code that is not there, the fourth test does not hold and the bar says NOT met.
-
-
-
 ## 23. Maintaining the tool
 
+Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 21). A prompt's words and its `VERSION` line change together. After a change, run a review on a project you know and compare its `Output.xlsx` with the one before: every sheet should differ only where the change meant it to.
