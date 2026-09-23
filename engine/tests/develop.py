@@ -1124,8 +1124,10 @@ else:
     try:                                            # flowR reads the R code: fetched once, checked against its pinned SHA-256
         print("flowR %s ready in %s" % (verifier.FLOWR_VERSION, verifier.flowr_ready(w.get("flowr_archive").strip())))
     except Exception as problem:
-        print("flowR IS NOT READY (%s). Without internet, download %s on an approved machine, put it in a Volume,"
-              " and give its path in widget 13." % (problem, verifier.FLOWR_URL.format(verifier.FLOWR_VERSION)))
+        print("flowR IS NOT READY: %s" % problem)
+        if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by staging it in a Volume
+            print("The cluster could not download it. Download %s on an approved machine, put it in a Volume, and give"
+                  " its path in widget 13." % verifier.FLOWR_URL.format(verifier.FLOWR_VERSION))
     print("")
     print("THE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")

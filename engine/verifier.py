@@ -4807,22 +4807,33 @@ FLOWR_URL = "https://github.com/flowr-analysis/flowr-r-adapter/releases/download
 READS, CALLS, BINDS = 1, 4, 16          # flowR's edge bits: reads, calls, defines-on-call; any other bit is ignored
 FLOWR_ANSWER_MAX = 200 * 1024 * 1024    # flowR answers ~64 KB of JSON per line of R, and Python needs ~8x that to read it
 
+FLOWR_FOLDERS = {}                      # once ready in a session, ready for the rest of it
+
 def flowr_ready(source=""):
     """flowR's folder, fetched once from source - a staged archive, such as one in a Volume - or from the
-    pinned release, and refused unless its SHA-256 is the pinned one. Never run unverified. Enforces: R12"""
+    pinned release, refused unless its SHA-256 is the pinned one, and run once: ready means it runs here.
+    The folder is this system user's own: a shared cluster runs every notebook session as a user of its
+    own, and a folder another session made can be neither read nor written. Enforces: R12"""
     import tarfile, urllib.request
-    folder = os.path.join(tempfile.gettempdir(), "flowr-" + FLOWR_VERSION)
-    if os.path.exists(os.path.join(folder, "flowr")):
-        return folder
-    os.makedirs(folder, exist_ok=True)
-    archive = os.path.join(folder, "flowr.tar.gz")
-    shutil.copyfile(source, archive) if source else urllib.request.urlretrieve(FLOWR_URL.format(FLOWR_VERSION), archive)
-    if file_sha256(archive) != FLOWR_SHA256:
-        os.remove(archive)
-        raise RuntimeError("The flowR archive is not the pinned release %s: its checksum differs." % FLOWR_VERSION)
-    with tarfile.open(archive) as bundle:
-        bundle.extractall(folder, members=[m for m in bundle.getmembers() if m.isfile() and "/" not in m.name.strip("./")])
-    os.chmod(os.path.join(folder, "flowr"), 0o755)
+    if source in FLOWR_FOLDERS:
+        return FLOWR_FOLDERS[source]
+    folder = os.path.join(tempfile.gettempdir(), "flowr-%s-%d" % (FLOWR_VERSION, os.getuid()))
+    binary = os.path.join(folder, "flowr")
+    if not all(os.path.exists(os.path.join(folder, name)) for name in ("flowr", "tree-sitter.wasm", "tree-sitter-r.wasm")):
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        archive = os.path.join(folder, "flowr.tar.gz")
+        shutil.copyfile(source, archive) if source else urllib.request.urlretrieve(FLOWR_URL.format(FLOWR_VERSION), archive)
+        if file_sha256(archive) != FLOWR_SHA256:
+            os.remove(archive)
+            raise RuntimeError("The flowR archive is not the pinned release %s: its checksum differs." % FLOWR_VERSION)
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(folder, members=[m for m in bundle.getmembers() if m.isfile() and "/" not in m.name.strip("./")])
+        os.chmod(binary, 0o700)
+    try:                                            # one line of R, read the way the review reads: ready means it ran
+        flowr_read(folder, "x <- 1\n")
+    except Exception as problem:
+        raise RuntimeError("flowR is here but could not run on this cluster: %s" % problem)
+    FLOWR_FOLDERS[source] = folder
     return folder
 
 def flowr_read(folder, text, prefix=""):
@@ -4874,11 +4885,12 @@ class Dataflow:
         self.functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
         self.tables = {u["data"]["object_name"]: u for u in units if (u.get("data") or {}).get("object_name")}
         self.nodes, self.records, self.tree, self.edges, self.unit_of, self.unread = {}, [], {}, {}, {}, {}
+        folder = folder or flowr_ready()
         for number, unit in enumerate(sorted(self.functions.values(), key=lambda u: u["ref"])):
             prefix = "%d:" % number             # one function at a time: memory is bounded by the largest function,
             self.unit_of[prefix] = unit["name"]  # not by the package - the whole package at once took a driver down
             try:
-                tree, edges = flowr_read(folder or flowr_ready(), unit["text"], prefix)
+                tree, edges = flowr_read(folder, unit["text"], prefix)
             except (ValueError, KeyError, OSError, subprocess.SubprocessError) as problem:
                 self.unread[unit["name"]] = "flowR could not read it: %s" % problem
                 continue

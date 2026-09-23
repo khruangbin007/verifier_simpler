@@ -198,6 +198,15 @@ class ImplementationMapSample(unittest.TestCase):
                 if record.get("code") and record.get("function_ref"):
                     self.assertIn(record["code"], text[record["function_ref"]], "not as written")
 
+    def test_flowr_lives_in_a_folder_of_this_users_own_and_is_ready_only_once_it_has_run(self):
+        """Found on Databricks: a shared cluster runs every notebook session as a system user of its own,
+        and one folder for everyone left the next session unable to write into it (Errno 13)."""
+        folder = runner.flowr_ready("")
+        self.assertTrue(folder.endswith("-%d" % os.getuid()), folder)
+        self.assertEqual(os.stat(folder).st_mode & 0o777, 0o700, "no other session can read or change it")
+        nodes, edges = runner.flowr_read(folder, "y <- 2\n")
+        self.assertTrue(nodes and edges is not None, "ready means it has read R code here")
+
     def test_the_pronouns_of_dplyr_are_read_as_dplyr_reads_them(self):
         """Packages written for CRAN name columns as .data$x, to keep the checks quiet, and values of the
         function as .env$x. Without this, .data$throughput would be read as a column called .data."""
