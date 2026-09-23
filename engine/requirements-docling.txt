@@ -1,6 +1,9 @@
-# Docling and all it brings - PyTorch, pandas 2, transformers - installed by cell 1 into a folder of its
+# Docling and what it brings - PyTorch, pandas 2, transformers - installed by cell 1 into a folder of its
 # own, never into the runtime's packages: Docling runs in a process of its own, so the runtime keeps its
 # pandas, numpy and pyarrow as they are.
+# Only the parts the tool uses: PDF, Word, HTML and Markdown, the chunker, and the local models.
+# Not Excel - the tool reads an .xlsx itself - and not PowerPoint, whose reader needs XlsxWriter: so no
+# spreadsheet package (openpyxl, XlsxWriter) is needed.
 # PyTorch without GPU libraries: add your index's PyTorch CPU repository to widget 06 after the main index
 # (URLs separated by spaces); pip then prefers torch's +cpu build.
-docling>=2.129
+docling-slim[convert-core,format-pdf,format-docx,format-html,format-markdown,feat-chunking,models-local]>=2.129

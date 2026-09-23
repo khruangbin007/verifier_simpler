@@ -1,7 +1,7 @@
 # What the engine itself imports. Cell 1 installs these, and only if one of them is missing.
-# Lower bounds, not pins: a managed runtime usually has openpyxl and PyYAML already, and
-# forcing an exact version would replace the runtime's own copy for no gain.
-openpyxl>=3.1
+# Lower bounds, not pins: a managed runtime usually has PyYAML and numpy already, and forcing an exact
+# version would replace the runtime's own copy for no gain. No spreadsheet package: the engine writes
+# and reads its .xlsx workbooks with the standard library.
 PyYAML>=6.0
 numpy>=1.24
 rdata>=1.0
