@@ -58,7 +58,7 @@ Fourteen rules, each enforced by named code: its docstring says so (`Enforces: R
 
 ## 4. Vocabulary
 
-Every wording the tool shows for a kind of unit, a kind of chunk or a piece that could not be read comes from one list in `verifier.py`; the tables below are that list.
+Every wording the tool shows for a kind of unit comes from a list in `verifier.py`; the tables below are that list.
 
 **Kinds of model unit**
 
@@ -79,7 +79,7 @@ Every wording the tool shows for a kind of unit, a kind of chunk or a piece that
 
 The rows of Chunks_Model never overlap, and each is a whole piece of code: a roxygen block is one row with the function or statement it documents, and what is written inside a function - its statements, a function defined within it - is part of the function's row. Model_Implementation_Map is where a function is taken apart: every assignment is a step of its own, so a value set four times is four steps, each computed from the one before; a named element of a list, such as `overrides_and_caps`, is a step of its own too; and a function's row has the value it returns as its child.
 
-**Kinds of chunk**
+**Kinds of document unit**
 
 | Wording |
 |---|
@@ -87,14 +87,6 @@ The rows of Chunks_Model never overlap, and each is a whole piece of code: a rox
 | Table |
 | Figure |
 | Equation |
-
-**Why an equation was not read**
-
-| Wording |
-|---|
-| the equation is an image |
-| the equation could not be read |
-
 
 ---
 
@@ -125,13 +117,11 @@ Three folders under `Inputs/`:
 
 | Folder | What | Formats |
 |---|---|---|
-| `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv`/`.tsv`, `.xlsx`, `.rtf`, `.tex`, `.svg` |
+| `1_Methodology` | the canonical methodology | `.docx`, `.pdf`, `.pptx`, `.xlsx`, `.html`, `.mhtml`, Markdown, `.csv`, plain text, and XML of any schema; a file's format is told by its content, so XML inside a `.txt` is read as XML |
 | `2_Model_Package` | the model | an R package as a `.tar.gz`, a `.zip` of it, or its source folder |
-| `3_Model_Documentation` | the model documentation | as for the methodology; `.docx` preferred |
+| `3_Model_Documentation` | the model documentation | as for the methodology |
 
 Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.db` and a saved web page's support folder are left out and listed. A format the tool does not read — a slide deck, an old `.doc`, a picture on its own — becomes one row on `Model_Package_Info` saying so and what to save it as instead. Nothing is decoded as text that is not text.
-
-**SVG pictures.** An SVG holds its text as text, so the tool reads a chart or a table drawn as a picture without guessing: every word comes from the picture's own `<text>` elements. Text that stands in a grid of at least two rows of the same width becomes a table, with the first row as its header; anything else becomes a figure whose words are the picture's labels in reading order. Where the methodology's XML refers to a picture beside it — `<figure src="floors.svg">` — that figure takes the picture's table or labels as its own, under the caption the XML gives. Only a picture in the same folder as the document, or a folder inside it, is followed; a missing picture or a path that leaves the folder stays a plain figure.
 
 **Only R is read as code.** A package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 
@@ -141,7 +131,7 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 
 | Sheet | What it holds |
 |---|---|
-| `Model_Package_Info` | what was read and what was not, each file's content account, the coverage identity, the run's progress |
+| `Model_Package_Info` | what was read and what was not - each document with the number of units Docling found in it - the coverage identity, the run's progress |
 | `Chunks_Canon` | every unit of the methodology, with its place in the outline |
 | `Chunks_Doc` | every unit of the documentation, with its place in the outline |
 | `Chunks_Model` | every unit of the model package: each a whole piece of code, as written |
@@ -222,15 +212,13 @@ A called function is entered with the arguments that call gives it, so what it c
 
 ## 13. Known limitations
 
-- The content of images is never evidence. A formula given only as a picture is kept as a figure and never read as a formula. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself.
-- The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
-- A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
-- Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
-- the tool reads XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv` and `.tsv`, `.xlsx`, `.rtf` and `.tex`. It does not read slide decks, OpenDocument files, e-books, old Office files (`.doc`, `.xls`, `.ppt`) or pictures on their own; each of those becomes one row on the sheet saying so, with what to save it as instead. Folders inside an Inputs corner are read, in name order; a Word lock file, Thumbs.db and a saved web page's support folder are left out and listed on `Model_Package_Info`.
-- A spreadsheet is read sheet by sheet, each sheet a heading over one table. A formula is never worked out: the value the spreadsheet saved with it is what is read, so save the workbook after it has calculated.
+- Documents are read by Docling without OCR: the words inside a picture are not read, and a scanned PDF - pages that are only pictures - yields no units. A formula given only as a picture is a Figure.
+- In a PDF, headings are found by Docling's layout model and their levels worked out from the PDF's outline, its numbering and its type; where none of these tells, the levels come out flat. Numbering without a trailing dot (`1 Introduction`) can mislead it. Word, HTML and Markdown files carry their levels, so they keep them. Where there is a choice, give a `.docx`.
+- XML is read by its structure alone: a short first element that differs from its siblings heads what holds it, a number in an attribute such as `num="1."` goes in front of that heading, rows of short cells make a table, and alike items make a list. An XML whose headings are written some other way is read as paragraphs without a Section.
+- Plain text: a line standing alone that is numbered (`A.`, `1.`, `1.2`) - or opens the file - is a heading, one level per numbering style in the order they first appear.
+- A file Docling cannot read is listed as not read on `Model_Package_Info`; the other files are still read.
 - The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
-- PDF input is read by position on the page; multi-column layouts and tables without ruling lines may be cut wrongly. Check the outline.
-- R code is never run. The package's units are read by the tool's own reader, and its data flow by flowR. Unusual syntax becomes a *File not read* unit for that expression only.
+- R code is never run. It is read by flowR - its units and its data flow. An expression flowR's syntax tree cannot give in the tool's shape becomes a *File not read* unit for that expression only.
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described but not taken apart; missing values of different kinds are not told apart.
 - The tool was developed against invented sample projects and a stand-in for `chat()`; results with a real model on a real package are still to be measured.
 
@@ -260,9 +248,11 @@ A step that carries out several parts keeps them in order, and a later part read
 
 A review asks the model nothing. Cell 2 asks your `chat()` one question, to check the gateway answers; what the workbook shows - the reading, the map, every row - is made by code alone.
 
-## 17. Reading, and the content account
+## 17. Reading documents
 
-Every file read keeps a **content account** (`verifier.account`): the file's smallest pieces of text are counted straight from its bytes, then counted again in the units the tool produced, and the two must agree. A piece that is read but lands in no unit leaves the account open, and the file is named on `Model_Package_Info` with the reason, so nothing is dropped in silence.
+Every methodology and documentation file is read by Docling (IBM Research; MIT licence). What Docling reads itself - Word, PDF, PowerPoint, Excel, HTML, Markdown, CSV - goes to it as it is; the rest is first turned into a page it reads (`verifier.page_of`): a saved web archive (`.mhtml`) gives up its page, plain text has its headings found by their numbering, and XML is laid out by its structure (section 13). The format is told by the content, not the name. One repair is made: Word may leave out the properties of an equation's brackets, which the format allows and Docling's equation reader does not, so empty ones - meaning ordinary parentheses - are put in first.
+
+Docling's hierarchical chunker then makes one unit of each part of the document - a paragraph, a table, a figure, an equation - with the headings above it, which is the unit's Section. The units are numbered in reading order, `C-` for the methodology and `D-` for the documentation, and each carries a hash of its text, which cell 4 checks by reading the files again. PDFs are read without OCR; their layout and table models are fetched from Hugging Face the first time a PDF is read, or taken from a staged folder (section 22).
 
 ## 18. What ships
 
@@ -284,11 +274,8 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `max_parameter_columns` | 50 | A stored object with more columns is profiled and not compared. |
 | `protect_sheets` | True | Lock every cell except the yellow ones (filtering stays allowed; no password). |
 | `trivial_numbers` | ['0', '1', '2', '-1', '10', '100'] | Numbers that are not looked up in the methodology. |
-| `bm25_k1` | 1.2 | Text ranking: how fast repeated words stop counting. |
-| `bm25_b` | 0.75 | Text ranking: how much long passages are scaled down. |
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
 | `reviewer_id` |  | Who runs the notebook; recorded against the run. |
-| `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 
 `map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting.
 
@@ -296,7 +283,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 | You want to add | Where |
 |---|---|
-| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` |
+| a document format Docling does not read | `verifier.page_of`: turn it into a page Docling reads |
 | a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` |
 
 After any change, see section 23.
@@ -311,10 +298,13 @@ After any change, see section 23.
 | PyYAML>=6.0 | required | the pipeline and the tool's own rule files |
 | numpy>=1.24 | required | reading stored data |
 | rdata>=1.0 | required | reads stored R data without running R |
-| pdfplumber>=0.10 | optional | PDF text and tables |
-| pypdf>=4.0 | optional | a second PDF reader |
-| rapidocr-onnxruntime>=1.3 | optional | the words inside pictures (OCR) |
+| docling>=2.130 | required | reads the methodology and the documentation; brings PyTorch |
 | flowR 2.15.8 (not a Python package) | required | reads the package's R code; fetched and checked by cell 1 |
+
+**Installing Docling.** Docling brings PyTorch. On a cluster without a GPU, install the CPU build of torch and torchvision first, both from the same index, so that the two match: a torchvision that does not match torch cannot load Docling's PDF models. Cell 1 then installs Docling itself when it is missing.
+
+**Docling's models on a cluster without internet.** Reading a PDF needs Docling's layout and table models, fetched from Hugging Face the first time. Where the cluster cannot reach Hugging Face, run `docling-tools models download layout tableformer` on an approved machine and put the folder it writes next to the notebook as `docling-models`; cell 1 finds it there and says so. Word, HTML, Markdown and plain text need no models.
+
 
 ## 23. Maintaining the tool
 
