@@ -788,8 +788,17 @@ DOCLING_HOME = {}                         # where Docling runs from, once found:
 UNIT_KIND_OF_LABEL = (("table", "Table"), ("picture", "Figure"), ("formula", "Equation"))
 DOCLING_WORKER = r'''
 """Docling, in a process of its own: reads each file of a request into units - [heading chain, kind, text] -
-and writes them back as JSON. Started by verifier.docling_read; it never imports the engine."""
+and writes them back as JSON. Started by verifier.docling_read; it never imports the engine. It makes no network
+connection: the documents never leave this machine, and Docling's models come from the staged folder."""
 import io, json, sys, importlib.metadata
+
+def no_network(event, args):                     # before anything is imported: no host looked up, no connection made
+    local = (None, "", "localhost", "127.0.0.1", "::1")
+    if event == "socket.getaddrinfo" and args and args[0] not in local:
+        raise OSError("the Docling process makes no network connection (%s was asked for)" % (args[0],))
+    if event == "socket.connect" and isinstance(args[1], tuple) and args[1] and args[1][0] not in local:
+        raise OSError("the Docling process makes no network connection (%s was asked for)" % (args[1][0],))
+sys.addaudithook(no_network)
 request = json.load(open(sys.argv[1], encoding="utf-8"))
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat, DocumentStream
@@ -827,8 +836,9 @@ def docling_folder():
     return os.path.join(base, "docling-%d" % os.getuid())
 
 def docling_environment(folder):
-    """The environment a Docling process runs in: its folder first on the path, ahead of the runtime's packages."""
-    environment = dict(os.environ)
+    """The environment a Docling process runs in: its folder first on the path, ahead of the runtime's packages, and
+    Hugging Face offline - Docling's models are read from the staged folder, never fetched."""
+    environment = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1", DO_NOT_TRACK="1")
     if folder:
         environment["PYTHONPATH"] = folder + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else "")
     return environment
@@ -3590,8 +3600,9 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
     NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"))
     missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
     if missing:
+        wheels = os.path.join(home, "wheels")
         install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"),
-                widgets.get("jfrog_index_url").strip(), allow_default_index)
+                widgets.get("jfrog_index_url").strip(), allow_default_index, wheels if os.path.isdir(wheels) else "")
         return
     print("Folder:", home, "| Python", sys.version.split()[0], "| engine", ENGINE_VERSION)
     for name in REQUIRED_PACKAGES:
@@ -3608,9 +3619,10 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
                   " notebook." % (FLOWR_URL.format(FLOWR_VERSION), home))
     models = os.path.join(home, "docling-models")      # Docling's models, staged for a cluster that cannot reach Hugging Face
     globals()["DOCLING_MODELS"] = models if os.path.isdir(models) else ""
-    print("Docling models:", models if os.path.isdir(models) else "fetched from Hugging Face the first time a PDF is read")
+    print("Docling models:", models if os.path.isdir(models) else "NOT STAGED in %s - a PDF is read only if they are already cached on "
+          "this machine (the manual says how to stage them). Docling never fetches them: it makes no network connection." % models)
     if docling_ready() is None:                      # Docling in a folder of its own: the runtime's packages are never changed for it
-        wheels = os.path.join(home, "docling-wheels")
+        wheels = os.path.join(home, "wheels")
         print("Installing Docling into its own folder, %s - the first time on a cluster this takes several minutes." % docling_folder())
         said = docling_install(widgets.get("jfrog_index_url").split(), wheels if os.path.isdir(wheels) else "", allow_default_index)
         if said:
@@ -3638,17 +3650,18 @@ def pip_said(stderr):
     if "from versions: none" in (stderr or ""):
         text += ("\nThe index offered no version at all of %s. When that is a package every index carries, the URL in widget 06 is "
                  "likely not the index's own address - on Artifactory it ends in /api/pypi/<repository>/simple - or the repository "
-                 "does not let this cluster have it." % (missing[0] if missing else "that package"))
+                 "does not let this cluster have it. Ask for it to be added to the index, or put its wheel in a folder named "
+                 "wheels next to the notebook: cell 1 then installs from there, and from no index." % (missing[0] if missing else "that package"))
     elif "ResolutionImpossible" in (stderr or "") or "conflicting dependencies" in (stderr or ""):
         text += "\nThe packages asked for cannot be installed together; the lines above say which."
     return text
 
-def install(missing, dbutils, requirements, index_url, allow_default_index=False):
-    """Install what the engine needs from the index named in widget 06, the runtime's own packages pinned
-    as they are, and restart Python only if those still import together afterwards."""
+def install(missing, dbutils, requirements, index_url, allow_default_index=False, wheels=""):
+    """Install what the engine needs - from a staged folder of wheels when there is one, else from the index named in
+    widget 06 - the runtime's own packages pinned as they are, and restart Python only if those still import together."""
     import importlib.metadata
     hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")    # no credentials of an index URL are shown
-    if not index_url and not allow_default_index:
+    if not wheels and not index_url and not allow_default_index:
         print("Packages missing:", ", ".join(missing), "- paste the package index URL into widget 06 and run this cell again.")
         print("Nothing is installed from an index you did not name. To use pip's default index, call "
               "verifier.setup(dbutils, allow_default_index=True).")
@@ -3662,7 +3675,8 @@ def install(missing, dbutils, requirements, index_url, allow_default_index=False
     constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
     with open(constraints, "w") as handle:
         handle.write("\n".join(pins) + "\n")
-    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + index_arguments(index_url.split())
+    source = ["--no-index", "--find-links", wheels] if wheels else index_arguments(index_url.split())
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + source
     print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode:
