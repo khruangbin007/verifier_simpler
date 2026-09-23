@@ -3066,17 +3066,6 @@ def read_description(text):
             fields[current.strip()] = value.strip()
     return fields
 
-def read_namespace(text):
-    """Exported names and export patterns from NAMESPACE."""
-    text = re.sub(r"#[^\n]*", "", text)
-    exports, patterns = set(), []
-    for directive, inner in re.findall(r"(export|exportPattern|S3method)\s*\(([^)]*)\)", text):
-        names = [part.strip().strip("\"'`") for part in inner.split(",") if part.strip()]
-        if directive == "export":
-            exports.update(names)
-        elif directive == "exportPattern":
-            patterns.extend(names)
-    return {"exports": exports, "patterns": patterns}
 
 def is_exported(name, namespace):
     """Is `name` exported by this NAMESPACE (by name, by pattern or as an S3 method)? None when there is no NAMESPACE."""
@@ -3085,58 +3074,8 @@ def is_exported(name, namespace):
     return name in namespace["exports"] or any(re.search(pattern, name) for pattern in namespace["patterns"])
 
 # ---------------------------------------------------------------- the R tokenizer
-@dataclass
-class Token:
-    """One token of R source: kind is num, str, name, op, newline or end. `column` is 0 for a
-    token that starts its line, which is where a new top-level statement usually begins."""
-    kind: str; text: str; line: int; column: int = -1
 
-_R_TOKEN = re.compile(r"""
-  (?P<space>[ \t\r\f]+)
- |(?P<newline>\n)
- |(?P<comment>\#[^\n]*)
- |(?P<raw>[rR]["'](?P<dashes>-*)[\(\[\{])
- |(?P<num>0[xX][0-9a-fA-F]+[Li]?|(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?[Li]?)
- |(?P<str>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
- |(?P<backtick>`[^`]*`)
- |(?P<name>(?:[^\W\d_]|\.(?![0-9]))[\w.]*)
- |(?P<op><<-|->>|\|>|:::|%[^%\n]*%|<-|->|<=|>=|==|!=|&&|\|\||::|\*\*|\[\[|[-+*/^<>=!&|~?:$@(){}\[\],;\\])
-""", re.X)
-_RAW_CLOSERS = {"(": ")", "[": "]", "{": "}"}
 
-def tokenize_r(source):
-    """R source to tokens. Comments are dropped here (roxygen lines are collected by
-    roxygen_blocks). Line breaks are kept as tokens because in R a line break ends an
-    expression unless a bracket is open or an operator is waiting for its right side."""
-    tokens, position, line, line_start = [], 0, 1, 0
-    while position < len(source):
-        match = _R_TOKEN.match(source, position)
-        column = position - line_start
-        if not match:
-            raise NotParsed("line %d holds the character '%s', which the tool's R reader does not know"
-                            % (line, source[position]))
-        kind, text = match.lastgroup, match.group(0)
-        if kind == "dashes":
-            kind = "raw"
-        if kind == "raw":
-            closer = _RAW_CLOSERS[text[-1]] + match.group("dashes") + text[1]
-            end = source.find(closer, match.end())
-            if end < 0:
-                raise NotParsed("a raw string that starts on line %d is never closed" % line)
-            tokens.append(Token("str", source[match.end():end], line, column))
-            text = source[position:end + len(closer)]
-        elif kind == "str":
-            tokens.append(Token("str", text[1:-1], line, column))
-        elif kind == "backtick":
-            tokens.append(Token("name", text[1:-1], line, column))
-        elif kind in ("num", "name", "op", "newline"):
-            tokens.append(Token(kind, text, line, column))
-        line += text.count("\n")
-        position += len(text)
-        if "\n" in text:
-            line_start = position - (len(text) - text.rfind("\n") - 1)
-    tokens.append(Token("end", "", line))
-    return tokens
 
 # ---------------------------------------------------------------- the R parser
 @dataclass
@@ -3148,268 +3087,200 @@ class Node:
     defaults (kind "missing" when there is none) and args[-1] the body."""
     kind: str; value: str = ""; args: tuple = (); names: tuple = (); line: int = 0; end_line: int = 0
 
-BINARY_POWER = {"?": 1, "=": 2, "<-": 3, "<<-": 3, "->": 4, "->>": 4, "~": 5, "|": 6, "||": 6, "&": 7, "&&": 7,
-                "==": 9, "!=": 9, "<": 9, ">": 9, "<=": 9, ">=": 9, "+": 10, "-": 10, "*": 11, "/": 11,
-                "|>": 12, ":": 13, "^": 15, "**": 15}
-RIGHT_TO_LEFT = ("=", "<-", "<<-", "^", "**")
-UNARY_POWER = {"-": 14, "+": 14, "!": 8, "~": 5, "?": 1}
 ASSIGNMENT_SIGNS = ("<-", "<<-", "=", "->", "->>")
-KEYWORDS = ("if", "else", "for", "while", "repeat", "function", "break", "next")
 
-class RParser:
-    """Precedence climbing over R's documented operator table (?Syntax). `open_brackets`
-    remembers which bracket is open: inside ( and [ a line break means nothing; at the top
-    level and inside { it ends the expression."""
-    def __init__(self, tokens):
-        self.tokens, self.position, self.open_brackets, self.last_line = tokens, 0, [], 1
 
-    def peek(self):
-        """The token at the reading position, without taking it."""
-        while self.tokens[self.position].kind == "newline" and self.open_brackets and self.open_brackets[-1] != "{":
-            self.position += 1
-        return self.tokens[self.position]
+# ---------------------------------------------------------------- R code, read by flowR
+# flowR reads the package's R code; its syntax tree is turned into the tool's Node, the shape every reader of
+# R code here expects. One flowR run reads a whole package, and every source is read once per session.
+PARSED = {}                               # R source text -> its top-level expressions
 
-    def take(self, text=None):
-        """Take the next token; with `text`, insist that it is that token."""
-        token = self.peek()
-        if text is not None and not (token.kind == "op" and token.text == text):
-            raise NotParsed("line %d: '%s' was expected where '%s' stands" % (token.line, text, token.text or "the end of the file"))
-        self.position += 1
-        self.last_line = token.line
-        return token
+def flowr_answer(folder, target, queries, work, *flags):
+    """flowR's answer to `queries` about `target` - an R file or a folder of them - read from a file: a pipe
+    can lose the end of a large answer. An answer too large to read safely is refused before it is read."""
+    answer = os.path.join(work, "answer.json")
+    with open(answer, "w", encoding="utf-8") as sink:
+        subprocess.run([os.path.join(folder, "flowr"), "--no-ansi", *flags, "--default-engine", "tree-sitter",
+                        "--engine.r-shell.disabled", "--engine.tree-sitter.wasm-path", os.path.join(folder, "tree-sitter-r.wasm"),
+                        "--engine.tree-sitter.tree-sitter-wasm-path", os.path.join(folder, "tree-sitter.wasm"), "--execute",
+                        ":query* %s file://%s" % (json.dumps(queries, separators=(",", ":")), target)], stdout=sink, stderr=subprocess.DEVNULL, cwd=work, timeout=900)
+    if os.path.getsize(answer) > FLOWR_ANSWER_MAX:
+        raise ValueError("flowR's answer is %d MB, too large to read safely" % (os.path.getsize(answer) // 2 ** 20))
+    with open(answer, encoding="utf-8") as handle:
+        said = handle.read()
+    if "{" not in said:
+        raise RuntimeError("flowR gave no answer for the package's R code.")
+    return json.JSONDecoder().raw_decode(said[said.index("{"):])[0]
 
-    def skip_newlines(self):
-        """Skip line ends where R allows an expression to go on."""
-        while self.tokens[self.position].kind == "newline":
-            self.position += 1
+def flowr_files(found):
+    """The syntax tree of every file in a flowR answer, by path."""
+    tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
+    return {os.path.normpath(entry["filePath"]): entry["root"] for entry in tree.get("files", [])}
 
-    def is_op(self, *texts):
-        """Is the next token one of these operators?"""
-        token = self.peek()
-        return token.kind == "op" and token.text in texts
+def top_level(root, text):
+    """The top-level expressions of one file; one flowR could not give in the tool's shape is 'not read'. Enforces: R2"""
+    found = []
+    for child in (root or {}).get("children", []):
+        try:
+            found.append(flowr_node(child))
+        except (KeyError, ValueError, TypeError, IndexError) as problem:
+            span = (child.get("info") or {}).get("fullRange") or child.get("location") or [1, 0, text.count("\n") + 1, 0]
+            found.append(("not read", span[0], span[2], "its syntax tree could not be used (%s)" % problem))
+    return found
 
-    def expression(self, minimum=0):
-        """Operator-precedence parsing of one expression; `minimum` is the weakest binding still accepted."""
-        left = self.prefix()
-        while True:
-            token = self.peek()
-            if token.kind != "op":
-                return left
-            if token.text in ("(", "[", "[["):
-                left = self.call_or_index(left)
-            elif token.text in ("$", "@", "::", ":::"):
-                self.take()
-                self.skip_newlines()
-                right = self.take()
-                kind = "dollar" if token.text in ("$", "@") else "ns"
-                right_node = Node("paren", args=(self.finish_paren(),)) if right.text == "(" else Node(right.kind, right.text, line=right.line)
-                left = Node(kind, token.text, (left, right_node), line=left.line, end_line=self.last_line)
-            else:
-                power = 12 if token.text.startswith("%") else BINARY_POWER.get(token.text)
-                if power is None or power < minimum:
-                    return left
-                self.take()
-                self.skip_newlines()
-                right = self.expression(power if token.text in RIGHT_TO_LEFT else power + 1)
-                left = Node("binary", "^" if token.text == "**" else token.text, (left, right), line=left.line, end_line=self.last_line)
+def flowr_package(files, folder=None):
+    """ONE flowR run over the package's R files and NAMESPACE: every R file's syntax tree is kept for
+    parse_r_source, and the NAMESPACE is returned as flowR reads it - exported names and export patterns -
+    or None when the package has none."""
+    folder = folder or flowr_ready()
+    with tempfile.TemporaryDirectory(prefix="pkg-") as work:
+        root, texts = os.path.join(work, "package"), {}
+        for path, data in files.items():
+            if path == "NAMESPACE" or path.lower().endswith(".r"):
+                target = os.path.normpath(os.path.join(root, path))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                texts[target] = decode_text(data)
+                with open(target, "w", encoding="utf-8") as handle:
+                    handle.write(texts[target])
+        try:
+            found = flowr_answer(folder, root, [{"type": "files"}, {"type": "normalized-ast"}], work)
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired):  # too large for one answer: each source is read when asked for
+            for path in list(texts):
+                if path.lower().endswith(".r"):
+                    os.remove(path)
+            found = flowr_answer(folder, root, [{"type": "files"}], work)
+            found["normalized-ast"] = {"normalized": {"ast": {"files": []}}}
+    for path, tree in flowr_files(found).items():
+        if path in texts and path.lower().endswith(".r"):
+            PARSED[texts[path]] = top_level(tree, texts[path])
+    namespace = next((entry["content"]["current"] for entry in found["files"]["files"] if "namespace" in entry.get("roles", [])), None)
+    return {"exports": set(namespace["exportedSymbols"]), "patterns": list(namespace["exportedPatterns"])} if namespace else None
 
-    def finish_paren(self):
-        """A bracketed expression, after its opening bracket."""
-        self.open_brackets.append("(")
-        inner = self.expression()
-        self.open_brackets.pop()
-        self.take(")")
-        return inner
-
-    def prefix(self):
-        """What an expression can start with: a literal, a name, a unary sign, a bracket, a block or a keyword."""
-        token = self.take()
-        if token.kind in ("num", "str"):
-            return Node(token.kind, token.text, line=token.line, end_line=token.line)
-        if token.kind == "name" and token.text not in KEYWORDS:
-            return Node("name", token.text, line=token.line, end_line=token.line)
-        if token.kind == "name":
-            return self.keyword(token)
-        if token.kind == "op" and token.text == "(":
-            self.open_brackets.append("(")
-            inner = self.expression()
-            self.open_brackets.pop()
-            self.take(")")
-            return Node("paren", args=(inner,), line=token.line, end_line=self.last_line)
-        if token.kind == "op" and token.text == "{":
-            return self.block(token)
-        if token.kind == "op" and token.text == "\\":
-            return self.function(token)
-        if token.kind == "op" and token.text in UNARY_POWER:
-            self.skip_newlines()
-            operand = self.expression(UNARY_POWER[token.text])
-            return Node("unary", token.text, (operand,), line=token.line, end_line=self.last_line)
-        raise NotParsed("line %d: '%s' stands where an expression should start" % (token.line, token.text or "the end of the file"))
-
-    def block(self, opening):
-        """The expressions between curly brackets."""
-        self.open_brackets.append("{")
-        statements = []
-        while True:
-            while self.tokens[self.position].kind == "newline" or self.is_op(";"):
-                self.position += 1
-            if self.is_op("}"):
-                break
-            if self.peek().kind == "end":
-                raise NotParsed("the '{' on line %d is never closed" % opening.line)
-            statements.append(self.expression())
-        self.open_brackets.pop()
-        self.take("}")
-        return Node("block", args=tuple(statements), line=opening.line, end_line=self.last_line)
-
-    def condition(self):
-        """The bracketed condition of if and while."""
-        self.take("(")
-        self.open_brackets.append("(")
-        inner = self.expression()
-        self.open_brackets.pop()
-        self.take(")")
-        self.skip_newlines()
-        return inner
-
-    def keyword(self, token):
-        """if, for, while, repeat, function and the other reserved words."""
-        if token.text == "function":
-            return self.function(token)
-        if token.text == "if":
-            parts = [self.condition(), self.expression()]
-            mark = self.position
-            self.skip_newlines()
-            if self.peek().kind == "name" and self.peek().text == "else":
-                self.take()
-                self.skip_newlines()
-                parts.append(self.expression())
-            else:
-                self.position = mark
-            return Node("if", args=tuple(parts), line=token.line, end_line=self.last_line)
-        if token.text == "for":
-            self.take("(")
-            self.open_brackets.append("(")
-            variable = self.take()
-            if not (self.peek().kind == "name" and self.peek().text == "in"):
-                raise NotParsed("line %d: 'in' was expected in the for loop" % token.line)
-            self.take()
-            sequence = self.expression()
-            self.open_brackets.pop()
-            self.take(")")
-            self.skip_newlines()
-            body = self.expression()
-            return Node("for", variable.text, (sequence, body), line=token.line, end_line=self.last_line)
-        if token.text == "while":
-            return Node("while", args=(self.condition(), self.expression()), line=token.line, end_line=self.last_line)
-        if token.text == "repeat":
-            self.skip_newlines()
-            return Node("repeat", args=(self.expression(),), line=token.line, end_line=self.last_line)
-        if token.text in ("break", "next"):
-            return Node("name", token.text, line=token.line, end_line=token.line)
-        raise NotParsed("line %d: '%s' stands where an expression should start" % (token.line, token.text))
-
-    def function(self, token):
-        """A function definition: its formal arguments with their defaults as written, and its body."""
-        self.take("(")
-        self.open_brackets.append("(")
-        names, defaults = [], []
-        while not self.is_op(")"):
-            formal = self.take()
-            if formal.kind != "name" and formal.text != "...":
-                raise NotParsed("line %d: an argument name was expected in the function header" % formal.line)
-            names.append(formal.text)
-            if self.is_op("="):
-                self.take()
-                defaults.append(self.expression(3))
-            else:
-                defaults.append(Node("missing", line=formal.line))
-            if self.is_op(","):
-                self.take()
-        self.open_brackets.pop()
-        self.take(")")
-        self.skip_newlines()
-        body = self.expression(1)
-        return Node("function", args=tuple(defaults) + (body,), names=tuple(names), line=token.line, end_line=self.last_line)
-
-    def call_or_index(self, target):
-        """Calls and the three kinds of indexing that may follow an expression."""
-        opening = self.take()
-        closer = ")" if opening.text == "(" else "]"
-        self.open_brackets.append("(" if opening.text == "(" else "[")
-        arguments, names = [], []
-        while not self.is_op(closer):
-            if self.is_op(","):
-                self.take()
-                arguments.append(Node("missing", line=self.last_line))
-                names.append("")
-                continue
-            name = ""
-            following = self.tokens[self.position + 1] if self.position + 1 < len(self.tokens) else None
-            if self.peek().kind in ("name", "str") and following is not None and following.kind == "op" and following.text == "=":
-                name = self.take().text
-                self.take("=")
-            if self.is_op(",") or self.is_op(closer):
-                arguments.append(Node("missing", line=self.last_line))
-            else:
-                arguments.append(self.expression(3))
-            names.append(name)
-            if self.is_op(","):
-                self.take()
-                if self.is_op(closer) and opening.text != "(":
-                    arguments.append(Node("missing", line=self.last_line))
-                    names.append("")
-        self.open_brackets.pop()
-        self.take(closer)
-        if opening.text == "[[":
-            self.take("]")
-        kind = "call" if opening.text == "(" else "index"
-        return Node(kind, opening.text, (target,) + tuple(arguments), tuple(names), target.line, self.last_line)
+def parse_r_sources(sources, folder=None):
+    """Read in ONE flowR run every source not read yet this session."""
+    todo = [text for text in dict.fromkeys(sources) if text not in PARSED]
+    if not todo:
+        return
+    folder = folder or flowr_ready()
+    with tempfile.TemporaryDirectory(prefix="src-") as work:
+        root = os.path.join(work, "sources")
+        os.makedirs(root)
+        names = {}
+        for number, text in enumerate(todo):
+            names[os.path.normpath(os.path.join(root, "s%05d.R" % number))] = text
+            with open(os.path.join(root, "s%05d.R" % number), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        try:
+            trees = flowr_files(flowr_answer(folder, root, [{"type": "normalized-ast"}], work))
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+            if len(todo) == 1:
+                raise
+            for text in todo:                         # too large for one answer: one source at a time
+                parse_r_sources([text], folder)
+            return
+    for path, text in names.items():
+        PARSED[text] = top_level(trees[path], text) if path in trees else [("not read", 1, text.count("\n") + 1, "flowR gave no syntax tree for it")]
 
 def parse_r_source(source):
-    """Parse a file ONE top-level expression at a time. An expression that cannot be read
-    becomes ("not read", first line, last line, reason) and reading continues with the next
-    one, so a single odd construct never costs the rest of the file. Enforces: R2, R7"""
-    try:
-        tokens = tokenize_r(source)
-    except NotParsed as problem:
-        return [("not read", 1, source.count("\n") + 1, str(problem))]
-    parser, results = RParser(tokens), []
-    while True:
-        while parser.tokens[parser.position].kind == "newline" or (parser.tokens[parser.position].kind == "op" and
-                                                                   parser.tokens[parser.position].text == ";"):
-            parser.position += 1
-        if parser.tokens[parser.position].kind == "end":
-            return results
-        start = parser.position
-        try:
-            parser.open_brackets = []
-            node = parser.expression()
-            follower = parser.tokens[parser.position]
-            if follower.kind not in ("newline", "end") and not (follower.kind == "op" and follower.text == ";"):
-                raise NotParsed("line %d: '%s' stands where the expression should have ended" % (follower.line, follower.text))
-            results.append(node)
-        except NotParsed as problem:
-            depth, position = 0, start
-            while tokens[position].kind != "end":               # skip to where the next statement starts
-                text = tokens[position].text if tokens[position].kind == "op" else ""
-                depth += 1 if text in ("(", "{", "[") else 2 if text == "[[" else -1 if text in (")", "}", "]") else 0
-                if tokens[position].kind == "newline" and position >= parser.position:
-                    first, second = tokens[position + 1], tokens[min(position + 2, len(tokens) - 1)]
-                    fresh_start = (first.column == 0 and first.kind == "name" and second.kind == "op"
-                                   and second.text in ASSIGNMENT_SIGNS)
-                    if depth <= 0 or fresh_start:
-                        break
-                position += 1
-            parser.position = position
-            results.append(("not read", tokens[start].line, tokens[max(start, position - 1)].line, str(problem)))
+    """The top-level expressions of one R source, as flowR reads them; one that cannot be read becomes
+    ("not read", first line, last line, reason) and the rest are still read. Enforces: R2, R7"""
+    parse_r_sources([source])
+    return PARSED[source]
 
-# ---------------------------------------------------------------- facts read from a syntax tree
 ARITHMETIC_SIGNS = ("+", "-", "*", "/", "^", "%%", "%/%")
 COMPARISON_SIGNS = ("==", "!=", "<", ">", "<=", ">=")
 CONSTANT_NAMES = ("TRUE", "FALSE", "NULL", "NA", "NA_integer_", "NA_real_", "NA_character_", "Inf", "NaN",
                   "T", "F", "break", "next", "...")
 
+def flowr_node(n):
+    """One flowR node as the tool's Node. Kinds and argument order are those Node documents."""
+    kind = n["type"]
+    token = kind in ("RSymbol", "RLogical", "RNumber", "RString", "RBreak", "RNext")
+    rng = (n.get("location") if token else None) or (n.get("info") or {}).get("fullRange") or n.get("location") or [0, 0, 0, 0]
+    line, end = rng[0], rng[2]
+    conv = flowr_node
+    if kind == "RExpressionList":
+        grouping = [g for g in (n.get("grouping") or []) if isinstance(g, dict)]
+        children = tuple(conv(c) for c in n.get("children", []))
+        if grouping:
+            opening, closing = grouping[0], grouping[-1]
+            line, end = opening["location"][0], closing["location"][2]
+            if opening.get("lexeme") == "(":
+                return Node("paren", args=children[:1], line=line, end_line=end)
+            return Node("block", args=children, line=line, end_line=end)
+        return children[0] if len(children) == 1 else Node("block", args=children, line=line, end_line=end)
+    if kind == "RSymbol":
+        content = n.get("content", n.get("lexeme", ""))
+        if isinstance(content, list):                    # pkg::name comes as [name, package, internal]
+            return namespaced(content[1], ":::" if len(content) > 2 and content[2] else "::", str(content[0]), line, end)
+        name = str(content)
+        written = str(n.get("lexeme", ""))
+        if n.get("namespace") or "::" in written:
+            return namespaced(n.get("namespace") or written.split(":")[0], ":::" if ":::" in written else "::", name, line, end)
+        return Node("name", name, line=line, end_line=end)
+    if kind == "RLogical":
+        return Node("name", "TRUE" if n.get("content") else "FALSE", line=line, end_line=end)
+    if kind == "RNumber":
+        return Node("num", n.get("lexeme", ""), line=line, end_line=end)
+    if kind == "RString":
+        return Node("str", (n.get("content") or {}).get("str", ""), line=line, end_line=end)
+    if kind in ("RBreak", "RNext"):
+        return Node("name", "break" if kind == "RBreak" else "next", line=line, end_line=end)
+    if kind in ("RBinaryOp", "RPipe"):
+        op = "|>" if kind == "RPipe" else "^" if n["operator"] == "**" else n["operator"]
+        left, right = conv(n["lhs"]), conv(n["rhs"])
+        return Node("binary", op, (left, right), line=left.line, end_line=max(end, right.end_line))
+    if kind == "RUnaryOp":
+        return Node("unary", n["operator"], (conv(n["operand"]),), line=line, end_line=end)
+    if kind == "RFunctionDefinition":
+        names, defaults = [], []
+        for p in n.get("parameters", []):
+            names.append(str(p["name"].get("content", p["name"].get("lexeme", ""))))
+            default = p.get("defaultValue")
+            defaults.append(conv(default) if default else Node("missing", line=p["name"]["location"][0]))
+        return Node("function", args=tuple(defaults) + (conv(n["body"]),), names=tuple(names), line=line, end_line=end)
+    if kind in ("RFunctionCall", "RAccess"):
+        arguments, names = [], []
+        for a in (n.get("arguments") if kind == "RFunctionCall" else n.get("access")) or []:
+            if not isinstance(a, dict) or a.get("type") != "RArgument" or a.get("value") is None:
+                arguments.append(Node("missing", line=line)); names.append(
+                    str(a["name"].get("content", a["name"].get("lexeme", ""))) if isinstance(a, dict) and a.get("name") else "")
+                continue
+            arguments.append(conv(a["value"]))
+            names.append(str(a["name"].get("content", a["name"].get("lexeme", ""))) if a.get("name") else "")
+        if kind == "RAccess":
+            target, op = conv(n["accessed"]), n["operator"]
+            if op in ("$", "@"):
+                field = arguments[0] if arguments else Node("missing")
+                field = Node(field.kind, field.value, line=field.line) if field.kind in ("name", "str") else field
+                return Node("dollar", op, (target, field), line=target.line, end_line=end)
+            return Node("index", op, (target,) + tuple(arguments), tuple(names), line=target.line, end_line=end)
+        if n.get("infixSpecial"):
+            return Node("binary", n["functionName"]["content"], tuple(arguments), line=arguments[0].line,
+                        end_line=max([end] + [a.end_line for a in arguments]))
+        if n.get("named"):
+            written = str(n.get("lexeme", ""))
+            callee = conv(n["functionName"])
+            if "::" in written and callee.kind == "name":
+                callee = namespaced(written.split(":")[0], ":::" if ":::" in written else "::", callee.value, callee.line, callee.end_line)
+        else:
+            callee = conv(n["calledFunction"])
+        return Node("call", "(", (callee,) + tuple(arguments), tuple(names), line=callee.line, end_line=end)
+    if kind == "RIfThenElse":
+        parts = [conv(n["condition"]), conv(n["then"])] + ([conv(n["otherwise"])] if n.get("otherwise") else [])
+        return Node("if", args=tuple(parts), line=line, end_line=end)
+    if kind == "RForLoop":
+        return Node("for", str(n["variable"].get("content", "")), (conv(n["vector"]), conv(n["body"])), line=line, end_line=end)
+    if kind == "RWhileLoop":
+        return Node("while", args=(conv(n["condition"]), conv(n["body"])), line=line, end_line=end)
+    if kind == "RRepeatLoop":
+        return Node("repeat", args=(conv(n["body"]),), line=line, end_line=end)
+    raise ValueError("flowR node %s is not one the tool reads" % kind)
+
+
+def namespaced(package, sign, name, line, end):
+    """pkg::name as the tool's parser made it: the package, then the name, which carries no end line."""
+    return Node("ns", sign, (Node("name", package, line=line, end_line=line), Node("name", name, line=line)), line=line, end_line=end)
 
 def walk(node):
     """Every node of a tree, parents first."""
@@ -4038,7 +3909,7 @@ def read_package(ctx):
     files = strip_top_folder(files)
     function_map = yaml.safe_load(R_FUNCTION_MAP_YAML)
     description = read_description(decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
-    namespace = read_namespace(decode_text(files["NAMESPACE"])) if "NAMESPACE" in files else None
+    namespace = flowr_package(files)
     context = {"function_map": function_map, "notation": function_map["notation"], "namespace": namespace,
                "trivial": set(ctx.settings["trivial_numbers"]), "settings": ctx.settings}
     order = ("description", "namespace", "r", "data", "inst", "man", "tests", "vignettes")
@@ -4167,22 +4038,10 @@ def flowr_read(folder, text, prefix=""):
     id carries the prefix, so that the answers for several sources can stand side by side. An answer too
     large to read safely is refused before it is read: loading it would take the driver's memory."""
     with tempfile.TemporaryDirectory() as work:
-        source, answer = os.path.join(work, "package.R"), os.path.join(work, "answer.json")
+        source = os.path.join(work, "package.R")
         with open(source, "w", encoding="utf-8") as handle:
             handle.write(text)
-        with open(answer, "w", encoding="utf-8") as sink:
-            subprocess.run([os.path.join(folder, "flowr"), "--no-ansi", "--no-fs", "--default-engine", "tree-sitter",
-                            "--engine.r-shell.disabled", "--engine.tree-sitter.wasm-path", os.path.join(folder, "tree-sitter-r.wasm"),
-                            "--engine.tree-sitter.tree-sitter-wasm-path", os.path.join(folder, "tree-sitter.wasm"), "--execute",
-                            ':query* [{"type":"dataflow"},{"type":"normalized-ast"}] file://' + source],
-                           stdout=sink, stderr=subprocess.DEVNULL, cwd=work, timeout=900)
-        if os.path.getsize(answer) > FLOWR_ANSWER_MAX:
-            raise ValueError("flowR's answer is %d MB, too large to read safely" % (os.path.getsize(answer) // 2 ** 20))
-        with open(answer, encoding="utf-8") as handle:
-            said = handle.read()
-    if "{" not in said:
-        raise RuntimeError("flowR gave no answer for the package's R code.")
-    found = json.JSONDecoder().raw_decode(said[said.index("{"):])[0]
+        found = flowr_answer(folder, source, [{"type": "dataflow"}, {"type": "normalized-ast"}], work, "--no-fs")
     tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
     edges = {prefix + str(s): [(prefix + str(t), e["types"]) for t, e in targets] for s, targets in found["dataflow"]["graph"]["edgeInformation"]}
     nodes, stack = {}, [(tree, None)]
@@ -4536,6 +4395,7 @@ class Dataflow:
         calls = [r for r in self.nodes.values() if r["kind"] == "call"]
         called = {r["callee"] for r in calls if r["callee"] != r["function"]}
         entry = set()
+        parse_r_sources([unit["text"] for unit in self.units if unit["kind"] in (KIND_TEST, KIND_TOPLEVEL, KIND_VIGNETTE)])
         for unit in self.units:                          # the tests and vignettes that call a package function
             if unit["kind"] in (KIND_TEST, KIND_TOPLEVEL, KIND_VIGNETTE):
                 for found in parse_r_source(unit["text"]):
