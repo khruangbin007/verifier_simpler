@@ -1038,7 +1038,7 @@ for old_widget in ("llm_user_id", "reviewer_role"):      # widgets of an earlier
 
 # --- packages: installed only if one is missing, pinned to what the runtime already has, and Python
 # is restarted only if the runtime's own packages still import together afterwards
-REQUIRED = ("yaml", "openpyxl", "docx", "numpy", "scipy", "sympy", "rdata")
+REQUIRED = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; docx, scipy and sympy went with the checks
 missing = [name for name in REQUIRED if importlib.util.find_spec(name) is None]
 if missing:
     index_url = w.get("jfrog_index_url").strip()
@@ -1074,8 +1074,16 @@ if missing:
                 print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip().splitlines()[-1]))
                 print("Restarting now would crash this notebook session. Detach this notebook from the cluster and attach it again to undo the install. Do not restart the cluster.")
             else:
-                print("Installed. Restarting Python; then run this cell once more.")
-                dbutils.library.restartPython()
+                still = subprocess.run([sys.executable, "-c", "import " + ", ".join(missing)],
+                                       capture_output=True, text=True)
+                if still.returncode:
+                    print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting "
+                          "would only bring this cell back here." % ", ".join(missing))
+                    print("What Python said:\n" + hide(still.stderr)[-600:])
+                    print("Check that engine/requirements.txt names it, and that the index in widget 08 carries it.")
+                else:
+                    print("Installed. Restarting Python; then run this cell once more.")
+                    dbutils.library.restartPython()
 else:
     # --- the engine
     for folder in (os.path.join(HOME, "engine"), os.path.join(HOME, "engine", "tests")):
