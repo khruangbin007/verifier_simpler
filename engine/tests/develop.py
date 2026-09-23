@@ -962,6 +962,9 @@ def manual_problems():
             continue                                 # `verifier.py` names the file, not a function
         if not hasattr(modules[module], name):
             found.append("the manual names `%s.%s`, which does not exist" % (module, name))
+    for name in sorted(set(re.findall(r"`verifier\.([A-Za-z_]\w*)`", text)) - {"py"}):   # the one engine file
+        if not hasattr(verifier, name):
+            found.append("the manual names `verifier.%s`, which does not exist" % name)
     sheets = {sheet["name"] for sheet in runner.load_layout()["sheets"]}
     for sheet in sorted(set(re.findall(r"`([A-Z][A-Za-z_]+)`", text))):
         if sheet.endswith("_") or sheet in sheets or not re.match(r"^[A-Z][a-z]+_[A-Z]", sheet):
@@ -976,7 +979,7 @@ def manual_problems():
     for step in runner.load_pipeline()["steps"]:
         if step["name"] not in text:
             found.append("step '%s' is not mentioned in the manual" % step["name"])
-    for message in ("cell 1", "cell 2", "cell 3", "cell 4", "cell 5"):
+    for message in ("cell 1", "cell 2", "cell 3", "cell 4"):
         if message not in text.lower():
             found.append("the manual never mentions %s of the notebook" % message)
     # a file the manual names by its path in the repository, or a test file by its name, must exist:

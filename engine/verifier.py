@@ -68,38 +68,9 @@ RELATION_WORDING = {  # the word allowed in a prompt -> the wording shown in the
 LINKING_RELATIONS = ("Implements", "Partly implements", "Differs from", "Describes", "Consistent with")
 HOW_PARSED = "Parsed from the files"
 HOW_AI = "AI judgement ({confidence}%)"
-HOW_VALUE_AGREES, HOW_VALUE_DIFFERS = "Value check: agrees at stated precision", "Value check: differs"
-HOW_TABLE, HOW_PERSON = "Table matched by headers and row keys", "Recorded by a person"
-CHECK_UNDECIDED, NOT_APPLICABLE, NOT_RUN_YET = "Could not be decided", "Not applicable", "Not run yet"
+NOT_RUN_YET = "Not run yet"
 
-ST_TRACED, ST_SUPPORTING = "Traced to methodology", "Supporting code (justified)"
-ST_UNIT_TEST, ST_NARRATIVE = "Unit test", "Narrative - nothing to check"
-ST_DIFFERS, ST_UNDECIDED = "Traced - differences flagged", "Traced - check undecided"
-ST_NOT_TRACED, ST_NOT_ASSESSED = "Not traced - for review", "Not assessed - for manual review"
-ST_EXCLUDED = "Not in scope (a person's decision)"
-CLEAN_STATUSES = (ST_TRACED, ST_SUPPORTING, ST_UNIT_TEST, ST_NARRATIVE, ST_EXCLUDED)
-NOT_CLEAN_STATUSES = (ST_DIFFERS, ST_UNDECIDED, ST_NOT_TRACED, ST_NOT_ASSESSED)
-
-
-CAT_CODE_DIFFERS, CAT_CODE_NOT_TRACED = "Code differs from methodology", "Code not traced to methodology"
-CAT_MATH_UNDECIDED, CAT_VALUE_DIFFERS = "Mathematical check undecided", "Value differs from methodology"
-CAT_NUMBER_NOT_TRACED, CAT_DATA_NOT_TRACED = "Hard-coded number not traced", "Parameter data not traced"
-CAT_DATA_NOT_DESCRIBED = "Parameter data not described"
-CAT_PKGDOC_VS_CODE = "Package documentation differs from code"
-CAT_PKGDOC_VS_CANON = "Package documentation differs from methodology"
-CAT_DOC_NOT_TRACED, CAT_DOC_VS_CODE = "Documentation statement not traced", "Documentation differs from code"
-CAT_DOC_VS_CANON = "Documentation differs from methodology"
-CAT_NOT_READ, CAT_AI_UNUSABLE = "Item could not be read or assessed", "AI answer could not be used"
-CAT_AI_DISAGREE = "AI answers disagree"
-CATEGORIES = (CAT_CODE_DIFFERS, CAT_CODE_NOT_TRACED, CAT_MATH_UNDECIDED, CAT_VALUE_DIFFERS,
-              CAT_NUMBER_NOT_TRACED, CAT_DATA_NOT_TRACED, CAT_DATA_NOT_DESCRIBED,
-              CAT_PKGDOC_VS_CODE, CAT_PKGDOC_VS_CANON, CAT_DOC_NOT_TRACED, CAT_DOC_VS_CANON,
-              CAT_DOC_VS_CODE, CAT_NOT_READ, CAT_AI_UNUSABLE, CAT_AI_DISAGREE)
-
-UNDECIDED_REASONS = (
-    "the equation is an image", "the equation could not be read",
-    "symbols could not be aligned", "the function could not be composed",
-    "it uses operations the tool cannot evaluate", "too few valid sample points")
+UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
 REJECTION_REASONS = (
     "it could not be read", "it named a passage that was not shown",
     "it quoted words that are not in the text", "it accepted a planted control passage",
@@ -1765,7 +1736,6 @@ numbering_schemes:
 # Words that start a cross-reference as written ("see Table 3", "section 4.2").
 cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
 # A documentation passage "states something checkable" when it holds a number, a formula,
-# or one of these phrases. Narrative passages get the clean status "Narrative - nothing to check".
 checkable_phrases: [is calculated, is computed, is set to, equals, is defined as, is floored, is capped,
                     at least, at most, not exceed, no less than, no more than, minimum, maximum,
                     must, shall, is applied, are applied, is multiplied, is divided, rounded, per cent, percent]
@@ -6189,8 +6159,7 @@ def assemble_question(question_type, unit_ref, blocks, passages, prompt, setting
     return question
 
 def narrow_question(question_type, unit_ref, blocks, settings, passages=(), more=None):
-    """The narrow questions of the checks (map-table-columns, align-symbols, read-formula-
-    from-prose, check-rule): same assembly, same budget, same validators."""
+    """A question with one prompt of its own, assembled within the token budget as every other is."""
     return assemble_question(question_type, unit_ref, blocks, list(passages), load_prompt(question_type), settings, more=more)
 
 def judge_question(source, corner, candidates, world, settings):

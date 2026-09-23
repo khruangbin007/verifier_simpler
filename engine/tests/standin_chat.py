@@ -150,13 +150,6 @@ def read_formula_from_prose(prompt):
     return {"formula": "", "no_formula_stated": True}
 
 
-def check_rule(prompt):
-    rule, code = block_after(prompt, "RULE AS STATED"), block_after(prompt, "UNIT")
-    for number in re.findall(r"\d+(?:\.\d+)?", rule):
-        line = next((l for l in code.split("\n") if number in l and re.search(r"pmax|pmin|max|min|if", l)), "")
-        if line:
-            return {"outcome": "applied", "quote_from_passage": rule.strip()[:80], "quote_from_unit": line.strip()}
-    return {"outcome": "not applied", "quote_from_passage": rule.strip()[:80], "quote_from_unit": ""}
 
 
 def second_opinion(prompt, name_a_difference):
@@ -241,12 +234,6 @@ def trace_gap(main_prompt, misbehave=False):
     return {"action": "give_up", "args": {"because": "what it works on is built at run time"}}
 
 
-def name_steps(main_prompt):
-    """A plain name for every step, from its name and where it is set."""
-    names = {}
-    for step, name, where in re.findall(r"^\[(S\d+)\] (.+?), in ([^:]+):", main_prompt, re.M):
-        names[step] = " ".join(("%s, set in %s" % (name.replace("_", " "), where)).split()[:12])
-    return {"names": names}
 
 
 
@@ -313,10 +300,6 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(read_formula_from_prose(main_prompt))
     if question_type == "trace-gap":
         return json.dumps(trace_gap(main_prompt, misbehave and bucket == 3))
-    if question_type == "name-steps":
-        return json.dumps(name_steps(main_prompt))
-    if question_type == "check-rule":
-        return json.dumps(check_rule(main_prompt))
     return json.dumps({"ok": True})
 
 

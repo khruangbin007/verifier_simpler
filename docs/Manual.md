@@ -10,7 +10,7 @@
 
 A model comes with three things: a **methodology** that says what it should do, a **package** of code and data that does it, and **documentation** that describes it. The tool reads all three, works out what corresponds to what, checks by code whether the things that correspond agree — formulas, values, stated rules — and raises what it could not line up as a question for a person.
 
-It does not run the model. It does not judge whether the methodology is sound. It rates nothing: no grade, no score, no verdict. Every flagged item is an observation with its evidence and a suggested next step, and a person decides what it means. The person's decision is recorded beside the item, with who made it and when.
+It does not run the model. It does not judge whether the methodology is sound. It rates nothing: no grade, no score, no verdict. It shows what was read, how the model computes what it returns, and what is covered; a person decides what it means.
 
 It is not tied to any sector. The methodology can be about anything the package computes. Nothing in the code, its vocabulary or its prompts assumes a field; what it knows about a project's language comes from the project's own files and, optionally, a glossary the analyst supplies.
 
@@ -18,40 +18,38 @@ It is not tied to any sector. The methodology can be about anything the package 
 
 ```
 Run_2026-09-22_1430/
-  Output.xlsx               eight sheets: what was read, what was linked, what was checked, what is flagged
+  Output.xlsx               six sheets: what was read, how the model computes what it returns, what is covered
   _audit/
-    records.jsonl           every record of the run, one per line
-    calls.jsonl.gz          every exchange with the model
-    manifest.json           the run's identity, its coverage account, the package as described
+    Audit_Log.xlsx          the record: the run, every step, every record, every exchange with the model
 ```
 
-The record is what makes the run an **evidence pack**: from those three files alone, anyone can check that the inputs are the ones fingerprinted, that the code that ran is the code released, that every citation still points at the words it cites, and that nothing was edited afterwards.
+The record is what makes the run an **evidence pack**: from that workbook alone, anyone can check that the inputs are the ones fingerprinted, that the code that ran is the code released, and that nothing was edited afterwards.
 
 ## 2. How a review goes
 
 1. **Put the files in.** A project folder has three input folders: the methodology, the package, the documentation. Almost any format works (section 6).
 2. **Read.** The tool reads every file into small citable units — a paragraph, a table, a formula, a function — each with its place in the document and a fingerprint of its content. No model is involved yet. You are shown the outline it found and asked to confirm it.
-3. **Link and check.** The tool finds, for each unit, the passages elsewhere that correspond to it, asks the model to choose among them and quote them, refuses any answer that does not quote the passage word for word, and then checks by code whether linked formulas, values and rules agree.
-4. **Decide.** Every unit that could not be traced or that differs becomes a flagged item. You fill in your determinations in the workbook; the tool reads them back and records them.
+3. **Map and link.** The tool maps how the model computes what it returns, from each final output down to its rawest inputs, with flowR reading the R code. It then links the passages of the methodology and the documentation to the model: the model chooses among candidates code proposes and must quote each word for word, or its answer is refused.
+4. **Read.** `Output.xlsx` shows everything that was read, the map, and what is covered.
 5. **Keep.** The run folder is the evidence pack.
 
 ## 3. Design rules
 
-Twelve rules were set at the start and one was added when reading was rebuilt. Each is enforced by named code, and a test holds each.
+Fourteen rules. Each is enforced by named code, and a test holds each.
 
 | Rule | Statement |
 |---|---|
-| R1 | The tool flags; people decide. No rating of seriousness. The policy terms never appear in anything the tool produces or names. |
-| R2 | Closed accounting. Every unit ends with one status; every unit that is not clean has a flagged item; this identity is checked on every run. A file, a step or a call that fails is written down, and the run goes on. |
-| R3 | The model's opinion is never the last word. Answers are validated by code; linked formulas and values are checked deterministically; a failed or rejected call leaves the unit untraced and flagged and never stops a run. |
+| R1 | The tool shows; people decide. No rating of seriousness. The policy terms never appear in anything the tool produces or names. |
+| R2 | Closed accounting. Every unit read is one row of its sheet, and no row is anything else; this identity is checked on every run. A file, a step or a call that fails is written down, and the run goes on. |
+| R3 | The model's opinion is never the last word. Answers are validated by code; a failed or rejected call leaves the unit unlinked and never stops a run. |
 | R4 | Every link says how it was established, shows its evidence and carries provenance. Every citation can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
 | R6 | Inputs are never modified. A run writes only inside its own folder. |
 | R7 | Nothing taken from an input or from the model is ever executed or evaluated: no R, no evaluation of text, no unpickling, no string parsing by a symbolic library, safe reading of archives, safe loading of YAML only. |
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
-| R9 | No domain concept in the engine, its vocabulary, its categories or its prompts. Domain flavour lives in sample data and in the optional glossary. |
+| R9 | No domain concept in the engine, its vocabulary or its prompts. Domain flavour lives in sample data and in the optional glossary. |
 | R10 | Plain language outward. No internal names, no technical traces, whole numbers shown as whole numbers, in anything an analyst reads. |
-| R11 | Five flat modules, one-way imports, plain code, line budgets. The notebook is built from code and never edited by hand. |
+| R11 | One engine file, plain code, line budgets. The notebook is built from code and never edited by hand. |
 | R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, read into another form, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
 | R14 | The map is exhaustive and verifiable. Every step of the Model Implementation Map is parsed from the code or quotes it word for word; every model unit is a step of the map, belongs to one, or is in the branch of units no final output reaches; every step ends at a named raw input; and what the tool cannot follow is a named gap, never a silence. |
@@ -60,37 +58,18 @@ Twelve rules were set at the start and one was added when reading was rebuilt. E
 
 ## 4. Vocabulary
 
-Every word the tool can show in a status, a relation or a "how established" cell comes from one list in `verifier.py`. The tables are generated from it.
+Every wording the tool records for a link, a refusal or a piece that could not be read comes from one list in `verifier.py`; the tables below are that list.
 
-**Statuses that are clean**
-
-| Wording |
-|---|
-| Traced to methodology |
-| Supporting code (justified) |
-| Unit test |
-| Narrative - nothing to check |
-
-**Statuses that need attention**
+**Relations, as recorded**
 
 | Wording |
 |---|
-| Traced - differences flagged |
-| Traced - check undecided |
-| Not traced - for review |
-| Not assessed - for manual review |
-
-**Relations, as shown**
-
-| Shown in the workbook | Word allowed in a prompt |
-|---|---|
-| Implements | implements |
-| Partly implements | partly implements |
-| Differs from | deviates from |
-| Same topic (not implemented here) | merely related |
-| Describes | describes |
-| Consistent with | consistent with |
-| Differs from | inconsistent with |
+| Implements |
+| Partly implements |
+| Differs from |
+| Same topic (not implemented here) |
+| Describes |
+| Consistent with |
 
 **How a link was established**
 
@@ -98,13 +77,6 @@ Every word the tool can show in a status, a relation or a "how established" cell
 |---|
 | Parsed from the files |
 | AI judgement ({confidence}%) |
-| Symbolic check: agrees |
-| Numerical check: agrees ({n} points) |
-| Numerical check: differs |
-| Value check: agrees at stated precision |
-| Value check: differs |
-| Table matched by headers and row keys |
-| Recorded by a person |
 
 **Kinds of model unit**
 
@@ -134,18 +106,14 @@ The rows of Chunks_Model never overlap, and each is a whole piece of code: a rox
 | Figure |
 | Equation |
 
-**Reasons for a check that could not be decided**
+**Why an equation was not read**
 
 | Wording |
 |---|
 | the equation is an image |
 | the equation could not be read |
-| symbols could not be aligned |
-| the function could not be composed |
-| it uses operations the tool cannot evaluate |
-| too few valid sample points |
 
-**Reasons why an answer of the model could not be used**
+**Why an answer of the model could not be used**
 
 | Wording |
 |---|
@@ -154,13 +122,12 @@ The rows of Chunks_Model never overlap, and each is a whole piece of code: a rox
 | it quoted words that are not in the text |
 | it accepted a planted control passage |
 | it contradicted itself |
+| it repeated an action it had already taken |
 
 **Fixed cell texts**
 
 | Wording |
 |---|
-| Could not be decided |
-| Not applicable |
 | Not run yet |
 | The AI's wording is not displayed here; the full text is in the audit records. |
 
@@ -205,7 +172,7 @@ Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.d
 
 ## 7. Reading `Output.xlsx`
 
-Eight sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
+Six sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
 
 | Sheet | What it holds |
 |---|---|
@@ -216,51 +183,7 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 | `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, one row per variable |
 | `Mapping_Coverage` | one row per final output and one per corner: what is covered and what is not |
 
-**How to read one row of the map.** One row is one variable: where it sits (the Map ID, a column per level, and how deep it is), the variable itself with the unit that defines it, the code as written and its concept, the function that defines it with its unit, and what it is computed from — each of those a row beneath it. Section 8 describes the sheet in full.
-
-**How to read one row of `Chunks_Doc`.** What the passage is (blue identity columns and its text), what it was linked to in the methodology and in the model, with the relation and **how established**, what was searched for it and why it was not linked, then its checks, its status and its flagged items. Several values in one cell stand on separate lines, each prefixed with its reference. Text taken from your inputs or from the model is always shown in quotation marks with its citation.
-
-**"How established"** starts with one of a small set of phrases: *Parsed from the files*; *AI judgement (64%)*; *Symbolic check: agrees*; *Numerical check: agrees (200 points)*; *Numerical check: differs*; *Value check: ...*; *Table matched by headers and row keys*; *Recorded by a person*. After an AI judgement you also see why the passage was proposed, for example "shares the words floor, probability; shares the rare number 0.0003".
-
-**What "AI judgement (64%)" means.** The model chose this passage among lettered passages, quoted words from both sides that code found verbatim, and did not accept a planted control passage. The percentage is the model's own statement and is not calibrated; treat it as an ordering hint at most. Where a deterministic check exists for the link, the check's result follows in the same cell and has the last word.
-
-**What was searched / Why not mapped.** Every unit without a link shows what the tool looked for (words, symbols, numbers) and what happened: nothing was proposed, the model saw only passages on the same topic, or its answer could not be used.
-
-**The statuses.** The table is generated from the code:
-
-**Units of the package** (the first rule that fits decides)
-
-| Order | Rule | Status | When it applies |
-|---|---|---|---|
-| 1 | could not be read or assessed | Not assessed - for manual review | A file that could not be read, compiled code, or a stored object that is not compared. |
-| 2 | test block | Unit test | A test_that block. Which function it tests is shown in the column Unit test. |
-| 3 | package file without code | Supporting code (justified) | DESCRIPTION, NAMESPACE and other files that hold no code. |
-| 4 | example code in a vignette | Supporting code (justified) | Code inside a vignette; it illustrates the package and is not part of the model. |
-| 5 | its own checks | Traced - differences flagged / Traced - check undecided | A roxygen block or help page whose own deterministic checks differ or are undecided. |
-| 6 | documents no single object | Supporting code (justified) | A roxygen block or help page that documents no single object of the package. |
-| 7 | takes the tracing of what it documents | the status of the documented object | A roxygen block or help page whose own checks pass. |
-| 8 | a check or the judge reports a difference | Traced - differences flagged | Linked, and a check, the judge or the second question reports a difference. |
-| 9 | a required check is undecided | Traced - check undecided | Linked, and a required check could not be decided. |
-| 10 | linked and all required checks agree | Traced to methodology | Linked to the methodology, and every required check agrees. |
-| 11 | covered by the check of the whole function | Traced to methodology | A statement without a link of its own, inside a function whose agreeing check ran through it. |
-| 12 | supporting code by syntax | Supporting code (justified) | No link, and no arithmetic and no number other than the trivial ones; the reason is shown. |
-| 13 | vignette prose without checkable statements | Supporting code (justified) | Vignette text that states no number and no formula. |
-| 14 | not linked | Not traced - for review | Anything else without a link to the methodology. |
-
-**Units of the documentation** (the first rule that fits decides)
-
-| Order | Rule | Status | When it applies |
-|---|---|---|---|
-| 1 | content cannot be read | Not assessed - for manual review | A figure, an equation that could not be read, or a part of a file that could not be read. |
-| 2 | states nothing checkable | Narrative - nothing to check | No formula, number, rule or definition, by code or by the judge's answer. |
-| 3 | a check or the judge reports a difference | Traced - differences flagged | Linked, and a check, the judge or the second question reports a difference. |
-| 4 | a required check is undecided | Traced - check undecided | Linked, and a required check could not be decided. |
-| 5 | linked and consistent | Traced to methodology | Linked to the methodology, directly or through a linked unit of the package, and consistent. |
-| 6 | checkable and not linked | Not traced - for review | States something checkable, and nothing was linked to it. |
-
-**The value-comparison rule** is one rule, used for parameter tables, numbers in code, numbers in roxygen text and numbers in the documentation. Its full text is on `Model_Package_Info`. In short: percent, basis points and scientific notation are converted first; a value agrees at stated precision when rounding it to the decimals of the methodology's value gives that value; there is no hidden tolerance. A cell reads like "package 0.10, methodology 0.15 (C-0017 row Retail): differs".
-
-**The mathematical check.** For a linked function or statement and a passage that states a formula, the tool aligns the symbols first (shown as "with rho = ρ"), then tries to show symbolically that both sides are equal, then evaluates both at 200 seeded points, including points at and around every threshold. *Differs* always comes with a counterexample: the inputs and both results. *Could not be decided* names one reason from a fixed list and is never clean.
+**How to read one row of the map.** One row is one variable: where it sits (the Map ID, a column per level, and how deep it is), the variable itself with the code as written, the function that defines it with its unit, and what it is computed from — each of those a row beneath it. Section 8 describes the sheet in full.
 
 **The sheets and columns.** As laid out in the one place that defines them, `verifier.WORKBOOK_LAYOUT_YAML`:
 
@@ -302,9 +225,9 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 | Lines | identity |  |
 | Text | code text |  |
 
-**Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets, one of the model to the methodology and the documentation, the other of the documentation to the methodology and the model, held one row per model unit and one row per documentation unit: what each was linked to, what was searched for it, its checks, its status and its flagged items. The Model Implementation Map now shows the model unit in its place in the computation, so those two sheets are gone and nothing they held is lost. A model unit's status and flagged items are on `Chunks_Model`, beside the unit itself. A documentation unit's links, what was searched, its checks, its status and its flagged items are on `Chunks_Doc`, beside the passage.
+**Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets held one row per model unit and one per documentation unit, with what each was linked to. The Model Implementation Map now shows each model unit in its place in the computation, and `Mapping_Coverage` what is covered, so those two sheets are gone.
 
-**Mapping_Coverage**, read off the map. One row for each final output: how many steps it takes and how deep they run, what it rests on — arguments, columns of the data given, stored tables, files, hard-coded numbers — how many of its steps are linked to a methodology passage (*Covered*) and how many are not, what its checks said (agreeing, differing, undecided), how many of its units need attention, and its flagged items with a count by category. Then one row for each corner, each read the way that corner needs:
+**Mapping_Coverage**, read off the map. One row for each final output: how many steps it takes and how deep they run, what it rests on — arguments, columns of the data, stored tables, files and hard-coded numbers — and how many of its steps a methodology passage is linked to (*Covered*) and how many are not. Then one row for each corner, each read the way that corner needs:
 
 | Row | Covered | Not covered |
 |---|---|---|
@@ -314,57 +237,37 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 
 Every number on this sheet is counted from the rows written to the map and to the Chunks sheets, so the sheet and the map always agree. The coverage identity is checked separately, by counting the statuses on `Chunks_Model` and `Chunks_Doc` against what the step account-coverage counted.
 
-| Column | Colour group | What it shows |
-|---|---|---|
-| Item id | identity |  |
-| Concerns | identity |  |
-| Category | identity |  |
-| Unit ref(s) | identity |  |
-| Item | assessments |  |
-| What was observed | assessments |  |
-| Methodology says | methodology |  |
-| Code does | code text |  |
-| Documentation says | documentation |  |
-| Suggested next step | assessments |  |
-| Status | assessments |  |
-| Last decision recorded | assessments |  |
-| Decision | reviewer input |  |
-| Reviewer | reviewer input |  |
-| Role | reviewer input |  |
-| Rationale | reviewer input |  |
 
 ## 8. The Model Implementation Map
 
 
-**The Model Implementation Map.** The sheet `Model_Implementation_Map` shows how the model computes what it returns, and nothing else: only what a calculation reaches is on it. One row is one variable. Reading a row from left to right: where it sits (the Map ID, one column per level — `MapID1`, `MapID2`, … — so any level can be filtered, and a parent leaves the deeper columns empty; the columns fold away with the + above them), then **Output Variable**, the one variable that row is about, with the model unit that defines it, the code as written, and the concept it is (a `K-` reference); then **Function Name**, the function that defines it, with its model unit; then **Arguments**, what the variable is computed from, separated by semicolons. Every name in Arguments is the Output Variable of a row directly beneath it, so a value can be followed down to the raw inputs it rests on: an argument of the final output, a column of the data given, a stored table, a file, or a hard-coded number, each a row with no function of its own. A reference is a link: clicking a `M-` reference opens that unit's row on `Chunks_Model`, and a `K-` reference its row on `Concepts`. The rows are grouped, each parent above its members, so a branch opens and closes with the + and − at the left; Excel groups eight levels deep and a deeper row is indented instead.
+**The Model Implementation Map.** The sheet `Model_Implementation_Map` shows how the model computes what it returns, and nothing else: only what a calculation reaches is on it. One row is one variable. Reading a row from left to right: where it sits (the Map ID, one column per level — `MapID1`, `MapID2`, … — so any level can be filtered, and a parent leaves the deeper columns empty; the columns fold away with the + above them), then **Output Variable**, the one variable that row is about, with the code as written; then **Function Name**, the function that defines it, with its model unit; then **Arguments**, what the variable is computed from, separated by semicolons. Every name in Arguments is the Output Variable of a row directly beneath it, so a value can be followed down to the raw inputs it rests on: an argument of the final output, a column of the data given, a stored table, a file, or a hard-coded number, each a row with no function of its own. A reference is a link: clicking a `M-` reference opens that unit's row on `Chunks_Model`. The rows are grouped, each parent above its members, so a branch opens and closes with the + and − at the left; Excel groups eight levels deep and a deeper row is indented instead.
 
 A called function is entered with the arguments that call gives it, so what it computes inside stands under the value it produces, and a parameter is never a row of its own: the row is the argument the call gave it. A function that calls itself stops there, keeping what the call is given. What no final output reaches is **not on this sheet**: dead code, a second way in, a function only the tests call, the methodology no step implements and the documentation describing nothing in the map are all counted on `Mapping_Coverage`, where each has its row.
 
-**Choosing the final outputs.** Code proposes as a final output a function nothing in the package calls that is exported or that the package's tests or vignettes call (step 05a); cell 3 and cell 4 both say which. Where code proposes none, every function nothing in the package calls stands in, so the map always has a top.
+**Choosing the final outputs.** Code proposes as a final output a function nothing in the package calls that is exported or that the package's tests or vignettes call. Where code proposes none, every function nothing in the package calls stands in, so the map always has a top.
 
 ## 11. The run folder as an evidence pack
 
-The three files in `_audit/` are the record. `records.jsonl` holds every record of every kind, one per line, each tagged with its kind, in the order written and never rewritten; `calls.jsonl.gz` holds every exchange with the model, prompt and reply; `manifest.json` holds the run's identity, the fingerprint of every input, the fingerprint of every engine file that ran, the coverage account and the package as described. Cell 5 verifies a pack from these three files alone: that the inputs are the ones fingerprinted, that the engine files match the release, that re-reading the inputs gives the recorded content hashes, that the hash chains verify (the graph, the determinations, and your decisions on what is in scope and what the final outputs are), that every unit has one status and every citation resolves, and that no token was written anywhere. A changed byte in an input, a removed record or an edited status is caught.
+`_audit/Audit_Log.xlsx` is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that the graph's hash chain verifies, that every unit read is in the record, that `Output.xlsx` carries this run's ids and fingerprints, and that no access token was written anywhere in the folder.
 
 ## 12. When something goes wrong
 
 | What you see | What it means and what to do |
 |---|---|
-| "Your notebook session has crashed" right after `cell 3`, with *compiled using NumPy 1.x cannot be run in NumPy 2* or *PyArrow must be installed* in the output | An install moved a package the runtime needs to start, so every restart crashes. Detach the notebook from the cluster and attach it again: that discards what `cell 3` installed, and only this notebook was affected. Do not restart the cluster for this. Then run `cell 2` onwards again. Since 21 September 2026 `cell 3` keeps the runtime's own numpy, pandas, pyarrow and scipy exactly as they are, and checks before restarting that they still import together, so this should not happen again; if it does, tell whoever maintains the tool. |
-| `cell 3` says "STOPPED BEFORE RESTARTING PYTHON" | The install changed something the runtime needs to start, and `cell 3` noticed before restarting, so the session is still alive. Detach the notebook and attach it again to undo the install, and tell whoever maintains the tool which package pip named. |
-| `cell 3` says pip could not find versions that fit | The index has no version of a package the tool needs that works with this runtime's own packages. Nothing was changed. Ask for an older version of the package pip names to be added to the index. |
-| The status cell says the run waits for a fresh token | The token ran out. Paste a new one (mode B: then run `cell 1`). No question is repeated. |
-| "Many calls in a row failed, so the run paused itself" | The gateway is not answering. Check it with `cell 2`, then run `cell 4` again. |
-| The cluster stopped | Start it, run `cell 1` to `cell 3` in order, choose the same run in the run widget, and run `cell 4`. The run resumes after its last finished step. |
+| `cell 1` says "STOPPED BEFORE RESTARTING PYTHON" | The install could not do what it should; the message says what is missing or what changed, and Python was not restarted. If it names a package the runtime itself needs, detach the notebook, attach it again and run `cell 1` once more. |
+| `cell 1` says "flowR IS NOT READY" | The reason follows it. If the download failed, download the archive it names on an approved machine and put it next to the notebook. If flowR "could not run on this cluster", the cluster does not let a notebook start a program: use one in dedicated (single-user) access mode. |
+| `cell 3` says "WAITING FOR A FRESH TOKEN" | The token ran out. Paste a new one into widget 02 and run `cell 3` again; the steps already finished are not repeated. |
+| "Many calls in a row failed, so the run paused itself" | The gateway is not answering. Check it with `cell 2`, then run `cell 3` again. |
+| The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. A new session starts a new run; the earlier run folder stays as it was. |
 | An input changed | Start a **new run** in the same project. `Model_Package_Info` lists what changed since the previous run. Never edit inputs of a run that has started. |
-| A unit of kind *File not read* | That file or expression could not be parsed. It has a flagged item with the reason; the rest of the package was still read. |
-| "... belongs to another run or another list of items" | The uploaded workbook is not this run's `Output.xlsx`. Download the current one and fill it again. |
+| A unit of kind *File not read* | That file or expression could not be parsed. `Model_Package_Info` lists it with the reason; the rest of the package was still read. |
 | A cell reads "This text could not be shown in plain words" | The tool withheld a text that contained technical traces; the text is in `_audit/run_log.txt`. Please report it; it is a defect in the tool. |
 | "This is a defect in the tool, not in the model under review" | The coverage identity did not hold and the run stopped on purpose. Keep the run folder and report it. |
 
 ## 13. Known limitations
 
-- The content of images is never evidence. Formulas given only as pictures end *Not assessed* or make the linked code *Traced - check undecided*. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself. The Figure still ends *Not assessed - for manual review*.
+- The content of images is never evidence. A formula given only as a picture is kept as a figure and never read as a formula. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself.
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
 - A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
 - Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
@@ -372,9 +275,8 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 - A spreadsheet is read sheet by sheet, each sheet a heading over one table. A formula is never worked out: the value the spreadsheet saved with it is what is read, so save the workbook after it has calculated.
 - The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 - PDF input is read by position on the page; multi-column layouts and tables without ruling lines may be cut wrongly. Check the outline.
-- R code is parsed by the tool's own reader, not by R. Unusual syntax becomes a *File not read* unit for that expression only. Functions with loops or branches are compared statement by statement; R semantics that the tool's evaluator does not cover (recycling of vectors, matrix products) end as "uses operations the tool cannot evaluate".
-- Stored data is decoded without R. Objects that are not tables, vectors or short lists are described and not compared; missing values of different kinds are not told apart.
-- The percentage after "AI judgement" is not calibrated.
+- R code is never run. The package's units are read by the tool's own reader, and its data flow by flowR. Unusual syntax becomes a *File not read* unit for that expression only.
+- Stored data is decoded without R. Objects that are not tables, vectors or short lists are described but not taken apart; missing values of different kinds are not told apart.
 - The evaluation so far used invented sample projects and the stand-in `chat()`; results with a real model on a real package are still to be measured (section 22).
 
 ---
@@ -383,7 +285,7 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 
 ## 14. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the search and the judgement of every link, the concepts, the map's agents, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the search and the judgement of every link, the map's agents, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
 ## 15. The pipeline
 
@@ -403,7 +305,7 @@ A step that carries out several parts keeps them in order, and a later part read
 
 ## 16. How the model is used, and held
 
-The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each; what this function does, in plain words; which reader should take this file; what this tag is for. Every answer is validated by `verifier.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit untraced and flagged. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
+The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each; and, for the map's agents, which of a fixed list of actions to take next, quoting the code each link rests on. Every answer is validated by `verifier.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit unlinked. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
 
 Every exchange is recorded, and `verifier.replay_chat` answers from the record, so that a run can be reproduced without a model and its graph version compared.
 
@@ -463,8 +365,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `max_unit_chars` | 3000 | A longer unit is cut around its formula lines before it is shown to the model. |
 | `max_passage_chars` | 1100 | A longer passage is cut around the matched words. |
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
-| `reviewer_id` |  | Who runs the notebook; recorded with confirmations and determinations. |
-| `reviewer_role` |  | The role of that person. |
+| `reviewer_id` |  | Who runs the notebook; recorded against the run. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 | `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the recall ladder (`develop.recall`) switches them off one by one. |
 
@@ -475,7 +376,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | You want to add | Where | What must be re-evaluated |
 |---|---|---|
 | a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
-| a question type | a prompt in `verifier.PROMPTS`, a validator branch in `verifier.validate_narrow`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
+| a question type | a prompt in `verifier.PROMPTS`, a validator in `verifier.validate_answer`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
 | a search signal | `verifier.search_one`, `verifier.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
 | a word the search should ignore, or a code-to-prose bridge | `verifier.STOPWORDS_TEXT`, `verifier.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
 | a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` | `test_runner.py`; the end-to-end tests |
@@ -502,7 +403,7 @@ After any change, see section 23.
 | rapidocr-onnxruntime>=1.3 | optional | the words inside pictures (OCR) |
 | flowR 2.15.8 (not a Python package) | required | reads the package's R code; fetched and checked by cell 1 |
 
-**The implementation map.** `develop.map_measure` measures the map of `J_pipeline` against its answer key, part by part, and `develop.map_report` is the sign-off bar of its agents, four tests: the map holds every part of the answer key, including the gaps on the path the agents traced; every link the AI declared quotes the code word for word; the shape of the map is the same as with no model at all, because code decides it; and every question the agents asked was answered and accepted the first time, with every gap on the path ending traced or with a reason. With the stand-in all four hold, and the bar says so while reporting itself **not met**: the stand-in shows the machinery is sound, not how a model traces a gap it has never seen. Run it on your own gateway from cell 5 with `APPENDIX = "map-sign-off"`. Rehearsed against a model that declares links quoting code that is not there, the fourth test does not hold and the bar says NOT met.
+**The implementation map.** `develop.map_measure` measures the map of `J_pipeline` against its answer key, part by part, and `develop.map_report` is the sign-off bar of its agents, four tests: the map holds every part of the answer key, including the gaps on the path the agents traced; every link the AI declared quotes the code word for word; the shape of the map is the same as with no model at all, because code decides it; and every question the agents asked was answered and accepted the first time, with every gap on the path ending traced or with a reason. With the stand-in all four hold, and the bar says so while reporting itself **not met**: the stand-in shows the machinery is sound, not how a model traces a gap it has never seen. Run it on your own gateway by calling `develop.map_report` with your `chat()`. Rehearsed against a model that declares links quoting code that is not there, the fourth test does not hold and the bar says NOT met.
 
 
 

@@ -454,9 +454,6 @@ class MapSignOff(unittest.TestCase):
             if "QUESTION TYPE: trace-gap" in main_prompt:
                 return {"answer": json.dumps({"action": "declare_edge",
                                               "args": {"value": "steps", "from": ["rating_scale"], "quote": "steps <- invented(code)"}})}
-            if "QUESTION TYPE: name-steps" in main_prompt:
-                shown = re.findall(r"^\[(S\d+)\]", main_prompt, re.M)
-                return {"answer": json.dumps({"names": {step: "a critical error needing urgent attention" for step in shown}})}
             return standin_chat.chat_well_behaved(system_prompt, main_prompt)
         text = develop.map_report(misbehaving, samples=("J_pipeline",), label="a misbehaving model")
         self.assertIn("**The bar is NOT met.**", text)
