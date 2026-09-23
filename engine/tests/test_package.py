@@ -72,7 +72,8 @@ class ReadingR(unittest.TestCase):
         function = next(u for u in units if u["kind"] == core.KIND_FUNCTION)
         text = core.expr_to_text(core.expr_from_dict(function["code"]["composed"]))
         self.assertEqual(text, "f = normal_cdf((normal_inverse(pd) - sqrt(rho) * normal_inverse(q)) / sqrt(1 - rho))")
-        self.assertEqual([u["name"] for u in units if u["kind"] == core.KIND_FORMULA], ["a", "b", "f"])
+        self.assertEqual([u["name"] for u in units if u["kind"] == core.KIND_FORMULA], [],
+                         "a statement is part of its function's row; the map takes the function apart")
 
     def test_supporting_code_by_syntax_never_holds_arithmetic_or_a_non_trivial_number(self):
         units, _ = helpers.units_of({"R/a.R": "check <- function(x) {\n  stopifnot(is.numeric(x))\n  invisible(TRUE)\n}\n\n"
@@ -80,11 +81,14 @@ class ReadingR(unittest.TestCase):
         plumbing = {u["name"]: bool(u["code"]["plumbing"]) for u in units if u["kind"] == core.KIND_FUNCTION}
         self.assertEqual(plumbing, {"check": True, "keep": False, "rate": False})
 
-    def test_roxygen_blocks_help_pages_tests_and_vignettes_become_units(self):
+    def test_a_roxygen_block_is_one_row_with_what_it_documents_and_no_rows_overlap(self):
         units, _ = helpers.units_of(build_samples.f_package(False))
         kinds = {kind: sum(1 for u in units if u["kind"] == kind) for kind in core.UNIT_KINDS}
-        self.assertEqual((kinds[core.KIND_ROXYGEN], kinds[core.KIND_HELP], kinds[core.KIND_TEST], kinds[core.KIND_VIGNETTE]), (7, 6, 2, 2))
-        block = next(u for u in units if u["kind"] == core.KIND_ROXYGEN and u["name"] == "cond_pd")
+        self.assertEqual((kinds[core.KIND_ROXYGEN], kinds[core.KIND_HELP], kinds[core.KIND_TEST], kinds[core.KIND_VIGNETTE]), (0, 6, 2, 2))
+        self.assertEqual(sum(1 for u in units if u["roxygen"]), 7, "each of the seven blocks, in the row of what it documents")
+        spans = sorted((u["file"], u["lines"][0], u["lines"][1]) for u in units if u.get("lines"))
+        self.assertFalse([(a, b) for a, b in zip(spans, spans[1:]) if a[0] == b[0] and b[1] <= a[2]], "no two rows share a line")
+        block = next(u for u in units if u["roxygen"] and u["name"] == "cond_pd")
         self.assertEqual([t["name"] for t in block["roxygen"]["tags"] if t["tag"] == "param"], ["pd", "rho", "q"])
         self.assertTrue(block["roxygen"]["formulas"][0]["readable"])
         target = next(u for u in units if u["ref"] == block["roxygen"]["documents_ref"])
@@ -197,6 +201,34 @@ class ImplementationMapSample(unittest.TestCase):
                         self.assertIn(source, nodes, "%s: %s comes from %s, which is not a node" % (sample, record["node"], source))
                 if record.get("code") and record.get("function_ref"):
                     self.assertIn(record["code"], text[record["function_ref"]], "not as written")
+
+    def test_a_value_set_four_times_is_four_steps_each_reading_the_one_before(self):
+        """Found on a real package: tie_model_call sets tie_outputs four times. As one node, the map showed
+        the first step's code under the last; as four, each reads the one before it, and a named element
+        of a list - overrides_and_caps - is a value of its own, computed by the function it calls."""
+        code = ("tie_score_anchor <- function(tie_inputs, tie_outputs) tie_outputs$profile + tie_inputs$x\n"
+                "tie_anchor_overrides <- function(tie_inputs, tie_outputs) min(tie_outputs$anchor, tie_inputs$cap)\n"
+                "#' @title Model Call\n#' @export\n"
+                "tie_model_call <- function(tie_inputs = NULL) {\n"
+                "  tie_outputs <- list(economic = tie_inputs$gdp * 2)\n"
+                "  tie_outputs <- c(list(profile = tie_outputs$economic + 1), tie_outputs)\n"
+                "  tie_outputs <- c(list(anchor = tie_score_anchor(tie_inputs, tie_outputs)), tie_outputs)\n"
+                "  tie_outputs <- c(list(overrides_and_caps = tie_anchor_overrides(tie_inputs, tie_outputs)), tie_outputs)\n"
+                "}\n")
+        units, _ = helpers.units_of({"R/model-engine.R": code})
+        self.assertEqual([(u["kind"], bool(u["roxygen"])) for u in units if u["name"] == "tie_model_call"], [(core.KIND_FUNCTION, True)],
+                         "the roxygen block and the function are one row")
+        flow = runner.Dataflow(units, (), runner.flowr_ready()).run()
+        nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+        steps = sorted((n for n in nodes.values() if n["function"] == "tie_model_call" and n["name"] == "tie_outputs"), key=lambda n: n["line"])
+        self.assertEqual(len(steps), 4)
+        for before, after in zip(steps, steps[1:]):
+            self.assertIn(before["node"], after["from"], "each step reads the one before it")
+        element = next(n for n in nodes.values() if n["name"] == "overrides_and_caps")
+        self.assertIn(element["node"], steps[3]["from"])
+        call = nodes[element["from"][0]]
+        self.assertEqual((call["kind"], call["callee"], call["bindings"]["tie_outputs"]), ("call", "tie_anchor_overrides", [steps[2]["node"]]))
+        self.assertEqual(nodes["tie_model_call:return"]["from"], [steps[3]["node"]], "what the function returns is the last step")
 
     def test_flowr_lives_in_a_folder_of_this_users_own_and_is_ready_only_once_it_has_run(self):
         """Found on Databricks: a shared cluster runs every notebook session as a system user of its own,

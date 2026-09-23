@@ -4229,11 +4229,32 @@ def units_from_r_source(path, source, context, line_offset=0):
             covered.add(number)
     if not units and source.strip():
         units.append(draft(KIND_TOPLEVEL, path, (1, len(source_lines)), "", source, code=None))
+    units = self_contained(units)
     for unit in units:
         if unit["parent_key"] is None or unit["kind"] == KIND_FUNCTION:
             unit["text"] = "\n".join(source_lines[unit["lines"][0] - 1:unit["lines"][1]])
         unit["lines"] = (unit["lines"][0] + line_offset, unit["lines"][1] + line_offset)
     return units
+
+def self_contained(units):
+    """Rows that never overlap, each a whole piece of code: what is written inside a function is the
+    function's (its statements are taken apart on Model_Implementation_Map, not here); a roxygen block
+    is one row with what it documents; and two rows over the same lines are one row."""
+    kept = []
+    for unit in sorted((u for u in units if not u["parent_key"]), key=lambda u: (u["lines"][0], -u["lines"][1])):
+        last = kept[-1] if kept else None
+        if last and last["kind"] == KIND_ROXYGEN and unit["kind"] not in (KIND_ROXYGEN, KIND_NOT_READ):
+            unit["roxygen"], unit["lines"] = last["roxygen"], (last["lines"][0], unit["lines"][1])
+            kept[-1] = unit
+        elif last and unit["lines"][0] <= last["lines"][1]:
+            if unit["data"] and not last["data"]:            # a stored object keeps what it is
+                last["kind"], last["name"] = unit["kind"], unit["name"]
+            last["lines"] = (last["lines"][0], max(last["lines"][1], unit["lines"][1]))
+            for part in ("data", "roxygen", "code"):
+                last[part] = last[part] or unit[part]
+        else:
+            kept.append(unit)
+    return kept
 
 # ---------------------------------------------------------------- roxygen blocks and help pages
 def braces_content(text, position):
@@ -4635,7 +4656,7 @@ def link_documentation_units(units):
             by_name.setdefault(unit["name"], unit)
     blocks = {}
     for unit in units:
-        if unit["kind"] == KIND_ROXYGEN:
+        if unit["roxygen"]:                               # a block, or the object it is one row with
             target = by_name.get(unit["roxygen"]["documents_name"])
             unit["roxygen"]["documents_ref"] = target["key"] if target else None
             blocks.setdefault(unit["roxygen"]["documents_name"], unit)
@@ -4801,6 +4822,7 @@ OPAQUE_CALLS = {"do.call": "do.call over arguments built at run time", "eval": "
 # definition it reads, for every call, the function it calls, and for every argument, the parameter it becomes.
 # It is fetched once, verified against the pinned SHA-256, and run in one-shot mode: no R process, no server,
 # no open port, no network. Its answer is written to a file - through a pipe it stops at 128 KiB.
+ELEMENT_MAKERS = ("list", "c", "data.frame", "tibble", "data.table")   # a named argument here is an element, a value of its own
 FLOWR_VERSION = "2.15.8"
 FLOWR_SHA256 = "39e1b9e5e4fab67f76204dbf6856d32e9e7f2a36132b1323e02cc8e3392436e4"
 FLOWR_URL = "https://github.com/flowr-analysis/flowr-r-adapter/releases/download/flowr-v{0}/flowr-{0}-linux-x64.tar.gz"
@@ -4900,12 +4922,34 @@ class Dataflow:
         self.defs = {str(n["rhs"]["info"]["id"]): named(n) for n in self.tree.values()
                      if n["type"] == "RBinaryOp" and n.get("rhs", {}).get("type") == "RFunctionDefinition"
                      and named(n) in self.functions and self.place(n)[0] == named(n)}
+        self.assigned = {}                              # (function, name) -> how many times it is set there
+        for n in self.tree.values():
+            for label in self.set_here(n):
+                key = (self.owner(str(n["info"]["id"])), label)
+                self.assigned[key] = self.assigned.get(key, 0) + 1
 
     # ------------------------------------------------ where a node is, and what it holds
     def place(self, node):
         """(function, first line, last line) of a node, the lines counted in its function's own unit."""
         where = node["info"].get("fullRange") or node.get("location") or [0, 0, 0, 0]
         return self.unit_of[node["info"]["id"].split(":")[0] + ":"], max(where[0], 1), max(where[2], where[0], 1)
+
+    def set_here(self, node):
+        """The names a node sets: the variable an assignment sets, or the names of a list's elements."""
+        if node["type"] == "RBinaryOp" and node.get("lexeme") in ("<-", "=", "<<-", "->", "->>"):
+            target = node["rhs"] if node["lexeme"].startswith("-") else node["lhs"]
+            while target["type"] == "RAccess":
+                target = target["accessed"]
+            return [target["lexeme"].strip("\"'`")] if target["type"] in ("RSymbol", "RString") else []
+        if node["type"] == "RFunctionCall" and node["functionName"].get("lexeme") in ELEMENT_MAKERS:
+            return [a["name"]["lexeme"] for a in node.get("arguments") or [] if a and a.get("name") and a.get("value")]
+        return []
+
+    def value_id(self, function, name, at):
+        """A value set once is 'f:v'; one set several times is 'f:v@line', one node for each time it is set -
+        tie_outputs set four times in tie_model_call is four nodes, each reading the one before it."""
+        many = self.assigned.get((function, name), 0) > 1
+        return "%s:%s@%d" % (function, name, self.place(at)[1]) if many else "%s:%s" % (function, name)
 
     def owner(self, node_id):
         while node_id and node_id not in self.defs:
@@ -4984,8 +5028,9 @@ class Dataflow:
                 if target["type"] in ("RSymbol", "RString"):
                     changed = item["rhs"] if item["lexeme"].startswith("-") else item["lhs"]
                     extra = self.sources(changed, env) if changed is not target else []
-                    node = self.node("%s:%s" % (env["function"], target["lexeme"].strip("\"'`")), "value",
-                                     target["lexeme"].strip("\"'`"), env, item, self.sources(value, env) + extra)
+                    name = target["lexeme"].strip("\"'`")
+                    node = self.node(self.value_id(env["function"], name, target), "value", name, env, item,
+                                     self.sources(value, env) + extra)
                     given = [node] if last else given
             elif item["type"] == "RIfThenElse" and not last:
                 self.sources(item["condition"], env)
@@ -5052,8 +5097,8 @@ class Dataflow:
                 found += ["%s:arg:%s" % (owner, name)] if owner else []
             elif "RArgument" in (up.get("type"), self.tree[target]["type"]):   # a column a verb named: mutate(name = ...)
                 found += self.column(name)
-            elif self.tree[target]["lexeme"] not in self.functions and self.owner(target):
-                found.append("%s:%s" % (self.owner(target), self.tree[target]["lexeme"]))
+            elif self.tree[target]["lexeme"] not in self.functions and self.owner(target):   # the very assignment it reads
+                found.append(self.value_id(self.owner(target), self.tree[target]["lexeme"], self.tree[target]))
         if reads:
             return list(dict.fromkeys(found))
         if name in self.tables:
@@ -5082,6 +5127,12 @@ class Dataflow:
         if name in OPAQUE_CALLS:
             self.gap(env, node, OPAQUE_CALLS[name])
             return flat(masked)
+        if name in ELEMENT_MAKERS and any(label for label, _ in pairs):
+            made = []                                        # list(overrides_and_caps = tie_anchor_overrides(...))
+            for label, value in pairs:
+                got = self.sources(value, env, masked)
+                made += [self.node(self.value_id(env["function"], label, value), "value", label, env, node, got)] if label and got else got
+            return made
         if name in FILE_READERS:
             path = self.file_path(values[0]) if values else ""
             if not path:
@@ -6266,7 +6317,7 @@ def structural_edges(units, provenance):
         for read in code.get("reads_data", ()):
             if read["object"] in data_units:
                 add(unit["ref"], data_units[read["object"]], "reads_data", dict(read))
-        if unit.get("roxygen") and unit["roxygen"]["documents_ref"]:
+        if unit.get("roxygen") and unit["roxygen"]["documents_ref"] not in (None, unit["ref"]):   # a row does not document itself
             add(unit["ref"], unit["roxygen"]["documents_ref"], "documents")
         page = unit.get("helppage")
         if page:
@@ -6784,7 +6835,7 @@ def interpret_question(unit, functions, outline, described, settings):
     about, owner = [], inside or unit
     if inside is not None:
         about.append("This piece is one statement inside the function %s. The whole function:\n%s" % (inside["name"], cut_code(inside["text"], settings["max_unit_chars"])))
-    if owner["ref"] in described:
+    if owner["ref"] in described and described[owner["ref"]]["ref"] != owner["ref"]:   # its own roxygen is in the piece
         about.append("What the package's own documentation says:\n%s" % cut_text(described[owner["ref"]]["text"], settings["max_passage_chars"]))
     code = owner.get("code") or {}
     callers = sorted(name for name, other in functions.items() if owner["name"] and owner["name"] in (other.get("code") or {}).get("calls", []))
@@ -7798,12 +7849,9 @@ def implementation_map(store, settings=None):
     rows, cut = [], []
 
     def variable_of(node):
-        """The one variable a row is about. A function's returned value takes the name of the variable
-        that holds it, or the function's own name where it returns an expression."""
-        if node["kind"] == "return":
-            found = re.match(r"\s*([A-Za-z._][\w.]*)\s*(?:<-|=[^=])", node.get("code") or "")
-            return found.group(1) if found else node.get("function", "")
-        return node["name"]
+        """The one variable a row is about. What a function returns is the function's own result: its row
+        is the function, and the value it returns - the last tie_outputs, say - is that row's child."""
+        return node.get("function", "") if node["kind"] == "return" else node["name"]
 
     def ref_of(node):
         if node["kind"] in ("stored data", "file"):
@@ -7873,9 +7921,7 @@ def implementation_map(store, settings=None):
                 if key not in seen:                              # the same value twice under one step is one row
                     seen.add(key)
                     once.append((child, child_frames))
-        # in the order the code runs: what is computed first stands first; what has no line - a table,
-        # a column of the data, a name from outside - after everything that does
-        return sorted(once, key=lambda pair: nodes.get(pair[0], {}).get("line") or float("inf"))
+        return once                                          # in the order the code gives them: c(overrides_and_caps, tie_outputs)
 
     def emit(node_id, frames, map_id, level, path):
         node = nodes.get(node_id)

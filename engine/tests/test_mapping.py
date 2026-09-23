@@ -87,11 +87,13 @@ class Search(unittest.TestCase):
         records = {(r["unit_ref"], r["target_corner"]) for r in self.store.read("search_records")}
         for unit in units:
             self.assertIn((unit["ref"], "canon"), records)
-        text = next(r["searched_text"] for r in self.store.read("search_records") if r["unit_ref"] == "M-0024" and r["target_corner"] == "canon")
+        cond_pd = next(u["ref"] for u in self.store.read("model_units") if u["kind"] == "Function" and u["name"] == "cond_pd")
+        text = next(r["searched_text"] for r in self.store.read("search_records") if r["unit_ref"] == cond_pd and r["target_corner"] == "canon")
         self.assertTrue(text.startswith("Searched the methodology for: cond, pd"))
 
     def test_the_gold_passage_is_proposed_and_every_proposal_gives_its_reason(self):
-        candidates = [c for c in self.store.read("candidates") if c["unit_ref"] == "M-0024" and c["target_corner"] == "canon"]
+        cond_pd = next(u["ref"] for u in self.store.read("model_units") if u["kind"] == "Function" and u["name"] == "cond_pd")
+        candidates = [c for c in self.store.read("candidates") if c["unit_ref"] == cond_pd and c["target_corner"] == "canon"]
         self.assertIn("C-0012", [c["target_ref"] for c in candidates][:5])
         self.assertTrue(all(c["reason"].startswith("Proposed") for c in candidates))
         self.assertLessEqual(len(candidates), self.settings["k_candidates"])
@@ -272,14 +274,15 @@ class InterpretingTheCode(unittest.TestCase):
         self.assertEqual(len(asked), len(set(asked)))
         self.assertFalse([r for r in self.records if self.units[r["unit_ref"]]["kind"] in ("Roxygen block", "Help page", "Parameter table")])
 
-    def test_a_statement_is_shown_with_where_it_sits_in_the_whole_package(self):
-        statement = next(ref for ref, u in self.units.items() if u["kind"] == "Formula statement" and u["name"] == "price")
-        prompt = next(c["main_prompt"] for c in self.calls if c["unit_ref"] == statement)
+    def test_a_function_is_shown_whole_with_its_statements_and_where_it_sits(self):
+        """A statement is no longer a row of its own: the model reads it as part of its function."""
+        function = next(ref for ref, u in self.units.items() if u["kind"] == "Function" and u["name"] == "parcel_price")
+        prompt = next(c["main_prompt"] for c in self.calls if c["unit_ref"] == function)
         piece, about = prompt.split("WHERE IT SITS IN THE PACKAGE")
         self.assertIn("price <- base + rate * cw", piece)
-        self.assertIn("one statement inside the function parcel_price", about)
-        self.assertIn('base <- zone_rates[zone_rates$zone == zone, "base_rate"]', about, "the whole function it sits in")
-        self.assertIn("Base rate plus rate per kilogram times chargeable weight", about, "the package's own documentation")
+        self.assertIn("The whole package", about)
+        self.assertIn('base <- zone_rates[zone_rates$zone == zone, "base_rate"]', piece, "the whole function, in its one row")
+        self.assertIn("Base rate plus rate per kilogram times chargeable weight", piece, "its roxygen block, in the same row")
         self.assertIn("Within this package it calls: volume_discount.", about)
         self.assertIn("It reads the stored data: zone_rates.", about)
         self.assertIn("Package parcelcost 1.2.0: Parcel Pricing", about)

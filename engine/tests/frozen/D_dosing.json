@@ -471,44 +471,6 @@
    "text": "export(dose_by_weight)\nexport(adjusted_dose)\n"
   },
   {
-   "code": null,
-   "content_hash": "3be6e6f671f23cbeae439247e060da6f85b60856d52eba52aea120d9b0a918e2",
-   "data": null,
-   "file": "R/data.R",
-   "file_sha256": "80f139614c5a2b6c5f88bc694a2e626395fe71281e4b49373f77d40580fd0a58",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    1,
-    7
-   ],
-   "name": "band_factors",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0003",
-   "roxygen": {
-    "documents_name": "band_factors",
-    "documents_ref": "M-0012",
-    "formulas": [],
-    "tags": [
-     {
-      "line": 1,
-      "name": "",
-      "tag": "description",
-      "text": "Factors by clearance band"
-     },
-     {
-      "line": 3,
-      "name": "",
-      "tag": "format",
-      "text": "A data frame with 3 rows and 2 columns:\n\\describe{\n  \\item{band}{clearance band}\n  \\item{factor}{factor applied to the dose}\n}"
-     }
-    ]
-   },
-   "text": "#' Factors by clearance band\n#'\n#' @format A data frame with 3 rows and 2 columns:\n#' \\describe{\n#'   \\item{band}{clearance band}\n#'   \\item{factor}{factor applied to the dose}\n#' }"
-  },
-  {
    "code": {
     "calls": [],
     "composed": null,
@@ -526,7 +488,7 @@
     "symbols_read": [],
     "symbols_written": []
    },
-   "content_hash": "e728e8b6a49010536cd4fe2e0a8a764257eef48801f44b4bfac2b1ac7bee1af5",
+   "content_hash": "0fb24118e7dbfb72a50a6be8a368c68692dc26d2954e5b37d214b490cf94e34b",
    "data": null,
    "file": "R/data.R",
    "file_sha256": "80f139614c5a2b6c5f88bc694a2e626395fe71281e4b49373f77d40580fd0a58",
@@ -534,35 +496,15 @@
    "inside": "",
    "kind": "Top-level statement",
    "lines": [
-    8,
+    1,
     8
    ],
    "name": "",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0004",
-   "roxygen": null,
-   "text": "\"band_factors\""
-  },
-  {
-   "code": null,
-   "content_hash": "7d1e8b7cd411c11b82a779b903cb92e64cf72e388cf679066dbcf85ac36129eb",
-   "data": null,
-   "file": "R/dose.R",
-   "file_sha256": "57faaa3b94d90adc8eb1f1a688ad6724ae8322db57a7ab8eb0e07bfdd7f1f655",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    1,
-    6
-   ],
-   "name": "dose_by_weight",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0005",
+   "ref": "M-0003",
    "roxygen": {
-    "documents_name": "dose_by_weight",
+    "documents_name": "band_factors",
     "documents_ref": "M-0006",
     "formulas": [],
     "tags": [
@@ -570,29 +512,17 @@
       "line": 1,
       "name": "",
       "tag": "description",
-      "text": "Dose by body weight\nThe body weight times the dose rate, never above 4000 milligrams."
+      "text": "Factors by clearance band"
      },
      {
-      "line": 4,
-      "name": "weight",
-      "tag": "param",
-      "text": "body weight in kilograms"
-     },
-     {
-      "line": 5,
-      "name": "rate",
-      "tag": "param",
-      "text": "dose rate in milligrams per kilogram, defaults to 15"
-     },
-     {
-      "line": 6,
+      "line": 3,
       "name": "",
-      "tag": "export",
-      "text": ""
+      "tag": "format",
+      "text": "A data frame with 3 rows and 2 columns:\n\\describe{\n  \\item{band}{clearance band}\n  \\item{factor}{factor applied to the dose}\n}"
      }
     ]
    },
-   "text": "#' Dose by body weight\n#'\n#' The body weight times the dose rate, never above 4000 milligrams.\n#' @param weight body weight in kilograms\n#' @param rate dose rate in milligrams per kilogram, defaults to 15\n#' @export"
+   "text": "#' Factors by clearance band\n#'\n#' @format A data frame with 3 rows and 2 columns:\n#' \\describe{\n#'   \\item{band}{clearance band}\n#'   \\item{factor}{factor applied to the dose}\n#' }\n\"band_factors\""
   },
   {
    "code": {
@@ -693,7 +623,7 @@
      "dose"
     ]
    },
-   "content_hash": "af7a6fd3f9889254f1e1931515ef301508235c38a92a8dcaea8bf32bb71c3206",
+   "content_hash": "5bcc2a6558db062725a8977231ae634b9b5053974eb7bb0c512cc3dbb8c3b3aa",
    "data": null,
    "file": "R/dose.R",
    "file_sha256": "57faaa3b94d90adc8eb1f1a688ad6724ae8322db57a7ab8eb0e07bfdd7f1f655",
@@ -701,309 +631,45 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    7,
+    1,
     10
    ],
    "name": "dose_by_weight",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0006",
-   "roxygen": null,
-   "text": "dose_by_weight <- function(weight, rate = 15) {\n  dose <- weight * rate\n  pmin(dose, 4000)\n}"
-  },
-  {
-   "code": {
-    "calls": [],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "dose",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "weight",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "rate",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "dose",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "weight",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "rate",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "weight",
-     "rate"
-    ],
-    "symbols_written": [
-     "dose"
-    ]
-   },
-   "content_hash": "e3c093b825b0392d14876d40c02dc98c10be6640e2ac0157ff2051dc76ce04c5",
-   "data": null,
-   "file": "R/dose.R",
-   "file_sha256": "57faaa3b94d90adc8eb1f1a688ad6724ae8322db57a7ab8eb0e07bfdd7f1f655",
-   "helppage": null,
-   "inside": "dose_by_weight",
-   "kind": "Formula statement",
-   "lines": [
-    8,
-    8
-   ],
-   "name": "dose",
-   "parent_ref": "M-0006",
-   "read_problem": null,
-   "ref": "M-0007",
-   "roxygen": null,
-   "text": "  dose <- weight * rate"
-  },
-  {
-   "code": {
-    "calls": [
-     "pmin"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "dose_by_weight",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "weight",
-           "op": "sym",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [],
-           "name": "rate",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "mul",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": null,
-         "op": "num",
-         "span": null,
-         "value": "4000"
-        }
-       ],
-       "name": "min",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "dose_by_weight",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "dose",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": null,
-         "op": "num",
-         "span": null,
-         "value": "4000"
-        }
-       ],
-       "name": "min",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [
-     {
-      "as_written": "4000",
-      "decimals": 0,
-      "line": 9,
-      "unit": "",
-      "value": "4000"
-     }
-    ],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "dose"
-    ],
-    "symbols_written": []
-   },
-   "content_hash": "189ceb0d65a22156959b71c5755cd6f8b1b9e5a08145742b2cabf230e5791f8e",
-   "data": null,
-   "file": "R/dose.R",
-   "file_sha256": "57faaa3b94d90adc8eb1f1a688ad6724ae8322db57a7ab8eb0e07bfdd7f1f655",
-   "helppage": null,
-   "inside": "dose_by_weight",
-   "kind": "Formula statement",
-   "lines": [
-    9,
-    9
-   ],
-   "name": "dose_by_weight",
-   "parent_ref": "M-0006",
-   "read_problem": null,
-   "ref": "M-0008",
-   "roxygen": null,
-   "text": "  pmin(dose, 4000)"
-  },
-  {
-   "code": null,
-   "content_hash": "fbb69d51457ec34c564af7ee3c14dcf46dac28d59580e4f715eac751877cc80e",
-   "data": null,
-   "file": "R/dose.R",
-   "file_sha256": "57faaa3b94d90adc8eb1f1a688ad6724ae8322db57a7ab8eb0e07bfdd7f1f655",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    12,
-    17
-   ],
-   "name": "adjusted_dose",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0009",
+   "ref": "M-0004",
    "roxygen": {
-    "documents_name": "adjusted_dose",
-    "documents_ref": "M-0010",
+    "documents_name": "dose_by_weight",
+    "documents_ref": "M-0004",
     "formulas": [],
     "tags": [
      {
-      "line": 12,
+      "line": 1,
       "name": "",
       "tag": "description",
-      "text": "Dose adjusted for kidney function\nThe dose times the factor of the clearance band, rounded to 10 milligrams."
+      "text": "Dose by body weight\nThe body weight times the dose rate, never above 4000 milligrams."
      },
      {
-      "line": 15,
-      "name": "dose",
+      "line": 4,
+      "name": "weight",
       "tag": "param",
-      "text": "daily dose in milligrams"
+      "text": "body weight in kilograms"
      },
      {
-      "line": 16,
-      "name": "band",
+      "line": 5,
+      "name": "rate",
       "tag": "param",
-      "text": "clearance band: Normal, Reduced or Low"
+      "text": "dose rate in milligrams per kilogram, defaults to 15"
      },
      {
-      "line": 17,
+      "line": 6,
       "name": "",
       "tag": "export",
       "text": ""
      }
     ]
    },
-   "text": "#' Dose adjusted for kidney function\n#'\n#' The dose times the factor of the clearance band, rounded to 10 milligrams.\n#' @param dose daily dose in milligrams\n#' @param band clearance band: Normal, Reduced or Low\n#' @export"
+   "text": "#' Dose by body weight\n#'\n#' The body weight times the dose rate, never above 4000 milligrams.\n#' @param weight body weight in kilograms\n#' @param rate dose rate in milligrams per kilogram, defaults to 15\n#' @export\ndose_by_weight <- function(weight, rate = 15) {\n  dose <- weight * rate\n  pmin(dose, 4000)\n}"
   },
   {
    "code": {
@@ -1137,7 +803,7 @@
      "factor"
     ]
    },
-   "content_hash": "7b85a9bcfbe9f1a072f4abdf1856a6f330b72c29ee61c6d9d8f8923bfa6724d4",
+   "content_hash": "2978a95a26852e745340055e1c4bdcbacf76cc35d3ac02db61809fbd3bb3300c",
    "data": null,
    "file": "R/dose.R",
    "file_sha256": "57faaa3b94d90adc8eb1f1a688ad6724ae8322db57a7ab8eb0e07bfdd7f1f655",
@@ -1145,217 +811,45 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    18,
+    12,
     21
    ],
    "name": "adjusted_dose",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0010",
-   "roxygen": null,
-   "text": "adjusted_dose <- function(dose, band) {\n  factor <- band_factors[band_factors$band == band, \"factor\"]\n  round(dose * factor / 10) * 10\n}"
-  },
-  {
-   "code": {
-    "calls": [
-     "round"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "adjusted_dose",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [],
-               "name": "dose",
-               "op": "sym",
-               "span": null,
-               "value": null
-              },
-              {
-               "args": [],
-               "name": "band_factors$factor",
-               "op": "sym",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "mul",
-             "span": null,
-             "value": null
-            },
-            {
-             "args": [],
-             "name": null,
-             "op": "num",
-             "span": null,
-             "value": "10"
-            }
-           ],
-           "name": null,
-           "op": "div",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "round",
-         "op": "call",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": null,
-         "op": "num",
-         "span": null,
-         "value": "10"
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "adjusted_dose",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [],
-               "name": "dose",
-               "op": "sym",
-               "span": null,
-               "value": null
-              },
-              {
-               "args": [],
-               "name": "factor",
-               "op": "sym",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "mul",
-             "span": null,
-             "value": null
-            },
-            {
-             "args": [],
-             "name": null,
-             "op": "num",
-             "span": null,
-             "value": "10"
-            }
-           ],
-           "name": null,
-           "op": "div",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "round",
-         "op": "call",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": null,
-         "op": "num",
-         "span": null,
-         "value": "10"
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [
+   "ref": "M-0005",
+   "roxygen": {
+    "documents_name": "adjusted_dose",
+    "documents_ref": "M-0005",
+    "formulas": [],
+    "tags": [
      {
-      "as_written": "10",
-      "decimals": 0,
-      "line": 20,
-      "unit": "",
-      "value": "10"
+      "line": 12,
+      "name": "",
+      "tag": "description",
+      "text": "Dose adjusted for kidney function\nThe dose times the factor of the clearance band, rounded to 10 milligrams."
      },
      {
-      "as_written": "10",
-      "decimals": 0,
-      "line": 20,
-      "unit": "",
-      "value": "10"
+      "line": 15,
+      "name": "dose",
+      "tag": "param",
+      "text": "daily dose in milligrams"
+     },
+     {
+      "line": 16,
+      "name": "band",
+      "tag": "param",
+      "text": "clearance band: Normal, Reduced or Low"
+     },
+     {
+      "line": 17,
+      "name": "",
+      "tag": "export",
+      "text": ""
      }
-    ],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "dose",
-     "factor"
-    ],
-    "symbols_written": []
+    ]
    },
-   "content_hash": "e0b39185ee20cfaf7bd8095fc20225317e21b9ec516351110947dcd40a32dd50",
-   "data": null,
-   "file": "R/dose.R",
-   "file_sha256": "57faaa3b94d90adc8eb1f1a688ad6724ae8322db57a7ab8eb0e07bfdd7f1f655",
-   "helppage": null,
-   "inside": "adjusted_dose",
-   "kind": "Formula statement",
-   "lines": [
-    20,
-    20
-   ],
-   "name": "adjusted_dose",
-   "parent_ref": "M-0010",
-   "read_problem": null,
-   "ref": "M-0011",
-   "roxygen": null,
-   "text": "  round(dose * factor / 10) * 10"
+   "text": "#' Dose adjusted for kidney function\n#'\n#' The dose times the factor of the clearance band, rounded to 10 milligrams.\n#' @param dose daily dose in milligrams\n#' @param band clearance band: Normal, Reduced or Low\n#' @export\nadjusted_dose <- function(dose, band) {\n  factor <- band_factors[band_factors$band == band, \"factor\"]\n  round(dose * factor / 10) * 10\n}"
   },
   {
    "code": null,
@@ -1400,7 +894,7 @@
    "name": "band_factors",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0012",
+   "ref": "M-0006",
    "roxygen": null,
    "text": "band; factor\nNormal; 1\nReduced; 0.75\nLow; 0.5"
   },
@@ -1424,7 +918,7 @@
       "clearance band: Normal, Reduced or Low"
      ]
     ],
-    "generated_from_ref": "M-0009",
+    "generated_from_ref": "M-0005",
     "in_step_with_source": true,
     "rd_name": "adjusted_dose",
     "title": "Dose adjusted for kidney function",
@@ -1439,7 +933,7 @@
    "name": "adjusted_dose",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0013",
+   "ref": "M-0007",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/dose.R\n\\name{adjusted_dose}\n\\alias{adjusted_dose}\n\\title{Dose adjusted for kidney function}\n\\usage{\nadjusted_dose(dose, band)\n}\n\\arguments{\n\\item{dose}{daily dose in milligrams}\n\\item{band}{clearance band: Normal, Reduced or Low}\n}\n"
   },
@@ -1463,7 +957,7 @@
       "dose rate in milligrams per kilogram, defaults to 15"
      ]
     ],
-    "generated_from_ref": "M-0005",
+    "generated_from_ref": "M-0004",
     "in_step_with_source": true,
     "rd_name": "dose_by_weight",
     "title": "Dose by body weight",
@@ -1478,7 +972,7 @@
    "name": "dose_by_weight",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0014",
+   "ref": "M-0008",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/dose.R\n\\name{dose_by_weight}\n\\alias{dose_by_weight}\n\\title{Dose by body weight}\n\\usage{\ndose_by_weight(weight, rate = 15)\n}\n\\arguments{\n\\item{weight}{body weight in kilograms}\n\\item{rate}{dose rate in milligrams per kilogram, defaults to 15}\n}\n"
   }
@@ -1511,7 +1005,7 @@
      "0.5"
     ]
    ],
-   "unit_ref": "M-0012"
+   "unit_ref": "M-0006"
   }
  ]
 }

@@ -123,6 +123,8 @@ Every word the tool can show in a status, a relation or a "how established" cell
 | File not read |
 | Other file |
 
+The rows of Chunks_Model never overlap, and each is a whole piece of code: a roxygen block is one row with the function or statement it documents, and what is written inside a function - its statements, a function defined within it - is part of the function's row. Model_Implementation_Map is where a function is taken apart: every assignment is a step of its own, so a value set four times is four steps, each computed from the one before; a named element of a list, such as `overrides_and_caps`, is a step of its own too; and a function's row has the value it returns as its child.
+
 **Kinds of chunk**
 
 | Wording |
