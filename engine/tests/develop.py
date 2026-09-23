@@ -1004,147 +1004,16 @@ def check_docs():
 
 # ================================================================================================
 # ---------------------------------------------------------------- the notebook, five cells
-CELL_1 = r'''# ===== Cell 1 of 4 - set up: widgets, packages, the engine =====
-# Run this first, and run it again after anything restarts Python. It is safe to run any number of times.
-import importlib, importlib.metadata, importlib.util, os, re, subprocess, sys, tempfile
-
-def notebook_folder():
-    try:
-        path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-        return os.path.dirname(path if path.startswith("/Workspace") else "/Workspace" + path)
-    except Exception:
-        return os.getcwd()
-
-HOME = notebook_folder()
-ALLOW_DEFAULT_INDEX = False        # True only on a cluster meant to install from pip's own default index
-
-# --- widgets: made before anything is installed, so this cell can run on a bare cluster
-w = dbutils.widgets
-def widget(name, default, label):
-    try:
-        return w.get(name)
-    except Exception:
-        w.text(name, default, label)
-        return default
-widget("llm_endpoint", "", "01 LLM endpoint"); widget("llm_token", "", "02 LLM token")
-widget("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)")
-widget("model_id", "", "04 Model ID"); widget("project", "", "05 Project date (empty = new project today)")
-widget("jfrog_index_url", "", "06 Package index URL")
-widget("concurrency_limit", "4", "07 Concurrency limit"); widget("token_cap", "40000", "08 Token cap")
-PROJECTS = os.path.join(HOME, "Projects")                # every project, in its own folder: <model id>/<date>/Inputs
-for old_widget in ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive"):
-    # widgets of an earlier notebook, no longer used
-    try:
-        w.remove(old_widget)
-    except Exception:
-        pass
-
-# --- packages: installed only if one is missing, pinned to what the runtime already has, and Python
-# is restarted only if the runtime's own packages still import together afterwards
-REQUIRED = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; docx, scipy and sympy went with the checks
-missing = [name for name in REQUIRED if importlib.util.find_spec(name) is None]
-if missing:
-    index_url = w.get("jfrog_index_url").strip()
-    requirements = os.path.join(HOME, "engine", "requirements.txt")
-    if not index_url and not ALLOW_DEFAULT_INDEX:
-        print("Packages missing:", ", ".join(missing), "- paste the package index URL into widget 08 and run this cell again.")
-        print("Nothing is installed from an index you did not name. To use pip's default index, set ALLOW_DEFAULT_INDEX = True above.")
-    else:
-        pins = []
-        for name in ("numpy", "pandas", "pyarrow", "scipy"):
-            try:
-                pins.append("%s==%s" % (name, importlib.metadata.version(name)))
-            except importlib.metadata.PackageNotFoundError:
-                pass
-        constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
-        open(constraints, "w").write("\n".join(pins) + "\n")
-        hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")
-        command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + (["--index-url", index_url] if index_url else [])
-        print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
-        done = subprocess.run(command, capture_output=True, text=True)
-        if done.returncode:
-            print("The install did not finish. What pip said:\n" + hide(done.stderr)[-1500:])
-            print("If pip found no versions that fit, the index lacks an older version that works with this runtime's own packages. Nothing the runtime depends on was changed.")
-        else:
-            wanted = open(requirements, encoding="utf-8").read().split("# --- optional ---")
-            if len(wanted) > 1:
-                spare = os.path.join(tempfile.gettempdir(), "optional.txt")
-                open(spare, "w", encoding="utf-8").write(wanted[1])
-                extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
-                print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures of text will say so.")
-            probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
-            if probe.returncode:
-                print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip().splitlines()[-1]))
-                print("Restarting now would crash this notebook session. Detach this notebook from the cluster and attach it again to undo the install. Do not restart the cluster.")
-            else:
-                still = subprocess.run([sys.executable, "-c", "import " + ", ".join(missing)],
-                                       capture_output=True, text=True)
-                if still.returncode:
-                    print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting "
-                          "would only bring this cell back here." % ", ".join(missing))
-                    print("What Python said:\n" + hide(still.stderr)[-600:])
-                    print("Check that engine/requirements.txt names it, and that the index in widget 08 carries it.")
-                else:
-                    print("Installed. Restarting Python; then run this cell once more.")
-                    dbutils.library.restartPython()
-else:
-    # --- the engine
-    for folder in (os.path.join(HOME, "engine"), os.path.join(HOME, "engine", "tests")):
-        if folder not in sys.path:
-            sys.path.insert(0, folder)
-    import verifier
-    if "LIVE" not in globals():
-        LIVE = verifier.LiveValues()
-    LIVE.update(w.get("llm_endpoint"), w.get("llm_token"), w.get("reviewer_id"))
-    def live(name):
-        """Read an endpoint, token or user id at the moment chat() is CALLED, so a fresh token pasted mid-run is used."""
-        return LIVE.get(name)
-
-    def current_settings():
-        return verifier.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
-                                     "reviewer_id": w.get("reviewer_id")})
-
-    def open_current():
-        """The run the widgets name, opened; or None with a message when the project has no inputs yet. Used
-        by cells 3, 4 and 5, so that a cell run before cell 3 - or after Python restarted - says what to do."""
-        _, missing = verifier.setup_project(PROJECTS, w.get("model_id"), w.get("project"))
-        if missing:
-            print("\n".join(missing)); print("Put the files in, then run cell 3.")
-            return None
-        if globals().get("PATHS") is not None and PATHS.model_id == w.get("model_id") and (not w.get("project") or PATHS.project_date == w.get("project")):
-            return PATHS                               # keep working on the run this session opened
-        return verifier.open_run(PROJECTS, w.get("model_id"), w.get("project"))   # a new session starts a new run
-    print("Folder:", HOME, "| Python", sys.version.split()[0], "| engine", verifier.ENGINE_VERSION)
-    for name in REQUIRED + ("pdfplumber", "pypdf"):
-        try:
-            print("  %-11s %s" % (name, getattr(importlib.import_module(name), "__version__", "installed")))
-        except Exception:
-            print("  %-11s not installed%s" % (name, "" if name in ("pdfplumber", "pypdf") else " - run this cell again"))
-    token = LIVE.get("llm_token")
-    print("Endpoint set:", bool(LIVE.get("llm_endpoint")), "| token:", ("%d characters, pasted %.1f minutes ago" % (len(token), LIVE.token_age_minutes())) if token else "none pasted yet")
-    try:                                            # flowR reads the R code: fetched once, checked against its pinned SHA-256
-        staged = os.path.join(HOME, verifier.FLOWR_URL.format(verifier.FLOWR_VERSION).rsplit("/", 1)[-1])
-        print("flowR %s ready in %s" % (verifier.FLOWR_VERSION, verifier.flowr_ready(staged if os.path.exists(staged) else "")))
-    except Exception as problem:
-        print("flowR IS NOT READY: %s" % problem)
-        if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by putting it here
-            print("The cluster could not download it. Download %s on an approved machine and put it in %s, next to this"
-                  " notebook." % (verifier.FLOWR_URL.format(verifier.FLOWR_VERSION), HOME))
-    print("")
-    print("THE ENGINE IS READY. What happens next:")
-    print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
-    print("  Cell 3  read the inputs and run the review; it prints what each step did.")
-    print("  Cell 4  check the finished run folder against its own record.")
-    print("Widgets 01 to 03 carry the endpoint, the token and your user id; 04 the model id; 05 the project date.")
-    print("Paste a fresh token into widget 02 at any time - it is read at the moment each call is made, so a run")
-    print("already working picks it up.")
-    print("Next: cell 2.")
+CELL_1 = r'''# ===== Cell 1 of 4 - set up =====
+# Run this first, and again after anything restarts Python. It makes the widgets, installs only what is
+# missing, gets flowR ready, and says what to do next.
+import os, sys; sys.path.insert(0, os.path.abspath("engine")); import verifier
+verifier.setup(dbutils)
 '''
 
 CELL_2 = r'''# ===== Cell 2 of 4 - your chat(), and where your files go =====
-# Paste your organisation's chat() below. It must return {"answer": "<the model's reply>"}. Read the endpoint,
-# token and user id with live("...") INSIDE the function, so that a fresh token pasted into the widget is
-# used mid-run. This cell asks it one question, then makes the project's Inputs folders and names them.
+# Paste your organisation's chat() below. It must return {"answer": "<the model's reply>"}, and read the
+# endpoint, token and user id with verifier.live("...") inside the function, so a fresh token is used mid-run.
 import requests
 
 def chat(SystemPrompt, MainPrompt, history=[]):
@@ -1165,78 +1034,26 @@ def chat(SystemPrompt, MainPrompt, history=[]):
         "select_all": False,
     }
     headers = {
-        "Authorization": f'Bearer {live("llm_token")}',
-        "SP_SSO_UID": live("reviewer_id"),
+        "Authorization": f'Bearer {verifier.live("llm_token")}',
+        "SP_SSO_UID": verifier.live("reviewer_id"),
         "Content-Type": "application/json",
     }
-    response = requests.post(live("llm_endpoint"), json=payload, headers=headers, timeout=180)
+    response = requests.post(verifier.live("llm_endpoint"), json=payload, headers=headers, timeout=180)
     response.raise_for_status()
     return response.json()          # the engine reads the reply from "answer", or from an OpenAI-shaped "choices"
 
-ACTIVE_CHAT = chat
-try:
-    reply = ACTIVE_CHAT("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
-    print("chat() answered:", str(reply)[:60])
-except Exception as problem:
-    print("chat() did not answer (%s: %s). Check widgets 01, 02 and 03, then run this cell again."
-          % (type(problem).__name__, problem))
-else:
-    project_dir, missing = verifier.setup_project(PROJECTS, w.get("model_id"), w.get("project"))
-    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
-    for _, folder, note in verifier.INPUT_FOLDERS:
-        print("  %s" % os.path.join(project_dir, "Inputs", folder))
-        print("      %s" % note)
-    print("\nOne methodology file, the model package as it ships (.tar.gz, .zip or the unpacked folder), and the")
-    print("model documentation. A folder with nothing in it stops the run and says so, rather than reading around it.")
-    if missing:
-        print("\nStill empty: " + "; ".join(missing))
-    else:
-        print("\nAll three folders have files in them. Next: cell 3.")
+verifier.check_chat(chat)           # asks it one question, then makes the Inputs folders and says what goes where
 '''
 
 CELL_3 = r'''# ===== Cell 3 of 4 - read the inputs and run the review =====
-# Reads every input file, maps how the model computes what it returns, then asks your model to interpret the
-# code, name the concepts, close the gaps code could not follow, and judge every link. It runs here, in this
-# cell, and prints what each step did. A step that has already finished is never repeated: run the cell again
-# after a token expires or a cluster restarts and it carries on where it stopped.
-FOREGROUND_MINUTES = 600      # how long this cell may work before it stops by itself and asks you to run it again
-
-PATHS = open_current()
-if PATHS is not None:
-    SETTINGS = dict(current_settings(), foreground_minutes=float(FOREGROUND_MINUTES))
-    STATE = verifier.AskState()
-    RESULT = verifier.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT, live=LIVE, state=STATE)
-    print(RESULT["message"])
-    store = verifier.open_store(PATHS, SETTINGS)
-    print("\nWhat each step did:")
-    for record in store.read("step_records"):
-        print("  step %s %-14s %s" % (record["step_id"], record["name"],
-                                      ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
-        for message in record["messages"]:
-            print("      " + message)
-    for label, value in verifier.call_statistics(store):
-        print("  %-52s %s" % (label, value))
-    if STATE.waiting_for_token:
-        print("\nWAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and")
-        print("run this cell again; the steps already finished are not repeated.")
-    print("\nRun folder:", PATHS.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Model_Implementation_Map")
-    print("how the model computes what it returns, and Mapping_Coverage what is covered.")
-    print("Then run cell 4 to check the run folder against its own record.")
+# Reads every input file, maps how the model computes what it returns, and asks your model to close the gaps
+# code could not follow and to judge every link, here in this cell. Run it again after a token expires or the
+# cluster restarts: a step already finished is never repeated.
+verifier.review()
 '''
 
 CELL_4 = r'''# ===== Cell 4 of 4 - check the run folder against its own record =====
-# The inputs are the files that were read, the engine is the one that produced the run, re-reading the inputs
-# gives the same content, the graph chain verifies, and no access token was written anywhere in the folder.
-if "PATHS" not in globals() or PATHS is None:
-    print("Cell 3 has not read the inputs yet. Run cell 3 first.")
-else:
-    SETTINGS = current_settings()
-    print("Verifying the evidence pack:")
-    for what, verdict, detail in verifier.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
-        print("  %-62s %-16s %s" % (what, verdict, detail))
-    print("\nRun folder:", PATHS.run_dir, "- Output.xlsx is the deliverable; _audit/Audit_Log.xlsx is the record")
-    print("of the run: every step, every record, and every exchange with the model.")
+verifier.verify()
 '''
 
 
@@ -1251,10 +1068,10 @@ else:
 ENGINE_FILE = os.path.join(ENGINE, "verifier.py")
 MAP_ID_COLUMNS = 10
 ENGINE_ROOTS = [("01 prepare-run", "prepare_run"), ("02 read-inputs", "read_inputs"), ("03 build-map", "build_map"),
-                ("05 read-with-ai", "read_with_ai"), ("06 link-units", "link_units"),
-                ("Output.xlsx", "build_workbook"), ("Cell 4 confirms the outline", "confirm_outline"),
-                ("Cell 5 verifies the pack", "verify_evidence_pack"), ("The run itself", "run_pipeline"),
-                ("Cell 3 opens the run", "open_run"), ("The settings a cell makes", "make_settings"),
+                ("04 read-with-ai", "read_with_ai"), ("05 link-units", "link_units"),
+                ("Output.xlsx", "build_workbook"), ("The run itself", "run_pipeline"),
+                ("Cell 1 sets up", "setup"), ("Cell 2 checks chat()", "check_chat"), ("Cell 3 runs the review", "review"),
+                ("Cell 4 verifies the pack", "verify"), ("chat() reads the widgets", "live"),
                 ("Replaying a run from its record", "replay_chat")]
 
 def engine_facts():

@@ -42,7 +42,10 @@ import time
 import traceback
 import unicodedata
 import xml.etree.ElementTree as ElementTree
-import yaml
+try:
+    import yaml
+except ImportError:                 # cell 1 imports the engine to install what is missing, yaml among them
+    yaml = None
 import zipfile
 import zlib
 from dataclasses import dataclass, field, replace
@@ -4831,6 +4834,18 @@ class Dataflow:
         _, first, last = self.place(at)
         return "\n".join(self.functions[env["function"]]["text"].split("\n")[first - 1:max(first, last)]).strip()
 
+    def exact_of(self, env, at, to=None):
+        """The characters from where a node starts to where `to` ends, not whole lines: a named argument's
+        range covers its name only, so overrides_and_caps = tie_anchor_overrides(...) runs to the value's end."""
+        span = lambda n: n["info"].get("fullRange") or n.get("location") or [0, 0, 0, 0]
+        (first, c1), (last, c2) = span(at)[:2], span(to or at)[2:]
+        lines = self.functions[env["function"]]["text"].split("\n")[first - 1:last]
+        if not lines:
+            return ""
+        lines[-1] = lines[-1][:c2] if len(lines) > 1 else lines[-1][c1 - 1:c2]
+        lines[0] = lines[0][c1 - 1:] if len(lines) > 1 else lines[0]
+        return "\n".join(lines).strip()
+
     def gap(self, env, at, why):
         self.records.append({"record_type": "gap", "function": env["function"], "function_ref": self.functions[env["function"]]["ref"],
                              "line": self.line_of(env, at), "code": self.code_of(env, at), "why": why})
@@ -4962,8 +4977,9 @@ class Dataflow:
 
     def call(self, node, env, masked, first=None):
         name = (node.get("functionName") or {}).get("lexeme", "")
-        pairs = [((a.get("name") or {}).get("lexeme", ""), a.get("value")) for a in node.get("arguments") or [] if a]
-        pairs = ([("", first)] if first is not None else []) + pairs
+        args = ([None] if first is not None else []) + [a for a in node.get("arguments") or [] if a]
+        pairs = [("", first)] if first is not None else []
+        pairs += [((a.get("name") or {}).get("lexeme", ""), a.get("value")) for a in node.get("arguments") or [] if a]
         values = [v for _, v in pairs]
         if name == "%>%" and len(values) == 2:                       # a %>% f(b) is f(a, b)
             left, right = values
@@ -4973,10 +4989,14 @@ class Dataflow:
             self.gap(env, node, OPAQUE_CALLS[name])
             return flat(masked)
         if name in ELEMENT_MAKERS and any(label for label, _ in pairs):
-            made = []                                        # list(overrides_and_caps = tie_anchor_overrides(...))
-            for label, value in pairs:
+            made = []            # list(overrides_and_caps = tie_anchor_overrides(...)): every named element is a value,
+            for (label, value), argument in zip(pairs, args):   # one holding only NA as much as any other
                 got = self.sources(value, env, masked)
-                made += [self.node(self.value_id(env["function"], label, value), "value", label, env, node, got)] if label and got else got
+                if label and value is not None:
+                    made.append(self.node(self.value_id(env["function"], label, value), "value", label, env, argument, got,
+                                          code=self.exact_of(env, argument, value)))
+                else:
+                    made += got
             return made
         if name in FILE_READERS:
             path = self.file_path(values[0]) if values else ""
@@ -4987,9 +5007,10 @@ class Dataflow:
             return [self.node("file:%s" % path, "file", path, unit_ref=self.tables[table]["ref"] if table else "")]
         if name in DPLYR_CREATE:
             created = self.sources(values[0], env, masked) if pairs and not pairs[0][0] else []
-            for label, value in pairs:
+            for (label, value), argument in zip(pairs, args):
                 if label:
-                    column = self.node("column:%s" % label, "column", label, env, node, self.sources(value, env, True))
+                    column = self.node("column:%s" % label, "column", label, env, argument, self.sources(value, env, True),
+                                       code=self.exact_of(env, argument, value))
                     self.nodes[column].setdefault("created_in", [])
                     if env["function"] not in self.nodes[column]["created_in"]:
                         self.nodes[column]["created_in"].append(env["function"])
@@ -7288,6 +7309,12 @@ def implementation_map(store, settings=None):
             row["role"] = "Raw input: argument of the final output"
         if node["kind"] == "column" and not node["from"]:
             row["role"] = "Raw input: column of the data given"
+        if row["role"].startswith("Raw input"):                 # never calculated: where the calculation starts
+            row["output_variable"], row["ov_code"] = "%s (terminal input)" % variable, ""
+        elif node["kind"] == "return" and node.get("function") in functions:    # the function that assembles it all
+            text = functions[node["function"]]["text"].split("\n")
+            start = next((n for n, line in enumerate(text) if re.match(r"\s*`?%s`?\s*(<-|=)" % re.escape(node["function"]), line)), 0)
+            row["ov_code"] = "\n".join(text[start:]).strip()
         for position, part in enumerate(map_id.split(".")[:MAP_ID_COLUMNS], start=1):
             row["id%d" % position] = ".".join(map_id.split(".")[MAP_ID_COLUMNS - 1:]) if position == MAP_ID_COLUMNS else part
         rows.append(row)
@@ -7744,3 +7771,211 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "build_map": build_map,
     "read_with_ai": read_with_ai,
     "link_units": link_units}
+
+# ---------------------------------------------------------------- the notebook: four cells, each one call
+# Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
+# cell 1 is setup(dbutils), cell 2 check_chat(chat), cell 3 review(), cell 4 verify(). The session - the
+# widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
+REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
+WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
+           ("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)"),
+           ("model_id", "", "04 Model ID"), ("project", "", "05 Project date (empty = new project today)"),
+           ("jfrog_index_url", "", "06 Package index URL"), ("concurrency_limit", "4", "07 Concurrency limit"),
+           ("token_cap", "40000", "08 Token cap"))
+OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive")
+NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "live": None, "chat": None, "paths": None, "result": None}
+
+def live(name):
+    """The endpoint, token or user id, read from the widgets at the moment chat() calls: a token pasted
+    into widget 02 while a run works is used by its next call. Enforces: R8"""
+    session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
+    try:
+        widgets = NOTEBOOK["dbutils"].widgets
+        session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), widgets.get("reviewer_id"))
+    except Exception:
+        pass                                        # no notebook, or a widget read failed: the last values stand
+    return session.get(name)
+
+def notebook_folder(dbutils):
+    try:
+        path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+        return os.path.dirname(path if path.startswith("/Workspace") else "/Workspace" + path)
+    except Exception:
+        return os.getcwd()
+
+def setup(dbutils, home=None, projects=None, allow_default_index=False):
+    """Cell 1: the widgets, the packages the engine needs (installed only if one is missing), flowR, and
+    what to do next. Safe to run any number of times; run it again after anything restarts Python."""
+    import importlib.util
+    widgets = dbutils.widgets
+    for name, default, label in WIDGETS:              # made before anything is installed: a bare cluster works
+        try:
+            widgets.get(name)
+        except Exception:
+            widgets.text(name, default, label)
+    for name in OLD_WIDGETS:                          # widgets of an earlier notebook, no longer used
+        try:
+            widgets.remove(name)
+        except Exception:
+            pass
+    home = home or notebook_folder(dbutils)
+    NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"))
+    missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
+    if missing:
+        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"),
+                widgets.get("jfrog_index_url").strip(), allow_default_index)
+        return
+    print("Folder:", home, "| Python", sys.version.split()[0], "| engine", ENGINE_VERSION)
+    for name in REQUIRED_PACKAGES + ("pdfplumber", "pypdf"):
+        found = importlib.util.find_spec(name)
+        print("  %-11s %s" % (name, "installed" if found else "not installed" + ("" if name in ("pdfplumber", "pypdf") else " - run this cell again")))
+    token = live("llm_token")
+    print("Endpoint set:", bool(live("llm_endpoint")), "| token:", ("%d characters" % len(token)) if token else "not set")
+    staged = os.path.join(home, FLOWR_URL.format(FLOWR_VERSION).rsplit("/", 1)[-1])
+    try:                                              # flowR reads the R code: fetched once, checked against its SHA-256
+        print("flowR %s ready in %s" % (FLOWR_VERSION, flowr_ready(staged if os.path.exists(staged) else "")))
+    except Exception as problem:
+        print("flowR IS NOT READY: %s" % problem)
+        if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by putting it here
+            print("The cluster could not download it. Download %s on an approved machine and put it in %s, next to this"
+                  " notebook." % (FLOWR_URL.format(FLOWR_VERSION), home))
+    print("\nTHE ENGINE IS READY. What happens next:")
+    print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
+    print("  Cell 3  read the inputs and run the review; it prints what each step did.")
+    print("  Cell 4  check the finished run folder against its own record.")
+    print("Widgets 01 to 03 carry the endpoint, the token and your user id; 04 the model id; 05 the project date.")
+    print("Paste a fresh token into widget 02 at any time - it is read at the moment each call is made, so a run")
+    print("already working picks it up.")
+    print("Next: cell 2.")
+
+def install(missing, dbutils, requirements, index_url, allow_default_index=False):
+    """Install what the engine needs from the index named in widget 06, the runtime's own packages pinned
+    as they are, and restart Python only if those still import together afterwards."""
+    import importlib.metadata
+    hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")    # no credentials of an index URL are shown
+    if not index_url and not allow_default_index:
+        print("Packages missing:", ", ".join(missing), "- paste the package index URL into widget 06 and run this cell again.")
+        print("Nothing is installed from an index you did not name. To use pip's default index, call "
+              "verifier.setup(dbutils, allow_default_index=True).")
+        return
+    pins = []
+    for name in ("numpy", "pandas", "pyarrow", "scipy"):
+        try:
+            pins.append("%s==%s" % (name, importlib.metadata.version(name)))
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
+    with open(constraints, "w") as handle:
+        handle.write("\n".join(pins) + "\n")
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + (["--index-url", index_url] if index_url else [])
+    print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
+    done = subprocess.run(command, capture_output=True, text=True)
+    if done.returncode:
+        print("The install did not finish. What pip said:\n" + hide(done.stderr)[-1500:])
+        print("Nothing the runtime needs was changed. Ask for the package pip names to be added to the index in widget 06.")
+        return
+    with open(requirements, encoding="utf-8") as handle:
+        wanted = handle.read().split("# --- optional ---")
+    if len(wanted) > 1:
+        spare = os.path.join(tempfile.gettempdir(), "optional.txt")
+        with open(spare, "w", encoding="utf-8") as handle:
+            handle.write(wanted[1])
+        extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
+        print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures of text will say so.")
+    probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
+    if probe.returncode:
+        print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip())[-300:])
+        print("Restarting now would crash this notebook session. Detach this notebook from the cluster and attach it again to undo the install.")
+        return
+    still = subprocess.run([sys.executable, "-c", "import " + ", ".join(missing)], capture_output=True, text=True)
+    if still.returncode:
+        print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting would only bring "
+              "this cell back here." % ", ".join(missing))
+        print("What Python said:\n" + hide(still.stderr)[-600:])
+        print("Check that engine/requirements.txt names it, and that the index in widget 06 carries it.")
+        return
+    print("Installed. Restarting Python; then run this cell once more.")
+    dbutils.library.restartPython()
+
+def notebook_settings():
+    widgets = NOTEBOOK["dbutils"].widgets
+    return make_settings({"concurrency_limit": int(widgets.get("concurrency_limit") or 4),
+                          "token_cap": int(widgets.get("token_cap") or 40000), "reviewer_id": widgets.get("reviewer_id")})
+
+def check_chat(chat):
+    """Cell 2: ask the organisation's chat() one question and, once it answers, make the project's three
+    Inputs folders and say what belongs in each."""
+    if NOTEBOOK["dbutils"] is None:
+        print("Run cell 1 first.")
+        return
+    NOTEBOOK["chat"] = chat
+    try:
+        reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
+        print("chat() answered:", str(reply)[:60])
+    except Exception as problem:
+        print("chat() did not answer (%s: %s). Check widgets 01, 02 and 03, then run this cell again." % (type(problem).__name__, problem))
+        return
+    widgets = NOTEBOOK["dbutils"].widgets
+    project_dir, missing = setup_project(NOTEBOOK["projects"], widgets.get("model_id"), widgets.get("project"))
+    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
+    for _, folder, note in INPUT_FOLDERS:
+        print("  %s\n      %s" % (os.path.join(project_dir, "Inputs", folder), note))
+    print("\nOne methodology file, the model package as it ships (.tar.gz, .zip or the unpacked folder), and the")
+    print("model documentation. A folder with nothing in it stops the run and says so, rather than reading around it.")
+    print("\nStill empty: " + "; ".join(missing) if missing else "\nAll three folders have files in them. Next: cell 3.")
+
+def open_current():
+    """The run the widgets name: the one this session opened, or a new one; None, with what to do, while the
+    project's folders are still empty."""
+    widgets = NOTEBOOK["dbutils"].widgets
+    model_id, project = widgets.get("model_id"), widgets.get("project")
+    _, missing = setup_project(NOTEBOOK["projects"], model_id, project)
+    if missing:
+        print("\n".join(missing))
+        print("Put the files in, then run cell 3.")
+        return None
+    paths = NOTEBOOK["paths"]
+    if paths is None or paths.model_id != model_id or (project and paths.project_date != project):
+        paths = NOTEBOOK["paths"] = open_run(NOTEBOOK["projects"], model_id, project)   # a new session starts a new run
+    return paths
+
+def review(foreground_minutes=600):
+    """Cell 3: read the inputs, map how the model computes what it returns, and run the model steps, in
+    this cell; then say what each step did. A step already finished is never repeated."""
+    if NOTEBOOK["dbutils"] is None or NOTEBOOK["chat"] is None:
+        print("Run cell 1, then cell 2, first: this cell uses the chat() that cell 2 checked.")
+        return
+    paths = open_current()
+    if paths is None:
+        return
+    settings = dict(notebook_settings(), foreground_minutes=float(foreground_minutes))
+    state = AskState()
+    result = NOTEBOOK["result"] = run_pipeline(paths, settings, chat=NOTEBOOK["chat"], live=NOTEBOOK["live"] or LiveValues(), state=state)
+    print(result["message"])
+    store = open_store(paths, settings)
+    print("\nWhat each step did:")
+    for record in store.read("step_records"):
+        print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
+        for message in record["messages"]:
+            print("      " + message)
+    for label, value in call_statistics(store):
+        print("  %-52s %s" % (label, value))
+    if state.waiting_for_token:
+        print("\nWAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and")
+        print("run this cell again; the steps already finished are not repeated.")
+    print("\nRun folder:", paths.run_dir)
+    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Model_Implementation_Map")
+    print("how the model computes what it returns, and Mapping_Coverage what is covered.")
+    print("Then run cell 4 to check the run folder against its own record.")
+
+def verify():
+    """Cell 4: check the run folder against its own record."""
+    paths = NOTEBOOK["paths"]
+    if paths is None:
+        print("Cell 3 has not read the inputs yet. Run cell 3 first.")
+        return
+    print("Verifying the evidence pack:")
+    for what, verdict, detail in verify_evidence_pack(paths, notebook_settings(), live=NOTEBOOK["live"] or LiveValues()):
+        print("  %-62s %-16s %s" % (what, verdict, detail))
+    print("\nRun folder:", paths.run_dir, "- Output.xlsx is the deliverable; _audit/Audit_Log.xlsx is the record")
+    print("of the run: every step, every record, and every exchange with the model.")

@@ -210,7 +210,7 @@ class ImplementationMapSample(unittest.TestCase):
                 "tie_anchor_overrides <- function(tie_inputs, tie_outputs) min(tie_outputs$anchor, tie_inputs$cap)\n"
                 "#' @title Model Call\n#' @export\n"
                 "tie_model_call <- function(tie_inputs = NULL) {\n"
-                "  tie_outputs <- list(economic = tie_inputs$gdp * 2)\n"
+                "  tie_outputs <- list(economic = tie_inputs$gdp * 2, placeholder = NA)\n"
                 "  tie_outputs <- c(list(profile = tie_outputs$economic + 1), tie_outputs)\n"
                 "  tie_outputs <- c(list(anchor = tie_score_anchor(tie_inputs, tie_outputs)), tie_outputs)\n"
                 "  tie_outputs <- c(list(overrides_and_caps = tie_anchor_overrides(tie_inputs, tie_outputs)), tie_outputs)\n"
@@ -229,6 +229,11 @@ class ImplementationMapSample(unittest.TestCase):
         call = nodes[element["from"][0]]
         self.assertEqual((call["kind"], call["callee"], call["bindings"]["tie_outputs"]), ("call", "tie_anchor_overrides", [steps[2]["node"]]))
         self.assertEqual(nodes["tie_model_call:return"]["from"], [steps[3]["node"]], "what the function returns is the last step")
+        self.assertEqual(element["code"], "overrides_and_caps = tie_anchor_overrides(tie_inputs, tie_outputs)",
+                         "an element's own code, not the whole statement it sits in")
+        placeholder = next(n for n in nodes.values() if n["name"] == "placeholder")
+        self.assertEqual((placeholder["from"], placeholder["code"]), ([], "placeholder = NA"))
+        self.assertIn(placeholder["node"], steps[0]["from"], "an element holding NA is listed as much as any other")
 
     def test_flowr_lives_in_a_folder_of_this_users_own_and_is_ready_only_once_it_has_run(self):
         """Found on Databricks: a shared cluster runs every notebook session as a system user of its own,
@@ -364,12 +369,23 @@ class ImplementationMapSheet(unittest.TestCase):
             if row["fn_ref"]:
                 self.assertTrue(row["function_name"], row["map_id"])
 
+    def test_a_terminal_input_says_so_and_a_final_output_shows_its_function(self):
+        """Found on a real run: tie_inputs showed the whole function as its code, though nothing computes it;
+        and the final output's row repeated its child's statement instead of the function that assembles it."""
+        for row in self.rows:
+            if row["role"].startswith("Raw input"):
+                self.assertTrue(row["output_variable"].endswith(" (terminal input)"), row)
+                self.assertEqual(row["ov_code"], "", row["output_variable"])
+        top = self.rows[0]
+        self.assertTrue(top["ov_code"].startswith("harbour_rating <- function("), top["ov_code"][:60])
+        self.assertNotEqual(top["ov_code"], self.rows[1]["ov_code"], "a parent does not repeat its child's code")
+
     def test_every_argument_is_a_variable_of_a_row_beneath_it(self):
         by_id = {row["map_id"]: row for row in self.rows}
         for row in self.rows:
             children = [other for other in self.rows if other["map_id"].rsplit(".", 1)[0] == row["map_id"] and other["map_id"] != row["map_id"]]
             named = [name.strip() for name in row["arguments"].split(";") if name.strip()]
-            self.assertEqual(named, [child["output_variable"] for child in children], row["map_id"])
+            self.assertEqual(named, [child["output_variable"].replace(" (terminal input)", "") for child in children], row["map_id"])
             self.assertTrue(all(child["map_id"] in by_id for child in children))
 
     def test_the_map_ids_dissect_into_columns_that_filter_the_tree(self):
@@ -385,7 +401,7 @@ class ImplementationMapSheet(unittest.TestCase):
         with open(os.path.join(helpers.SAMPLES_DIR, "J_pipeline", "gold_map.yaml"), encoding="utf-8") as handle:
             gold = yaml.safe_load(handle)
         self.assertEqual(self.rows[0]["output_variable"], "harbour_rating")
-        variables = {row["output_variable"] for row in self.rows}
+        variables = {row["output_variable"].replace(" (terminal input)", "") for row in self.rows}
         for kind in ("argument", "column_of_an_argument", "stored_data", "hard_coded_number"):
             for name in gold["raw_inputs"][kind]:
                 self.assertIn(name, variables, kind)
@@ -428,7 +444,7 @@ class ImplementationMapSheet(unittest.TestCase):
         rows = runner.implementation_map(runner.open_store(paths, settings), settings)
         top = [row for row in rows if row["map_id"] == "01"][0]
         self.assertEqual((top["output_variable"], top["function_name"]), ("capital_k", "capital_k"))
-        variables = {row["output_variable"] for row in rows}
+        variables = {row["output_variable"].replace(" (terminal input)", "") for row in rows}   # the name, without the label
         self.assertTrue({"lgd", "segment", "lgd_floors", "0.999"} <= variables, sorted(variables))
 
 
