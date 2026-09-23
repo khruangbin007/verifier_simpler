@@ -364,18 +364,12 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(name_steps(main_prompt))
     if question_type == "match-concepts":
         return json.dumps(match_concepts(main_prompt, misbehave and bucket == 3))
-    if question_type == "package-plan":
-        return json.dumps(package_plan(main_prompt, misbehave and bucket == 5))
-    if question_type == "slice-rules":
-        return json.dumps(slice_rules(main_prompt, misbehave and bucket in (1, 2)))
     if question_type == "check-rule":
         return json.dumps(check_rule(main_prompt))
     if question_type == "interpret-code":
         if misbehave and bucket == 0:
             return json.dumps({"interpretation": "It works out the price.", "quote_from_unit": "words that are not in the code at all"})
         return json.dumps(interpret_code(main_prompt))
-    if question_type == "second-opinion":
-        return json.dumps(second_opinion(main_prompt, misbehave and bucket in (4, 5)))
     return json.dumps({"ok": True})
 
 

@@ -38,13 +38,13 @@ SETTLED_SAMPLES = ("A_minimal", "D_dosing", "F_capital", "F_capital_known")
 
 def units_of_sample(sample):
     """Steps 01 to 04 of one sample, as plain dictionaries, with nothing that varies by runner."""
-    import core
-    import runner
+    import verifier as core
+    import verifier as runner
     import standin_chat
 
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "FROZEN", "2026-09-18")
-    settings = runner.make_settings({"require_outline_confirmation": False})
+    settings = runner.make_settings({})
     paths = runner.open_run(projects, "FROZEN", "2026-09-18", scratch_root=helpers.scratch())
     runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after="04")
     store = runner.open_store(paths, settings)

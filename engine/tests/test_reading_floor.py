@@ -10,8 +10,8 @@ import unittest
 import zipfile
 
 import helpers
-import core
-import reading
+import verifier
+core = reading = verifier   # the engine is one module now
 def plain(chunks):
     return chunks
 

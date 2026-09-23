@@ -12,11 +12,11 @@ import os
 import unittest
 
 import helpers
-import core
-import runner
+import verifier
+core = runner = verifier   # the engine is one module now
 import standin_chat
 
-BROKEN = "review.build_graph"
+BROKEN = "build_map"
 
 
 def a_run(replace=None):
@@ -27,7 +27,7 @@ def a_run(replace=None):
     try:
         projects = helpers.scratch()
         helpers.copy_sample("A_minimal", projects, "GOESON", "2026-09-21")
-        settings = runner.make_settings({"require_outline_confirmation": False})
+        settings = runner.make_settings({})
         paths = runner.open_run(projects, "GOESON", "2026-09-21", scratch_root=helpers.scratch())
         outcome = runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved)
         return outcome, paths, runner.open_store(paths, settings).read("step_records")
@@ -54,7 +54,7 @@ class AStepThatFailsDoesNotStopTheRun(unittest.TestCase):
     def test_the_step_is_recorded_as_not_finished_and_only_that_step(self):
         unfinished = [record["step_id"] for record in self.records
                       if (record.get("counts") or {}).get("step did not finish")]
-        self.assertEqual(unfinished, ["05"])
+        self.assertEqual(unfinished, ["03"])
 
     def test_the_workbook_is_still_written_with_everything_that_did_work(self):
         books = glob.glob(os.path.join(self.paths.run_dir, "**", "Output.xlsx"), recursive=True)
@@ -64,13 +64,13 @@ class AStepThatFailsDoesNotStopTheRun(unittest.TestCase):
         self.assertGreater(sheet.max_row, 1, "the reading done before the failure is kept")
 
     def test_the_analyst_is_told_in_plain_words(self):
-        said = [record for record in self.records if record["step_id"] == "05"][0]["messages"][0]
-        self.assertIn("Step 05 (build-graph) could not finish", said)
+        said = [record for record in self.records if record["step_id"] == "03"][0]["messages"][0]
+        self.assertIn("Step 03 (build-map) could not finish", said)
         self.assertIn("The steps after it ran on what there was", said)
         self.assertEqual(core.has_banned_wording(said), "", said)
 
     def test_the_details_are_kept_for_a_maintainer_and_not_put_in_the_evidence_pack(self):
-        kept = glob.glob(os.path.join(self.paths.local_dir, "work", "step_05_did_not_finish.txt"))
+        kept = glob.glob(os.path.join(self.paths.local_dir, "work", "step_03_did_not_finish.txt"))
         self.assertEqual(len(kept), 1)
         with open(kept[0], encoding="utf-8") as handle:
             self.assertIn("KeyError", handle.read())
@@ -88,7 +88,7 @@ class APauseIsNotAFailure(unittest.TestCase):
         self.assertIn("fresh token", outcome["message"])
         self.assertFalse([record for record in records if (record.get("counts") or {}).get("step did not finish")],
                          "a pause must never be written down as a step that did not finish")
-        self.assertNotIn("05", [record["step_id"] for record in records], "the paused step is not recorded as done")
+        self.assertNotIn("03", [record["step_id"] for record in records], "the paused step is not recorded as done")
 
 
 if __name__ == "__main__":

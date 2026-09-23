@@ -4,8 +4,8 @@ import textwrap
 import unittest
 
 import helpers
-import core
-import reading
+import verifier
+core = reading = verifier   # the engine is one module now
 import build_samples
 
 UNFAMILIAR_SCHEMA = """<table>

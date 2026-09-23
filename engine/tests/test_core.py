@@ -1,8 +1,8 @@
 """Tests of core.py: contracts, canonical JSON, hashes, numbers, symbols, the expression tree."""
-import core
 import unittest
 import helpers  # noqa: F401  (sets the import path)
-from core import Expr
+import verifier as core
+from verifier import Expr
 
 
 class CanonicalJsonAndHashes(unittest.TestCase):
@@ -110,21 +110,13 @@ class NumbersAsProseWritesThem(unittest.TestCase):
     put spurious numbers into the search."""
 
     def test_comma_grouped_thousands_are_one_number(self):
-        from core import find_numbers
+        from verifier import find_numbers
         self.assertEqual([n["value"] for n in find_numbers("a limit of 1,000 units and 250,000.5 in all")], ["1000", "250000.5"])
         self.assertEqual([n["value"] for n in find_numbers("-1,250 and 1,000,000")], ["-1250", "1000000"])
 
     def test_a_comma_between_other_digit_counts_is_not_a_grouping(self):
         """"1,5" is a decimal comma in some writing; guessing which would be guessing."""
-        from core import find_numbers
+        from verifier import find_numbers
         self.assertEqual([n["value"] for n in find_numbers("1,5")], ["1", "5"])
         self.assertEqual([n["value"] for n in find_numbers("table 3, 100 rows")], ["100"])
 
-    def test_one_value_written_twice_in_a_cell_is_one_number(self):
-        import review
-        self.assertEqual(review.number_of("0.15 (15%)")["value"], "0.15")
-        self.assertIsNone(review.number_of("0.15 or 0.20"))
-
-
-if __name__ == "__main__":
-    unittest.main()

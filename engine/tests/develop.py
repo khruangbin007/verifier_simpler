@@ -1,15 +1,14 @@
 """
 Verifier 0.0.3 - develop.py - everything that is about the tool rather than about a run: how it
-is measured, released, checked against its own manual, and how the notebook is built.
+is measured, checked against its own manual, and how the notebook is built.
 For whoever maintains the tool.
 
 WHAT THIS FILE DOES
   Measurement. Seeded differences (mutants of a sample package, its data and its documentation)
-  and the harness that runs them; recall of the candidate search against gold links; a live
+  recall of the candidate search against gold links; a live
   trial that compares two runs at different concurrency; an environment probe for a new
   cluster; and the sign-off bar for guided reading. Each returns its report as text and records
   its numbers in one history file, engine/tests/history.csv. No report file is written.
-  Release. The SHA-256 of every file that makes up the engine, kept in engine/release.json;
   a run's manifest is compared with it, so a run can prove which code produced it.
   Checks on the code itself. Line budgets, and that the one manual names only things that
   exist and explains every setting and every design rule.
@@ -18,13 +17,12 @@ WHAT THIS FILE DOES
 
 WHAT IT TAKES IN AND PRODUCES
   In: the sample projects, a chat() where a measurement needs one, the manual.
-  Out: report text; rows in engine/tests/history.csv; engine/release.json; the notebook.
+  Out: report text; rows in engine/tests/history.csv; the notebook.
 
 WHICH SHEETS SHOW ITS RESULTS
   None: nothing here is part of a run. What it measures is described in the manual.
 
 DESIGN RULES ENFORCED HERE
-  R5  the release manifest pins the bytes of the code a run reports having used.
   R10 the check on the manual keeps every word of it true of the code.
   R11 line budgets; the notebook is generated, never edited by hand.
 
@@ -34,6 +32,7 @@ HOW TO SANITY-CHECK IT
   python engine/develop.py harness A_minimal --limit 10
 """
 
+import ast
 import csv
 import datetime
 import glob
@@ -53,19 +52,18 @@ import warnings
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENGINE = os.path.join(ROOT, "engine")
+ENGINE = ROOT if os.path.basename(ROOT) == "engine" else os.path.join(ROOT, "engine")
 TESTS = os.path.join(ENGINE, "tests")
 SAMPLES = os.path.join(TESTS, "sample_projects")
 HISTORY = os.path.join(TESTS, "history.csv")
-RELEASE_FILE = os.path.join(ENGINE, "release.json")
-MANUAL = os.path.join(ROOT, "docs", "Manual.md")
-NOTEBOOK = os.path.join(ROOT, "Verifier.ipynb")
+MANUAL = os.path.join(os.path.dirname(ENGINE), "docs", "Manual.md")
+NOTEBOOK = os.path.join(os.path.dirname(ENGINE), "Verifier.ipynb")
 for folder in (ENGINE, TESTS):
     if folder not in sys.path:
         sys.path.insert(0, folder)
 
-import core        # noqa: E402
-import runner      # noqa: E402
+import verifier    # noqa: E402
+core = reading = review = runner = verifier   # the engine is one module now
 
 
 def remember(measure, date, sample, chat, **numbers):
@@ -244,32 +242,6 @@ def docx_mutants(name, data):
     return mutants
 
 
-def mutants_of(inputs_dir):
-    """Every mutant of one sample: {"id", "operator", "file", "line", "what", "expected", "inputs": {relative path: bytes}}."""
-    package_dir = os.path.join(inputs_dir, "2_Model_Package")
-    tar_name = sorted(os.listdir(package_dir))[0]
-    top, files = read_tarball(os.path.join(package_dir, tar_name))
-    found = []
-    for path in sorted(files):
-        if path.startswith("R/") and path.lower().endswith(".r"):
-            text = files[path].decode("utf-8")
-            for mutant in code_mutants(path, text) + roxygen_mutants(path, text):
-                mutant["inputs"] = {"2_Model_Package/" + tar_name: write_tarball(top, dict(files, **{path: mutant.pop("text").encode("utf-8")}))}
-                found.append(mutant)
-        elif path.lower().endswith((".rda", ".rds", ".rdata")):
-            for mutant in data_mutants(path, files[path]):
-                mutant["inputs"] = {"2_Model_Package/" + tar_name: write_tarball(top, dict(files, **{path: mutant.pop("bytes")}))}
-                found.append(mutant)
-    doc_dir = os.path.join(inputs_dir, "3_Model_Documentation")
-    for name in sorted(os.listdir(doc_dir)):
-        if name.lower().endswith(".docx"):
-            with open(os.path.join(doc_dir, name), "rb") as handle:
-                for mutant in docx_mutants(name, handle.read()):
-                    mutant["inputs"] = {"3_Model_Documentation/" + name: mutant.pop("bytes")}
-                    found.append(mutant)
-    for number, mutant in enumerate(found, start=1):
-        mutant["id"] = "S-%03d" % number
-    return found
 
 
 # ================================================================================================
@@ -301,7 +273,7 @@ def run_once(sample, replaced, chat):
     for relative, data in replaced.items():
         with open(os.path.join(inputs, relative), "wb") as handle:
             handle.write(data)
-    settings = runner.make_settings({"require_outline_confirmation": False})
+    settings = runner.make_settings({})
     paths = runner.open_run(projects, "HARNESS", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_harness_local_"))
     runner.run_pipeline(paths, settings, chat=chat)
     store = runner.open_store(paths, settings)
@@ -332,46 +304,6 @@ def outcome_of(mutant, result):
     return "not flagged", []
 
 
-def harness(arguments):
-    import standin_chat
-    sample = arguments[0] if arguments and not arguments[0].startswith("--") else "F_capital"
-    limit = int(arguments[arguments.index("--limit") + 1]) if "--limit" in arguments else 0
-    only = arguments[arguments.index("--operator") + 1] if "--operator" in arguments else ""
-    chat = cached(standin_chat.make_chat(misbehave="--misbehave" in arguments))
-    baseline = run_once(sample, {}, chat)
-    with open(os.path.join(SAMPLES, sample, "gold_clean_units.csv"), encoding="utf-8") as handle:
-        gold_clean = [row["unit_ref"] for row in csv.DictReader(handle)]
-    clean = {s["unit_ref"]: s["clean"] for s in baseline["unit_status"]}
-    falsely = [ref for ref in gold_clean if not clean.get(ref, False)]
-    mutants = [m for m in mutants_of(os.path.join(SAMPLES, sample, "Inputs")) if not only or m["operator"] == only]
-    mutants = mutants[:limit] if limit else mutants
-    rows = []
-    for mutant in mutants:
-        outcome, categories = outcome_of(mutant, run_once(sample, mutant["inputs"], chat))
-        rows.append((mutant["id"], mutant["operator"], mutant["file"], mutant["line"] or "", mutant["what"], outcome, "; ".join(categories)))
-        print(*rows[-1], sep=" | ", flush=True)
-    today = datetime.date.today().isoformat()
-    operators = sorted({row[1] for row in rows})
-    handle = io.StringIO()
-    if True:
-        handle.write("# Seeded-difference harness: %s\n\nRun on %s with the stand-in chat() (%s). Counts, not only percentages: with 30 mutants of a type, "
-                     "30 of 30 supports a claim of about 90 percent, not 100.\n\n" % (sample, today, "misbehaving" if "--misbehave" in arguments else "well-behaved"))
-        handle.write("False-flag rate on the clean baseline: %d of %d units listed in gold_clean_units.csv ended flagged%s.\n\n"
-                     % (len(falsely), len(gold_clean), " (%s)" % ", ".join(falsely) if falsely else ""))
-        handle.write("| Operator | Mutants | Flagged as expected | Flagged otherwise | Not flagged |\n|---|---|---|---|---|\n")
-        for operator in operators:
-            mine = [row for row in rows if row[1] == operator]
-            handle.write("| %s | %d | %d | %d | %d |\n" % (operator, len(mine), sum(r[5] == "flagged as expected" for r in mine),
-                                                         sum(r[5] == "flagged otherwise" for r in mine), sum(r[5] == "not flagged" for r in mine)))
-        handle.write("\n## Every mutant\n\n| Id | Operator | File | Line | What changed | Outcome | Categories raised |\n|---|---|---|---|---|---|---|\n")
-        for row in rows:
-            handle.write("| " + " | ".join(str(cell) for cell in row) + " |\n")
-        handle.write("\nEvery mutant that ended *not flagged* has to be inspected by hand and labelled *equivalent* or *missed*.\n")
-    remember("harness", today, sample, "stand-in", mutants=len(rows), flagged_as_expected=sum(r[5] == "flagged as expected" for r in rows),
-             flagged_otherwise=sum(r[5] == "flagged otherwise" for r in rows), not_flagged=sum(r[5] == "not flagged" for r in rows),
-             false_flags=len(falsely), gold_clean_units=len(gold_clean))
-    print(handle.getvalue())
-    return handle.getvalue()
 
 
 # ================================================================================================
@@ -386,7 +318,7 @@ KS = (3, 5, 12)
 def shortlists(sample, signals):
     projects = tempfile.mkdtemp(prefix="verifier_recall_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "RECALL", "2026-01-01", "Inputs"))
-    settings = runner.make_settings({"require_outline_confirmation": False, "signals": signals})
+    settings = runner.make_settings({"signals": signals})
     paths = runner.open_run(projects, "RECALL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_recall_local_"))
     runner.run_pipeline(paths, settings, chat=None, stop_after="06")
     store = runner.open_store(paths, settings)
@@ -437,7 +369,7 @@ def trial_run(sample, chat, live, concurrency):
     """Steps 01 to 08 on a fresh copy of the sample. Returns the accepted links, the call records and the seconds used."""
     projects = tempfile.mkdtemp(prefix="verifier_trial_")
     shutil.copytree(os.path.join(SAMPLES, sample, "Inputs"), os.path.join(projects, "TRIAL", "2026-01-01", "Inputs"))
-    settings = runner.make_settings({"require_outline_confirmation": False, "concurrency_limit": concurrency})
+    settings = runner.make_settings({"concurrency_limit": concurrency})
     paths = runner.open_run(projects, "TRIAL", "2026-01-01", scratch_root=tempfile.mkdtemp(prefix="verifier_trial_local_"))
     started = datetime.datetime.now()
     runner.run_pipeline(paths, settings, chat=chat, live=live, stop_after="08")
@@ -652,7 +584,7 @@ def one_run(sample, mode, chat, live):
     import helpers
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "R6", "2026-09-18")
-    settings = runner.make_settings({"require_outline_confirmation": False, "agentic_reading": mode})
+    settings = runner.make_settings({"agentic_reading": mode})
     paths = runner.open_run(projects, "R6", "2026-09-18", scratch_root=helpers.scratch())
     runner.run_pipeline(paths, settings, chat=chat, live=live, stop_after="04")
     store = runner.open_store(paths, settings)
@@ -795,7 +727,7 @@ def append_history(found, samples, label, stamp):
 # runner.py rose by 100 for the implementation map's sheet and the final outputs a person decides there,
 # and by 250 more for the map itself: the tree, its IDs and groups, and its three branches.
 # review.py rose by 300 more for the skill map-implementation: the Tracer's tools, turns and validator, and the Namer.
-BUDGETS = {"core.py": 2250, "reading.py": 3450, "review.py": 3250, "runner.py": 2150, "develop.py": 1800}
+BUDGETS = {"verifier.py": 9000}
 MINIMUM_EXPLANATION_SHARE = 0.30
 
 
@@ -853,20 +785,6 @@ def current():
     return {"engine_version": core.ENGINE_VERSION, "files": files, "requirements": requirements}
 
 
-def release(arguments):
-    target = RELEASE_FILE
-    now = current()
-    if "--check" in arguments:
-        with open(target, encoding="utf-8") as handle:
-            frozen = json.load(handle)
-        changed = sorted(name for name in set(now["files"]) | set(frozen["files"]) if now["files"].get(name) != frozen["files"].get(name))
-        print("\n".join("differs from the release: " + name for name in changed) if changed else "Every file equals the release manifest.")
-        return 1 if changed else 0
-    with open(target, "w", encoding="utf-8") as handle:
-        json.dump(now, handle, indent=1, sort_keys=True)
-        handle.write("\n")
-    print("%s: %d files" % (target, len(now["files"])))
-    return 0
 
 
 # ================================================================================================
@@ -877,7 +795,7 @@ def map_measure(sample="J_pipeline", record=True, chat=None):
     is given. Raw inputs are the leaves of the walk down from each final output. What the map says of the
     documents is read from its branches 91 and 92, on a whole run with the stand-in. Returns {part: (found, total)}."""
     import helpers
-    import reading
+    import verifier
     import yaml
     with open(os.path.join(SAMPLES, sample, "gold_map.yaml"), encoding="utf-8") as handle:
         gold = yaml.safe_load(handle)
@@ -957,7 +875,7 @@ def map_run(sample, chat, live=None, settings=None):
     import helpers
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "BAR", "2026-01-01")
-    run_settings = runner.make_settings(dict({"require_outline_confirmation": False}, **(settings or {})))
+    run_settings = runner.make_settings(dict({}, **(settings or {})))
     paths = runner.open_run(projects, "BAR", "2026-01-01", scratch_root=helpers.scratch())
     runner.run_pipeline(paths, run_settings, chat=chat, live=live, stop_after="07d")
     store = runner.open_store(paths, run_settings)
@@ -1034,14 +952,14 @@ def manual_problems():
     """Every way the one manual can drift from the code, as plain sentences. The manual may name
     a function (`module.name`), a sheet, a test, a setting or a design rule; each must exist, and
     every setting and every design rule must be explained. An empty list means they agree."""
-    import review
+    import verifier
     text = open(MANUAL, encoding="utf-8").read()
     found = []
-    import reading
+    import verifier
     modules = {"core": core, "reading": reading, "review": review, "runner": runner, "develop": sys.modules[__name__]}
     for module, name in sorted(set(re.findall(r"`(core|reading|review|runner|develop)\.([A-Za-z_]\w*)`", text))):
         if name == "py":
-            continue                                 # `core.py` names the file, not a function
+            continue                                 # `verifier.py` names the file, not a function
         if not hasattr(modules[module], name):
             found.append("the manual names `%s.%s`, which does not exist" % (module, name))
     sheets = {sheet["name"] for sheet in runner.load_layout()["sheets"]}
@@ -1064,7 +982,7 @@ def manual_problems():
     # a file the manual names by its path in the repository, or a test file by its name, must exist:
     # a restructure that moves or renames a file otherwise leaves the manual pointing at nothing
     for path in sorted(set(re.findall(r"`((?:engine|docs|tools|evaluation)/[\w./*-]+)`", text))):
-        if not glob.glob(os.path.join(ROOT, path)):
+        if not glob.glob(os.path.join(os.path.dirname(ENGINE), path)):
             found.append("the manual names `%s`, which is not in the repository" % path)
     for name in sorted(set(re.findall(r"`(test_\w+\.py)`", text))):
         if not os.path.exists(os.path.join(TESTS, name)):
@@ -1083,7 +1001,7 @@ def check_docs():
 
 # ================================================================================================
 # ---------------------------------------------------------------- the notebook, five cells
-CELL_1 = r'''# ===== Cell 1 of 5 - set up: widgets, packages, the engine =====
+CELL_1 = r'''# ===== Cell 1 of 4 - set up: widgets, packages, the engine =====
 # Run this first, and run it again after anything restarts Python. It is safe to run any number of times.
 import importlib, importlib.metadata, importlib.util, os, re, subprocess, sys, tempfile
 
@@ -1120,7 +1038,7 @@ for old_widget in ("llm_user_id", "reviewer_role"):      # widgets of an earlier
 
 # --- packages: installed only if one is missing, pinned to what the runtime already has, and Python
 # is restarted only if the runtime's own packages still import together afterwards
-REQUIRED = ("yaml", "openpyxl", "docx", "numpy", "scipy", "sympy", "rdata")
+REQUIRED = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; docx, scipy and sympy went with the checks
 missing = [name for name in REQUIRED if importlib.util.find_spec(name) is None]
 if missing:
     index_url = w.get("jfrog_index_url").strip()
@@ -1145,45 +1063,55 @@ if missing:
             print("The install did not finish. What pip said:\n" + hide(done.stderr)[-1500:])
             print("If pip found no versions that fit, the index lacks an older version that works with this runtime's own packages. Nothing the runtime depends on was changed.")
         else:
-            optional = requirements.replace("requirements.txt", "requirements-optional.txt")
-            if os.path.exists(optional):
-                extra = subprocess.run(command[:4] + ["-r", optional] + command[6:], capture_output=True, text=True)
-                print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures are then not read.")
+            wanted = open(requirements, encoding="utf-8").read().split("# --- optional ---")
+            if len(wanted) > 1:
+                spare = os.path.join(tempfile.gettempdir(), "optional.txt")
+                open(spare, "w", encoding="utf-8").write(wanted[1])
+                extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
+                print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures of text will say so.")
             probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
             if probe.returncode:
                 print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip().splitlines()[-1]))
                 print("Restarting now would crash this notebook session. Detach this notebook from the cluster and attach it again to undo the install. Do not restart the cluster.")
             else:
-                print("Installed. Restarting Python; then run this cell once more.")
-                dbutils.library.restartPython()
+                still = subprocess.run([sys.executable, "-c", "import " + ", ".join(missing)],
+                                       capture_output=True, text=True)
+                if still.returncode:
+                    print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting "
+                          "would only bring this cell back here." % ", ".join(missing))
+                    print("What Python said:\n" + hide(still.stderr)[-600:])
+                    print("Check that engine/requirements.txt names it, and that the index in widget 08 carries it.")
+                else:
+                    print("Installed. Restarting Python; then run this cell once more.")
+                    dbutils.library.restartPython()
 else:
     # --- the engine
     for folder in (os.path.join(HOME, "engine"), os.path.join(HOME, "engine", "tests")):
         if folder not in sys.path:
             sys.path.insert(0, folder)
-    import runner
+    import verifier
     if "LIVE" not in globals():
-        LIVE = runner.LiveValues()
+        LIVE = verifier.LiveValues()
     LIVE.update(w.get("llm_endpoint"), w.get("llm_token"), w.get("reviewer_id"))
     def live(name):
         """Read an endpoint, token or user id at the moment chat() is CALLED, so a fresh token pasted mid-run is used."""
         return LIVE.get(name)
 
     def current_settings():
-        return runner.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
+        return verifier.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
                                      "reviewer_id": w.get("reviewer_id"), "concept_subject": w.get("concept_subject").strip()})
 
     def open_current():
         """The run the widgets name, opened; or None with a message when the project has no inputs yet. Used
         by cells 3, 4 and 5, so that a cell run before cell 3 - or after Python restarted - says what to do."""
-        _, missing = runner.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
+        _, missing = verifier.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
         if missing:
             print("\n".join(missing)); print("Put the files in, then run cell 3.")
             return None
         if globals().get("PATHS") is not None and PATHS.model_id == w.get("model_id") and (not w.get("project") or PATHS.project_date == w.get("project")) and (not w.get("run") or PATHS.run_id == w.get("run")):
             return PATHS                               # keep working on the run this session opened
-        return runner.open_run(w.get("projects_dir"), w.get("model_id"), w.get("project"), w.get("run"), scratch_root=w.get("scratch_dir"))
-    print("Folder:", HOME, "| Python", sys.version.split()[0], "| engine", runner.core.ENGINE_VERSION)
+        return verifier.open_run(w.get("projects_dir"), w.get("model_id"), w.get("project"), w.get("run"), scratch_root=w.get("scratch_dir"))
+    print("Folder:", HOME, "| Python", sys.version.split()[0], "| engine", verifier.ENGINE_VERSION)
     for name in REQUIRED + ("pdfplumber", "pypdf"):
         try:
             print("  %-11s %s" % (name, getattr(importlib.import_module(name), "__version__", "installed")))
@@ -1191,15 +1119,21 @@ else:
             print("  %-11s not installed%s" % (name, "" if name in ("pdfplumber", "pypdf") else " - run this cell again"))
     token = LIVE.get("llm_token")
     print("Endpoint set:", bool(LIVE.get("llm_endpoint")), "| token:", ("%d characters, pasted %.1f minutes ago" % (len(token), LIVE.token_age_minutes())) if token else "none pasted yet")
+    print("")
+    print("THE ENGINE IS READY. What happens next:")
+    print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
+    print("  Cell 3  read the inputs and run the review; it prints what each step did.")
+    print("  Cell 4  check the finished run folder against its own record.")
+    print("Widgets 01 to 03 carry the endpoint, the token and your user id; widget 04 the model id, 05 the")
+    print("project date, 07 the projects folder. Paste a fresh token into widget 02 at any time - it is read")
+    print("at the moment each call is made, so a run already working picks it up.")
     print("Next: cell 2.")
 '''
 
-CELL_2 = r'''# ===== Cell 2 of 5 - your chat() =====
-# Paste your organisation's chat() below, or leave USE_STANDIN = True to try the notebook without a model.
-# chat(system_prompt, main_prompt) must return {"answer": "<the model's reply>"}. Read the endpoint, token and
-# user id with live("...") INSIDE the function, so that a fresh token pasted into the widget is used mid-run.
-USE_STANDIN = False
-
+CELL_2 = r'''# ===== Cell 2 of 4 - your chat(), and where your files go =====
+# Paste your organisation's chat() below. It must return {"answer": "<the model's reply>"}. Read the endpoint,
+# token and user id with live("...") INSIDE the function, so that a fresh token pasted into the widget is
+# used mid-run. This cell asks it one question, then makes the project's Inputs folders and names them.
 import requests
 
 def chat(SystemPrompt, MainPrompt, history=[]):
@@ -1228,164 +1162,275 @@ def chat(SystemPrompt, MainPrompt, history=[]):
     response.raise_for_status()
     return response.json()          # the engine reads the reply from "answer", or from an OpenAI-shaped "choices"
 
-if USE_STANDIN:
-    import standin_chat
-    ACTIVE_CHAT = standin_chat.chat
-    print("Using the stand-in: no model is called; answers are made up from the prompt, for trying the notebook only.")
+ACTIVE_CHAT = chat
+try:
+    reply = ACTIVE_CHAT("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
+    print("chat() answered:", str(reply)[:60])
+except Exception as problem:
+    print("chat() did not answer (%s: %s). Check widgets 01, 02 and 03, then run this cell again."
+          % (type(problem).__name__, problem))
 else:
-    ACTIVE_CHAT = chat
-    try:
-        reply = ACTIVE_CHAT("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
-        print("chat() answered:", reply[:60], "| Next: cell 3.")
-    except Exception as problem:
-        print("chat() did not answer (%s: %s). Check widgets 01 to 03, or set USE_STANDIN = True to try without a model." % (type(problem).__name__, str(problem)[:120]))
+    project_dir, missing = verifier.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
+    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
+    for _, folder, note in verifier.INPUT_FOLDERS:
+        print("  %s" % os.path.join(project_dir, "Inputs", folder))
+        print("      %s" % note)
+    print("\nOne methodology file, the model package as it ships (.tar.gz, .zip or the unpacked folder), and the")
+    print("model documentation. A folder with nothing in it stops the run and says so, rather than reading around it.")
+    if missing:
+        print("\nStill empty: " + "; ".join(missing))
+    else:
+        print("\nAll three folders have files in them. Next: cell 3.")
 '''
 
-CELL_3 = r'''# ===== Cell 3 of 5 - read the inputs (no model involved) =====
-# Makes the project folder if it is new, tells you what to put where, reads every input file, and shows
-# the outline of the methodology for you to check before any model call is spent.
+CELL_3 = r'''# ===== Cell 3 of 4 - read the inputs and run the review =====
+# Reads every input file, maps how the model computes what it returns, then asks your model to interpret the
+# code, name the concepts, close the gaps code could not follow, and judge every link. It runs here, in this
+# cell, and prints what each step did. A step that has already finished is never repeated: run the cell again
+# after a token expires or a cluster restarts and it carries on where it stopped.
+FOREGROUND_MINUTES = 600      # how long this cell may work before it stops by itself and asks you to run it again
+
 PATHS = open_current()
 if PATHS is not None:
-    SETTINGS = current_settings()
-    RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=None, live=LIVE, stop_after="06")
+    SETTINGS = dict(current_settings(), foreground_minutes=float(FOREGROUND_MINUTES))
+    STATE = verifier.AskState()
+    RESULT = verifier.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT, live=LIVE, state=STATE)
     print(RESULT["message"])
-    store = runner.open_store(PATHS, SETTINGS)
-    for outline in store.read("outline"):
-        if outline["corner"] == "canon":
-            print("\nOutline of the methodology as it was read (first 60 lines):\n" + "\n".join(outline["lines"][:60]))
+    store = verifier.open_store(PATHS, SETTINGS)
+    print("\nWhat each step did:")
     for record in store.read("step_records"):
+        print("  step %s %-14s %s" % (record["step_id"], record["name"],
+                                      ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
         for message in record["messages"]:
-            if message.startswith(("Read as:", "Not read:")) or "left out" in message or "R package" in message:
-                print("  " + message)
-    flow = store.read("dataflow")
-    if flow:
-        outputs, how, _ = runner.reading.decided_outputs(flow, {})
-        print("\nFinal outputs code proposes: %s." % "; ".join("%s (%s)" % (name, how[name]) for name in outputs))
-    concepts, _ = runner.review.latest_concepts(store.read)
-    print("\nConcepts found by code: %d (sheet Concepts). The model refines them after you confirm the outline." % len(concepts))
-    print("Run folder:", PATHS.run_dir)
-    print("Open Output.xlsx there. The three Chunks sheets show everything that was read; Model_Package_Info what was not.")
-    print("into the run folder before cell 4. If the outline is right, go to cell 4; if not, fix the input and run this cell again.")
-'''
-
-CELL_4 = r'''# ===== Cell 4 of 5 - confirm the outline, then run the model steps and the checks =====
-# First run: records that you confirmed the outline, then starts the model steps in the background.
-# Run it again at any time to see where the run stands. Set PAUSE or STOP to True and run it to pause or stop.
-OUTLINE_CONFIRMED = True      # set False if you have not checked the outline in cell 3
-PAUSE, STOP = False, False
-MODE = "A"                    # "A": background thread. "C": foreground, stops by itself after FOREGROUND_MINUTES.
-FOREGROUND_MINUTES = 12
-import threading
-
-def keep_alive():
-    """A trivial Spark action so the cluster does not shut down mid-run - in its own thread, so that
-    a slow or stuck Spark call can never hold the review up."""
-    def touch():
-        try:
-            spark.range(1).count()
-        except Exception:
-            pass
-    threading.Thread(target=touch, daemon=True).start()
-
-def work():
-    """The run itself. Whatever goes wrong is written into RESULT, where cell 4 shows it: a thread
-    that dies otherwise dies in silence, and the run just looks idle."""
-    import traceback
-    try:
-        settings = dict(SETTINGS, foreground_minutes=FOREGROUND_MINUTES if MODE == "C" else 0.0, token_wait="stop" if MODE == "C" else "wait")
-        RESULT.update(runner.run_pipeline(PATHS, runner.make_settings({k: v for k, v in settings.items() if v != runner.DEFAULT_SETTINGS.get(k)}),
-                                          chat=ACTIVE_CHAT, live=LIVE, state=STATE, keep_alive=keep_alive))
-    except Exception as problem:
-        RESULT.update(state="failed", message="The run stopped: %s: %s" % (type(problem).__name__, problem),
-                      details=traceback.format_exc())
-
-RESULT = globals().get("RESULT") or {}
-
-if "PATHS" not in globals() or PATHS is None:
-    PATHS = open_current()
-    SETTINGS = current_settings() if PATHS is not None else None
-if PATHS is None:
-    print("Cell 3 has not read the inputs yet. Run cell 3 first.")
-elif "STATE" not in globals():
-    store = runner.open_store(PATHS, SETTINGS)
-    if not OUTLINE_CONFIRMED:
-        print("Check the outline in cell 3 first, then set OUTLINE_CONFIRMED = True.")
-    else:
-        print(runner.confirm_outline(PATHS, SETTINGS, w.get("reviewer_id")))
-        STATE = runner.AskState()
-        if MODE == "C":
-            work(); print(RESULT["message"])
-        else:
-            WORKER = threading.Thread(target=work, name="verifier-run", daemon=True); WORKER.start()
-            print("The run works in the background. Run this cell again to see where it stands; paste a fresh token into widget 02 whenever it asks.")
-else:
-    store = runner.open_store(PATHS, SETTINGS)
-    STATE.control["pause"], STATE.control["stop"] = PAUSE, STOP
-    print(runner.progress_text(store, RESULT.get("message", "")))
-    for record in store.read("step_records"):
-        print("  step %s %-22s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted(record["counts"].items()))))
-    for label, value in runner.call_statistics(store):
+            print("      " + message)
+    for label, value in verifier.call_statistics(store):
         print("  %-52s %s" % (label, value))
-    print("Token pasted %.1f minutes ago." % LIVE.token_age_minutes())
     if STATE.waiting_for_token:
-        print("WAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and run cell 1; the run goes on by itself.")
-    alive = "WORKER" in globals() and WORKER.is_alive()
-    if RESULT.get("state") == "failed":
-        print("THE RUN STOPPED WITH A PROBLEM:", RESULT["message"])
-        print(RESULT.get("details", "")[-1500:])
-        print("Fix what it says, then set STATE aside (del STATE) and run this cell again; finished steps are not repeated.")
-    elif alive:
-        print("The run is working in the background. Run this cell again to see progress.")
-    else:
-        print("The run is not working at the moment:", RESULT.get("message", "no message yet"), "| When it waits for a person, go to cell 5.")
+        print("\nWAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and")
+        print("run this cell again; the steps already finished are not repeated.")
+    print("\nRun folder:", PATHS.run_dir)
+    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Concepts the model's own")
+    print("names, Model_Implementation_Map how it computes what it returns, and Mapping_Coverage what is covered.")
+    print("Then run cell 4 to check the run folder against its own record.")
 '''
 
-CELL_5 = r'''# ===== Cell 5 of 5 - finish: read your determinations back, verify the evidence pack =====
-# After the run waits for a person: download Output.xlsx from the run folder, fill the yellow columns on
-# Flagged_Items, put it back in the run folder, and run this cell. Run it again after every round of edits.
-# APPENDIX runs a maintainer's check instead: "probe" (a new cluster), "sanity" (the sample projects with the
-# stand-in), "harness" (seeded differences), "sign-off" (guided reading against your real chat()), or
-# "map-sign-off" (the implementation map's agents against your real chat()).
-APPENDIX = ""
-
-if APPENDIX:
-    import develop, standin_chat
-    if APPENDIX == "probe":
-        print(develop.run_probe(w.get("projects_dir"), chat=ACTIVE_CHAT, live=LIVE))
-    elif APPENDIX == "sanity":
-        import datetime, shutil, tempfile
-        demo = tempfile.mkdtemp(prefix="verifier_sanity_")
-        shutil.copytree(os.path.join(HOME, "engine", "tests", "sample_projects", "A_minimal", "Inputs"), os.path.join(demo, "SANITY", datetime.date.today().isoformat(), "Inputs"))
-        demo_paths = runner.open_run(demo, "SANITY")
-        print(runner.run_pipeline(demo_paths, runner.make_settings({"require_outline_confirmation": False}), chat=standin_chat.chat)["message"])
-        print("Open", os.path.join(demo_paths.run_dir, "Output.xlsx"))
-    elif APPENDIX == "harness":
-        develop.harness(["A_minimal", "--limit", "10"])
-    elif APPENDIX == "sign-off":
-        print(develop.run(ACTIVE_CHAT, LIVE, label="the real model"))
-    elif APPENDIX == "map-sign-off":
-        print(develop.map_report(ACTIVE_CHAT, LIVE, label="the real model"))
-elif "PATHS" not in globals() or PATHS is None:
-    print("Cell 3 has not read the inputs yet. Run cells 3 and 4 first.")
+CELL_4 = r'''# ===== Cell 4 of 4 - check the run folder against its own record =====
+# The inputs are the files that were read, the engine is the one that produced the run, re-reading the inputs
+# gives the same content, the graph chain verifies, and no access token was written anywhere in the folder.
+if "PATHS" not in globals() or PATHS is None:
+    print("Cell 3 has not read the inputs yet. Run cell 3 first.")
 else:
     SETTINGS = current_settings()
-    RESULT = runner.run_pipeline(PATHS, SETTINGS, chat=ACTIVE_CHAT if "ACTIVE_CHAT" in globals() else None, live=LIVE, determinations=True)
-    print(RESULT["message"])
-    store = runner.open_store(PATHS, SETTINGS)
-    last = [r for r in store.read("step_records") if r["name"] == "record-determinations"][-1:]
-    for message in (last[0]["messages"] if last else []):
-        print("  " + message)
-    print("\nVerifying the evidence pack:")
-    for what, verdict, detail in runner.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
-        print("  %-34s %-10s %s" % (what, verdict, detail))
-    print("\nRun folder:", PATHS.run_dir, "- Output.xlsx and Validation_Report.docx are the deliverables; _audit/ holds the record.")
+    print("Verifying the evidence pack:")
+    for what, verdict, detail in verifier.verify_evidence_pack(PATHS, SETTINGS, live=LIVE):
+        print("  %-62s %-16s %s" % (what, verdict, detail))
+    print("\nRun folder:", PATHS.run_dir, "- Output.xlsx is the deliverable; _audit/Audit_Log.xlsx is the record")
+    print("of the run: every step, every record, and every exchange with the model.")
 '''
 
+
+
+# ====================================================================================
+# ---------------------------------------------------------------- the engine's own map
+# The tool mapped the model it reviews; this maps the tool. Everything here is read from
+# verifier.py by its syntax tree - nothing is listed by hand, so the map cannot drift from the
+# code. It is written as a workbook laid out like Output.xlsx: an inventory of every function,
+# the same flow drawn as a tree from each thing the tool produces, the file's sections, and the
+# records that carry work from one step to the next.
+ENGINE_FILE = os.path.join(ENGINE, "verifier.py")
+MAP_ID_COLUMNS = 10
+ENGINE_ROOTS = [("01 prepare-run", "prepare_run"), ("02 read-inputs", "read_inputs"), ("03 build-map", "build_map"),
+                ("05 read-with-ai", "read_with_ai"), ("06 link-units", "link_units"),
+                ("Output.xlsx", "build_workbook"), ("Cell 4 confirms the outline", "confirm_outline"),
+                ("Cell 5 verifies the pack", "verify_evidence_pack"), ("The run itself", "run_pipeline"),
+                ("Cell 3 opens the run", "open_run"), ("The settings a cell makes", "make_settings"),
+                ("Replaying a run from its record", "replay_chat")]
+
+def engine_facts():
+    """Every function of verifier.py, what it calls, what calls it, where it lives and what it
+    does - read from the file's syntax tree and its section headers."""
+    source = open(ENGINE_FILE, encoding="utf-8").read()
+    lines = source.split("\n")
+    tree = ast.parse(source)
+    sections = [(number, line.split("- ")[-1].strip()) for number, line in enumerate(lines, start=1)
+                if line.startswith("# " + "-" * 20)]
+    def section_of(line_number):
+        found = [title for start, title in sections if start <= line_number]
+        return found[-1] if found else "(the top of the file)"
+    facts = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            continue
+        body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+        said = ast.get_docstring(node) or ""
+        facts[node.name] = {
+            "name": node.name, "kind": "class" if isinstance(node, ast.ClassDef) else "function",
+            "first_line": node.lineno, "last_line": node.end_lineno, "size": node.end_lineno - node.lineno + 1,
+            "section": section_of(node.lineno), "body": body,
+            "says": " ".join(said.split("\n")[0].split())[:300] or "(no description)",
+            "asks_the_model": "load_prompt(" in body or "ctx.ask(" in body or "state.ask(" in body,
+            "checks_an_answer": node.name.startswith("validate") or "Rejected(" in body,
+            "writes": sorted(set(re.findall(r'"([a-z_]+)":\s*(?:\[|list\()', "".join(re.findall(r"StepResult\((\{.*?\})", body, re.S))))),
+            "reads": sorted(set(re.findall(r'read\("([a-z_]+)"\)', body))),
+        }
+    for name, fact in facts.items():
+        # a name used at all, not only called with brackets: a step that hands another step to combine()
+        # refers to it by name, and that is a call as much as any other
+        fact["calls"] = sorted(other for other in facts if other != name
+                               and re.search(r"(?<![\w.])%s(?![\w])" % re.escape(other), fact["body"]))
+    for name in facts:
+        facts[name]["called_by"] = sorted(other for other in facts if name in facts[other]["calls"])
+    for number, name in enumerate(sorted(facts), start=1):
+        facts[name]["ref"] = "F-%04d" % number
+    return facts, sections, len(lines)
+
+def reached_from(facts, root):
+    """Every function the work of one root reaches, following the calls."""
+    seen, queue = {root} & set(facts), [root] if root in facts else []
+    while queue:
+        for child in facts[queue.pop()]["calls"]:
+            if child not in seen:
+                seen.add(child)
+                queue.append(child)
+    return seen
+
+def engine_tree(facts, rows_max=4000):
+    """The same call flow as a tree: each thing the tool produces, then what it calls, and what
+    those call, numbered so that sorting the ID columns gives the tree back. A function already
+    shown is one row pointing at where it stands in full; a function that calls itself stops."""
+    rows, shown = [], {}
+    def emit(name, map_id, level, path):
+        if len(rows) >= rows_max or name not in facts:
+            return
+        fact = facts[name]
+        note = ""
+        if name in path:
+            note = "calls itself; the descent stops here"
+        elif name in shown:
+            note = "shown in full at %s" % shown[name]
+        row = {"map_id": map_id, "level": level, "function": name, "ref": fact["ref"], "section": fact["section"],
+               "lines": "%d-%d" % (fact["first_line"], fact["last_line"]), "size": fact["size"],
+               "says": fact["says"], "calls": "; ".join(fact["calls"]), "note": note}
+        for position, part in enumerate(map_id.split(".")[:MAP_ID_COLUMNS], start=1):
+            row["id%d" % position] = part
+        rows.append(row)
+        if note:
+            return
+        shown[name] = map_id
+        width = max(2, len(str(len(fact["calls"]))))
+        for position, child in enumerate(fact["calls"], start=1):
+            emit(child, "%s.%0*d" % (map_id, width, position), level + 1, path | {name})
+    for number, (label, root) in enumerate(ENGINE_ROOTS, start=1):
+        if root in facts:
+            emit(root, "%02d" % number, 0, frozenset())
+            rows[[r["map_id"] for r in rows].index("%02d" % number)]["says"] = \
+                "%s - %s" % (label, facts[root]["says"])
+    return rows
+
+def build_engine_map(target=None):
+    """Write the engine's own map as a workbook: Engine_Info, Functions, Function_Map, Sections
+    and Records. Laid out like Output.xlsx - frozen headers, filters, grouped rows, and a
+    reference in one sheet linking to its row in another."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    facts, sections, total_lines = engine_facts()
+    tree = engine_tree(facts)
+    target = target or os.path.join(os.path.dirname(ENGINE), "Engine_Map.xlsx")
+    book = openpyxl.Workbook()
+    book.remove(book.active)
+    blue, green, orange = "D9E1F2", "E2EFDA", "FCE4D6"
+    def sheet_of(name, headers, rows, widths, colours):
+        sheet = book.create_sheet(name)
+        for number, (header, width, colour) in enumerate(zip(headers, widths, colours), start=1):
+            cell = sheet.cell(row=1, column=number, value=header)
+            cell.font, cell.fill = Font(bold=True), PatternFill("solid", start_color=colour)
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            sheet.column_dimensions[get_column_letter(number)].width = width
+        for row_number, row in enumerate(rows, start=2):
+            for number, value in enumerate(row, start=1):
+                cell = sheet.cell(row=row_number, column=number, value=value)
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+        sheet.freeze_panes = "B2"
+        sheet.auto_filter.ref = "A1:%s%d" % (get_column_letter(len(headers)), max(1, len(rows) + 1))
+        return sheet
+    # --- what this workbook is
+    roots = [label for label, root in ENGINE_ROOTS if root in facts]
+    info = [("The file", "engine/verifier.py", "%d lines, %d functions and classes, %d sections" %
+             (total_lines, len(facts), len(sections))),
+            ("Functions", "one row each", "what it does, where it lives, what it calls and what calls it"),
+            ("Function_Map", "the same flow as a tree", "from each thing the tool produces (%s) down to the "
+             "functions that do the work; sorting the ID columns gives the tree back" % ", ".join(roots[:4]) + ", …"),
+            ("Sections", "the file's own headings", "how many lines and functions each holds"),
+            ("Records", "what carries work between steps", "each kind of record, which function writes it and which read it"),
+            ("How to read a row of Function_Map", "one function a row",
+             "indented under the function that calls it; a function already shown points at where it stands in full"),
+            ("Where it comes from", "read from the code",
+             "every row is read from verifier.py by its syntax tree, so this map cannot drift from the code")]
+    sheet_of("Engine_Info", ["What", "Item", "Detail"], info, [34, 30, 96], [blue, blue, green])
+    # --- the inventory
+    order = sorted(facts, key=lambda name: facts[name]["first_line"])
+    rows = [(facts[name]["ref"], name, facts[name]["kind"], facts[name]["section"],
+             "%d-%d" % (facts[name]["first_line"], facts[name]["last_line"]), facts[name]["size"],
+             facts[name]["says"], "; ".join(facts[name]["calls"]), "; ".join(facts[name]["called_by"]),
+             "; ".join(label for label, root in ENGINE_ROOTS if name in reached_from(facts, root)),
+             "asks the model" if facts[name]["asks_the_model"] else "checks an answer" if facts[name]["checks_an_answer"] else "")
+            for name in order]
+    functions = sheet_of("Functions", ["Ref", "Function", "Kind", "Section", "Lines", "Size", "What it does",
+                                       "Calls", "Called by", "Reached from", "Where the model enters"],
+                         rows, [10, 30, 10, 40, 14, 8, 80, 50, 50, 50, 20],
+                         [blue, blue, blue, blue, blue, blue, green, orange, orange, orange, orange])
+    where = {facts[name]["ref"]: number for number, name in enumerate(order, start=2)}
+    # --- the tree
+    headers = ["MapID%d" % n for n in range(1, MAP_ID_COLUMNS + 1)] + \
+              ["Level", "Function", "Function ref", "Section", "Lines", "Size", "What it does", "Calls", "Note"]
+    body = [tuple(row.get("id%d" % n, "") for n in range(1, MAP_ID_COLUMNS + 1)) +
+            (row["level"], row["function"], row["ref"], row["section"], row["lines"], row["size"],
+             row["says"], row["calls"], row["note"]) for row in tree]
+    map_sheet = sheet_of("Function_Map", headers, body,
+                         [7] * MAP_ID_COLUMNS + [7, 30, 12, 34, 14, 8, 70, 44, 34],
+                         [blue] * MAP_ID_COLUMNS + [blue, blue, orange, blue, blue, blue, green, orange, orange])
+    map_sheet.sheet_properties.outlinePr.summaryBelow = False
+    map_sheet.column_dimensions.group(get_column_letter(1), get_column_letter(MAP_ID_COLUMNS), outline_level=1)
+    at_function = MAP_ID_COLUMNS + 2
+    for number, row in enumerate(tree, start=2):
+        if row["level"]:
+            map_sheet.row_dimensions[number].outline_level = min(row["level"], 7)
+        map_sheet.cell(row=number, column=at_function).alignment = Alignment(wrap_text=True, vertical="top",
+                                                                            indent=min(row["level"], 15))
+        cell = map_sheet.cell(row=number, column=at_function + 1)
+        if cell.value in where:
+            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'Functions'!A%d" % where[cell.value])
+            cell.style = "Hyperlink"
+    for number, name in enumerate(order, start=2):
+        cell = functions.cell(row=number, column=1)
+        first = next((row for row in tree if row["function"] == name and not row["note"]), None)
+        if first:
+            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'Function_Map'!A%d" %
+                                       (2 + [row["function"] for row in tree].index(name)))
+            cell.style = "Hyperlink"
+    # --- the file's own sections
+    bounds = sections + [(total_lines + 1, "")]
+    section_rows = []
+    for (start, title), (nxt, _) in zip(sections, bounds[1:]):
+        inside = [name for name in facts if start <= facts[name]["first_line"] < nxt]
+        section_rows.append((title, start, nxt - start, len(inside), "; ".join(sorted(inside))[:300]))
+    sheet_of("Sections", ["Section", "First line", "Lines", "Functions", "Which functions"],
+             sorted(section_rows, key=lambda row: row[1]), [54, 12, 10, 12, 90], [blue, blue, blue, blue, green])
+    # --- what carries work from step to step
+    kinds = sorted({kind for fact in facts.values() for kind in fact["writes"] + fact["reads"]})
+    record_rows = [(kind,
+                    "; ".join(sorted(name for name in facts if kind in facts[name]["writes"])),
+                    "; ".join(sorted(name for name in facts if kind in facts[name]["reads"]))) for kind in kinds]
+    sheet_of("Records", ["Record kind", "Written by", "Read by"], record_rows, [30, 46, 80], [blue, orange, green])
+    book.save(target)
+    return target, len(facts), len(tree)
 
 def build_notebook(target=NOTEBOOK):
-    """The notebook, five cells, written from the sources above so that it is never edited by hand."""
+    """The notebook, four cells, written from the sources above so that it is never edited by hand."""
     cells = [{"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": text.splitlines(keepends=True)}
-             for text in (CELL_1, CELL_2, CELL_3, CELL_4, CELL_5)]
+             for text in (CELL_1, CELL_2, CELL_3, CELL_4)]
     notebook = {"cells": cells, "metadata": {"language_info": {"name": "python"},
                                              "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
                 "nbformat": 4, "nbformat_minor": 5}
@@ -1403,14 +1448,13 @@ if __name__ == "__main__":
         for row in rows:
             print("%-12s %6d %7d %9.0f%% %s" % (row["name"], row["total"], row["budget"], 100 * row["share"], "within budget" if row["ok"] else "OVER BUDGET"))
         sys.exit(0 if within else 1)
-    if what == "release":
-        sys.exit(release(sys.argv[2:]))
     if what == "check-docs":
         sys.exit(check_docs())
+    if what == "engine-map":
+        where, functions, rows = build_engine_map()
+        print("%s: %d functions, %d rows of the tree" % (where, functions, rows))
     if what == "notebook":
-        print(build_notebook(), "with 5 cells")
-    if what == "harness":
-        harness(sys.argv[2:])
+        print(build_notebook(), "with 4 cells")
     if what == "recall":
         recall(sys.argv[2:] or ["A_minimal", "F_capital"])
     if what == "map-bar":

@@ -3,11 +3,12 @@ import json
 import os
 import threading
 import time
+import tempfile
 import unittest
 
 import helpers
-import core
-import runner
+import verifier
+core = runner = verifier   # the engine is one module now
 import failing_chat
 import standin_chat
 
@@ -240,119 +241,60 @@ class ResumeAndBreaker(unittest.TestCase):
 
 
 class Store(unittest.TestCase):
-    def test_round_trip_sync_only_changed_and_restore(self):
-        """Three files. Records of every kind go to one; the single-object kinds to the manifest;
-        sync copies only what changed; a fresh store restores itself from the run folder."""
-        store, folder = fresh_store()
-        os.makedirs(store.local_dir)
-        store.append("chunks_canon", [{"ref": "C-0001", "text": "\u03c1 is rho"}, {"ref": "C-0002", "text": "b"}])
-        store.append("coverage", [{"total": 2}])
-        self.assertEqual(store.read("chunks_canon")[0]["text"], "\u03c1 is rho")
-        self.assertEqual(store.read("coverage"), [{"total": 2}])
-        self.assertEqual(sorted(store.sync()), ["manifest.json", "records.jsonl"])
-        self.assertEqual(store.sync(), [])
-        store.append("chunks_canon", [{"ref": "C-0003", "text": "c"}])
-        self.assertEqual(store.sync(), ["records.jsonl"])
-        for batch in range(4):
-            store.append_calls([{"question_id": "q%d" % batch, "response_text": "x" * 400, "final": True}])
-        self.assertEqual(len(store.read_calls()), 4)
+    """The record of a run is one workbook a person can open, and everything written to it comes back
+    exactly, however long the text."""
+
+    def store(self):
+        folder = tempfile.mkdtemp(prefix="store_")
+        return runner.AuditStore(os.path.join(folder, "local"), os.path.join(folder, "run", "_audit"))
+
+    def test_everything_written_comes_back_from_the_workbook(self):
+        store = self.store()
+        store.append("chunks_canon", [{"ref": "C-0001", "text": "a paragraph", "numbers": [1, 2.5]}])
+        store.append("run_manifest", [{"run_id": "R-1", "outline_confirmed_by": "analyst.one"}])
+        store.append_calls([{"question_id": "q1", "question_type": "judge-unit-to-canon", "outcome": "accepted",
+                             "main_prompt": "x" * 70000}])                     # longer than a cell holds
         store.sync()
-        self.assertEqual(sorted(os.listdir(store.remote_dir)), ["calls.jsonl.gz", "manifest.json", "records.jsonl"],
-                         "the record of a run is exactly three files")
-        other = runner.AuditStore(os.path.join(folder, "local2"), store.remote_dir)
-        other.restore()
-        self.assertEqual(len(other.read("chunks_canon")), 3)
-        self.assertEqual(len(other.read_calls()), 4)
-        self.assertEqual(other.read("coverage"), [{"total": 2}])
+        self.assertEqual(os.listdir(os.path.dirname(store.target())), ["Audit_Log.xlsx"])
+        again = runner.AuditStore(store.local_dir, store.remote_dir)
+        self.assertEqual(again.read("chunks_canon"), [{"ref": "C-0001", "text": "a paragraph", "numbers": [1, 2.5]}])
+        self.assertEqual(again.read("run_manifest")[0]["outline_confirmed_by"], "analyst.one")
+        self.assertEqual(len(again.read_calls()[0]["main_prompt"]), 70000, "text longer than a cell is written in parts")
 
-    def test_a_read_during_a_half_written_line_sees_only_the_complete_lines(self):
-        """Cell 4 reads the record while the run's own thread writes it. A line caught half way
-        is left for the next read, never parsed, never an exception in the status cell."""
-        store, _ = fresh_store()
-        os.makedirs(store.local_dir)
-        store.append("a", [{"n": 1}])
-        with open(store.path(runner.RECORDS_FILE), "a", encoding="utf-8") as handle:
-            handle.write('{"kind": "a", "record": {"n": 2, "text": "half of a lo')
-        self.assertEqual(store.read("a"), [{"n": 1}])
-        with open(store.path(runner.RECORDS_FILE), "a", encoding="utf-8") as handle:
-            handle.write('ng line"}}\n')
-        self.assertEqual(store.read("a"), [{"n": 1}, {"n": 2, "text": "half of a long line"}])
+    def test_the_workbook_is_never_seen_half_written(self):
+        store = self.store()
+        store.append("chunks_canon", [{"ref": "C-0001", "text": "first"}])
+        store.sync()
+        import openpyxl
+        store.append("chunks_canon", [{"ref": "C-0002", "text": "second"}])
+        store.sync()
+        book = openpyxl.load_workbook(store.target(), read_only=True)
+        self.assertEqual(book["Records"].max_row - 1, 2)
+        self.assertEqual(sorted(book.sheetnames), ["Model_Calls", "Records", "Run", "Steps"])
 
-    def test_the_manifest_is_never_seen_half_written(self):
-        """The manifest is rewritten whole; it is written beside and swapped in, so a reader in
-        the other thread sees the old one or the new one and never an empty file."""
-        store, _ = fresh_store()
-        os.makedirs(store.local_dir)
-        store.append("run_manifest", [{"run_id": "r1"}])
-        self.assertFalse(os.path.exists(store.path(runner.MANIFEST_FILE + ".writing")))
-        self.assertEqual(store.read("run_manifest"), [{"run_id": "r1"}])
-
-    def test_a_record_kind_is_read_back_in_the_order_written_and_kinds_do_not_mix(self):
-        store, _ = fresh_store()
-        os.makedirs(store.local_dir)
-        store.append("a", [{"n": 1}]); store.append("b", [{"n": 2}]); store.append("a", [{"n": 3}])
-        self.assertEqual(store.read("a"), [{"n": 1}, {"n": 3}])
-        self.assertEqual(store.read("b"), [{"n": 2}])
-        self.assertEqual(store.read("nothing"), [])
-
-    def test_call_files_have_the_same_bytes_for_the_same_records(self):
-        contents = []
-        for _ in range(2):
-            store, _folder = fresh_store()
-            os.makedirs(store.local_dir)
-            store.append_calls([{"question_id": "q1", "final": True}])
-            time.sleep(0.01)
-            with open(store.path(runner.CALLS_FILE), "rb") as handle:
-                contents.append(handle.read())
-        self.assertEqual(contents[0], contents[1])
-
-
-class Paths(unittest.TestCase):
-    def test_run_id_collision_gives_a_letter(self):
-        import datetime
-        projects = os.path.join(helpers.scratch(), "Projects")
-        now = datetime.datetime(2026, 9, 17, 10, 15)
-        first = runner.open_run(projects, "DEMO", "2026-09-17", now=now, scratch_root=helpers.scratch())
-        second = runner.open_run(projects, "DEMO", "2026-09-17", now=now, scratch_root=helpers.scratch())
-        self.assertEqual((first.run_id, second.run_id), ("Run_2026-09-17_1015", "Run_2026-09-17_1015b"))
-
-    def test_model_id_and_path_budget_are_refused_in_plain_words(self):
-        self.assertIn("at most 24 characters", runner.check_model_id("x" * 25))
-        self.assertIn("letters, digits", runner.check_model_id("bad id!"))
-        self.assertEqual(runner.check_model_id("PD_Model-7"), "")
-        deep = os.path.join(helpers.scratch(), "a_rather_long_folder_name_for_projects")
-        with self.assertRaises(ValueError) as refused:
-            runner.open_run(deep, "M" * 24, "2026-09-17", scratch_root=helpers.scratch())
-        self.assertIn("shorter", str(refused.exception))
-
-    def test_setup_creates_readmes_and_reports_what_is_missing(self):
-        projects = os.path.join(helpers.scratch(), "Projects")
-        project_dir, missing = runner.setup_project(projects, "DEMO", "2026-09-17")
-        self.assertEqual(len(missing), 3)
-        self.assertTrue(os.path.exists(os.path.join(project_dir, "Inputs", "2_Model_Package", "README.txt")))
-
-    def test_settings_are_an_allow_list(self):
-        with self.assertRaises(ValueError):
-            runner.make_settings({"llm_token": "secret"})
-
+    def test_one_store_for_one_run_folder(self):
+        """Two stores on one run folder would overwrite each other's records."""
+        folder = tempfile.mkdtemp(prefix="store_")
+        paths = type("P", (), {"local_dir": os.path.join(folder, "local"), "audit_dir": os.path.join(folder, "_audit")})()
+        runner.OPEN_STORES.clear()
+        self.assertIs(runner.open_store(paths, {}), runner.open_store(paths, {}))
 
 class RunnerAndWorkbook(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.projects = os.path.join(helpers.scratch(), "Projects")
         cls.paths = runner.open_run(cls.projects, "DEMO", scratch_root=helpers.scratch())
-        cls.settings = runner.make_settings({"require_outline_confirmation": True})
+        cls.settings = runner.make_settings({})
         cls.first = runner.run_pipeline(cls.paths, cls.settings, chat=standin_chat.chat)
 
-    def test_run_stops_at_the_human_step_and_resumes_after_confirmation(self):
-        self.assertEqual(self.first["state"], "waiting for a person")
-        self.assertIn("cell 4", self.first["message"])
-        self.assertEqual(self.first["steps_run"][-1], "extract-concepts", "before the person: reading, the graph, and the concepts code finds")
-        runner.confirm_outline(self.paths, self.settings, "reviewer-1")
+    def test_a_run_goes_from_end_to_end_and_repeats_no_finished_step(self):
+        """There is no person in the middle of a run: it reads, maps, asks the model and judges, and a
+        second call carries on where the first stopped rather than doing anything twice."""
+        self.assertEqual(self.first["state"], "finished", self.first)
+        self.assertEqual(self.first["steps_run"],
+                         ["prepare-run", "read-inputs", "build-map", "read-with-ai", "link-units"])
         second = runner.run_pipeline(self.paths, self.settings, chat=standin_chat.chat)
-        self.assertNotIn("prepare-run", second["steps_run"], "a finished step was repeated")
-        self.assertEqual(second["steps_run"][:5], ["interpret-code", "judge-concepts", "find-candidates", "map-implementation", "judge-links"],
-                         "after the person: the model's concepts, the search that puts them first, the map's agents, then the judge")
+        self.assertEqual(second["steps_run"], [], "a finished step was repeated")
 
     def test_pipeline_refuses_an_unknown_function_and_an_unversioned_step(self):
         """pipeline.yaml is the one place a step is named, versioned and mapped to its function.
@@ -363,12 +305,12 @@ class RunnerAndWorkbook(unittest.TestCase):
         with open(os.path.join(runner.ENGINE_DIR, "pipeline.yaml"), encoding="utf-8") as handle:
             text = handle.read()
         with open(os.path.join(folder, "pipeline.yaml"), "w", encoding="utf-8") as handle:
-            handle.write(text.replace("carried_out_by: runner.prepare_run", "carried_out_by: os.system", 1))
+            handle.write(text.replace("carried_out_by: prepare_run", "carried_out_by: os.system", 1))
         with self.assertRaises(ValueError) as refused:
             runner.load_pipeline(folder)
         self.assertIn("not a function this engine offers", str(refused.exception))
         with open(os.path.join(folder, "pipeline.yaml"), "w", encoding="utf-8") as handle:
-            handle.write(text.replace('    version: "0.0.2"\n    carried_out_by: runner.prepare_run', "    carried_out_by: runner.prepare_run", 1))
+            handle.write(__import__("re").sub(r"  version: [^\n]*\n(  carried_out_by: prepare_run)", r"\1", text, count=1))
         with self.assertRaises(ValueError) as refused:
             runner.load_pipeline(folder)
         self.assertIn("has no 'version'", str(refused.exception))
@@ -378,7 +320,7 @@ class RunnerAndWorkbook(unittest.TestCase):
         layout = runner.load_layout()
         workbook = openpyxl.load_workbook(os.path.join(self.paths.outputs_dir, "Output.xlsx"))
         self.assertEqual(workbook.sheetnames, [sheet["name"] for sheet in layout["sheets"]])
-        self.assertEqual(len(workbook.sheetnames), 8)
+        self.assertEqual(len(workbook.sheetnames), 7)
         for sheet_layout in layout["sheets"]:
             sheet = workbook[sheet_layout["name"]]
             self.assertLessEqual(len(sheet.title), 31)
@@ -389,9 +331,7 @@ class RunnerAndWorkbook(unittest.TestCase):
             self.assertEqual(list(sheet.merged_cells.ranges), [])
             self.assertTrue(all(cell.alignment.wrap_text for cell in sheet[1]))
             self.assertTrue(sheet.protection.sheet)
-        flagged = workbook["Flagged_Items"]
-        yellow = [cell.value for cell in flagged[1] if cell.fill.start_color.rgb.endswith("FFFF00")]
-        self.assertEqual(yellow, ["Decision", "Reviewer", "Role", "Rationale"])
+        self.assertNotIn("Flagged_Items", workbook.sheetnames, "the tool raises nothing for a person to decide")
         info = {row[1]: row[2] for row in workbook["Model_Package_Info"].iter_rows(min_row=2, values_only=True)}
         self.assertEqual(info["Model ID"], "DEMO")
         self.assertIn("Run progress", info)

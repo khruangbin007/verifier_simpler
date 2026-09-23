@@ -19,7 +19,6 @@ It is not tied to any sector. The methodology can be about anything the package 
 ```
 Run_2026-09-22_1430/
   Output.xlsx               eight sheets: what was read, what was linked, what was checked, what is flagged
-  Validation_Report.docx    the same, as a report a person can read end to end
   _audit/
     records.jsonl           every record of the run, one per line
     calls.jsonl.gz          every exchange with the model
@@ -57,11 +56,11 @@ Twelve rules were set at the start and one was added when reading was rebuilt. E
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, read into another form, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
 | R14 | The map is exhaustive and verifiable. Every step of the Model Implementation Map is parsed from the code or quotes it word for word; every model unit is a step of the map, belongs to one, or is in the branch of units no final output reaches; every step ends at a named raw input; and what the tool cannot follow is a named gap, never a silence. |
 
-**The wording rule.** The tool rates nothing. Words that grade how serious something is, and the two policy terms that classify an observation, never appear in anything the tool produces, because grading and classifying are decisions of the validation policy and of people, not of a tool. The tool says what it observed, where, and what a sensible next step would be. The list of words lives in one place in `core.py`, and a test scans the engine, the workbook, the report and this manual for them on every build.
+**The wording rule.** The tool rates nothing. Words that grade how serious something is, and the two policy terms that classify an observation, never appear in anything the tool produces, because grading and classifying are decisions of the validation policy and of people, not of a tool. The tool says what it observed, where, and what a sensible next step would be. The list of words lives in one place in `verifier.py`, and a test scans the engine, the workbook, the report and this manual for them on every build.
 
 ## 4. Vocabulary
 
-Every word the tool can show in a status, a relation or a "how established" cell comes from one list in `core.py`. The tables are generated from it.
+Every word the tool can show in a status, a relation or a "how established" cell comes from one list in `verifier.py`. The tables are generated from it.
 
 **Statuses that are clean**
 
@@ -167,23 +166,22 @@ Every word the tool can show in a status, a relation or a "how established" cell
 
 # Part II — Running a review
 
-## 5. The notebook, five cells
+## 5. The notebook, four cells
 
-The notebook is `Verifier.ipynb`. It has five cells, each run in order the first time; cells 4 and 5 are run again as the review goes on.
+The notebook is `Verifier.ipynb`. Four cells, run in order.
 
 | Cell | What it does | When to run it again |
 |---|---|---|
-| **cell 1** | Makes the widgets, installs the packages if any is missing (pinned to what the cluster already has), loads the engine, and reads the endpoint, token and user id from the widgets. | After anything restarts Python, and after pasting a fresh token. |
-| **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `live()` each time it is called. Set `USE_STANDIN = True` to try the notebook without a model. Ends with a one-word self-test. | After changing `chat()`. |
-| **cell 3** | Makes the project folder if it is new and says what to put where. Reads every input file, with no model involved, and shows the outline of the methodology and what each file was read as. | After adding or changing an input, or adding `Inputs/tag_rules.yaml`. |
-| **cell 4** | The first time: records that you confirmed the outline and starts the model steps and the checks in the background. Every time after: shows where the run stands. `PAUSE` and `STOP` at the top do what they say. | To see progress; to pause or stop. |
-| **cell 5** | After the run waits for a person: reads your determinations back from `Output.xlsx` and verifies the evidence pack. `APPENDIX` at the top runs a maintainer's check instead. | After every round of determinations. |
+| **cell 1** | Makes the widgets, installs a package only if one the engine imports is missing, loads the engine, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
+| **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `live()` at the moment it is called. Asks it one question, then makes the project's `Inputs` folders and prints their paths | when the gateway or your id changes |
+| **cell 3** | Reads every input file, maps how the model computes what it returns, and asks your model to interpret the code, name the concepts, close the gaps and judge every link. Prints what each step did | after a token expires, a cluster restarts, or you add an input: finished steps are never repeated |
+| **cell 4** | Checks the finished run folder against its own record | after any run |
 
-**The widgets.** Endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the id recorded beside every decision you make; the model id (04); an existing project date and run to resume, or empty for new (05, 06); the Projects folder (07); the package index (08); concurrency and token cap (09, 10); a scratch folder, normally empty (11); and the subject of the documents (12), such as `financial`, which tells the model what kind of concepts to look for and names the concepts column after it.
+**The widgets.** Endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the name recorded against the run; the model id (04) and project date (05); the run to open (06); the projects folder (07); a package index (08); how many calls at once (09) and the token cap (10); a scratch folder (11); and the subject of the documents (12), which names the concepts column.
 
-**The token.** It is read at the moment `chat()` is called, never stored. When it runs out mid-run, cell 4 says the run is waiting for a fresh one: paste it into widget 02, run cell 1, and the run goes on. No question is repeated.
+**The token.** It is read at the moment `chat()` is called, never stored. When it runs out mid-run, cell 3 says so and stops; paste a fresh one into widget 02 and run cell 3 again, and it carries on from the step that stopped.
 
-**Three ways to run the model steps.** Mode A (the default) runs them in a background thread and cell 4 shows progress. Mode C runs them in the foreground and stops by itself after `FOREGROUND_MINUTES`, so that a token can be renewed; run cell 4 again to continue.
+**How long a run may take.** Cell 3 works in the cell itself, so you can see it and interrupt it. `FOREGROUND_MINUTES` at the top of the cell is how long it may work before it stops by itself and asks you to run it again; it is 600 by default, which is longer than any run we have seen.
 
 ## 6. What goes in
 
@@ -216,7 +214,6 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 | `Concepts` | one row per concept of the model, with every form it is written in and where |
 | `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, one row per variable |
 | `Mapping_Coverage` | one row per final output and one per corner: what is covered and what is not |
-| `Flagged_Items` | every question for a person, with its evidence and the four yellow columns for your determination |
 
 **How to read one row of the map.** One row is one variable: where it sits (the Map ID, a column per level, and how deep it is), the variable itself with the unit that defines it, the code as written and its concept, the function that defines it with its unit, and what it is computed from — each of those a row beneath it. Section 8 describes the sheet in full.
 
@@ -260,15 +257,11 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 | 5 | linked and consistent | Traced to methodology | Linked to the methodology, directly or through a linked unit of the package, and consistent. |
 | 6 | checkable and not linked | Not traced - for review | States something checkable, and nothing was linked to it. |
 
-Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit test*, *Narrative - nothing to check*. The other four need attention, and every unit with one of them is named by at least one row of `Flagged_Items`. `Mapping_Coverage` counts the same statuses; its numbers equal what you get by filtering *Overall status* on the two mapping sheets, and the tool stops a run in which they would not.
-
 **The value-comparison rule** is one rule, used for parameter tables, numbers in code, numbers in roxygen text and numbers in the documentation. Its full text is on `Model_Package_Info`. In short: percent, basis points and scientific notation are converted first; a value agrees at stated precision when rounding it to the decimals of the methodology's value gives that value; there is no hidden tolerance. A cell reads like "package 0.10, methodology 0.15 (C-0017 row Retail): differs".
 
 **The mathematical check.** For a linked function or statement and a passage that states a formula, the tool aligns the symbols first (shown as "with rho = ρ"), then tries to show symbolically that both sides are equal, then evaluates both at 200 seeded points, including points at and around every threshold. *Differs* always comes with a counterexample: the inputs and both results. *Could not be decided* names one reason from a fixed list and is never clean.
 
-**How to read a path.** *What was observed* on `Flagged_Items` ends with the supporting path, hop by hop: the unit, the function it sits in, the table it reads, the passage it corresponds to with how that was established, the roxygen block and documentation passage that describe it.
-
-**The sheets and columns.** As laid out in the one place that defines them, `runner.WORKBOOK_LAYOUT_YAML`:
+**The sheets and columns.** As laid out in the one place that defines them, `verifier.WORKBOOK_LAYOUT_YAML`:
 
 **Model_Package_Info**
 
@@ -336,8 +329,6 @@ Clean statuses: *Traced to methodology*, *Supporting code (justified)*, *Unit te
 
 Every number on this sheet is counted from the rows written to the map and to the Chunks sheets, so the sheet and the map always agree. The coverage identity is checked separately, by counting the statuses on `Chunks_Model` and `Chunks_Doc` against what the step account-coverage counted.
 
-**Flagged_Items**
-
 | Column | Colour group | What it shows |
 |---|---|---|
 | Item id | identity |  |
@@ -357,17 +348,14 @@ Every number on this sheet is counted from the rows written to the map and to th
 | Role | reviewer input |  |
 | Rationale | reviewer input |  |
 
-## 8. Confirming the outline, and choosing what is in scope
+## 8. The Model Implementation Map
 
-The reading steps run before any model call is spent, and cell 3 shows the outline of the methodology as it was read: every heading at its depth. Check it against the document's own table of contents. Where the tool read a file whose shape it did not know, `Model_Package_Info` says which tag was read as what and why, and what the built-in rules would have done instead. Read those rows before confirming.
 
 **The Model Implementation Map.** The sheet `Model_Implementation_Map` shows how the model computes what it returns, and nothing else: only what a calculation reaches is on it. One row is one variable. Reading a row from left to right: where it sits (the Map ID, one column per level — `MapID1`, `MapID2`, … — so any level can be filtered, and a parent leaves the deeper columns empty; the columns fold away with the + above them), then **Output Variable**, the one variable that row is about, with the model unit that defines it, the code as written, and the concept it is (a `K-` reference); then **Function Name**, the function that defines it, with its model unit; then **Arguments**, what the variable is computed from, separated by semicolons. Every name in Arguments is the Output Variable of a row directly beneath it, so a value can be followed down to the raw inputs it rests on: an argument of the final output, a column of the data given, a stored table, a file, or a hard-coded number, each a row with no function of its own. A reference is a link: clicking a `M-` reference opens that unit's row on `Chunks_Model`, and a `K-` reference its row on `Concepts`. The rows are grouped, each parent above its members, so a branch opens and closes with the + and − at the left; Excel groups eight levels deep and a deeper row is indented instead.
 
 A called function is entered with the arguments that call gives it, so what it computes inside stands under the value it produces, and a parameter is never a row of its own: the row is the argument the call gave it. A function that calls itself stops there, keeping what the call is given. What no final output reaches is **not on this sheet**: dead code, a second way in, a function only the tests call, the methodology no step implements and the documentation describing nothing in the map are all counted on `Mapping_Coverage`, where each has its row.
 
 **Choosing the final outputs.** Code proposes as a final output a function nothing in the package calls that is exported or that the package's tests or vignettes call (step 05a); cell 3 and cell 4 both say which. Where code proposes none, every function nothing in the package calls stands in, so the map always has a top.
-
-Then set `OUTLINE_CONFIRMED = True` at the top of cell 4 and run it; the confirmation is recorded with your id.
 
 ## 8a. Concepts
 
@@ -383,21 +371,6 @@ Then set `OUTLINE_CONFIRMED = True` at the top of cell 4 and run it; the confirm
 
 **How concepts steer the mapping.** The search for corresponding passages (step 07c) runs after the concepts, and a passage that names the same model concept as the unit comes first: that signal counts `concept_weight` times as much as any other and is the first to fill the places reserved on each shortlist. The reason shown for such a candidate begins *shares the concept*.
 
-## 9. Working through `Flagged_Items`
-
-1. Download `Output.xlsx` from `the run folder`.
-2. On `Flagged_Items`, fill the four **yellow** columns for the items you decide: *Decision* (`Requires action` or `No action needed`; capital letters do not matter), *Reviewer*, *Role* and *Rationale*. A decision without all three other cells is reported back and not recorded. You may sort and filter; the tool finds rows by *Item id*, never by position. Anything typed outside the yellow columns is ignored.
-3. Upload the workbook into the same `the run folder` folder, under any name. The tool recognises it by the identity stored inside the file, keeps a copy of exactly what you uploaded in `_audit/uploads/`, and refuses in plain words a workbook of another run or a file in the old `.xls` format.
-4. Run `cell 5`. It says what was recorded and what was incomplete, and rebuilds both output files. `the run folder` again holds exactly two files.
-
-What is recorded for every determination: item id, decision, reviewer, role, rationale, the time, the reviewer id of whoever ran the cell, and the SHA-256 of the uploaded workbook. Records are only ever added. Changing a decision adds a record; clearing one adds a record with the decision *Withdrawn* and the item is *Open* again. The records form a hash chain whose head appears as the *Determinations record fingerprint* on `Model_Package_Info` and on the first page of the report.
-
-A workbook you have edited and uploaded is never overwritten before it has been read in.
-
-## 10. Reading `Validation_Report.docx`
-
-The report says what was reviewed, how, and what is open, in the order a reader needs: the scope, the inputs and their fingerprints, what was read and how much of it, the coverage identity, then every flagged item with its evidence and its determination if one has been recorded. A person who has never opened the workbook can read the report alone. It is rebuilt after every step, so it always matches the workbook.
-
 ## 11. The run folder as an evidence pack
 
 The three files in `_audit/` are the record. `records.jsonl` holds every record of every kind, one per line, each tagged with its kind, in the order written and never rewritten; `calls.jsonl.gz` holds every exchange with the model, prompt and reply; `manifest.json` holds the run's identity, the fingerprint of every input, the fingerprint of every engine file that ran, the coverage account and the package as described. Cell 5 verifies a pack from these three files alone: that the inputs are the ones fingerprinted, that the engine files match the release, that re-reading the inputs gives the recorded content hashes, that the hash chains verify (the graph, the determinations, and your decisions on what is in scope and what the final outputs are), that every unit has one status and every citation resolves, and that no token was written anywhere. A changed byte in an input, a removed record or an edited status is caught.
@@ -410,7 +383,6 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 | `cell 3` says "STOPPED BEFORE RESTARTING PYTHON" | The install changed something the runtime needs to start, and `cell 3` noticed before restarting, so the session is still alive. Detach the notebook and attach it again to undo the install, and tell whoever maintains the tool which package pip named. |
 | `cell 3` says pip could not find versions that fit | The index has no version of a package the tool needs that works with this runtime's own packages. Nothing was changed. Ask for an older version of the package pip names to be added to the index. |
 | The status cell says the run waits for a fresh token | The token ran out. Paste a new one (mode B: then run `cell 1`). No question is repeated. |
-| "The time box of this foreground run is over" | Mode C stopped by itself. Paste a fresh token and run `cell 4` again. |
 | "Many calls in a row failed, so the run paused itself" | The gateway is not answering. Check it with `cell 2`, then run `cell 4` again. |
 | The cluster stopped | Start it, run `cell 1` to `cell 3` in order, choose the same run in the run widget, and run `cell 4`. The run resumes after its last finished step. |
 | An input changed | Start a **new run** in the same project. `Model_Package_Info` lists what changed since the previous run. Never edit inputs of a run that has started. |
@@ -427,8 +399,6 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
 - A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
 - Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
-- A reading guided by the model (`agentic_reading: rules`) can put a statement under the wrong heading. It cannot lose a word or add one: every answer is a choice among tags the tool showed it and families from a fixed list, and the content account on `Model_Package_Info` balances whatever the answer says. Check the changed rows at cell 4 before confirming the outline.
-- A run with `agentic_reading` on is reproducible from its recorded answers, and two fresh runs on the same inputs may cut a file it is unsure of differently. The reading notes say which files were read that way.
 - the tool reads XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv` and `.tsv`, `.xlsx`, `.rtf` and `.tex`. It does not read slide decks, OpenDocument files, e-books, old Office files (`.doc`, `.xls`, `.ppt`) or pictures on their own; each of those becomes one row on the sheet saying so, with what to save it as instead. Folders inside an Inputs corner are read, in name order; a Word lock file, Thumbs.db and a saved web page's support folder are left out and listed on `Model_Package_Info`.
 - A spreadsheet is read sheet by sheet, each sheet a heading over one table. A formula is never worked out: the value the spreadsheet saved with it is what is read, so save the workbook after it has calculated.
 - The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
@@ -442,65 +412,33 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 
 # Part III — For whoever reads the code
 
-## 14. The five modules
+## 14. The one engine file
 
-The engine is five flat files, imported in one direction: `core` imports nothing of the engine; `reading` imports `core`; `review` imports `core` and `reading`; `runner` imports all three; `develop` imports whatever it measures. Each opens with the same five-part overview (what it does, what it takes in and produces, which sheets show its results, which design rules it enforces, and how to sanity-check it). Read the overview first; it was written to be read before the code.
-
-| Module | What it holds | Reviewer |
-|---|---|---|
-| `core.py` | the record contracts and vocabulary; the machinery for asking the model and validating an answer; the baseline decisions about a document's shape; the content account; the shape digest; what a file is; which files of a folder are documents; the converters for spreadsheets, Markdown, delimited rows, RTF and LaTeX | everyone |
-| `reading.py` | the methodology and the documentation into units; the package into functions, formula statements, objects, data tables, help pages and vignettes; the guided reading of an unfamiliar file | 1 and 2 |
-| `review.py` | the graph; the search for corresponding passages; the judged links; the interpretation of code; the checks of formulas, values, rules and package documentation; statuses, flagged items and the coverage identity | 3 and 4 |
-| `runner.py` | the run folder and its record; the wrapper around `chat()`; the pipeline; the workbook and the report; the determinations; the verification of a pack | 5 |
-| `develop.py` | the measurements, the release manifest, the check of this manual against the code, the notebook | the maintainer |
-
-**How to review a module.** Read its overview. Run the tests it names. Run the sanity check it names and look at the sheet. Then read the functions in the order the overview lists them, checking each docstring's `Enforces:` line against the rule table in section 3.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the search and the judgement of every link, the concepts, the map's agents, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
 ## 15. The pipeline
 
-`engine/pipeline.yaml` names eighteen steps, in order, each with a version and the function that carries it out (`carried_out_by`). Only functions in `runner.STEP_FUNCTIONS` may be named; `runner.load_pipeline` refuses anything else, and refuses a step with no version. A step's version is part of the provenance of every record it writes.
+Five steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, and only a function the engine offers may be named.
 
-| Step | Name | Carried out by |
+| Step | Name | What it does |
 |---|---|---|
-| 01 | prepare-run | `runner.prepare_run`: fingerprints every input |
-| 02 | read-methodology | `reading.read_methodology` |
-| 03 | read-documentation | `reading.read_documentation` |
-| 04 | read-package | `reading.read_package` |
-| 05 | build-graph | `review.build_graph`: every unit a node |
-| 05a | trace-dataflow | `reading.trace_dataflow`: the package's data flow, by code alone |
-| 06 | extract-concepts | `review.extract_concepts`: the model's concepts, and where the documents write them in the same words |
-| 07c, 09 | find-candidates | `review.find_candidates`, two passes; shared concepts first |
-| 07 | confirm-outline | a person, in cell 4 |
-| 07a | interpret-code | `review.interpret_code` |
-| 07b | judge-concepts | `review.judge_concepts`: the model's guesses of synonyms and acronyms, kept apart |
-| 07d | map-implementation | `review.map_implementation`: the skill — the map's agents, where code stopped |
-| 08, 10 | judge-links | `review.judge_links`, two passes |
-| 11 | check-mathematics | `review.check_mathematics` |
-| 12 | check-values | `review.check_values` |
-| 13 | check-rules | `review.check_rules` |
-| 14 | check-package-docs | `review.check_package_docs` |
-| 15 | account-coverage | `review.account_coverage`: the identity |
-| 16 | await-determinations | a person, in the workbook |
-| 17 | record-determinations | `runner.record_determinations` |
-| 18 | build-report | `runner.build_report` |
+| 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
+| 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
+| 03 | build-map | by code alone: the graph, the data flow of the package, and the model's concepts |
+| 04 | read-with-ai | what each piece of code does, the concepts only a reader can confirm, the map's agents closing the gaps code named |
+| 05 | link-units | two passes of search and judgement: candidates by code, then the model's judgement on each |
 
-The steps that ask the model are `read-methodology`, `read-documentation` and `read-package` (only where a file's shape is in doubt and `agentic_reading` is on), `interpret-code`, `judge-concepts`, `map-implementation`, `judge-links`, `check-mathematics`, `check-values` and `check-rules`. Every other step is code alone.
-
-**The data flow (step 05a, `trace-dataflow`).** Before any model call, code traces how the package computes what it returns, function by function, into a record of its own; no unit is changed and every M- reference stays as it was. It records each value a function sets and what that value is computed from; each call of a package function, with which argument went to which parameter at that call — by name first, then by position, as R matches them — and the default of a parameter a call leaves out; each column a dplyr verb creates (`mutate`, `transmute`, `summarise`) and what it is computed from, reading a bare name inside the verb as a column of the data, and dplyr's pronouns as dplyr reads them (`.data$x` a column, `.env$x` a value of the function); the columns a join adds from a stored table, but not the keys it only matches on; pipes (`%>%` and `|>`); files read from a path as written or through `system.file`, which names a file under `inst/`; stored tables; and hard-coded numbers. What code cannot follow is a named gap with its code, for the agents: a function written in place and handed to `purrr` or `lapply`, `do.call`, `eval`, `get`, `assign`, `<<-`, and object systems (R6, S4, reference classes). It proposes the final outputs — exported functions nothing in the package calls, and those its tests and vignettes call — and lists the functions no proposed output reaches. `reading.walk_dataflow` follows the value a function returns down to where it starts, taking each call with the arguments that call was given; a recursive call is a loop that stops the descent but keeps what the call is given. This is the backbone of the Model Implementation Map; how much of `J_pipeline`'s answer key it holds is measured by `python engine/develop.py map-measure`.
-
-**The skill `map-implementation` (step 07d).** Where the traced data flow has a gap on the path from a final output, agents take over; a gap in a function no final output reaches stays named and costs no question. They are three, each a prompt of its own. The **Tracer** is given one gap, the whole function, what the tool knows of it and the names it may use, and a fixed list of actions: `open_unit`, `statements_setting`, `callers_of`, `return_of`, `columns_of` (code carries each out on the records and shows what it found), `declare_edge` (a value and what it is computed from), `declare_input` (a raw input and its kind), `done` and `give_up`. Each turn it chooses one action, as JSON; the gaps advance together, a turn at a time, within `map_hops_max` turns a gap and `map_calls_max` questions in all. An action is refused, and the gap left open with the reason, when it is not on the list, names a unit, function or table the package does not have, quotes code that is not in the function or a unit it opened word for word, declares a name its quote does not hold, or repeats an action it has taken. The **Auditor** is code: the final outputs, the functions reached and not reached, the gaps traced and open, the loops. Every turn is a question of its own, recorded, so a run replays from its record without a model; `map_with_ai` switched off leaves the gaps named and the steps unnamed.
+A step that carries out several parts keeps them in order, and a later part reads what the earlier ones have just recorded, as it would if each were still a step of its own.
 
 ## 16. How the model is used, and held
 
-The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each; what this function does, in plain words; which reader should take this file; what this tag is for. Every answer is validated by `review.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit untraced and flagged. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
+The model is asked questions whose answers are **choices among things code has already decided to show**: which of these lettered passages corresponds, quoting words from each; what this function does, in plain words; which reader should take this file; what this tag is for. Every answer is validated by `verifier.validate_answer` before anything is done with it: a quotation that is not word for word in the passage, a reference to a passage that was not shown, a planted control passage accepted, a self-contradiction — each is a refusal, and a refusal leaves the unit untraced and flagged. Nothing is repaired. A refused, failed or absent answer never stops a run and never changes an input.
 
-Every exchange is recorded, and `runner.replay_chat` answers from the record, so that a run can be reproduced without a model and its graph version compared.
-
-**Guided reading.** Where the built-in rules cannot tell what a file's tags are for, and `agentic_reading` is not `off`, the reader asks one question about the file's *shape* — a digest of its tags, never the file — and the answer names a family for each tag from a fixed list of five. The model cannot name a tag it was not shown, cannot ask for a tag to be skipped, and cannot overrule the analyst, the shipped rules or a table whose rows were counted. It speaks only where the reader guessed. The same holds for a package member the built-in tests give no reader: one question chooses which existing reader takes it, and there is no reader that means skip. `core.validate_slice_rules` and `core.validate_package_plan` hold these lines; `core.account` proves afterwards that no word was lost or added.
+Every exchange is recorded, and `verifier.replay_chat` answers from the record, so that a run can be reproduced without a model and its graph version compared.
 
 ## 17. Reading, and the content account
 
-Every file read keeps a **content account** (`core.account`). The file's smallest pieces of text are counted straight from its bytes — not from what the reader made of it — and each must end in one of five classes: in a unit's text; relocated into another field of a unit (a heading carried onto the units below it, a caption, the cells of a table); rewritten into another form (an equation into linear notation); left out under a named rule (page furniture, an attribute the rules do not read, a comment); or reported as not read. What is in none of them is counted and located on `Model_Package_Info`. In the other direction, every piece of text a unit shows must come from the file or from a transform named in the code (`core.DECLARED_MARKS`); anything else is reported as added. An account that will not close is written down and the run goes on.
+Every file read keeps a **content account** (`verifier.account`): the file's smallest pieces of text are counted straight from its bytes, then counted again in the units the tool produced, and the two must agree. A piece that is read but lands in no unit leaves the account open, and the file is named on `Model_Package_Info` with the reason, so nothing is dropped in silence.
 
 ## 18. Tests and sample projects
 
@@ -531,7 +469,6 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `foreground_minutes` | 0.0 | Time box of a foreground run; 0 means none. |
 | `sync_every_calls` | 100 | Call records are written and copied to the Workspace after this many questions. |
 | `llm_file_roll_mb` | 25.0 | Size at which a new file of call records is started. |
-| `require_outline_confirmation` | True | The AI steps wait until a person has confirmed the outline of the methodology. |
 | `second_opinion` | unchecked_only | When the second, oppositely framed question is asked: unchecked_only, all or none. |
 | `judge_supporting_code` | False | Also send supporting code by syntax to the search and the judge. |
 | `max_parameter_cells` | 5000 | A stored object with more cells is profiled and not compared. |
@@ -559,50 +496,21 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `reviewer_role` |  | The role of that person. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 | `interpret_code` | True | Ask the AI to say in plain words what each function, formula statement, top-level statement and test block does, shown with where it sits in the whole package. Fills the column LLM Interpretation on Chunks_Model. One question per piece of code; switch it off to save the calls. |
-| `agentic_reading` | off | Whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. "off" asks nothing and reads as the built-in rules read; "rules" asks one question per file the rules are unsure about and applies the answer under everything the rules already know. |
 | `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the recall ladder (`develop.recall`) switches them off one by one. |
 
 `concept_subject` (default empty): the subject of the documents, from widget 12; it tells the model what kind of concepts to look for and names the concepts column. `concept_weight` (default 2.0): how much more a shared concept counts in the search than any other signal. `concept_batch` (default 8): how many units one extraction question shows the model. `concept_candidates_max` (default 40): the most model concepts shown to the model in one question, and the most suggested for one unit. `concepts_with_ai` (default true): whether the model is asked for synonyms and acronyms code could not prove; switched off, only what code proved stands.
 
 `map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting. `map_hops_max` (default 8): the most turns the Tracer takes on one gap. `map_calls_max` (default 200): the most questions the map's agents ask in one run, the Tracer's and the Namer's together. `map_with_ai` (default true): whether the map's agents are asked at all.
 
-`agentic_reading` (default `off`): whether a reading step may ask the model what the tags of a file whose shape the tool does not know are for. `off` asks nothing; `rules` asks one question per file the rules are unsure about. The sign-off bar for turning it on is `develop.run`, run from cell 5 with `APPENDIX = "sign-off"`; it changes no setting.
-
-## 20. Categories and decision words
-
-**Concerns:** Model code, Parameter data, Package documentation, Model documentation.
-
-| Category | Suggested next step, as shown |
-|---|---|
-| Code differs from methodology | Compare the code with the cited passage, starting from the inputs shown under What was observed. |
-| Code not traced to methodology | Decide whether this code implements a part of the methodology; if so, name the passage. |
-| Mathematical check undecided | Compare the formula in the code with the cited passage by hand; the tool could not decide it. |
-| Value differs from methodology | Compare the listed rows of the package table with the cited table of the methodology. |
-| Hard-coded number not traced | Find where the methodology states this number, or confirm that it needs no statement. |
-| Parameter data not traced | Decide which table of the methodology this stored object corresponds to, if any. |
-| Parameter data not described | Check whether the stored object and each of its columns should be described in the package. |
-| Package documentation differs from code | Compare the roxygen block or help page with the function it documents. |
-| Package documentation differs from methodology | Compare the value stated in the package documentation with the cited passage. |
-| Documentation statement not traced | Decide which passage of the methodology this statement of the documentation rests on, if any. |
-| Documentation differs from methodology | Compare the statement in the documentation with the cited passage of the methodology. |
-| Documentation differs from code | Compare the statement in the documentation with the cited unit of the package. |
-| Item could not be read or assessed | Review this item by hand; the tool could not read or assess it. |
-| AI answer could not be used | Review this unit by hand, or run the tool again; the AI's answer could not be used. |
-| AI answers disagree | Read both quotations and decide whether the unit and the passage state the same thing. |
-
-**Decision words:** *Requires action*, *No action needed*. A cleared decision is recorded as *Withdrawn*; an item without an active decision is *Open*.
-
 ## 21. Extending the tool safely
 
 | You want to add | Where | What must be re-evaluated |
 |---|---|---|
-| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `reading.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
-| an R function the comparison should understand | `reading.R_FUNCTION_MAP_YAML` (neutral name, arguments, domain), `review.to_sympy` and `review.evaluate` | `test_checks.py`, with new pairs in `engine/tests/equivalence_corpus.yaml` |
-| a question type | a prompt in `core.PROMPTS`, a validator branch in `review.validate_narrow`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
-| a category | the constants of `core.py`, `review.NEXT_STEPS`, section 20 | the wording lint; the identity tests |
-| a search signal | `review.search_one`, `review.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
-| a word the search should ignore, or a code-to-prose bridge | `review.STOPWORDS_TEXT`, `review.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
-| a column or a sheet of `Output.xlsx` | `runner.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `runner.py` | `test_runner.py`; the end-to-end tests |
+| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` | `test_documents.py`; the outline of one real document |
+| a question type | a prompt in `verifier.PROMPTS`, a validator branch in `verifier.validate_narrow`, a handler in the stand-in | the bad-answer corpus; the token budget for the largest unit |
+| a search signal | `verifier.search_one`, `verifier.REASON_TEMPLATES`, the `signals` setting | `develop.recall`: the signal must earn its place on the recall ladder |
+| a word the search should ignore, or a code-to-prose bridge | `verifier.STOPWORDS_TEXT`, `verifier.BRIDGE_PATTERNS_YAML` | the layout lint, which checks both for domain words |
+| a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` | `test_runner.py`; the end-to-end tests |
 
 A prompt's text is part of every question id made from it, and recorded answers are found by that id: change a prompt's words and raise its `VERSION` line together, so that no answer to the old question is taken for an answer to the new one.
 
@@ -610,31 +518,24 @@ After any change, see section 23.
 
 ## 22. How the tool was measured
 
-With the stand-in `chat()` on invented samples: an equivalence corpus of 100 formula pairs, in which no differing pair is ever reported as agreeing; the seeded-difference harness (`develop.harness`), in which every seeded difference in a sample ends flagged in an expected category and the clean baseline flags none of its gold clean units; the recall ladder of the search (`develop.recall`); the six seeded differences of `F_capital_known`; and reproducibility by replay from recorded answers. Every measurement appends a row to `engine/tests/history.csv`. What is still to be done is to measure the same with the real model on a real package.
 
-**Line counts.** `python engine/develop.py budgets` prints them. The plan asked for at least 30 percent of each file to be docstrings, comments and overview; the files are below that share, and the numbers are reported as they are rather than padded.
+**Line counts.** `python engine/tests/develop.py budgets` prints them. The plan asked for at least 30 percent of each file to be docstrings, comments and overview; the files are below that share, and the numbers are reported as they are rather than padded.
 
 **Dependencies.**
 
 | Package | Needed | Note |
 |---|---|---|
-| PyYAML>=6.0 | required |  |
-| openpyxl>=3.1 | required |  |
-| python-docx>=1.1 | required |  |
-| numpy>=1.24 | required |  |
-| scipy>=1.10 | required |  |
-| sympy>=1.12 | required |  |
-| rdata>=1.0 | required |  |
-| pdfplumber>=0.10 | optional |  |
-| pypdf>=4.0 | optional |  |
-| pyreadr | optional, not used in 0.0.1 | a second, independent reader of stored data |
+| openpyxl>=3.1 | required | Output.xlsx and the record of a run |
+| PyYAML>=6.0 | required | the pipeline and the tool's own rule files |
+| numpy>=1.24 | required | reading stored data and the search's own arithmetic |
+| rdata>=1.0 | required | reads stored R data without running R |
+| pdfplumber>=0.10 | optional | PDF text and tables |
+| pypdf>=4.0 | optional | a second PDF reader |
+| rapidocr-onnxruntime>=1.3 | optional | the words inside pictures (OCR) |
 
 **The implementation map.** `develop.map_measure` measures the map of `J_pipeline` against its answer key, part by part, and `develop.map_report` is the sign-off bar of its agents, four tests: the map holds every part of the answer key, including the gaps on the path the agents traced; every link the AI declared quotes the code word for word; the shape of the map is the same as with no model at all, because code decides it; and every question the agents asked was answered and accepted the first time, with every gap on the path ending traced or with a reason. With the stand-in all four hold, and the bar says so while reporting itself **not met**: the stand-in shows the machinery is sound, not how a model traces a gap it has never seen. Run it on your own gateway from cell 5 with `APPENDIX = "map-sign-off"`. Rehearsed against a model that declares links quoting code that is not there, the fourth test does not hold and the bar says NOT met.
 
-**Reading.** The content account closes on every file of every sample. The hard samples measure guided reading: on the XML schema the rules do not know, guidance takes heading depths from 0 of 4 right to 4 of 4 for one question; the two-column PDF and the Word file raise no doubt and cost nothing. Every measurement appends a row to `engine/tests/history.csv`.
 
-**What is not measured here.** Whether a unit is *useful* — a package file with no reader is fully accounted for and still unusable. And guided reading against a real model: everything above was measured with the stand-in, which shows the machinery is safe and the vocabularies sound, and does not show how a model reads an unfamiliar schema. `agentic_reading` stays `off` until `develop.run` holds against the real model.
 
 ## 23. Maintaining the tool
 
-`python engine/develop.py budgets` prints the line count of each module against its budget. `python engine/develop.py release` rewrites `engine/release.json`, the fingerprint of every engine file, and must be the last step of every change: a run records the engine files it used and cell 5 compares them with the release. `python engine/develop.py check-docs` checks this manual against the code: every function, sheet, setting, rule, step and cell it names must exist, and every setting and rule must be explained. `python engine/develop.py notebook` rebuilds `Verifier.ipynb`, the only way it is ever changed. `python engine/develop.py harness A_minimal --limit 10` runs the seeded-difference harness. `python engine/develop.py map-measure` measures how much of `J_pipeline`'s answer key the map holds, part by part; `python engine/develop.py map-bar` runs the map's sign-off bar with the stand-in. Both record what they measured in the history.

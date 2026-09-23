@@ -45,14 +45,14 @@ def gold_of(sample):
         return list(csv.DictReader(handle))
 
 
-def reading_of(sample, mode="off"):
+def reading_of(sample):
     """Steps 01 to 04 of a hard sample: its units, and the content accounts of its files."""
-    import core
-    import runner
+    import verifier as core
+    import verifier as runner
     import standin_chat
     projects = helpers.scratch()
     helpers.copy_sample(sample, projects, "HARD", "2026-09-18")
-    settings = runner.make_settings({"require_outline_confirmation": False, "agentic_reading": mode})
+    settings = runner.make_settings({})
     paths = runner.open_run(projects, "HARD", "2026-09-18", scratch_root=helpers.scratch())
     runner.run_pipeline(paths, settings, chat=standin_chat.chat_well_behaved, stop_after="04")
     store = runner.open_store(paths, settings)
@@ -71,8 +71,8 @@ def holding(units, phrase, in_file=""):
     return None
 
 
-def score(sample, mode="off"):
-    units, accounts, calls = reading_of(sample, mode)
+def score(sample):
+    units, accounts, calls = reading_of(sample)
     gold = gold_of(sample)
     present = sum(1 for row in gold if holding(units, row["must_appear"], row.get("in_file") or ""))
     wanted = [row for row in gold if row["expected_level"]]
@@ -135,19 +135,6 @@ class WhatACorrectReadingWouldDo(unittest.TestCase):
         self.assertEqual(found["present"], found["gold"], "G's words are all read; it is the shape that is lost")
         self.assertLess(found["levels_right"], found["wanted"],
                         "G now places headings correctly with no guidance - raise TODAY and say so in the report")
-
-    def test_guidance_closes_g_s_heading_gap_and_leaves_h_and_i_alone(self):
-        """The measured case for guided reading, held as a test. With agentic_reading on, G's
-        headings are placed and every unit carries a chain, for one question. H and I raise no
-        doubt, so they ask nothing and come out exactly as they do without it."""
-        guided = {sample: score(sample, mode="rules") for sample in HARD}
-        self.assertEqual(guided["G_schema"]["levels_right"], guided["G_schema"]["wanted"],
-                         "guidance should place every heading the gold names in G")
-        self.assertEqual(guided["G_schema"]["calls"], 1, "one question about the shape of one file")
-        for sample in ("H_twocolumn", "I_wordtraps"):
-            self.assertEqual(guided[sample]["calls"], 0, "%s raises no doubt and should ask nothing" % sample)
-            self.assertEqual(guided[sample]["levels_right"], self.scores[sample]["levels_right"])
-            self.assertEqual(guided[sample]["present"], self.scores[sample]["present"])
 
     def test_two_list_items_in_one_table_cell_are_run_together(self):
         """G puts two list items inside one table cell. They arrive fused with no separator,

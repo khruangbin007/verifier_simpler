@@ -10,8 +10,9 @@ import os
 import unittest
 
 import helpers
+import verifier
+runner = verifier   # the engine is one module now
 import develop
-import runner
 
 
 class ManualAndCode(unittest.TestCase):
@@ -57,32 +58,51 @@ class ManualAndCode(unittest.TestCase):
             self.assertIn(named, problems)
 
 
-class Release(unittest.TestCase):
-    def test_the_release_manifest_matches_the_files(self):
-        self.assertEqual(develop.release(["--check"]), 0, "run python engine/develop.py release as the last step of a change")
-
-    def test_every_run_names_exactly_the_engine_files_that_produced_it(self):
-        paths, settings, _ = helpers.run_sample("A_minimal", stop_after="01")
-        recorded = runner.open_store(paths, settings).read("run_manifest")[0]["engine_files"]
-        with open(develop.RELEASE_FILE, encoding="utf-8") as handle:
-            released = {name: digest for name, digest in json.load(handle)["files"].items() if name.startswith("engine/")}
-        self.assertEqual(recorded, released)
-
-
 class Notebook(unittest.TestCase):
     def test_the_notebook_is_the_one_develop_builds(self):
         built = develop.build_notebook(os.path.join(helpers.scratch(), "Verifier.ipynb"))
         with open(built, encoding="utf-8") as fresh, open(develop.NOTEBOOK, encoding="utf-8") as committed:
             self.assertEqual(committed.read(), fresh.read(), "run python engine/develop.py notebook")
 
-    def test_five_cells_that_each_parse_and_say_which_they_are(self):
+    def test_four_cells_that_each_parse_and_say_which_they_are(self):
         import ast
         with open(develop.NOTEBOOK, encoding="utf-8") as handle:
             cells = ["".join(cell["source"]) for cell in json.load(handle)["cells"]]
-        self.assertEqual(len(cells), 5)
+        self.assertEqual(len(cells), 4)
         for number, source in enumerate(cells, start=1):
             ast.parse(source)
-            self.assertIn("Cell %d of 5" % number, source.split("\n")[0])
+            self.assertIn("Cell %d of 4" % number, source.split("\n")[0])
+
+
+class EngineMap(unittest.TestCase):
+    """The engine's own map: read from verifier.py by its syntax tree, so it cannot drift from the code."""
+
+    def test_the_map_holds_every_function_and_reaches_all_but_the_test_helpers(self):
+        facts, sections, total_lines = develop.engine_facts()
+        tree = develop.engine_tree(facts)
+        self.assertGreater(len(facts), 200)
+        self.assertTrue(sections and total_lines > len(facts))
+        reached = set()
+        for _, root in develop.ENGINE_ROOTS:
+            reached |= develop.reached_from(facts, root)
+        left = sorted(set(facts) - reached)
+        self.assertEqual(left, ["find_path", "verify_ledger"], "only what the tests call is outside the flow")
+        shown = {row["function"] for row in tree}
+        self.assertEqual(shown, reached, "every function the roots reach is a row of the tree")
+        for row in tree:
+            parent = row["map_id"].rsplit(".", 1)[0]
+            self.assertTrue("." not in row["map_id"] or any(other["map_id"] == parent for other in tree))
+            self.assertEqual(row["level"], row["map_id"].count("."))
+
+    def test_the_workbook_builds_with_its_five_sheets(self):
+        import openpyxl
+        import tempfile
+        target = os.path.join(tempfile.mkdtemp(prefix="engine_map_"), "Engine_Map.xlsx")
+        where, functions, rows = develop.build_engine_map(target)
+        book = openpyxl.load_workbook(where, read_only=True)
+        self.assertEqual(book.sheetnames, ["Engine_Info", "Functions", "Function_Map", "Sections", "Records"])
+        self.assertEqual(book["Functions"].max_row - 1, functions)
+        self.assertEqual(book["Function_Map"].max_row - 1, rows)
 
 
 if __name__ == "__main__":
