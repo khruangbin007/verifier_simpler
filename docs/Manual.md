@@ -117,7 +117,7 @@ Three folders under `Inputs/`:
 
 | Folder | What | Formats |
 |---|---|---|
-| `1_Methodology` | the canonical methodology | `.docx`, `.pdf`, `.xlsx`, `.html`, `.mhtml`, Markdown, `.csv`, plain text, and XML of any schema; a file's format is told by its content, so XML inside a `.txt` is read as XML |
+| `1_Methodology` | the canonical methodology | `.docx`, `.pdf`, `.pptx`, `.xlsx`, `.html`, `.mhtml`, Markdown, `.csv`, plain text, and XML of any schema; a file's format is told by its content, so XML inside a `.txt` is read as XML |
 | `2_Model_Package` | the model | an R package as a `.tar.gz`, a `.zip` of it, or its source folder |
 | `3_Model_Documentation` | the model documentation | as for the methodology |
 
@@ -217,7 +217,6 @@ A called function is entered with the arguments that call gives it, so what it c
 - XML is read by its structure alone: a short first element that differs from its siblings heads what holds it, a number in an attribute such as `num="1."` goes in front of that heading, rows of short cells make a table, and alike items make a list. An XML whose headings are written some other way is read as paragraphs without a Section.
 - Plain text: a line standing alone that is numbered (`A.`, `1.`, `1.2`) - or opens the file - is a heading, one level per numbering style in the order they first appear.
 - A file Docling cannot read is listed as not read on `Model_Package_Info`; the other files are still read.
-- A slide deck is not read: save it as a PDF. A spreadsheet is read by the tool itself, each sheet a heading over one table; a formula is its value as last saved.
 - The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 - R code is never run. It is read by flowR - its units and its data flow. An expression flowR's syntax tree cannot give in the tool's shape becomes a *File not read* unit for that expression only.
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described but not taken apart; missing values of different kinds are not told apart.
@@ -295,15 +294,14 @@ After any change, see section 23.
 
 | Package | Needed | Note |
 |---|---|---|
+| openpyxl>=3.1 | required | Output.xlsx and the record of a run |
 | PyYAML>=6.0 | required | the pipeline and the tool's own rule files |
 | numpy>=1.24 | required | reading stored data |
 | rdata>=1.0 | required | reads stored R data without running R |
-| docling-slim>=2.129 | required | reads the methodology and the documentation - only its PDF, Word, HTML and Markdown readers, its chunker and its local models - in a process of its own; cell 1 installs it into a folder of its own, from `engine/requirements-docling.txt` |
+| docling>=2.129 | required | reads the methodology and the documentation, in a process of its own; cell 1 installs it into a folder of its own, from `engine/requirements-docling.txt` |
 | flowR 2.15.8 (not a Python package) | required | reads the package's R code; fetched and checked by cell 1 |
 
-**No spreadsheet package.** The engine writes `Output.xlsx` and the record of a run, and reads them back, with Python's standard library (`verifier.xlsx_write`, `verifier.xlsx_read`); an `.xlsx` input is read the same way. Docling is installed without its Excel and PowerPoint readers, so neither openpyxl nor XlsxWriter is needed anywhere.
-
-**Installing Docling.** Docling needs pandas 2 and PyTorch, which a managed runtime may not carry - a Databricks runtime may keep pandas 1.5 - so cell 1 installs it into a folder of its own on the cluster's local disk, never into the runtime's packages, and the tool runs it in a process of its own. The runtime's pandas, numpy and pyarrow are never changed. The first time on a cluster this takes several minutes. Widget 06 may name several indexes, separated by spaces: the first is the index, the others extra indexes. Put your index's PyTorch CPU repository second, so that pip takes torch without GPU libraries. On a cluster that can reach no index, download the wheels on an approved machine for the cluster's Python and platform - `pip download -r engine/requirements-docling.txt -d wheels --only-binary=:all: --python-version 3.12 --platform manylinux2014_x86_64` - and put them in a folder named `wheels` next to the notebook; cell 1 installs from it and from no index. The same folder serves the engine's own packages (`pip download -r engine/requirements.txt` into it), for a package the index does not carry.
+**Installing Docling.** Docling needs pandas 2 and PyTorch, which a managed runtime may not carry - a Databricks runtime may keep pandas 1.5 - so cell 1 installs it into a folder of its own on the cluster's local disk, never into the runtime's packages, and the tool runs it in a process of its own. The runtime's pandas, numpy and pyarrow are never changed. The first time on a cluster this takes several minutes. Widget 06 may name several indexes, separated by spaces: the first is the index, the others extra indexes. Put your index's PyTorch CPU repository second, so that pip takes torch without GPU libraries. On a cluster that can reach no index, download the wheels on an approved machine for the cluster's Python and platform - `pip download -r engine/requirements-docling.txt -d wheels --only-binary=:all: --python-version 3.12 --platform manylinux2014_x86_64` - and put them in a folder named `wheels` next to the notebook; cell 1 installs from it and from no index. The same folder serves the engine's own packages (`pip download -r engine/requirements.txt` into it) - for a package the index does not carry, such as openpyxl, which the engine and Docling both need.
 
 **Docling's models.** Reading a PDF needs Docling's layout and table models, and Docling never fetches them: its process runs with Hugging Face offline and refuses any network connection. Stage them: on an approved machine run `docling-tools models download layout tableformer` and put the folder it writes next to the notebook as `docling-models`; cell 1 says whether it found them. Until they are staged, every PDF is listed as not read. Word, HTML, Markdown, plain text and XML need no models.
 

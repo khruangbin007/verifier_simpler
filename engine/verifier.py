@@ -23,7 +23,6 @@ import html.entities
 import html.parser
 import io
 import json
-import math
 import lzma
 import os
 import subprocess
@@ -810,14 +809,7 @@ options.heading_hierarchy_options = HeadingHierarchyOptions(enabled=True)   # a 
 convert = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}).convert
 chunk, kinds = HierarchicalChunker().chunk, request["kinds"]
 label = lambda item: str(getattr(item.label, "value", item.label))
-def version_of(*names):
-    for name in names:
-        try:
-            return importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            pass
-    return ""
-answer = {"version": version_of("docling-slim", "docling"), "files": []}
+answer = {"version": importlib.metadata.version("docling"), "files": []}
 for name, path in request["files"]:
     try:
         with open(path, "rb") as handle:
@@ -1029,11 +1021,7 @@ def page_of(name, data):
         return name, docx_for_docling(data)
     if low.endswith((".mhtml", ".mht")) or head.startswith(b"mime-version") or b"content-type: multipart/related" in head:
         return name + ".html", captions_out(html_of_mhtml(data)).encode("utf-8")
-    if low.endswith((".xlsx", ".xlsm")):
-        return name + ".html", html_of_xlsx(data).encode("utf-8")
-    if low.endswith((".pptx", ".ppt", ".key", ".odp")):
-        raise ValueError("a slide deck is not read - save it as a PDF and put that in its place")
-    if low.endswith((".pdf", ".csv", ".md")):
+    if low.endswith((".pdf", ".pptx", ".xlsx", ".csv", ".md")):
         return name, data
     if head.startswith((b"<!doctype html", b"<html")) or low.endswith((".html", ".htm")):
         return name + ("" if low.endswith((".html", ".htm")) else ".html"), captions_out(decode_text(data)).encode("utf-8")
@@ -2824,39 +2812,37 @@ class AuditStore:
 
     def sync(self):
         """Write the whole workbook, beside and then swapped in. Returns what was written."""
+        import openpyxl
         os.makedirs(self.remote_dir, exist_ok=True)
-        book = []
-        run = XlsxSheet("Run")
-        book.append(run)
+        book = openpyxl.Workbook()
+        book.remove(book.active)
+        run = book.create_sheet("Run")
         run.append(["Entry", "Value"])
         for key in sorted(self.account):
             for line, part in parts_of(canonical_json(self.account[key])):
                 run.append([key if line == 1 else "%s (part %d)" % (key, line), part])
-        steps = XlsxSheet("Steps")
-        book.append(steps)
+        steps = book.create_sheet("Steps")
         steps.append(["Step", "Name", "Version", "Seconds", "What it counted", "What it said"])
         for record in self.read("step_records"):
             steps.append([record.get("step_id", ""), record.get("step", ""), record.get("step_version", ""),
                           record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
                           "\n".join(record.get("messages") or [])[:CELL_LIMIT]])
-        records = XlsxSheet("Records")
-        book.append(records)
+        records = book.create_sheet("Records")
         records.append(["Kind", "Number", "Part", "Record (JSON)"])
         for number, row in enumerate(self.rows, start=1):
             for part_number, part in parts_of(canonical_json(row["record"])):
                 records.append([row["kind"], number, part_number, part])
-        calls = XlsxSheet("Model_Calls")
-        book.append(calls)
+        calls = book.create_sheet("Model_Calls")
         calls.append(["Number", "Question", "Step", "Question type", "Attempt", "Outcome", "Part", "Exchange (JSON)"])
         for number, record in enumerate(self.calls, start=1):    # a question asked twice has two records: each its own number
             for part_number, part in parts_of(canonical_json(record)):
                 calls.append([number, record.get("question_id", ""), record.get("step", ""), record.get("question_type", ""),
                               record.get("attempt", ""), record.get("outcome", ""), part_number, part])
-        for sheet in book:
-            sheet.freeze = "A2"
+        for sheet in book.worksheets:
+            sheet.freeze_panes = "A2"
         partial = os.path.join(self.local_dir, AUDIT_FILE + ".writing")
         os.makedirs(self.local_dir, exist_ok=True)
-        xlsx_write(partial, book)
+        book.save(partial)
         copy_whole(partial, self.target())
         os.remove(partial)
         return [AUDIT_FILE]
@@ -2868,19 +2854,20 @@ class AuditStore:
         self.loaded = True
         if not os.path.exists(self.target()):
             return
-        book = xlsx_read(self.target())[0]
+        import openpyxl
+        book = openpyxl.load_workbook(self.target(), read_only=True)
         joined = {}
-        for row in book["Records"][1:]:
+        for row in book["Records"].iter_rows(min_row=2, values_only=True):
             kind, number, _, part = row[0], row[1], row[2], row[3] or ""
             joined.setdefault((kind, number), []).append(part)
         self.rows = [{"kind": kind, "record": json.loads("".join(parts))}
                      for (kind, number), parts in sorted(joined.items(), key=lambda pair: pair[0][1])]
         whole = {}
-        for row in book["Model_Calls"][1:]:
+        for row in book["Model_Calls"].iter_rows(min_row=2, values_only=True):
             whole.setdefault(row[0], []).append((row[6] or 1, row[7] or ""))
         self.calls = [json.loads("".join(part for _, part in sorted(parts))) for _, parts in sorted(whole.items())]
         entries = {}
-        for row in book["Run"][1:]:
+        for row in book["Run"].iter_rows(min_row=2, values_only=True):
             key = re.sub(r" \(part \d+\)$", "", str(row[0] or ""))
             entries.setdefault(key, []).append(row[1] or "")
         self.account = {key: json.loads("".join(parts)) for key, parts in entries.items() if key}
@@ -3008,7 +2995,8 @@ def log_line(store, text):
         handle.write("%s  %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), text))
 
 # ---------------------------------------------------------------- step 01: prepare-run
-PACKAGES_RECORDED = ("PyYAML", "numpy", "pandas", "rdata")        # what the engine itself imports; Docling's version is on each file's row
+PACKAGES_RECORDED = ("PyYAML", "openpyxl", "python-docx", "numpy", "scipy", "sympy", "rdata",
+                     "pdfplumber", "pypdf", "pyreadr")
 
 def fingerprint_file(path, corner, inputs_dir):
     """Name, corner, size, SHA-256 and content identifier of one input file."""
@@ -3359,227 +3347,68 @@ def load_layout():
     return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None):
-    """One generic writer for every sheet: header row and first column frozen, filter on the header, wrapped text,
-    no merged cells."""
-    columns, index = sheet_layout["columns"], index or {}
-    argb = lambda colour: colour.upper() if len(colour) == 8 else "FF" + colour.upper()
-    sheet.append([column["header"] for column in columns])
+    """One generic writer for every sheet: header row and first column frozen, filter on
+    the header, wrapped text, no merged cells, reviewer columns yellow and unlocked."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    columns = sheet_layout["columns"]
+    wrap = Alignment(wrap_text=True, vertical="top")
     for number, column in enumerate(columns, start=1):
-        sheet.styles[(1, number)] = (True, True, argb(colours[column["group"]]), False, 0)
-        sheet.widths[number] = column.get("width", 20)
-    for row in rows:
-        sheet.append([plain_cell(row.get(column["field"]), column.get("input_text"), store) for column in columns])
-    sheet.styles[None] = (True, False, "", False, 0)            # every other cell: wrapped, at the top
+        header = column["header"]
+        cell = sheet.cell(row=1, column=number, value=header)
+        cell.font, cell.alignment = Font(bold=True), wrap
+        cell.fill = PatternFill("solid", start_color=colours[column["group"]])
+        sheet.column_dimensions[get_column_letter(number)].width = column.get("width", 20)
+    for row_number, row in enumerate(rows, start=2):
+        for number, column in enumerate(columns, start=1):
+            value = row.get(column["field"])
+            cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
+            cell.alignment = wrap
     if sheet_layout["name"] == "Model_Implementation_Map":     # collapsible: each parent a summary row above its members
-        sheet.summary_above = True
-        sheet.column_levels.update({number: 1 for number in range(1, MAP_ID_COLUMNS + 1)})
+        sheet.sheet_properties.outlinePr.summaryBelow = False
+        sheet.column_dimensions.group(get_column_letter(1), get_column_letter(MAP_ID_COLUMNS), outline_level=1)
         at_variable = [c["field"] for c in columns].index("output_variable") + 1
         for number, row in enumerate(rows, start=2):
             level = int(row.get("level") or 0)
             if level:
-                sheet.row_levels[number] = min(level, MAP_OUTLINE_MAX)
-                sheet.styles[(number, at_variable)] = (True, False, "", False, min(level, 15))
+                sheet.row_dimensions[number].outline_level = min(level, MAP_OUTLINE_MAX)
+            sheet.cell(row=number, column=at_variable).alignment = Alignment(wrap_text=True, vertical="top", indent=min(level, 15))
+    index = index or {}
     for number, column in enumerate(columns, start=1):         # a reference is a link to the row that holds it
         target = column.get("links_to")
+        if not target:
+            continue
         for row_number, row in enumerate(rows, start=2):
-            where = (index.get(target) or {}).get(row.get(column["field"])) if target else None
+            where = (index.get(target) or {}).get(row.get(column["field"]))
             if where:
-                sheet.links[(row_number, number)] = "'%s'!A%d" % (target, where)
-                sheet.styles[(row_number, number)] = (True, False, "", True, 0)
-    sheet.freeze, sheet.filter, sheet.protect = "B2", True, bool(settings["protect_sheets"])
-
-
-# ---------------------------------------------------------------- .xlsx, written and read with the standard library
-# An .xlsx is a zip of XML parts. The tool writes its two workbooks and reads them back with the standard library
-# alone - no spreadsheet package to install - and reads an .xlsx given as input the same way. What it writes is
-# the same from one run to the next: no dates in it, every part stamped alike.
-XLSX_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-XLSX_RELS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-XLSX_PACKAGE = "http://schemas.openxmlformats.org/package/2006/relationships"
-XLSX_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")      # characters XML cannot carry
-XLSX_MAX_BYTES = 512 * 2 ** 20                                    # an .xlsx that would unpack larger is refused
-
-class XlsxSheet:
-    """One worksheet to write: its rows, and how it looks. A cell's style is (wrap, bold, fill, link, indent);
-    styles[None] is every other cell's."""
-    def __init__(self, name):
-        self.name, self.rows, self.styles, self.widths, self.links = name, [], {}, {}, {}
-        self.row_levels, self.column_levels, self.freeze, self.filter, self.protect, self.summary_above = {}, {}, "", False, False, False
-
-    def append(self, values):
-        self.rows.append(list(values))
-
-def column_letter(number):
-    """1 is A, 27 is AA."""
-    letters = ""
-    while number:
-        number, rest = divmod(number - 1, 26)
-        letters = chr(65 + rest) + letters
-    return letters
-
-def column_number(letters):
-    """A is 1, AA is 27."""
-    number = 0
-    for letter in letters:
-        number = number * 26 + ord(letter) - 64
-    return number
-
-def xml_escape(value):
-    return html.escape(XLSX_BAD.sub("", str(value)), quote=True)
-
-def xlsx_sheet_xml(sheet, style_of):
-    """One worksheet's XML, its parts in the order the format requires."""
-    width = max([len(values) for values in sheet.rows] + [1])
-    out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="%s" xmlns:r="%s">' % (XLSX_MAIN, XLSX_RELS)]
-    if sheet.summary_above:
-        out.append('<sheetPr><outlinePr summaryBelow="0"/></sheetPr>')
-    if sheet.freeze:
-        letters, row = re.match(r"([A-Z]+)(\d+)$", sheet.freeze).groups()
-        x, y = column_number(letters) - 1, int(row) - 1
-        out.append('<sheetViews><sheetView workbookViewId="0"><pane %s%stopLeftCell="%s" activePane="%s" state="frozen"/></sheetView></sheetViews>'
-                   % ('xSplit="%d" ' % x if x else "", 'ySplit="%d" ' % y if y else "", sheet.freeze,
-                      "bottomRight" if x and y else "bottomLeft" if y else "topRight"))
-    columns = sorted(set(sheet.widths) | set(sheet.column_levels))
-    if columns:
-        out.append("<cols>%s</cols>" % "".join('<col min="%d" max="%d" width="%s" customWidth="1"%s/>' % (
-            c, c, sheet.widths.get(c, 9.140625), ' outlineLevel="%d"' % sheet.column_levels[c] if c in sheet.column_levels else "") for c in columns))
-    out.append("<sheetData>")
-    for r, values in enumerate(sheet.rows, start=1):
-        out.append('<row r="%d"%s>' % (r, ' outlineLevel="%d"' % sheet.row_levels[r] if sheet.row_levels.get(r) else ""))
-        for c, value in enumerate(values, start=1):
-            style = style_of(sheet.styles.get((r, c)) or sheet.styles.get(None) if r > 1 or (r, c) in sheet.styles else sheet.styles.get((r, c)))
-            ref, attribute = column_letter(c) + str(r), ' s="%d"' % style if style else ""
-            if value is None or value == "":
-                out.append('<c r="%s"%s/>' % (ref, attribute) if style else "")
-            elif isinstance(value, bool):
-                out.append('<c r="%s"%s t="b"><v>%d</v></c>' % (ref, attribute, value))
-            elif isinstance(value, (int, float)) and math.isfinite(value):
-                out.append('<c r="%s"%s><v>%r</v></c>' % (ref, attribute, value))
-            else:
-                out.append('<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>' % (ref, attribute, xml_escape(value)))
-        out.append("</row>")
-    out.append("</sheetData>")
-    if sheet.protect:
-        out.append('<sheetProtection sheet="1" autoFilter="0" formatColumns="0"/>')      # filtering and column widths stay free
-    if sheet.filter:
-        out.append('<autoFilter ref="A1:%s%d"/>' % (column_letter(width), max(1, len(sheet.rows))))
-    if sheet.links:
-        out.append("<hyperlinks>%s</hyperlinks>" % "".join('<hyperlink ref="%s%d" location="%s"/>' % (column_letter(c), r, xml_escape(location))
-                                                         for (r, c), location in sorted(sheet.links.items())))
-    return "".join(out) + "</worksheet>"
-
-def xlsx_styles_xml(keys):
-    """The styles every cell of the workbook refers to: fonts plain, bold and link; a solid fill per colour."""
-    fills = [""] + sorted({key[2] for key in keys[1:] if key[2]})
-    fonts = ('<font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font>'
-             '<font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font>')
-    fill_xml = '<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' + "".join(
-        '<fill><patternFill patternType="solid"><fgColor rgb="%s"/><bgColor indexed="64"/></patternFill></fill>' % colour for colour in fills[1:])
-    xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>']
-    for wrap, bold, fill, link, indent in keys[1:]:
-        xfs.append('<xf numFmtId="0" fontId="%d" fillId="%d" borderId="0" xfId="0" applyFont="1"%s applyAlignment="1"><alignment%s vertical="top"%s/></xf>' % (
-            2 if link else 1 if bold else 0, fills.index(fill) + 1 if fill else 0, ' applyFill="1"' if fill else "",
-            ' wrapText="1"' if wrap else "", ' indent="%d"' % indent if indent else ""))
-    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="%s"><fonts count="3">%s</fonts><fills count="%d">%s</fills>'
-            '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
-            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="%d">%s</cellXfs>'
-            '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'
-            % (XLSX_MAIN, fonts, len(fills) + 1, fill_xml, len(xfs), "".join(xfs)))
-
-def xlsx_write(target, sheets, title="", description=""):
-    """Write sheets (XlsxSheet) as an .xlsx, with the workbook's title and description."""
-    keys = [None]
-    style_of = lambda key: 0 if not key else keys.index(key) if key in keys else keys.append(key) or len(keys) - 1
-    parts = {"xl/worksheets/sheet%d.xml" % n: xlsx_sheet_xml(sheet, style_of) for n, sheet in enumerate(sheets, start=1)}
-    head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-    filters = "".join('<definedName name="_xlnm._FilterDatabase" localSheetId="%d" hidden="1">%s</definedName>' % (
-        n - 1, xml_escape("'%s'!$A$1:$%s$%d" % (sheet.name.replace("'", "''"), column_letter(max([len(v) for v in sheet.rows] + [1])),
-                                             max(1, len(sheet.rows))))) for n, sheet in enumerate(sheets, start=1) if sheet.filter)
-    parts["xl/workbook.xml"] = head + '<workbook xmlns="%s" xmlns:r="%s"><sheets>%s</sheets>%s</workbook>' % (
-        XLSX_MAIN, XLSX_RELS, "".join('<sheet name="%s" sheetId="%d" r:id="rId%d"/>' % (xml_escape(sheet.name), n, n) for n, sheet in enumerate(sheets, start=1)),
-        "<definedNames>%s</definedNames>" % filters if filters else "")
-    parts["xl/styles.xml"] = xlsx_styles_xml(keys)
-    parts["xl/_rels/workbook.xml.rels"] = head + '<Relationships xmlns="%s">%s<Relationship Id="rId%d" Type="%s/styles" Target="styles.xml"/></Relationships>' % (
-        XLSX_PACKAGE, "".join('<Relationship Id="rId%d" Type="%s/worksheet" Target="worksheets/sheet%d.xml"/>' % (n, XLSX_RELS, n)
-                              for n in range(1, len(sheets) + 1)), len(sheets) + 1, XLSX_RELS)
-    parts["_rels/.rels"] = head + ('<Relationships xmlns="%s"><Relationship Id="rId1" Type="%s/officeDocument" Target="xl/workbook.xml"/>'
-                                   '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" '
-                                   'Target="docProps/core.xml"/></Relationships>') % (XLSX_PACKAGE, XLSX_RELS)
-    parts["docProps/core.xml"] = head + ('<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-                                         'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>%s</dc:title><dc:description>%s</dc:description>'
-                                         '</cp:coreProperties>') % (xml_escape(title), xml_escape(description))
-    types = "".join('<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' % n
-                    for n in range(1, len(sheets) + 1))
-    content = head + ('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-                      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-                      '<Default Extension="xml" ContentType="application/xml"/>'
-                      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-                      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-                      '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>%s</Types>') % types
-    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as book:
-        for name, text in [("[Content_Types].xml", content)] + sorted(parts.items()):
-            book.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), text.encode("utf-8"), zipfile.ZIP_DEFLATED)
-
-def xlsx_read(source):
-    """Every sheet of an .xlsx - a path or a file object - as rows of values (text, numbers, booleans, None), each
-    row as wide as the widest of its sheet; and the workbook's description."""
-    tag = lambda name: "{%s}%s" % (XLSX_MAIN, name)
-    with zipfile.ZipFile(source) as book:
-        if sum(item.file_size for item in book.infolist()) > XLSX_MAX_BYTES:
-            raise ValueError("the workbook would unpack to more than %d MB" % (XLSX_MAX_BYTES // 2 ** 20))
-        names = set(book.namelist())
-        shared = ["".join(t.text or "" for t in item.iter(tag("t"))) for item in ElementTree.fromstring(book.read("xl/sharedStrings.xml")).findall(tag("si"))] \
-            if "xl/sharedStrings.xml" in names else []
-        targets = {r.get("Id"): r.get("Target") for r in ElementTree.fromstring(book.read("xl/_rels/workbook.xml.rels"))}
-        sheets = {}
-        for entry in ElementTree.fromstring(book.read("xl/workbook.xml")).find(tag("sheets")):
-            target = targets[entry.get("{%s}id" % XLSX_RELS)]
-            rows = []
-            for row in ElementTree.fromstring(book.read(target.lstrip("/") if target.startswith("/") else "xl/" + target)).iter(tag("row")):
-                values, place = {}, 0
-                for cell in row.findall(tag("c")):
-                    place = column_number(re.match(r"[A-Z]+", cell.get("r")).group()) if cell.get("r") else place + 1
-                    kind, found = cell.get("t", "n"), cell.find(tag("v"))
-                    if kind == "inlineStr":
-                        values[place] = "".join(t.text or "" for t in cell.iter(tag("t")))
-                    elif found is not None and found.text is not None:
-                        text = found.text
-                        values[place] = shared[int(text)] if kind == "s" else text == "1" if kind == "b" else text if kind in ("str", "e") \
-                            else int(text) if re.fullmatch(r"-?\d+", text) else float(text)
-                number = int(row.get("r")) if row.get("r") else len(rows) + 1
-                rows.extend([] for _ in range(number - 1 - len(rows)))
-                rows.append([values.get(c) for c in range(1, max(values, default=0) + 1)])
-            width = max([len(values) for values in rows] + [0])
-            sheets[entry.get("name")] = [values + [None] * (width - len(values)) for values in rows]
-        description = ""
-        if "docProps/core.xml" in names:
-            found = ElementTree.fromstring(book.read("docProps/core.xml")).find("{http://purl.org/dc/elements/1.1/}description")
-            description = (found.text or "") if found is not None else ""
-    return sheets, description
-
-def html_of_xlsx(data):
-    """A workbook as a page: each sheet a heading over one table; a formula is its saved value."""
-    sheets, _ = xlsx_read(io.BytesIO(data))
-    out = []
-    for name, rows in sheets.items():
-        rows = [row for row in rows if any(value not in (None, "") for value in row)]
-        if rows:
-            out.append("<h2>%s</h2><table>%s</table>" % (html.escape(name), "".join("<tr>%s</tr>" % "".join(
-                "<td>%s</td>" % html.escape("" if value is None else str(value)) for value in row) for row in rows)))
-    return "<html><body>%s</body></html>" % "".join(out)
+                cell = sheet.cell(row=row_number, column=number)
+                cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, where))
+                cell.style = "Hyperlink"
+    last = get_column_letter(len(columns))
+    sheet.freeze_panes = "B2"
+    sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
+    if settings["protect_sheets"]:
+        sheet.protection.sheet = True
+        sheet.protection.autoFilter = False          # False = not locked: filtering stays possible
+        sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
     """Build Output.xlsx on local disk from the record of the run. All five sheets always
     exist; a sheet whose step has not run shows its header only."""
+    import openpyxl
     layout = load_layout()
     rows = sheet_rows(store, paths, settings, progress)
     check_written_totals(rows, store)
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
     index = {"Chunks_Model": {row["ref"]: number for number, row in enumerate(rows.get("Chunks_Model") or [], start=2)}}
-    sheets = []
     for sheet_layout in layout["sheets"]:
-        sheets.append(XlsxSheet(sheet_layout["name"]))
-        write_sheet(sheets[-1], sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store, index)
-    xlsx_write(target, sheets, "the tool Output", canonical_json(run_identity(store, paths)))
+        sheet = workbook.create_sheet(sheet_layout["name"])
+        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store, index)
+    workbook.properties.title = "the tool Output"
+    workbook.properties.description = canonical_json(run_identity(store, paths))
+    workbook.save(target)
     return rows
 
 # ---------------------------------------------------------------- rebuilding the outputs
@@ -3671,7 +3500,8 @@ def verify_evidence_pack(paths, settings, live=None):
          ", ".join("%s: %d" % pair for pair in sorted(written.items())))
     identity = run_identity(store, paths)
     try:
-        found = json.loads(xlsx_read(os.path.join(paths.outputs_dir, "Output.xlsx"))[1])
+        import openpyxl
+        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, "Output.xlsx"), read_only=True).properties.description)
         line("The workbook carries this run's ids and fingerprints", all(found.get(k) == v for k, v in identity.items()))
     except Exception:
         line("The workbook carries this run's ids and fingerprints", False, "Output.xlsx could not be opened")
@@ -3724,7 +3554,7 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
 # Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
 # cell 1 is setup(dbutils), cell 2 check_chat(chat), cell 3 review(), cell 4 verify(). The session - the
 # widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
-REQUIRED_PACKAGES = ("yaml", "numpy", "rdata")   # what the engine imports; installed only if missing
+REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
 WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
            ("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)"),
            ("model_id", "", "04 Model ID"), ("project", "", "05 Project date (empty = new project today)"),
