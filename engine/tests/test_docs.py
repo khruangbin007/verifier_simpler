@@ -74,5 +74,36 @@ class Notebook(unittest.TestCase):
             self.assertIn("Cell %d of 5" % number, source.split("\n")[0])
 
 
+class EngineMap(unittest.TestCase):
+    """The engine's own map: read from verifier.py by its syntax tree, so it cannot drift from the code."""
+
+    def test_the_map_holds_every_function_and_reaches_all_but_the_test_helpers(self):
+        facts, sections, total_lines = develop.engine_facts()
+        tree = develop.engine_tree(facts)
+        self.assertGreater(len(facts), 200)
+        self.assertTrue(sections and total_lines > len(facts))
+        reached = set()
+        for _, root in develop.ENGINE_ROOTS:
+            reached |= develop.reached_from(facts, root)
+        left = sorted(set(facts) - reached)
+        self.assertEqual(left, ["find_path", "verify_ledger"], "only what the tests call is outside the flow")
+        shown = {row["function"] for row in tree}
+        self.assertEqual(shown, reached, "every function the roots reach is a row of the tree")
+        for row in tree:
+            parent = row["map_id"].rsplit(".", 1)[0]
+            self.assertTrue("." not in row["map_id"] or any(other["map_id"] == parent for other in tree))
+            self.assertEqual(row["level"], row["map_id"].count("."))
+
+    def test_the_workbook_builds_with_its_five_sheets(self):
+        import openpyxl
+        import tempfile
+        target = os.path.join(tempfile.mkdtemp(prefix="engine_map_"), "Engine_Map.xlsx")
+        where, functions, rows = develop.build_engine_map(target)
+        book = openpyxl.load_workbook(where, read_only=True)
+        self.assertEqual(book.sheetnames, ["Engine_Info", "Functions", "Function_Map", "Sections", "Records"])
+        self.assertEqual(book["Functions"].max_row - 1, functions)
+        self.assertEqual(book["Function_Map"].max_row - 1, rows)
+
+
 if __name__ == "__main__":
     unittest.main()

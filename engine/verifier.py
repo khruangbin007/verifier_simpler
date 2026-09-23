@@ -1322,19 +1322,6 @@ PACKAGE_READERS = ("r-source", "r-data", "help-page", "vignette", "table-file", 
 MANIFEST_SAMPLE_LINES = 5
 
 
-def manifest_text(digest):
-    """The manifest as the lines a prompt shows."""
-    lines = []
-    for row in digest["members"]:
-        parts = ["%s (%d bytes)" % (row["path"], row["bytes"])]
-        if row["placed_as"]:
-            parts.append("ALREADY READ AS: %s" % row["placed_as"])
-        else:
-            parts.append("NOT PLACED: the built-in tests give it no reader")
-        lines.append(" | ".join(parts))
-        for sample in row["first_lines"]:
-            lines.append("    line: %s" % sample)
-    return "\n".join(lines)
 
 
 
@@ -4605,24 +4592,6 @@ def is_parsed_r_file(path):
     """Is this an R source file in a folder whose code the tool parses?"""
     return path.lower().endswith(".r") and path.lower().split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo")
 
-def built_in_reader(path, data):
-    """Which reader the built-in tests give a member, or "" where they give none. A member with
-    no reader is read as two thousand characters of running text and the rest of it reaches
-    nothing, which is what the plan exists to ask about. Enforces: R13"""
-    lowered = path.lower()
-    if is_data_file(path):
-        return "r-data"
-    if lowered.startswith("src/") or b"\x00" in data[:4096]:
-        return "not read"                            # compiled or binary: named as such, never guessed at
-    if is_parsed_r_file(path):
-        return "r-source"
-    if lowered.endswith(".rd") and lowered.startswith("man/"):
-        return "help-page"
-    if lowered.endswith((".rmd", ".rnw", ".qmd")):
-        return "vignette"
-    if path in ("DESCRIPTION", "NAMESPACE") or lowered.endswith((".md", ".txt")) and "/" not in path:
-        return "prose"
-    return ""
 
 def file_units(path, data, context, facts, reader=""):
     """The units of one file of the package, by where it lies and what it is. A reader chosen
@@ -4726,9 +4695,6 @@ def package_rows(description, namespace, units, facts, refused):
     return [{"group": group, "item": item, "value": value} for group, item, value in rows if value != ""]
 
 
-def safe_text(data):
-    """A member as text, or None where it holds bytes the tool cannot decode."""
-    return decode_text(data) if b"\x00" not in data[:4096] else None
 
 def read_package(ctx):
     """Step 04, read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,

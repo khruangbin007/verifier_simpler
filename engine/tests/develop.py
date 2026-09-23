@@ -32,6 +32,7 @@ HOW TO SANITY-CHECK IT
   python engine/develop.py harness A_minimal --limit 10
 """
 
+import ast
 import csv
 import datetime
 import glob
@@ -1296,6 +1297,203 @@ else:
 '''
 
 
+# ====================================================================================
+# ---------------------------------------------------------------- the engine's own map
+# The tool mapped the model it reviews; this maps the tool. Everything here is read from
+# verifier.py by its syntax tree - nothing is listed by hand, so the map cannot drift from the
+# code. It is written as a workbook laid out like Output.xlsx: an inventory of every function,
+# the same flow drawn as a tree from each thing the tool produces, the file's sections, and the
+# records that carry work from one step to the next.
+ENGINE_FILE = os.path.join(ENGINE, "verifier.py")
+MAP_ID_COLUMNS = 10
+ENGINE_ROOTS = [("01 prepare-run", "prepare_run"), ("02 read-inputs", "read_inputs"), ("03 build-map", "build_map"),
+                ("05 read-with-ai", "read_with_ai"), ("06 link-units", "link_units"),
+                ("Output.xlsx", "build_workbook"), ("Cell 4 confirms the outline", "confirm_outline"),
+                ("Cell 5 verifies the pack", "verify_evidence_pack"), ("The run itself", "run_pipeline"),
+                ("Cell 3 opens the run", "open_run"), ("The settings a cell makes", "make_settings"),
+                ("Replaying a run from its record", "replay_chat")]
+
+def engine_facts():
+    """Every function of verifier.py, what it calls, what calls it, where it lives and what it
+    does - read from the file's syntax tree and its section headers."""
+    source = open(ENGINE_FILE, encoding="utf-8").read()
+    lines = source.split("\n")
+    tree = ast.parse(source)
+    sections = [(number, line.split("- ")[-1].strip()) for number, line in enumerate(lines, start=1)
+                if line.startswith("# " + "-" * 20)]
+    def section_of(line_number):
+        found = [title for start, title in sections if start <= line_number]
+        return found[-1] if found else "(the top of the file)"
+    facts = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            continue
+        body = "\n".join(lines[node.lineno - 1:node.end_lineno])
+        said = ast.get_docstring(node) or ""
+        facts[node.name] = {
+            "name": node.name, "kind": "class" if isinstance(node, ast.ClassDef) else "function",
+            "first_line": node.lineno, "last_line": node.end_lineno, "size": node.end_lineno - node.lineno + 1,
+            "section": section_of(node.lineno), "body": body,
+            "says": " ".join(said.split("\n")[0].split())[:300] or "(no description)",
+            "asks_the_model": "load_prompt(" in body or "ctx.ask(" in body or "state.ask(" in body,
+            "checks_an_answer": node.name.startswith("validate") or "Rejected(" in body,
+            "writes": sorted(set(re.findall(r'"([a-z_]+)":\s*(?:\[|list\()', "".join(re.findall(r"StepResult\((\{.*?\})", body, re.S))))),
+            "reads": sorted(set(re.findall(r'read\("([a-z_]+)"\)', body))),
+        }
+    for name, fact in facts.items():
+        # a name used at all, not only called with brackets: a step that hands another step to combine()
+        # refers to it by name, and that is a call as much as any other
+        fact["calls"] = sorted(other for other in facts if other != name
+                               and re.search(r"(?<![\w.])%s(?![\w])" % re.escape(other), fact["body"]))
+    for name in facts:
+        facts[name]["called_by"] = sorted(other for other in facts if name in facts[other]["calls"])
+    for number, name in enumerate(sorted(facts), start=1):
+        facts[name]["ref"] = "F-%04d" % number
+    return facts, sections, len(lines)
+
+def reached_from(facts, root):
+    """Every function the work of one root reaches, following the calls."""
+    seen, queue = {root} & set(facts), [root] if root in facts else []
+    while queue:
+        for child in facts[queue.pop()]["calls"]:
+            if child not in seen:
+                seen.add(child)
+                queue.append(child)
+    return seen
+
+def engine_tree(facts, rows_max=4000):
+    """The same call flow as a tree: each thing the tool produces, then what it calls, and what
+    those call, numbered so that sorting the ID columns gives the tree back. A function already
+    shown is one row pointing at where it stands in full; a function that calls itself stops."""
+    rows, shown = [], {}
+    def emit(name, map_id, level, path):
+        if len(rows) >= rows_max or name not in facts:
+            return
+        fact = facts[name]
+        note = ""
+        if name in path:
+            note = "calls itself; the descent stops here"
+        elif name in shown:
+            note = "shown in full at %s" % shown[name]
+        row = {"map_id": map_id, "level": level, "function": name, "ref": fact["ref"], "section": fact["section"],
+               "lines": "%d-%d" % (fact["first_line"], fact["last_line"]), "size": fact["size"],
+               "says": fact["says"], "calls": "; ".join(fact["calls"]), "note": note}
+        for position, part in enumerate(map_id.split(".")[:MAP_ID_COLUMNS], start=1):
+            row["id%d" % position] = part
+        rows.append(row)
+        if note:
+            return
+        shown[name] = map_id
+        width = max(2, len(str(len(fact["calls"]))))
+        for position, child in enumerate(fact["calls"], start=1):
+            emit(child, "%s.%0*d" % (map_id, width, position), level + 1, path | {name})
+    for number, (label, root) in enumerate(ENGINE_ROOTS, start=1):
+        if root in facts:
+            emit(root, "%02d" % number, 0, frozenset())
+            rows[[r["map_id"] for r in rows].index("%02d" % number)]["says"] = \
+                "%s - %s" % (label, facts[root]["says"])
+    return rows
+
+def build_engine_map(target=None):
+    """Write the engine's own map as a workbook: Engine_Info, Functions, Function_Map, Sections
+    and Records. Laid out like Output.xlsx - frozen headers, filters, grouped rows, and a
+    reference in one sheet linking to its row in another."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    facts, sections, total_lines = engine_facts()
+    tree = engine_tree(facts)
+    target = target or os.path.join(os.path.dirname(ENGINE), "Engine_Map.xlsx")
+    book = openpyxl.Workbook()
+    book.remove(book.active)
+    blue, green, orange = "D9E1F2", "E2EFDA", "FCE4D6"
+    def sheet_of(name, headers, rows, widths, colours):
+        sheet = book.create_sheet(name)
+        for number, (header, width, colour) in enumerate(zip(headers, widths, colours), start=1):
+            cell = sheet.cell(row=1, column=number, value=header)
+            cell.font, cell.fill = Font(bold=True), PatternFill("solid", start_color=colour)
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            sheet.column_dimensions[get_column_letter(number)].width = width
+        for row_number, row in enumerate(rows, start=2):
+            for number, value in enumerate(row, start=1):
+                cell = sheet.cell(row=row_number, column=number, value=value)
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+        sheet.freeze_panes = "B2"
+        sheet.auto_filter.ref = "A1:%s%d" % (get_column_letter(len(headers)), max(1, len(rows) + 1))
+        return sheet
+    # --- what this workbook is
+    roots = [label for label, root in ENGINE_ROOTS if root in facts]
+    info = [("The file", "engine/verifier.py", "%d lines, %d functions and classes, %d sections" %
+             (total_lines, len(facts), len(sections))),
+            ("Functions", "one row each", "what it does, where it lives, what it calls and what calls it"),
+            ("Function_Map", "the same flow as a tree", "from each thing the tool produces (%s) down to the "
+             "functions that do the work; sorting the ID columns gives the tree back" % ", ".join(roots[:4]) + ", …"),
+            ("Sections", "the file's own headings", "how many lines and functions each holds"),
+            ("Records", "what carries work between steps", "each kind of record, which function writes it and which read it"),
+            ("How to read a row of Function_Map", "one function a row",
+             "indented under the function that calls it; a function already shown points at where it stands in full"),
+            ("Where it comes from", "read from the code",
+             "every row is read from verifier.py by its syntax tree, so this map cannot drift from the code")]
+    sheet_of("Engine_Info", ["What", "Item", "Detail"], info, [34, 30, 96], [blue, blue, green])
+    # --- the inventory
+    order = sorted(facts, key=lambda name: facts[name]["first_line"])
+    rows = [(facts[name]["ref"], name, facts[name]["kind"], facts[name]["section"],
+             "%d-%d" % (facts[name]["first_line"], facts[name]["last_line"]), facts[name]["size"],
+             facts[name]["says"], "; ".join(facts[name]["calls"]), "; ".join(facts[name]["called_by"]),
+             "; ".join(label for label, root in ENGINE_ROOTS if name in reached_from(facts, root)),
+             "asks the model" if facts[name]["asks_the_model"] else "checks an answer" if facts[name]["checks_an_answer"] else "")
+            for name in order]
+    functions = sheet_of("Functions", ["Ref", "Function", "Kind", "Section", "Lines", "Size", "What it does",
+                                       "Calls", "Called by", "Reached from", "Where the model enters"],
+                         rows, [10, 30, 10, 40, 14, 8, 80, 50, 50, 50, 20],
+                         [blue, blue, blue, blue, blue, blue, green, orange, orange, orange, orange])
+    where = {facts[name]["ref"]: number for number, name in enumerate(order, start=2)}
+    # --- the tree
+    headers = ["MapID%d" % n for n in range(1, MAP_ID_COLUMNS + 1)] + \
+              ["Level", "Function", "Function ref", "Section", "Lines", "Size", "What it does", "Calls", "Note"]
+    body = [tuple(row.get("id%d" % n, "") for n in range(1, MAP_ID_COLUMNS + 1)) +
+            (row["level"], row["function"], row["ref"], row["section"], row["lines"], row["size"],
+             row["says"], row["calls"], row["note"]) for row in tree]
+    map_sheet = sheet_of("Function_Map", headers, body,
+                         [7] * MAP_ID_COLUMNS + [7, 30, 12, 34, 14, 8, 70, 44, 34],
+                         [blue] * MAP_ID_COLUMNS + [blue, blue, orange, blue, blue, blue, green, orange, orange])
+    map_sheet.sheet_properties.outlinePr.summaryBelow = False
+    map_sheet.column_dimensions.group(get_column_letter(1), get_column_letter(MAP_ID_COLUMNS), outline_level=1)
+    at_function = MAP_ID_COLUMNS + 2
+    for number, row in enumerate(tree, start=2):
+        if row["level"]:
+            map_sheet.row_dimensions[number].outline_level = min(row["level"], 7)
+        map_sheet.cell(row=number, column=at_function).alignment = Alignment(wrap_text=True, vertical="top",
+                                                                            indent=min(row["level"], 15))
+        cell = map_sheet.cell(row=number, column=at_function + 1)
+        if cell.value in where:
+            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'Functions'!A%d" % where[cell.value])
+            cell.style = "Hyperlink"
+    for number, name in enumerate(order, start=2):
+        cell = functions.cell(row=number, column=1)
+        first = next((row for row in tree if row["function"] == name and not row["note"]), None)
+        if first:
+            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'Function_Map'!A%d" %
+                                       (2 + [row["function"] for row in tree].index(name)))
+            cell.style = "Hyperlink"
+    # --- the file's own sections
+    bounds = sections + [(total_lines + 1, "")]
+    section_rows = []
+    for (start, title), (nxt, _) in zip(sections, bounds[1:]):
+        inside = [name for name in facts if start <= facts[name]["first_line"] < nxt]
+        section_rows.append((title, start, nxt - start, len(inside), "; ".join(sorted(inside))[:300]))
+    sheet_of("Sections", ["Section", "First line", "Lines", "Functions", "Which functions"],
+             sorted(section_rows, key=lambda row: row[1]), [54, 12, 10, 12, 90], [blue, blue, blue, blue, green])
+    # --- what carries work from step to step
+    kinds = sorted({kind for fact in facts.values() for kind in fact["writes"] + fact["reads"]})
+    record_rows = [(kind,
+                    "; ".join(sorted(name for name in facts if kind in facts[name]["writes"])),
+                    "; ".join(sorted(name for name in facts if kind in facts[name]["reads"]))) for kind in kinds]
+    sheet_of("Records", ["Record kind", "Written by", "Read by"], record_rows, [30, 46, 80], [blue, orange, green])
+    book.save(target)
+    return target, len(facts), len(tree)
+
 def build_notebook(target=NOTEBOOK):
     """The notebook, five cells, written from the sources above so that it is never edited by hand."""
     cells = [{"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": text.splitlines(keepends=True)}
@@ -1319,6 +1517,9 @@ if __name__ == "__main__":
         sys.exit(0 if within else 1)
     if what == "check-docs":
         sys.exit(check_docs())
+    if what == "engine-map":
+        where, functions, rows = build_engine_map()
+        print("%s: %d functions, %d rows of the tree" % (where, functions, rows))
     if what == "notebook":
         print(build_notebook(), "with 5 cells")
     if what == "recall":
