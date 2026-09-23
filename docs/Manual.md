@@ -103,11 +103,11 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 | **cell 3** | `verifier.review()`: reads every input file and maps how the model computes what it returns. Prints what each step did | after the cluster restarts, or you add an input: finished steps are never repeated |
 | **cell 4** | `verifier.verify()`: checks the finished run folder against its own record | after any run |
 
-**The widgets.** Eight: the endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the name recorded against the run; the model id (04) and project date (05); the package index (06) - its pip address, which on Artifactory ends in `/api/pypi/<repository>/simple`; several may be given, separated by spaces, the first the index and the others extra indexes - used only when something must be installed; how many calls at once (07); and the token cap (08). Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
+**The widgets.** Four: the endpoint and token for the model gateway (01, 02), the model id (03) and the project date (04). Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
 
 **No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Nothing is installed from an index you did not name: to install from pip's own default index, call `verifier.setup(dbutils, allow_default_index=True)`.
 
-**The token.** It is read at the moment `chat()` is called, never stored. When it runs out mid-run, cell 3 says so and stops; paste a fresh one into widget 02 and run cell 3 again, and it carries on from the step that stopped.
+**The token.** It is read at the moment `chat()` is called, never stored. Only cell 2 calls `chat()`; a review makes no call, so a token that runs out stops nothing.
 
 **How long a run may take.** Cell 3 works in the cell itself, so you can see it and interrupt it. It may work for 600 minutes before it stops by itself and asks you to run it again - longer than any run we have seen; `verifier.review(foreground_minutes=...)` changes that.
 
@@ -202,7 +202,6 @@ A called function is entered with the arguments that call gives it, so what it c
 |---|---|
 | `cell 1` says "STOPPED BEFORE RESTARTING PYTHON" | The install could not do what it should; the message says what is missing or what changed, and Python was not restarted. If it names a package the runtime itself needs, detach the notebook, attach it again and run `cell 1` once more. |
 | `cell 1` says "flowR IS NOT READY" | The reason follows it. If the download failed, download the archive it names on an approved machine and put it next to the notebook. If flowR "could not run on this cluster", the cluster does not let a notebook start a program: use one in dedicated (single-user) access mode. |
-| `cell 3` says "WAITING FOR A FRESH TOKEN" | The token ran out. Paste a new one into widget 02 and run `cell 3` again; the steps already finished are not repeated. |
 | "Many calls in a row failed, so the run paused itself" | The gateway is not answering. Check it with `cell 2`, then run `cell 3` again. |
 | The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. A new session starts a new run; the earlier run folder stays as it was. |
 | An input changed | Start a **new run** in the same project. `Model_Package_Info` lists what changed since the previous run. Never edit inputs of a run that has started. |
@@ -268,14 +267,12 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `concurrency_limit` | 4 | How many questions are asked at the same time. |
-| `token_cap` | 40000 | The gateway's limit for one call, in tokens. |
 | `max_parameter_cells` | 5000 | A stored object with more cells is profiled and not compared. |
 | `max_parameter_columns` | 50 | A stored object with more columns is profiled and not compared. |
 | `protect_sheets` | True | Lock every cell except the yellow ones (filtering stays allowed; no password). |
 | `trivial_numbers` | ['0', '1', '2', '-1', '10', '100'] | Numbers that are not looked up in the methodology. |
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
-| `reviewer_id` |  | Who runs the notebook; recorded against the run. |
+| `reviewer_id` |  | Who runs the notebook, taken from Databricks by cell 1; sent to the gateway by `chat()` and recorded against the run. |
 
 `map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting.
 
@@ -301,11 +298,11 @@ After any change, see section 23.
 | docling>=2.129 | required | reads the methodology and the documentation, in a process of its own; cell 1 installs it into a folder of its own, from `engine/requirements-docling.txt` |
 | flowR 2.15.8 (not a Python package) | required | reads the package's R code; fetched and checked by cell 1 |
 
-**Installing Docling.** Docling needs pandas 2 and PyTorch, which a managed runtime may not carry - a Databricks runtime may keep pandas 1.5 - so cell 1 installs it into a folder of its own on the cluster's local disk, never into the runtime's packages, and the tool runs it in a process of its own. The runtime's pandas, numpy and pyarrow are never changed. The first time on a cluster this takes several minutes. Widget 06 may name several indexes, separated by spaces: the first is the index, the others extra indexes. Put your index's PyTorch CPU repository second, so that pip takes torch without GPU libraries. On a cluster that can reach no index, download the wheels on an approved machine for the cluster's Python and platform - `pip download -r engine/requirements-docling.txt -d wheels --only-binary=:all: --python-version 3.12 --platform manylinux2014_x86_64` - and put them in a folder named `wheels` next to the notebook; cell 1 installs from it and from no index. The same folder serves the engine's own packages (`pip download -r engine/requirements.txt` into it) - for a package the index does not carry, such as openpyxl, which the engine and Docling both need.
+**Installing Docling.** Docling needs pandas 2 and PyTorch, which a managed runtime may not carry - a Databricks runtime may keep pandas 1.5 - so cell 1 installs it into a folder of its own on the cluster's local disk, never into the runtime's packages, and the tool runs it in a process of its own. The runtime's pandas, numpy and pyarrow are never changed. The first time on a cluster this takes several minutes. Every package comes from PyPI (`https://pypi.org/simple/`), named in the engine, so the cluster's network has to let it reach PyPI; a pip index set for the whole cluster is not used. PyTorch from PyPI brings its GPU libraries - several GB, which a cluster without a GPU leaves unused.
 
 **Docling's models.** Reading a PDF needs Docling's layout and table models, and Docling never fetches them: its process runs with Hugging Face offline and refuses any network connection. Stage them: on an approved machine run `docling-tools models download layout tableformer` and put the folder it writes next to the notebook as `docling-models`; cell 1 says whether it found them. Until they are staged, every PDF is listed as not read. Word, HTML, Markdown, plain text and XML need no models.
 
-**What leaves the cluster.** Only this. In cell 1, pip asks the index in widget 06 for packages - nothing, when a `wheels` folder is staged - and flowR is downloaded from GitHub unless its archive is staged. In cell 2, one short test question goes to your `chat()`. A review sends nothing: flowR reads the code on the cluster in one-shot mode, needing no network, and Docling's process runs with Hugging Face offline and an audit hook that refuses every network connection, so no document, and nothing read from one, leaves the cluster. This was checked by recording every network attempt of the Docling process while it read a PDF, a Word file and a saved web page: none.
+**What leaves the cluster.** Only this. In cell 1, pip asks PyPI for packages - their names and versions, nothing of yours - and flowR is downloaded from GitHub unless its archive is staged. In cell 2, one short test question goes to your `chat()`. A review sends nothing: flowR reads the code on the cluster in one-shot mode, needing no network, and Docling's process runs with Hugging Face offline and an audit hook that refuses every network connection, so no document, and nothing read from one, leaves the cluster. This was checked by recording every network attempt of the Docling process while it read a PDF, a Word file and a saved web page: none.
 
 
 ## 23. Maintaining the tool

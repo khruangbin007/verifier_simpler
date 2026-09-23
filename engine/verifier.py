@@ -856,15 +856,12 @@ def docling_ready():
                 break
     return DOCLING_HOME.get("path")
 
-def docling_install(urls, wheels, allow_default_index=False):
-    """Install Docling into its own folder - never into the runtime's packages - from the index(es) of widget 06, or
-    from a staged folder of wheels. Returns what pip said when it failed, else ""."""
+def docling_install():
+    """Install Docling from PyPI into its own folder - never into the runtime's packages. Returns what pip said when
+    it failed, else ""."""
     requirements = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements-docling.txt")
-    source = ["--no-index", "--find-links", wheels] if wheels else index_arguments(urls)
-    if not source and not allow_default_index:
-        return "no package index is named in widget 06, and no wheels are staged"
-    done = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "--target", docling_folder(), "-r", requirements] + source,
-                          capture_output=True, text=True)
+    done = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "--target", docling_folder(), "-r", requirements,
+                           "--index-url", PYPI], capture_output=True, text=True)
     DOCLING_HOME.clear()
     return done.stderr if done.returncode else ""
 
@@ -2589,7 +2586,7 @@ ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------- settings (allow-list)
 DEFAULT_SETTINGS = {
-    "concurrency_limit": 4, "token_cap": 40000, 
+    
     
     
     
@@ -3556,20 +3553,35 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
 # widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
 REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
 WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
-           ("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)"),
-           ("model_id", "", "04 Model ID"), ("project", "", "05 Project date (empty = new project today)"),
-           ("jfrog_index_url", "", "06 Package index URL"), ("concurrency_limit", "4", "07 Concurrency limit"),
-           ("token_cap", "40000", "08 Token cap"))
-OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive")
-NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "live": None, "chat": None, "paths": None, "result": None}
+           ("model_id", "", "03 Model ID"), ("project", "", "04 Project date (empty = new project today)"))
+OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
+               "reviewer_id", "jfrog_index_url", "concurrency_limit", "token_cap")
+PYPI = "https://pypi.org/simple/"          # where every package comes from: named here, so no pip setting of the cluster redirects it
+NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": None, "chat": None, "paths": None, "result": None}
+
+def databricks_user(dbutils):
+    """Who runs the notebook, as Databricks knows them: the notebook context's user name; on a cluster that keeps
+    that context from Python, Spark's current_user(); outside Databricks, the system user."""
+    try:
+        return dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+    except Exception:
+        pass
+    try:
+        from pyspark.sql import SparkSession
+        session = SparkSession.getActiveSession()
+        if session is not None:
+            return session.sql("SELECT current_user()").first()[0]
+    except Exception:
+        pass
+    return getpass.getuser()
 
 def live(name):
-    """The endpoint, token or user id, read from the widgets at the moment chat() calls: a token pasted
-    into widget 02 while a run works is used by its next call. Enforces: R8"""
+    """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
+    while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8"""
     session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
     try:
         widgets = NOTEBOOK["dbutils"].widgets
-        session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), widgets.get("reviewer_id"))
+        session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), NOTEBOOK["user"])
     except Exception:
         pass                                        # no notebook, or a widget read failed: the last values stand
     return session.get(name)
@@ -3581,7 +3593,7 @@ def notebook_folder(dbutils):
     except Exception:
         return os.getcwd()
 
-def setup(dbutils, home=None, projects=None, allow_default_index=False):
+def setup(dbutils, home=None, projects=None):
     """Cell 1: the widgets, the packages the engine needs (installed only if one is missing), flowR, and
     what to do next. Safe to run any number of times; run it again after anything restarts Python."""
     import importlib.util
@@ -3597,12 +3609,10 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
         except Exception:
             pass
     home = home or notebook_folder(dbutils)
-    NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"))
+    NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"), user=databricks_user(dbutils))
     missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
     if missing:
-        wheels = os.path.join(home, "wheels")
-        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"),
-                widgets.get("jfrog_index_url").strip(), allow_default_index, wheels if os.path.isdir(wheels) else "")
+        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
         return
     print("Folder:", home, "| Python", sys.version.split()[0], "| engine", ENGINE_VERSION)
     for name in REQUIRED_PACKAGES:
@@ -3622,9 +3632,8 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
     print("Docling models:", models if os.path.isdir(models) else "NOT STAGED in %s - a PDF is read only if they are already cached on "
           "this machine (the manual says how to stage them). Docling never fetches them: it makes no network connection." % models)
     if docling_ready() is None:                      # Docling in a folder of its own: the runtime's packages are never changed for it
-        wheels = os.path.join(home, "wheels")
         print("Installing Docling into its own folder, %s - the first time on a cluster this takes several minutes." % docling_folder())
-        said = docling_install(widgets.get("jfrog_index_url").split(), wheels if os.path.isdir(wheels) else "", allow_default_index)
+        said = docling_install()
         if said:
             print("DOCLING IS NOT READY. What pip said:\n" + pip_said(said))
             print("Documents cannot be read until it is; the runtime's own packages were not changed.")
@@ -3634,38 +3643,28 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
     print("  Cell 4  check the finished run folder against its own record.")
-    print("Widgets 01 to 03 carry the endpoint, the token and your user id; 04 the model id; 05 the project date.")
-    print("Paste a fresh token into widget 02 at any time - it is read at the moment each call is made, so a run")
-    print("already working picks it up.")
+    print("Widgets 01 and 02 carry the endpoint and the token; 03 the model id; 04 the project date.")
+    print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
+    print("at the moment it calls.")
     print("Next: cell 2.")
 
-def index_arguments(urls):
-    """pip's arguments for the index(es) of widget 06: the first URL is the index, any further one an extra index."""
-    return (["--index-url", urls[0]] + [part for url in urls[1:] for part in ("--extra-index-url", url)]) if urls else []
 
 def pip_said(stderr):
     """What pip said, without any credentials of an index URL, and what its most common failure means."""
     text = re.sub(r"//[^/@\s]+@", "//...@", stderr or "")[-1500:]
     missing = re.findall(r"satisfies the requirement ([\w.\-\[\]]+)", stderr or "")
     if "from versions: none" in (stderr or ""):
-        text += ("\nThe index offered no version at all of %s. When that is a package every index carries, the URL in widget 06 is "
-                 "likely not the index's own address - on Artifactory it ends in /api/pypi/<repository>/simple - or the repository "
-                 "does not let this cluster have it. Ask for it to be added to the index, or put its wheel in a folder named "
-                 "wheels next to the notebook: cell 1 then installs from there, and from no index." % (missing[0] if missing else "that package"))
+        text += ("\nPyPI offered no version of %s that fits this cluster's Python, or the cluster cannot reach %s: its network "
+                 "has to let the cluster reach PyPI." % (missing[0] if missing else "that package", PYPI))
     elif "ResolutionImpossible" in (stderr or "") or "conflicting dependencies" in (stderr or ""):
         text += "\nThe packages asked for cannot be installed together; the lines above say which."
     return text
 
-def install(missing, dbutils, requirements, index_url, allow_default_index=False, wheels=""):
-    """Install what the engine needs - from a staged folder of wheels when there is one, else from the index named in
-    widget 06 - the runtime's own packages pinned as they are, and restart Python only if those still import together."""
+def install(missing, dbutils, requirements):
+    """Install what the engine needs from PyPI, the runtime's own packages pinned as they are, and restart Python
+    only if those still import together afterwards."""
     import importlib.metadata
     hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")    # no credentials of an index URL are shown
-    if not wheels and not index_url and not allow_default_index:
-        print("Packages missing:", ", ".join(missing), "- paste the package index URL into widget 06 and run this cell again.")
-        print("Nothing is installed from an index you did not name. To use pip's default index, call "
-              "verifier.setup(dbutils, allow_default_index=True).")
-        return
     pins = []
     for name in ("numpy", "pandas", "pyarrow", "scipy"):
         try:
@@ -3675,8 +3674,7 @@ def install(missing, dbutils, requirements, index_url, allow_default_index=False
     constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
     with open(constraints, "w") as handle:
         handle.write("\n".join(pins) + "\n")
-    source = ["--no-index", "--find-links", wheels] if wheels else index_arguments(index_url.split())
-    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + source
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints, "--index-url", PYPI]
     print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode:
@@ -3701,15 +3699,13 @@ def install(missing, dbutils, requirements, index_url, allow_default_index=False
         print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting would only bring "
               "this cell back here." % ", ".join(missing))
         print("What Python said:\n" + hide(still.stderr)[-600:])
-        print("Check that engine/requirements.txt names it, and that the index in widget 06 carries it.")
+        print("Check that engine/requirements.txt names it, and that PyPI carries it for this cluster's Python.")
         return
     print("Installed. Restarting Python; then run this cell once more.")
     dbutils.library.restartPython()
 
 def notebook_settings():
-    widgets = NOTEBOOK["dbutils"].widgets
-    return make_settings({"concurrency_limit": int(widgets.get("concurrency_limit") or 4),
-                          "token_cap": int(widgets.get("token_cap") or 40000), "reviewer_id": widgets.get("reviewer_id")})
+    return make_settings({"reviewer_id": NOTEBOOK["user"]})
 
 def check_chat(chat):
     """Cell 2: ask the organisation's chat() one question and, once it answers, make the project's three
@@ -3722,7 +3718,8 @@ def check_chat(chat):
         reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
         print("chat() answered:", str(reply)[:60])
     except Exception as problem:
-        print("chat() did not answer (%s: %s). Check widgets 01, 02 and 03, then run this cell again." % (type(problem).__name__, problem))
+        print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
+              " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
         return
     widgets = NOTEBOOK["dbutils"].widgets
     project_dir, missing = setup_project(NOTEBOOK["projects"], widgets.get("model_id"), widgets.get("project"))
