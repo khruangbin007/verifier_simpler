@@ -49,18 +49,31 @@ class NotebookCells(unittest.TestCase):
             except SyntaxError as problem:
                 self.fail("cell %d does not parse: %s" % (number, problem))
 
-    def test_cell_1_makes_every_widget_before_it_needs_one(self):
+    def test_the_notebook_holds_no_code_of_its_own_but_the_organisations_chat(self):
+        """Every cell is a call into the engine; cell 2 also holds chat(), which is the organisation's."""
+        cells = self.cells()
+        self.assertEqual([c.strip().split("\n")[-1].split("#")[0].strip() for c in cells],
+                         ["verifier.setup(dbutils)", "verifier.check_chat(chat)", "verifier.review()", "verifier.verify()"])
+        code = lambda cell: [l for l in cell.split("\n") if l.strip() and not l.strip().startswith("#")]
+        self.assertEqual([len(code(cells[0])), len(code(cells[2])), len(code(cells[3]))], [2, 1, 1])
+
+    def test_setup_makes_every_widget_before_it_needs_one(self):
         """On a freshly opened notebook no widget exists. Cell 1 makes each one before reading it, and
         needs no installed package to do so, which is what lets it run on a bare cluster."""
-        source = self.cells()[0]
-        made = set(re.findall(r'widget\("(\w+)"', source))
-        read = set(re.findall(r'w\.get\("(\w+)"\)', source))
+        import inspect
+        import verifier as runner
+        made = {name for name, _, _ in runner.WIDGETS}
+        section = inspect.getsource(runner)[inspect.getsource(runner).index("def live(name):"):]
+        read = set(re.findall(r'widgets\.get\("(\w+)"\)', section))
         self.assertTrue(read <= made, "read before made: %s" % sorted(read - made))
-        self.assertLess(source.index('widget("llm_endpoint"'), source.index("REQUIRED = "), "widgets come before the install")
+        setup = inspect.getsource(runner.setup)
+        self.assertLess(setup.index("widgets.text("), setup.index("install("), "widgets come before the install")
 
     def test_no_package_is_installed_from_an_index_nobody_named(self):
-        source = self.cells()[0]
-        self.assertIn("ALLOW_DEFAULT_INDEX = False", source)
+        import inspect
+        import verifier as runner
+        source = inspect.getsource(runner.install)
+        self.assertIn("allow_default_index=False", inspect.getsource(runner.setup))
         self.assertIn("Nothing is installed from an index you did not name", source)
         self.assertIn('"-c", constraints', source, "the runtime's own packages are pinned")
         self.assertIn("import numpy, pandas, pyarrow", source, "the runtime is probed before Python is restarted")
@@ -74,8 +87,9 @@ class NotebookCells(unittest.TestCase):
         from unittest import mock
         import verifier as runner
         source = self.cells()[1]
-        live_values = runner.LiveValues()
-        live_values.update("https://gateway.example/chat", "tok-FIRST", "mel_lorenzo")
+        values = {"llm_endpoint": "https://gateway.example/chat", "llm_token": "tok-FIRST", "reviewer_id": "mel_lorenzo",
+                  "model_id": "NBCHAT", "project": "2026-01-01"}
+        runner.NOTEBOOK.update(dbutils=FakeDbutils(values), projects=helpers.scratch(), live=None, chat=None, paths=None)
         sent = []
 
         class Reply:
@@ -88,13 +102,10 @@ class NotebookCells(unittest.TestCase):
             sent.append({"url": url, "json": json, "headers": headers})
             return Reply()
 
-        import types
-        widgets = types.SimpleNamespace(get=lambda name: {"projects_dir": helpers.scratch(), "model_id": "NBCHAT",
-                                                          "project": "2026-01-01"}.get(name, ""))
-        space = {"live": live_values.get, "verifier": runner, "w": widgets, "os": os, "__name__": "notebook"}
+        space = {"verifier": runner, "__name__": "notebook"}
         with mock.patch("requests.post", post), contextlib.redirect_stdout(io.StringIO()):
             exec(compile(source, "cell 2", "exec"), space)
-            live_values.update("https://gateway.example/chat", "tok-SECOND", "mel_lorenzo")
+            runner.NOTEBOOK["dbutils"].widgets.values["llm_token"] = "tok-SECOND"     # pasted while a run works
             self.assertEqual(space["chat"]("system text", "main text"), {"answer": "OK"})
         request = sent[-1]
         self.assertEqual(request["headers"]["SP_SSO_UID"], "mel_lorenzo", "the user id must reach the gateway")
@@ -107,9 +118,9 @@ class NotebookCells(unittest.TestCase):
         cells = self.cells()
         self.assertEqual(len(cells), 4)
         projects = helpers.scratch()
-        values = {"model_id": "NBTEST", "projects_dir": projects, "llm_token": "tok-SECRET-123", "llm_endpoint": "https://x",
-                  "reviewer_id": "analyst.one", "project": "", "run": "",
-                  "jfrog_index_url": "", "concurrency_limit": "4", "token_cap": "40000", "scratch_dir": ""}
+        values = {"model_id": "NBTEST", "llm_token": "tok-SECRET-123", "llm_endpoint": "https://x",
+                  "reviewer_id": "analyst.one", "project": "",
+                  "jfrog_index_url": "", "concurrency_limit": "4", "token_cap": "40000"}
         space = {"dbutils": FakeDbutils(values), "__name__": "notebook"}
 
         def run_cell(number, replace=None):
@@ -125,14 +136,16 @@ class NotebookCells(unittest.TestCase):
         previous = os.getcwd()
         os.chdir(helpers.ROOT_DIR)
         try:
-            shown = run_cell(1, {"HOME = notebook_folder()": "HOME = %r" % helpers.ROOT_DIR})
+            import verifier as runner
+            runner.NOTEBOOK.update(dbutils=None, live=None, chat=None, paths=None, result=None)   # a fresh session
+            shown = run_cell(1, {"verifier.setup(dbutils)": "verifier.setup(dbutils, home=%r, projects=%r)" % (helpers.ROOT_DIR, projects)})   # projects go to scratch, never the repo
             self.assertIn("engine", shown)
             self.assertNotIn("tok-SECRET-123", shown, "the token is never printed")
             self.assertIn("14 characters", shown)
             # the notebook carries no stand-in; the test puts one in place of the organisation's chat()
-            stand_in = "import standin_chat\nchat = standin_chat.chat\nACTIVE_CHAT = chat"
+            stand_in = "import standin_chat\nverifier.check_chat(standin_chat.chat)"
             self.assertIn("PUT YOUR FILES IN THESE THREE FOLDERS",
-                          run_cell(2, {"ACTIVE_CHAT = chat": stand_in}), "cell 2 names the folders")
+                          run_cell(2, {"verifier.check_chat(chat)": stand_in}), "cell 2 names the folders")
             self.assertIn("Run cell 3 first", run_cell(4), "cell 4 before cell 3 says what to do instead of raising")
             self.assertIn("Put the files in", run_cell(3))
             project_dir = os.path.join(projects, "NBTEST", sorted(os.listdir(os.path.join(projects, "NBTEST")))[0])
@@ -142,7 +155,7 @@ class NotebookCells(unittest.TestCase):
             self.assertIn("What each step did:", shown)
             self.assertIn("link-units", shown, "cell 3 runs the model steps as well as the reading")
             self.assertIn("Run folder:", shown)
-            self.assertEqual(space["RESULT"]["state"], "finished", space["RESULT"])
+            self.assertEqual(runner.NOTEBOOK["result"]["state"], "finished", runner.NOTEBOOK["result"])
             self.assertIn("step 05", run_cell(3), "running cell 3 again shows the steps and repeats none")
             shown = run_cell(4)
             self.assertIn("Verifying the evidence pack", shown)

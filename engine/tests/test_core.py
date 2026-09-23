@@ -99,8 +99,9 @@ class Wording(unittest.TestCase):
         for text in ("ValueError", "terrors", "a path finder", "a high value", "minority"):
             self.assertFalse(core.has_banned_wording(text), text)
 
-    def test_no_category_or_status_rates_seriousness(self):
-        for wording in core.CATEGORIES + core.CLEAN_STATUSES + core.NOT_CLEAN_STATUSES:
+    def test_no_wording_the_tool_shows_rates_seriousness(self):
+        shown = tuple(core.RELATION_WORDING.values()) + (core.HOW_PARSED, core.HOW_AI, core.NOT_RUN_YET)
+        for wording in shown + core.REJECTION_REASONS + core.UNDECIDED_REASONS:
             self.assertFalse(core.has_banned_wording(wording), wording)
 
 

@@ -1870,62 +1870,6 @@
    "text": "export(floor_pd)\nexport(cond_pd)\nexport(asset_correlation)\nexport(capital_k)\nexport(rwa)\nexport(effective_maturity)\n"
   },
   {
-   "code": null,
-   "content_hash": "738b3b890cf36591e9a9f17786c74e1012783bffe0acb90296abae3385dd9721",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    1,
-    7
-   ],
-   "name": "capital_k",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0003",
-   "roxygen": {
-    "documents_name": "capital_k",
-    "documents_ref": "M-0004",
-    "formulas": [],
-    "tags": [
-     {
-      "line": 1,
-      "name": "",
-      "tag": "description",
-      "text": "Capital requirement per unit of exposure\nThe product of the loss given default, floored by segment, and the unexpected loss rate."
-     },
-     {
-      "line": 4,
-      "name": "pd",
-      "tag": "param",
-      "text": "probability of default"
-     },
-     {
-      "line": 5,
-      "name": "lgd",
-      "tag": "param",
-      "text": "loss given default"
-     },
-     {
-      "line": 6,
-      "name": "segment",
-      "tag": "param",
-      "text": "segment of the exposure: Retail, Corporate or Bank"
-     },
-     {
-      "line": 7,
-      "name": "",
-      "tag": "export",
-      "text": ""
-     }
-    ]
-   },
-   "text": "#' Capital requirement per unit of exposure\n#'\n#' The product of the loss given default, floored by segment, and the unexpected loss rate.\n#' @param pd probability of default\n#' @param lgd loss given default\n#' @param segment segment of the exposure: Retail, Corporate or Bank\n#' @export"
-  },
-  {
    "code": {
     "calls": [
      "check_inputs",
@@ -1981,7 +1925,7 @@
      "ul"
     ]
    },
-   "content_hash": "f5d3e8c0b44de4d6d264c58b36d4f5b1d5a031a530adbab4a0837c38ffc1841c",
+   "content_hash": "b8fc80b271a0cd9e8987d2293b5513cf74e55d9580508af83f556ed575a82675",
    "data": null,
    "file": "R/capital.R",
    "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
@@ -1989,431 +1933,51 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    8,
+    1,
     14
    ],
    "name": "capital_k",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0004",
-   "roxygen": null,
-   "text": "capital_k <- function(pd, lgd, segment) {\n  check_inputs(pd, lgd)\n  lgd_f <- pmax(lgd, lgd_floors[lgd_floors$segment == segment, \"lgd_floor\"])\n  pdc <- cond_pd(floor_pd(pd), asset_correlation(pd))\n  ul <- pdc - pd\n  lgd_f * ul\n}"
-  },
-  {
-   "code": {
-    "calls": [
-     "pmax"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "lgd_f",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "lgd",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "lgd_floors$lgd_floor",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": "max",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "lgd_f",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "lgd",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "lgd_floors$lgd_floor",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": "max",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [
-     "lgd_floor"
-    ],
-    "symbols_read": [
-     "lgd",
-     "lgd_floors",
-     "segment"
-    ],
-    "symbols_written": [
-     "lgd_f"
-    ]
-   },
-   "content_hash": "fdbe4a8a2fac70aa0abed1b60502dbb61cd0d449a363bc289f0ee049b502e622",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "capital_k",
-   "kind": "Formula statement",
-   "lines": [
-    10,
-    10
-   ],
-   "name": "lgd_f",
-   "parent_ref": "M-0004",
-   "read_problem": null,
-   "ref": "M-0005",
-   "roxygen": null,
-   "text": "  lgd_f <- pmax(lgd, lgd_floors[lgd_floors$segment == segment, \"lgd_floor\"])"
-  },
-  {
-   "code": {
-    "calls": [],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "ul",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "pdc",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "pd",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "sub",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "ul",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "pdc",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "pd",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "sub",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "pdc",
-     "pd"
-    ],
-    "symbols_written": [
-     "ul"
-    ]
-   },
-   "content_hash": "e43fd5d082ebfe0f3a5e6dd2605b9056c24ed6639f3ba14aa0cf58557f65fb31",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "capital_k",
-   "kind": "Formula statement",
-   "lines": [
-    12,
-    12
-   ],
-   "name": "ul",
-   "parent_ref": "M-0004",
-   "read_problem": null,
-   "ref": "M-0006",
-   "roxygen": null,
-   "text": "  ul <- pdc - pd"
-  },
-  {
-   "code": {
-    "calls": [],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "capital_k",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "lgd",
-           "op": "sym",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [],
-           "name": "lgd_floors$lgd_floor",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "max",
-         "op": "call",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "pdc",
-           "op": "sym",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [],
-           "name": "pd",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "sub",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "capital_k",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "lgd_f",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "ul",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "lgd_f",
-     "ul"
-    ],
-    "symbols_written": []
-   },
-   "content_hash": "babc185cfda625b232cc6d8ba8c9bd3266cf49fd6ed1476b5bd30335ad144f6a",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "capital_k",
-   "kind": "Formula statement",
-   "lines": [
-    13,
-    13
-   ],
-   "name": "capital_k",
-   "parent_ref": "M-0004",
-   "read_problem": null,
-   "ref": "M-0007",
-   "roxygen": null,
-   "text": "  lgd_f * ul"
-  },
-  {
-   "code": null,
-   "content_hash": "e3dd8b89adc670425874a3081f68564f6a4c16a2c1aa995939c8bcd682bc7482",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    16,
-    21
-   ],
-   "name": "rwa",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0008",
+   "ref": "M-0003",
    "roxygen": {
-    "documents_name": "rwa",
-    "documents_ref": "M-0009",
+    "documents_name": "capital_k",
+    "documents_ref": "M-0003",
     "formulas": [],
     "tags": [
      {
-      "line": 16,
+      "line": 1,
       "name": "",
       "tag": "description",
-      "text": "Risk-weighted amount\nThe requirement scaled by 12.5 and multiplied by the exposure at default."
+      "text": "Capital requirement per unit of exposure\nThe product of the loss given default, floored by segment, and the unexpected loss rate."
      },
      {
-      "line": 19,
-      "name": "k",
+      "line": 4,
+      "name": "pd",
       "tag": "param",
-      "text": "capital requirement per unit of exposure"
+      "text": "probability of default"
      },
      {
-      "line": 20,
-      "name": "ead",
+      "line": 5,
+      "name": "lgd",
       "tag": "param",
-      "text": "exposure at default"
+      "text": "loss given default"
      },
      {
-      "line": 21,
+      "line": 6,
+      "name": "segment",
+      "tag": "param",
+      "text": "segment of the exposure: Retail, Corporate or Bank"
+     },
+     {
+      "line": 7,
       "name": "",
       "tag": "export",
       "text": ""
      }
     ]
    },
-   "text": "#' Risk-weighted amount\n#'\n#' The requirement scaled by 12.5 and multiplied by the exposure at default.\n#' @param k capital requirement per unit of exposure\n#' @param ead exposure at default\n#' @export"
+   "text": "#' Capital requirement per unit of exposure\n#'\n#' The product of the loss given default, floored by segment, and the unexpected loss rate.\n#' @param pd probability of default\n#' @param lgd loss given default\n#' @param segment segment of the exposure: Retail, Corporate or Bank\n#' @export\ncapital_k <- function(pd, lgd, segment) {\n  check_inputs(pd, lgd)\n  lgd_f <- pmax(lgd, lgd_floors[lgd_floors$segment == segment, \"lgd_floor\"])\n  pdc <- cond_pd(floor_pd(pd), asset_correlation(pd))\n  ul <- pdc - pd\n  lgd_f * ul\n}"
   },
   {
    "code": {
@@ -2502,7 +2066,7 @@
     ],
     "symbols_written": []
    },
-   "content_hash": "d0e9f5361d80a95aee376ea4eefed5dde3c6b91951719a0a72bdbf460bc2114a",
+   "content_hash": "dba32fd9eb0f5e7d60e80a20df4ddd75688006f3524032dd19c6360420668d67",
    "data": null,
    "file": "R/capital.R",
    "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
@@ -2510,206 +2074,45 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    22,
+    16,
     24
    ],
    "name": "rwa",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0009",
-   "roxygen": null,
-   "text": "rwa <- function(k, ead) {\n  k * 12.5 * ead\n}"
-  },
-  {
-   "code": {
-    "calls": [],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "rwa",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "k",
-           "op": "sym",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "12.5"
-          }
-         ],
-         "name": null,
-         "op": "mul",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "ead",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "rwa",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "k",
-           "op": "sym",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "12.5"
-          }
-         ],
-         "name": null,
-         "op": "mul",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": "ead",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [
-     {
-      "as_written": "12.5",
-      "decimals": 1,
-      "line": 23,
-      "unit": "",
-      "value": "12.5"
-     }
-    ],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "k",
-     "ead"
-    ],
-    "symbols_written": []
-   },
-   "content_hash": "a7ce81e71684d60877390dba2b452dd7bd8bf2393417fa40fcc279a65ced595f",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "rwa",
-   "kind": "Formula statement",
-   "lines": [
-    23,
-    23
-   ],
-   "name": "rwa",
-   "parent_ref": "M-0009",
-   "read_problem": null,
-   "ref": "M-0010",
-   "roxygen": null,
-   "text": "  k * 12.5 * ead"
-  },
-  {
-   "code": null,
-   "content_hash": "468c3f4f1a9f4780613106a68cfea8716e24c0c2401725cba92ae2888699e178",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    26,
-    30
-   ],
-   "name": "effective_maturity",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0011",
+   "ref": "M-0004",
    "roxygen": {
-    "documents_name": "effective_maturity",
-    "documents_ref": "M-0012",
+    "documents_name": "rwa",
+    "documents_ref": "M-0004",
     "formulas": [],
     "tags": [
      {
-      "line": 26,
+      "line": 16,
       "name": "",
       "tag": "description",
-      "text": "Effective maturity\nAt least 1 year and capped at 5 years."
+      "text": "Risk-weighted amount\nThe requirement scaled by 12.5 and multiplied by the exposure at default."
      },
      {
-      "line": 29,
-      "name": "m",
+      "line": 19,
+      "name": "k",
       "tag": "param",
-      "text": "maturity in years"
+      "text": "capital requirement per unit of exposure"
      },
      {
-      "line": 30,
+      "line": 20,
+      "name": "ead",
+      "tag": "param",
+      "text": "exposure at default"
+     },
+     {
+      "line": 21,
       "name": "",
       "tag": "export",
       "text": ""
      }
     ]
    },
-   "text": "#' Effective maturity\n#'\n#' At least 1 year and capped at 5 years.\n#' @param m maturity in years\n#' @export"
+   "text": "#' Risk-weighted amount\n#'\n#' The requirement scaled by 12.5 and multiplied by the exposure at default.\n#' @param k capital requirement per unit of exposure\n#' @param ead exposure at default\n#' @export\nrwa <- function(k, ead) {\n  k * 12.5 * ead\n}"
   },
   {
    "code": {
@@ -2803,7 +2206,7 @@
     ],
     "symbols_written": []
    },
-   "content_hash": "348c362accaf2bfd1e597a15886f82e7b600b25308f32229764e9713bc9d798b",
+   "content_hash": "361dad7d3e90f725fdd47043de8f08b05a609e1627002521ccee95a763bbffb5",
    "data": null,
    "file": "R/capital.R",
    "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
@@ -2811,215 +2214,39 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    31,
+    26,
     33
    ],
    "name": "effective_maturity",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0012",
-   "roxygen": null,
-   "text": "effective_maturity <- function(m) {\n  pmin(pmax(m, 1), 5)\n}"
-  },
-  {
-   "code": {
-    "calls": [
-     "pmin",
-     "pmax"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "effective_maturity",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "m",
-           "op": "sym",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "1"
-          }
-         ],
-         "name": "max",
-         "op": "call",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": null,
-         "op": "num",
-         "span": null,
-         "value": "5"
-        }
-       ],
-       "name": "min",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "effective_maturity",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "m",
-           "op": "sym",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "1"
-          }
-         ],
-         "name": "max",
-         "op": "call",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [],
-         "name": null,
-         "op": "num",
-         "span": null,
-         "value": "5"
-        }
-       ],
-       "name": "min",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [
-     {
-      "as_written": "1",
-      "decimals": 0,
-      "line": 32,
-      "unit": "",
-      "value": "1"
-     },
-     {
-      "as_written": "5",
-      "decimals": 0,
-      "line": 32,
-      "unit": "",
-      "value": "5"
-     }
-    ],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "m"
-    ],
-    "symbols_written": []
-   },
-   "content_hash": "87e2674023c9a182a6a7f238b42785512bc56dfc076f23390f1927d0137c11be",
-   "data": null,
-   "file": "R/capital.R",
-   "file_sha256": "ef01d751508c303aed8b98913dc3effaeeda2df1bd71afec9ed04940bf4c9c4f",
-   "helppage": null,
-   "inside": "effective_maturity",
-   "kind": "Formula statement",
-   "lines": [
-    32,
-    32
-   ],
-   "name": "effective_maturity",
-   "parent_ref": "M-0012",
-   "read_problem": null,
-   "ref": "M-0013",
-   "roxygen": null,
-   "text": "  pmin(pmax(m, 1), 5)"
-  },
-  {
-   "code": null,
-   "content_hash": "42a127617e64235765f1680a852f6263e42ff8cfe74c14b33f8f9c9e6f954d01",
-   "data": null,
-   "file": "R/correlation.R",
-   "file_sha256": "510d86db946df898d150ff6c4055b540cc7288621adb43e2329f9faaa63eb927",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    1,
-    5
-   ],
-   "name": "asset_correlation",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0014",
+   "ref": "M-0005",
    "roxygen": {
-    "documents_name": "asset_correlation",
-    "documents_ref": "M-0015",
+    "documents_name": "effective_maturity",
+    "documents_ref": "M-0005",
     "formulas": [],
     "tags": [
      {
-      "line": 1,
+      "line": 26,
       "name": "",
       "tag": "description",
-      "text": "Asset correlation\nThe asset correlation falls with the probability of default and lies between 0.12 and 0.24."
+      "text": "Effective maturity\nAt least 1 year and capped at 5 years."
      },
      {
-      "line": 4,
-      "name": "pd",
+      "line": 29,
+      "name": "m",
       "tag": "param",
-      "text": "probability of default"
+      "text": "maturity in years"
      },
      {
-      "line": 5,
+      "line": 30,
       "name": "",
       "tag": "export",
       "text": ""
      }
     ]
    },
-   "text": "#' Asset correlation\n#'\n#' The asset correlation falls with the probability of default and lies between 0.12 and 0.24.\n#' @param pd probability of default\n#' @export"
+   "text": "#' Effective maturity\n#'\n#' At least 1 year and capped at 5 years.\n#' @param m maturity in years\n#' @export\neffective_maturity <- function(m) {\n  pmin(pmax(m, 1), 5)\n}"
   },
   {
    "code": {
@@ -3364,7 +2591,7 @@
      "w"
     ]
    },
-   "content_hash": "e3cdd7fc663817d0585797603267c28f5faf3bb3b115833edb2a85177e4b4f61",
+   "content_hash": "1c0eef742b583e1f0c94f3c4a64295551e7aeba42932dd03581b04cb12aea58f",
    "data": null,
    "file": "R/correlation.R",
    "file_sha256": "510d86db946df898d150ff6c4055b540cc7288621adb43e2329f9faaa63eb927",
@@ -3372,735 +2599,76 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    6,
+    1,
     9
    ],
    "name": "asset_correlation",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0015",
-   "roxygen": null,
-   "text": "asset_correlation <- function(pd) {\n  w <- (1 - exp(-50 * pd)) / (1 - exp(-50))\n  0.13 * w + 0.24 * (1 - w)\n}"
-  },
-  {
-   "code": {
-    "calls": [
-     "exp"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "w",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "1"
-          },
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [
-                {
-                 "args": [],
-                 "name": null,
-                 "op": "num",
-                 "span": null,
-                 "value": "50"
-                }
-               ],
-               "name": null,
-               "op": "neg",
-               "span": null,
-               "value": null
-              },
-              {
-               "args": [],
-               "name": "pd",
-               "op": "sym",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "mul",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": "exp",
-           "op": "call",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "sub",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "1"
-          },
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [],
-               "name": null,
-               "op": "num",
-               "span": null,
-               "value": "50"
-              }
-             ],
-             "name": null,
-             "op": "neg",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": "exp",
-           "op": "call",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "sub",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "div",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "w",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "1"
-          },
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [
-                {
-                 "args": [],
-                 "name": null,
-                 "op": "num",
-                 "span": null,
-                 "value": "50"
-                }
-               ],
-               "name": null,
-               "op": "neg",
-               "span": null,
-               "value": null
-              },
-              {
-               "args": [],
-               "name": "pd",
-               "op": "sym",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "mul",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": "exp",
-           "op": "call",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "sub",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "1"
-          },
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [],
-               "name": null,
-               "op": "num",
-               "span": null,
-               "value": "50"
-              }
-             ],
-             "name": null,
-             "op": "neg",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": "exp",
-           "op": "call",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "sub",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "div",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [
+   "ref": "M-0006",
+   "roxygen": {
+    "documents_name": "asset_correlation",
+    "documents_ref": "M-0006",
+    "formulas": [],
+    "tags": [
      {
-      "as_written": "1",
-      "decimals": 0,
-      "line": 7,
-      "unit": "",
-      "value": "1"
+      "line": 1,
+      "name": "",
+      "tag": "description",
+      "text": "Asset correlation\nThe asset correlation falls with the probability of default and lies between 0.12 and 0.24."
      },
      {
-      "as_written": "50",
-      "decimals": 0,
-      "line": 7,
-      "unit": "",
-      "value": "50"
+      "line": 4,
+      "name": "pd",
+      "tag": "param",
+      "text": "probability of default"
      },
      {
-      "as_written": "1",
-      "decimals": 0,
-      "line": 7,
-      "unit": "",
-      "value": "1"
-     },
-     {
-      "as_written": "50",
-      "decimals": 0,
-      "line": 7,
-      "unit": "",
-      "value": "50"
+      "line": 5,
+      "name": "",
+      "tag": "export",
+      "text": ""
      }
-    ],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "pd"
-    ],
-    "symbols_written": [
-     "w"
     ]
    },
-   "content_hash": "3d470b4b460e20a9537ccdfe7bad57b1197c398b2a8def157f06158be6d3fd75",
-   "data": null,
-   "file": "R/correlation.R",
-   "file_sha256": "510d86db946df898d150ff6c4055b540cc7288621adb43e2329f9faaa63eb927",
-   "helppage": null,
-   "inside": "asset_correlation",
-   "kind": "Formula statement",
-   "lines": [
-    7,
-    7
-   ],
-   "name": "w",
-   "parent_ref": "M-0015",
-   "read_problem": null,
-   "ref": "M-0016",
-   "roxygen": null,
-   "text": "  w <- (1 - exp(-50 * pd)) / (1 - exp(-50))"
+   "text": "#' Asset correlation\n#'\n#' The asset correlation falls with the probability of default and lies between 0.12 and 0.24.\n#' @param pd probability of default\n#' @export\nasset_correlation <- function(pd) {\n  w <- (1 - exp(-50 * pd)) / (1 - exp(-50))\n  0.13 * w + 0.24 * (1 - w)\n}"
   },
   {
    "code": {
     "calls": [],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "asset_correlation",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "0.13"
-          },
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [],
-               "name": null,
-               "op": "num",
-               "span": null,
-               "value": "1"
-              },
-              {
-               "args": [
-                {
-                 "args": [
-                  {
-                   "args": [
-                    {
-                     "args": [],
-                     "name": null,
-                     "op": "num",
-                     "span": null,
-                     "value": "50"
-                    }
-                   ],
-                   "name": null,
-                   "op": "neg",
-                   "span": null,
-                   "value": null
-                  },
-                  {
-                   "args": [],
-                   "name": "pd",
-                   "op": "sym",
-                   "span": null,
-                   "value": null
-                  }
-                 ],
-                 "name": null,
-                 "op": "mul",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": "exp",
-               "op": "call",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "sub",
-             "span": null,
-             "value": null
-            },
-            {
-             "args": [
-              {
-               "args": [],
-               "name": null,
-               "op": "num",
-               "span": null,
-               "value": "1"
-              },
-              {
-               "args": [
-                {
-                 "args": [
-                  {
-                   "args": [],
-                   "name": null,
-                   "op": "num",
-                   "span": null,
-                   "value": "50"
-                  }
-                 ],
-                 "name": null,
-                 "op": "neg",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": "exp",
-               "op": "call",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "sub",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": null,
-           "op": "div",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "mul",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "0.24"
-          },
-          {
-           "args": [
-            {
-             "args": [],
-             "name": null,
-             "op": "num",
-             "span": null,
-             "value": "1"
-            },
-            {
-             "args": [
-              {
-               "args": [
-                {
-                 "args": [],
-                 "name": null,
-                 "op": "num",
-                 "span": null,
-                 "value": "1"
-                },
-                {
-                 "args": [
-                  {
-                   "args": [
-                    {
-                     "args": [
-                      {
-                       "args": [],
-                       "name": null,
-                       "op": "num",
-                       "span": null,
-                       "value": "50"
-                      }
-                     ],
-                     "name": null,
-                     "op": "neg",
-                     "span": null,
-                     "value": null
-                    },
-                    {
-                     "args": [],
-                     "name": "pd",
-                     "op": "sym",
-                     "span": null,
-                     "value": null
-                    }
-                   ],
-                   "name": null,
-                   "op": "mul",
-                   "span": null,
-                   "value": null
-                  }
-                 ],
-                 "name": "exp",
-                 "op": "call",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": null,
-               "op": "sub",
-               "span": null,
-               "value": null
-              },
-              {
-               "args": [
-                {
-                 "args": [],
-                 "name": null,
-                 "op": "num",
-                 "span": null,
-                 "value": "1"
-                },
-                {
-                 "args": [
-                  {
-                   "args": [
-                    {
-                     "args": [],
-                     "name": null,
-                     "op": "num",
-                     "span": null,
-                     "value": "50"
-                    }
-                   ],
-                   "name": null,
-                   "op": "neg",
-                   "span": null,
-                   "value": null
-                  }
-                 ],
-                 "name": "exp",
-                 "op": "call",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": null,
-               "op": "sub",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "div",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": null,
-           "op": "sub",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "mul",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "add",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
+    "composed": null,
     "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "asset_correlation",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "0.13"
-          },
-          {
-           "args": [],
-           "name": "w",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "mul",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [
-          {
-           "args": [],
-           "name": null,
-           "op": "num",
-           "span": null,
-           "value": "0.24"
-          },
-          {
-           "args": [
-            {
-             "args": [],
-             "name": null,
-             "op": "num",
-             "span": null,
-             "value": "1"
-            },
-            {
-             "args": [],
-             "name": "w",
-             "op": "sym",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": null,
-           "op": "sub",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "mul",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "add",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
+    "expression": null,
     "formals": [],
     "not_composed_reason": "",
-    "numbers": [
-     {
-      "as_written": "0.13",
-      "decimals": 2,
-      "line": 8,
-      "unit": "",
-      "value": "0.13"
-     },
-     {
-      "as_written": "0.24",
-      "decimals": 2,
-      "line": 8,
-      "unit": "",
-      "value": "0.24"
-     },
-     {
-      "as_written": "1",
-      "decimals": 0,
-      "line": 8,
-      "unit": "",
-      "value": "1"
-     }
-    ],
-    "plumbing": false,
-    "plumbing_reason": "",
+    "numbers": [],
+    "plumbing": true,
+    "plumbing_reason": "a statement without arithmetic (it loads, declares or sets something up)",
     "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "w"
+    "strings": [
+     "lgd_floors"
     ],
+    "symbols_read": [],
     "symbols_written": []
    },
-   "content_hash": "a9202b40f8fce31fbc26427f1189c235e9d4934d73eb340bf3e35b48613c00dc",
-   "data": null,
-   "file": "R/correlation.R",
-   "file_sha256": "510d86db946df898d150ff6c4055b540cc7288621adb43e2329f9faaa63eb927",
-   "helppage": null,
-   "inside": "asset_correlation",
-   "kind": "Formula statement",
-   "lines": [
-    8,
-    8
-   ],
-   "name": "asset_correlation",
-   "parent_ref": "M-0015",
-   "read_problem": null,
-   "ref": "M-0017",
-   "roxygen": null,
-   "text": "  0.13 * w + 0.24 * (1 - w)"
-  },
-  {
-   "code": null,
-   "content_hash": "3447c496fd8bc0fcffcdf11896ad3977c18629d732d13cda7ece9753d761b96a",
+   "content_hash": "48c4d4e102d231e8e01d8e2a33f267b6f917cf305aabd44f4c2e12f3ec2d55a5",
    "data": null,
    "file": "R/data.R",
    "file_sha256": "03fd1a820eb1118ad5c1d0a91456d43f83ee4ec0cc429942199f13f899e747b2",
    "helppage": null,
    "inside": "",
-   "kind": "Roxygen block",
+   "kind": "Top-level statement",
    "lines": [
     1,
-    8
+    9
    ],
-   "name": "lgd_floors",
+   "name": "",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0018",
+   "ref": "M-0007",
    "roxygen": {
     "documents_name": "lgd_floors",
-    "documents_ref": "M-0029",
+    "documents_ref": "M-0012",
     "formulas": [],
     "tags": [
      {
@@ -4123,93 +2691,7 @@
      }
     ]
    },
-   "text": "#' Floors of the loss given default by segment\n#'\n#' @format A data frame with 3 rows and 2 columns:\n#' \\describe{\n#'   \\item{segment}{segment of the exposure}\n#'   \\item{lgd_floor}{floor of the loss given default}\n#' }\n#' @source Table 3 of the methodology"
-  },
-  {
-   "code": {
-    "calls": [],
-    "composed": null,
-    "exported": null,
-    "expression": null,
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [],
-    "plumbing": true,
-    "plumbing_reason": "a statement without arithmetic (it loads, declares or sets something up)",
-    "reads_data": [],
-    "strings": [
-     "lgd_floors"
-    ],
-    "symbols_read": [],
-    "symbols_written": []
-   },
-   "content_hash": "da795c78e2d6eb4ea4ebc3a1367047d0d67317bb4158a589ec3bd1f090c9aaef",
-   "data": null,
-   "file": "R/data.R",
-   "file_sha256": "03fd1a820eb1118ad5c1d0a91456d43f83ee4ec0cc429942199f13f899e747b2",
-   "helppage": null,
-   "inside": "",
-   "kind": "Top-level statement",
-   "lines": [
-    9,
-    9
-   ],
-   "name": "",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0019",
-   "roxygen": null,
-   "text": "\"lgd_floors\""
-  },
-  {
-   "code": null,
-   "content_hash": "813e6f28138c3b21aa6f34e665666b7356f60027515c829db934a38af665cf1b",
-   "data": null,
-   "file": "R/pd.R",
-   "file_sha256": "52d989bd5e76a6c0b23d17de21235f9a1d57f291f3139cc41c2e2d3a6dc90e4f",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    1,
-    6
-   ],
-   "name": "floor_pd",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0020",
-   "roxygen": {
-    "documents_name": "floor_pd",
-    "documents_ref": "M-0021",
-    "formulas": [],
-    "tags": [
-     {
-      "line": 1,
-      "name": "",
-      "tag": "description",
-      "text": "Floor of the probability of default\nThe probability of default is never taken below 0.03%."
-     },
-     {
-      "line": 4,
-      "name": "pd",
-      "tag": "param",
-      "text": "probability of default"
-     },
-     {
-      "line": 5,
-      "name": "floor",
-      "tag": "param",
-      "text": "the floor, defaults to 0.0003"
-     },
-     {
-      "line": 6,
-      "name": "",
-      "tag": "export",
-      "text": ""
-     }
-    ]
-   },
-   "text": "#' Floor of the probability of default\n#'\n#' The probability of default is never taken below 0.03%.\n#' @param pd probability of default\n#' @param floor the floor, defaults to 0.0003\n#' @export"
+   "text": "#' Floors of the loss given default by segment\n#'\n#' @format A data frame with 3 rows and 2 columns:\n#' \\describe{\n#'   \\item{segment}{segment of the exposure}\n#'   \\item{lgd_floor}{floor of the loss given default}\n#' }\n#' @source Table 3 of the methodology\n\"lgd_floors\""
   },
   {
    "code": {
@@ -4267,7 +2749,7 @@
     ],
     "symbols_written": []
    },
-   "content_hash": "f6783df5945cb16a2dba66cdfaffe37473fd419ec39e22655a721abd4a38f96d",
+   "content_hash": "4b12824c49192f69347a7152247b7819bb3065d49e7e52b37cb615a5d01e6c5c",
    "data": null,
    "file": "R/pd.R",
    "file_sha256": "52d989bd5e76a6c0b23d17de21235f9a1d57f291f3139cc41c2e2d3a6dc90e4f",
@@ -4275,202 +2757,45 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    7,
+    1,
     9
    ],
    "name": "floor_pd",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0021",
-   "roxygen": null,
-   "text": "floor_pd <- function(pd, floor = 0.0003) {\n  pd\n}"
-  },
-  {
-   "code": null,
-   "content_hash": "381ad8e8b302fe32ef464c9f577c2e23be324903766b90b30f6014c36d73358c",
-   "data": null,
-   "file": "R/pd.R",
-   "file_sha256": "52d989bd5e76a6c0b23d17de21235f9a1d57f291f3139cc41c2e2d3a6dc90e4f",
-   "helppage": null,
-   "inside": "",
-   "kind": "Roxygen block",
-   "lines": [
-    11,
-    18
-   ],
-   "name": "cond_pd",
-   "parent_ref": null,
-   "read_problem": null,
-   "ref": "M-0022",
+   "ref": "M-0008",
    "roxygen": {
-    "documents_name": "cond_pd",
-    "documents_ref": "M-0023",
-    "formulas": [
-     {
-      "expression": {
-       "args": [
-        {
-         "args": [],
-         "name": "pdc",
-         "op": "sym",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [
-                {
-                 "args": [],
-                 "name": "pd",
-                 "op": "sym",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": "normal_inverse",
-               "op": "call",
-               "span": null,
-               "value": null
-              },
-              {
-               "args": [
-                {
-                 "args": [
-                  {
-                   "args": [],
-                   "name": "rho",
-                   "op": "sym",
-                   "span": null,
-                   "value": null
-                  }
-                 ],
-                 "name": "sqrt",
-                 "op": "call",
-                 "span": null,
-                 "value": null
-                },
-                {
-                 "args": [
-                  {
-                   "args": [],
-                   "name": null,
-                   "op": "num",
-                   "span": null,
-                   "value": "0.999"
-                  }
-                 ],
-                 "name": "normal_inverse",
-                 "op": "call",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": null,
-               "op": "mul",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "add",
-             "span": null,
-             "value": null
-            },
-            {
-             "args": [
-              {
-               "args": [
-                {
-                 "args": [],
-                 "name": null,
-                 "op": "num",
-                 "span": null,
-                 "value": "1"
-                },
-                {
-                 "args": [],
-                 "name": "rho",
-                 "op": "sym",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": null,
-               "op": "sub",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": "sqrt",
-             "op": "call",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": null,
-           "op": "div",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "normal_cdf",
-         "op": "call",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "eq",
-       "span": null,
-       "value": null
-      },
-      "image_sha256": "",
-      "line": 14,
-      "linear": "pdc = normal_cdf((normal_inverse(pd) + sqrt(rho) * normal_inverse(0.999)) / sqrt(1 - rho))",
-      "not_readable_reason": "",
-      "readable": true,
-      "source_form": "latex"
-     }
-    ],
+    "documents_name": "floor_pd",
+    "documents_ref": "M-0008",
+    "formulas": [],
     "tags": [
      {
-      "line": 11,
+      "line": 1,
       "name": "",
       "tag": "description",
-      "text": "Conditional probability of default\nEvaluated at the 99.9th percentile of the systematic factor:\n\\deqn{PDc = \\Phi\\left(\\frac{\\Phi^{-1}(PD) + \\sqrt{\\rho} \\cdot \\Phi^{-1}(0.999)}{\\sqrt{1 - \\rho}}\\right)}"
+      "text": "Floor of the probability of default\nThe probability of default is never taken below 0.03%."
      },
      {
-      "line": 15,
+      "line": 4,
       "name": "pd",
       "tag": "param",
       "text": "probability of default"
      },
      {
-      "line": 16,
-      "name": "rho_a",
+      "line": 5,
+      "name": "floor",
       "tag": "param",
-      "text": "asset correlation"
+      "text": "the floor, defaults to 0.0003"
      },
      {
-      "line": 17,
-      "name": "q",
-      "tag": "param",
-      "text": "confidence level, defaults to 0.999"
-     },
-     {
-      "line": 18,
+      "line": 6,
       "name": "",
       "tag": "export",
       "text": ""
      }
     ]
    },
-   "text": "#' Conditional probability of default\n#'\n#' Evaluated at the 99.9th percentile of the systematic factor:\n#' \\deqn{PDc = \\Phi\\left(\\frac{\\Phi^{-1}(PD) + \\sqrt{\\rho} \\cdot \\Phi^{-1}(0.999)}{\\sqrt{1 - \\rho}}\\right)}\n#' @param pd probability of default\n#' @param rho_a asset correlation\n#' @param q confidence level, defaults to 0.999\n#' @export"
+   "text": "#' Floor of the probability of default\n#'\n#' The probability of default is never taken below 0.03%.\n#' @param pd probability of default\n#' @param floor the floor, defaults to 0.0003\n#' @export\nfloor_pd <- function(pd, floor = 0.0003) {\n  pd\n}"
   },
   {
    "code": {
@@ -4650,7 +2975,7 @@
      "b"
     ]
    },
-   "content_hash": "e7125e0cb4e91691d284b59581b507e3100212ba7cea86df494a9c96b64b6151",
+   "content_hash": "6d65bdfe2a68d4816c213ed434a9cbeb94c9d5851bfe9d7ea550081b5ea15a04",
    "data": null,
    "file": "R/pd.R",
    "file_sha256": "52d989bd5e76a6c0b23d17de21235f9a1d57f291f3139cc41c2e2d3a6dc90e4f",
@@ -4658,277 +2983,27 @@
    "inside": "",
    "kind": "Function",
    "lines": [
-    19,
+    11,
     23
    ],
    "name": "cond_pd",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0023",
-   "roxygen": null,
-   "text": "cond_pd <- function(pd, rho, q = 0.999) {\n  a <- qnorm(pd)\n  b <- sqrt(rho) * qnorm(q)\n  pnorm((a - b) / sqrt(1 - rho))\n}"
-  },
-  {
-   "code": {
-    "calls": [
-     "qnorm"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "a",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
+   "ref": "M-0009",
+   "roxygen": {
+    "documents_name": "cond_pd",
+    "documents_ref": "M-0009",
+    "formulas": [
+     {
+      "expression": {
        "args": [
         {
          "args": [],
-         "name": "pd",
+         "name": "pdc",
          "op": "sym",
          "span": null,
          "value": null
-        }
-       ],
-       "name": "normal_inverse",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "a",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [],
-         "name": "pd",
-         "op": "sym",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": "normal_inverse",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "pd"
-    ],
-    "symbols_written": [
-     "a"
-    ]
-   },
-   "content_hash": "cecabee2216caba33e22d9afffc45ed8aa183700276c50aa309f1898e1632d7d",
-   "data": null,
-   "file": "R/pd.R",
-   "file_sha256": "52d989bd5e76a6c0b23d17de21235f9a1d57f291f3139cc41c2e2d3a6dc90e4f",
-   "helppage": null,
-   "inside": "cond_pd",
-   "kind": "Formula statement",
-   "lines": [
-    20,
-    20
-   ],
-   "name": "a",
-   "parent_ref": "M-0023",
-   "read_problem": null,
-   "ref": "M-0024",
-   "roxygen": null,
-   "text": "  a <- qnorm(pd)"
-  },
-  {
-   "code": {
-    "calls": [
-     "sqrt",
-     "qnorm"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "b",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "rho",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "sqrt",
-         "op": "call",
-         "span": null,
-         "value": null
         },
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "q",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "normal_inverse",
-         "op": "call",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "b",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "rho",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "sqrt",
-         "op": "call",
-         "span": null,
-         "value": null
-        },
-        {
-         "args": [
-          {
-           "args": [],
-           "name": "q",
-           "op": "sym",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": "normal_inverse",
-         "op": "call",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": null,
-       "op": "mul",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "rho",
-     "q"
-    ],
-    "symbols_written": [
-     "b"
-    ]
-   },
-   "content_hash": "a2b582c3411ea734e68b6f70d6d4732c556b882539bac506da351f4f8b3c321e",
-   "data": null,
-   "file": "R/pd.R",
-   "file_sha256": "52d989bd5e76a6c0b23d17de21235f9a1d57f291f3139cc41c2e2d3a6dc90e4f",
-   "helppage": null,
-   "inside": "cond_pd",
-   "kind": "Formula statement",
-   "lines": [
-    21,
-    21
-   ],
-   "name": "b",
-   "parent_ref": "M-0023",
-   "read_problem": null,
-   "ref": "M-0025",
-   "roxygen": null,
-   "text": "  b <- sqrt(rho) * qnorm(q)"
-  },
-  {
-   "code": {
-    "calls": [
-     "pnorm",
-     "sqrt"
-    ],
-    "composed": {
-     "args": [
-      {
-       "args": [],
-       "name": "cond_pd",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
         {
          "args": [
           {
@@ -4936,40 +3011,10 @@
             {
              "args": [
               {
-               "args": [],
-               "name": "pd",
-               "op": "sym",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": "normal_inverse",
-             "op": "call",
-             "span": null,
-             "value": null
-            },
-            {
-             "args": [
-              {
                "args": [
                 {
                  "args": [],
-                 "name": "rho",
-                 "op": "sym",
-                 "span": null,
-                 "value": null
-                }
-               ],
-               "name": "sqrt",
-               "op": "call",
-               "span": null,
-               "value": null
-              },
-              {
-               "args": [
-                {
-                 "args": [],
-                 "name": "q",
+                 "name": "pd",
                  "op": "sym",
                  "span": null,
                  "value": null
@@ -4979,190 +3024,141 @@
                "op": "call",
                "span": null,
                "value": null
-              }
-             ],
-             "name": null,
-             "op": "mul",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": null,
-           "op": "sub",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [],
-               "name": null,
-               "op": "num",
-               "span": null,
-               "value": "1"
               },
               {
-               "args": [],
-               "name": "rho",
-               "op": "sym",
+               "args": [
+                {
+                 "args": [
+                  {
+                   "args": [],
+                   "name": "rho",
+                   "op": "sym",
+                   "span": null,
+                   "value": null
+                  }
+                 ],
+                 "name": "sqrt",
+                 "op": "call",
+                 "span": null,
+                 "value": null
+                },
+                {
+                 "args": [
+                  {
+                   "args": [],
+                   "name": null,
+                   "op": "num",
+                   "span": null,
+                   "value": "0.999"
+                  }
+                 ],
+                 "name": "normal_inverse",
+                 "op": "call",
+                 "span": null,
+                 "value": null
+                }
+               ],
+               "name": null,
+               "op": "mul",
                "span": null,
                "value": null
               }
              ],
              "name": null,
-             "op": "sub",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": "sqrt",
-           "op": "call",
-           "span": null,
-           "value": null
-          }
-         ],
-         "name": null,
-         "op": "div",
-         "span": null,
-         "value": null
-        }
-       ],
-       "name": "normal_cdf",
-       "op": "call",
-       "span": null,
-       "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "exported": null,
-    "expression": {
-     "args": [
-      {
-       "args": [],
-       "name": "cond_pd",
-       "op": "sym",
-       "span": null,
-       "value": null
-      },
-      {
-       "args": [
-        {
-         "args": [
-          {
-           "args": [
-            {
-             "args": [],
-             "name": "a",
-             "op": "sym",
+             "op": "add",
              "span": null,
              "value": null
             },
             {
-             "args": [],
-             "name": "b",
-             "op": "sym",
+             "args": [
+              {
+               "args": [
+                {
+                 "args": [],
+                 "name": null,
+                 "op": "num",
+                 "span": null,
+                 "value": "1"
+                },
+                {
+                 "args": [],
+                 "name": "rho",
+                 "op": "sym",
+                 "span": null,
+                 "value": null
+                }
+               ],
+               "name": null,
+               "op": "sub",
+               "span": null,
+               "value": null
+              }
+             ],
+             "name": "sqrt",
+             "op": "call",
              "span": null,
              "value": null
             }
            ],
            "name": null,
-           "op": "sub",
-           "span": null,
-           "value": null
-          },
-          {
-           "args": [
-            {
-             "args": [
-              {
-               "args": [],
-               "name": null,
-               "op": "num",
-               "span": null,
-               "value": "1"
-              },
-              {
-               "args": [],
-               "name": "rho",
-               "op": "sym",
-               "span": null,
-               "value": null
-              }
-             ],
-             "name": null,
-             "op": "sub",
-             "span": null,
-             "value": null
-            }
-           ],
-           "name": "sqrt",
-           "op": "call",
+           "op": "div",
            "span": null,
            "value": null
           }
          ],
-         "name": null,
-         "op": "div",
+         "name": "normal_cdf",
+         "op": "call",
          "span": null,
          "value": null
         }
        ],
-       "name": "normal_cdf",
-       "op": "call",
+       "name": null,
+       "op": "eq",
        "span": null,
        "value": null
-      }
-     ],
-     "name": null,
-     "op": "eq",
-     "span": null,
-     "value": null
-    },
-    "formals": [],
-    "not_composed_reason": "",
-    "numbers": [
-     {
-      "as_written": "1",
-      "decimals": 0,
-      "line": 22,
-      "unit": "",
-      "value": "1"
+      },
+      "image_sha256": "",
+      "line": 14,
+      "linear": "pdc = normal_cdf((normal_inverse(pd) + sqrt(rho) * normal_inverse(0.999)) / sqrt(1 - rho))",
+      "not_readable_reason": "",
+      "readable": true,
+      "source_form": "latex"
      }
     ],
-    "plumbing": false,
-    "plumbing_reason": "",
-    "reads_data": [],
-    "strings": [],
-    "symbols_read": [
-     "a",
-     "b",
-     "rho"
-    ],
-    "symbols_written": []
+    "tags": [
+     {
+      "line": 11,
+      "name": "",
+      "tag": "description",
+      "text": "Conditional probability of default\nEvaluated at the 99.9th percentile of the systematic factor:\n\\deqn{PDc = \\Phi\\left(\\frac{\\Phi^{-1}(PD) + \\sqrt{\\rho} \\cdot \\Phi^{-1}(0.999)}{\\sqrt{1 - \\rho}}\\right)}"
+     },
+     {
+      "line": 15,
+      "name": "pd",
+      "tag": "param",
+      "text": "probability of default"
+     },
+     {
+      "line": 16,
+      "name": "rho_a",
+      "tag": "param",
+      "text": "asset correlation"
+     },
+     {
+      "line": 17,
+      "name": "q",
+      "tag": "param",
+      "text": "confidence level, defaults to 0.999"
+     },
+     {
+      "line": 18,
+      "name": "",
+      "tag": "export",
+      "text": ""
+     }
+    ]
    },
-   "content_hash": "2c272d47b841828ba37b23c3c4eed08dc41db6d346c9ed31c624fe458358dd88",
-   "data": null,
-   "file": "R/pd.R",
-   "file_sha256": "52d989bd5e76a6c0b23d17de21235f9a1d57f291f3139cc41c2e2d3a6dc90e4f",
-   "helppage": null,
-   "inside": "cond_pd",
-   "kind": "Formula statement",
-   "lines": [
-    22,
-    22
-   ],
-   "name": "cond_pd",
-   "parent_ref": "M-0023",
-   "read_problem": null,
-   "ref": "M-0026",
-   "roxygen": null,
-   "text": "  pnorm((a - b) / sqrt(1 - rho))"
+   "text": "#' Conditional probability of default\n#'\n#' Evaluated at the 99.9th percentile of the systematic factor:\n#' \\deqn{PDc = \\Phi\\left(\\frac{\\Phi^{-1}(PD) + \\sqrt{\\rho} \\cdot \\Phi^{-1}(0.999)}{\\sqrt{1 - \\rho}}\\right)}\n#' @param pd probability of default\n#' @param rho_a asset correlation\n#' @param q confidence level, defaults to 0.999\n#' @export\ncond_pd <- function(pd, rho, q = 0.999) {\n  a <- qnorm(pd)\n  b <- sqrt(rho) * qnorm(q)\n  pnorm((a - b) / sqrt(1 - rho))\n}"
   },
   {
    "code": {
@@ -5213,7 +3209,7 @@
    "name": "check_inputs",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0027",
+   "ref": "M-0010",
    "roxygen": null,
    "text": "# Argument checks shared by the exported functions.\ncheck_inputs <- function(pd, lgd) {\n  if (!is.numeric(pd)) stop(\"pd must be numeric\")\n  if (!is.numeric(lgd)) stop(\"lgd must be numeric\")\n  invisible(TRUE)\n}"
   },
@@ -5261,7 +3257,7 @@
    "name": "%||%",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0028",
+   "ref": "M-0011",
    "roxygen": null,
    "text": "`%||%` <- function(a, b) if (is.null(a)) b else a"
   },
@@ -5308,7 +3304,7 @@
    "name": "lgd_floors",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0029",
+   "ref": "M-0012",
    "roxygen": null,
    "text": "segment; lgd_floor\nRetail; 0.1\nCorporate; 0.25\nBank; 0.45"
   },
@@ -5355,7 +3351,7 @@
    "name": "confidence",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0030",
+   "ref": "M-0013",
    "roxygen": null,
    "text": "parameter; value\nconfidence_level; 0.999"
   },
@@ -5375,7 +3371,7 @@
       "probability of default"
      ]
     ],
-    "generated_from_ref": "M-0014",
+    "generated_from_ref": "M-0006",
     "in_step_with_source": true,
     "rd_name": "asset_correlation",
     "title": "Asset correlation",
@@ -5390,7 +3386,7 @@
    "name": "asset_correlation",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0031",
+   "ref": "M-0014",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/correlation.R\n\\name{asset_correlation}\n\\alias{asset_correlation}\n\\title{Asset correlation}\n\\usage{\nasset_correlation(pd)\n}\n\\arguments{\n\\item{pd}{probability of default}\n}\n"
   },
@@ -5433,7 +3429,7 @@
    "name": "capital_k",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0032",
+   "ref": "M-0015",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/capital.R\n\\name{capital_k}\n\\alias{capital_k}\n\\title{Capital requirement per unit of exposure}\n\\usage{\ncapital_k(pd, lgd, segment)\n}\n\\arguments{\n\\item{pd}{probability of default}\n\\item{lgd}{loss given default}\n\\item{segment}{segment of the exposure: Retail, Corporate or Bank}\n}\n"
   },
@@ -5457,7 +3453,7 @@
       "asset correlation"
      ]
     ],
-    "generated_from_ref": "M-0022",
+    "generated_from_ref": "M-0009",
     "in_step_with_source": false,
     "rd_name": "cond_pd",
     "title": "Conditional probability of default",
@@ -5472,7 +3468,7 @@
    "name": "cond_pd",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0033",
+   "ref": "M-0016",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/pd.R\n\\name{cond_pd}\n\\alias{cond_pd}\n\\title{Conditional probability of default}\n\\usage{\ncond_pd(pd, rho)\n}\n\\arguments{\n\\item{pd}{probability of default}\n\\item{rho}{asset correlation}\n}\n"
   },
@@ -5492,7 +3488,7 @@
       "maturity in years"
      ]
     ],
-    "generated_from_ref": "M-0011",
+    "generated_from_ref": "M-0005",
     "in_step_with_source": true,
     "rd_name": "effective_maturity",
     "title": "Effective maturity",
@@ -5507,7 +3503,7 @@
    "name": "effective_maturity",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0034",
+   "ref": "M-0017",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/capital.R\n\\name{effective_maturity}\n\\alias{effective_maturity}\n\\title{Effective maturity}\n\\usage{\neffective_maturity(m)\n}\n\\arguments{\n\\item{m}{maturity in years}\n}\n"
   },
@@ -5531,7 +3527,7 @@
       "the floor, defaults to 0.0003"
      ]
     ],
-    "generated_from_ref": "M-0020",
+    "generated_from_ref": "M-0008",
     "in_step_with_source": true,
     "rd_name": "floor_pd",
     "title": "Floor of the probability of default",
@@ -5546,7 +3542,7 @@
    "name": "floor_pd",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0035",
+   "ref": "M-0018",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/pd.R\n\\name{floor_pd}\n\\alias{floor_pd}\n\\title{Floor of the probability of default}\n\\usage{\nfloor_pd(pd, floor = 0.0003)\n}\n\\arguments{\n\\item{pd}{probability of default}\n\\item{floor}{the floor, defaults to 0.0003}\n}\n"
   },
@@ -5570,7 +3566,7 @@
       "exposure at default"
      ]
     ],
-    "generated_from_ref": "M-0008",
+    "generated_from_ref": "M-0004",
     "in_step_with_source": true,
     "rd_name": "rwa",
     "title": "Risk-weighted amount",
@@ -5585,7 +3581,7 @@
    "name": "rwa",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0036",
+   "ref": "M-0019",
    "roxygen": null,
    "text": "% Generated by roxygen2: do not edit by hand\n% Please edit documentation in R/capital.R\n\\name{rwa}\n\\alias{rwa}\n\\title{Risk-weighted amount}\n\\usage{\nrwa(k, ead)\n}\n\\arguments{\n\\item{k}{capital requirement per unit of exposure}\n\\item{ead}{exposure at default}\n}\n"
   },
@@ -5623,7 +3619,7 @@
    "name": "library",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0037",
+   "ref": "M-0020",
    "roxygen": null,
    "text": "library(testthat)"
   },
@@ -5661,7 +3657,7 @@
    "name": "library",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0038",
+   "ref": "M-0021",
    "roxygen": null,
    "text": "library(capreq)"
   },
@@ -5699,7 +3695,7 @@
    "name": "test_check",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0039",
+   "ref": "M-0022",
    "roxygen": null,
    "text": "test_check(\"capreq\")"
   },
@@ -5754,7 +3750,7 @@
    "name": "the floor of the probability of default holds",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0040",
+   "ref": "M-0023",
    "roxygen": null,
    "text": "test_that(\"the floor of the probability of default holds\", {\n  expect_equal(floor_pd(0.0001), 0.0003)\n})"
   },
@@ -5816,7 +3812,7 @@
    "name": "the conditional probability exceeds the probability",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0041",
+   "ref": "M-0024",
    "roxygen": null,
    "text": "test_that(\"the conditional probability exceeds the probability\", {\n  expect_true(cond_pd(0.01, 0.2) > 0.01)\n})"
   },
@@ -5836,7 +3832,7 @@
    "name": "",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0042",
+   "ref": "M-0025",
    "roxygen": null,
    "text": "---\ntitle: \"Using capreq\"\n---\n\nThis vignette shows how the capital requirement of one exposure is obtained."
   },
@@ -5874,7 +3870,7 @@
    "name": "library",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0043",
+   "ref": "M-0026",
    "roxygen": null,
    "text": "library(capreq)"
   },
@@ -5929,7 +3925,7 @@
    "name": "k",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0044",
+   "ref": "M-0027",
    "roxygen": null,
    "text": "k <- capital_k(0.01, 0.40, \"Corporate\")"
   },
@@ -5975,7 +3971,7 @@
    "name": "rwa",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0045",
+   "ref": "M-0028",
    "roxygen": null,
    "text": "rwa(k, 1000)"
   },
@@ -5995,7 +3991,7 @@
    "name": "",
    "parent_ref": null,
    "read_problem": null,
-   "ref": "M-0046",
+   "ref": "M-0029",
    "roxygen": null,
    "text": "The floors by segment are stored in the object lgd_floors."
   }
@@ -6028,7 +4024,7 @@
      "0.45"
     ]
    ],
-   "unit_ref": "M-0029"
+   "unit_ref": "M-0012"
   },
   {
    "column_types": [
@@ -6049,7 +4045,7 @@
      "0.999"
     ]
    ],
-   "unit_ref": "M-0030"
+   "unit_ref": "M-0013"
   }
  ]
 }

@@ -72,7 +72,8 @@ class ReadingR(unittest.TestCase):
         function = next(u for u in units if u["kind"] == core.KIND_FUNCTION)
         text = core.expr_to_text(core.expr_from_dict(function["code"]["composed"]))
         self.assertEqual(text, "f = normal_cdf((normal_inverse(pd) - sqrt(rho) * normal_inverse(q)) / sqrt(1 - rho))")
-        self.assertEqual([u["name"] for u in units if u["kind"] == core.KIND_FORMULA], ["a", "b", "f"])
+        self.assertEqual([u["name"] for u in units if u["kind"] == core.KIND_FORMULA], [],
+                         "a statement is part of its function's row; the map takes the function apart")
 
     def test_supporting_code_by_syntax_never_holds_arithmetic_or_a_non_trivial_number(self):
         units, _ = helpers.units_of({"R/a.R": "check <- function(x) {\n  stopifnot(is.numeric(x))\n  invisible(TRUE)\n}\n\n"
@@ -80,11 +81,14 @@ class ReadingR(unittest.TestCase):
         plumbing = {u["name"]: bool(u["code"]["plumbing"]) for u in units if u["kind"] == core.KIND_FUNCTION}
         self.assertEqual(plumbing, {"check": True, "keep": False, "rate": False})
 
-    def test_roxygen_blocks_help_pages_tests_and_vignettes_become_units(self):
+    def test_a_roxygen_block_is_one_row_with_what_it_documents_and_no_rows_overlap(self):
         units, _ = helpers.units_of(build_samples.f_package(False))
         kinds = {kind: sum(1 for u in units if u["kind"] == kind) for kind in core.UNIT_KINDS}
-        self.assertEqual((kinds[core.KIND_ROXYGEN], kinds[core.KIND_HELP], kinds[core.KIND_TEST], kinds[core.KIND_VIGNETTE]), (7, 6, 2, 2))
-        block = next(u for u in units if u["kind"] == core.KIND_ROXYGEN and u["name"] == "cond_pd")
+        self.assertEqual((kinds[core.KIND_ROXYGEN], kinds[core.KIND_HELP], kinds[core.KIND_TEST], kinds[core.KIND_VIGNETTE]), (0, 6, 2, 2))
+        self.assertEqual(sum(1 for u in units if u["roxygen"]), 7, "each of the seven blocks, in the row of what it documents")
+        spans = sorted((u["file"], u["lines"][0], u["lines"][1]) for u in units if u.get("lines"))
+        self.assertFalse([(a, b) for a, b in zip(spans, spans[1:]) if a[0] == b[0] and b[1] <= a[2]], "no two rows share a line")
+        block = next(u for u in units if u["roxygen"] and u["name"] == "cond_pd")
         self.assertEqual([t["name"] for t in block["roxygen"]["tags"] if t["tag"] == "param"], ["pd", "rho", "q"])
         self.assertTrue(block["roxygen"]["formulas"][0]["readable"])
         target = next(u for u in units if u["ref"] == block["roxygen"]["documents_ref"])
@@ -197,6 +201,48 @@ class ImplementationMapSample(unittest.TestCase):
                         self.assertIn(source, nodes, "%s: %s comes from %s, which is not a node" % (sample, record["node"], source))
                 if record.get("code") and record.get("function_ref"):
                     self.assertIn(record["code"], text[record["function_ref"]], "not as written")
+
+    def test_a_value_set_four_times_is_four_steps_each_reading_the_one_before(self):
+        """Found on a real package: tie_model_call sets tie_outputs four times. As one node, the map showed
+        the first step's code under the last; as four, each reads the one before it, and a named element
+        of a list - overrides_and_caps - is a value of its own, computed by the function it calls."""
+        code = ("tie_score_anchor <- function(tie_inputs, tie_outputs) tie_outputs$profile + tie_inputs$x\n"
+                "tie_anchor_overrides <- function(tie_inputs, tie_outputs) min(tie_outputs$anchor, tie_inputs$cap)\n"
+                "#' @title Model Call\n#' @export\n"
+                "tie_model_call <- function(tie_inputs = NULL) {\n"
+                "  tie_outputs <- list(economic = tie_inputs$gdp * 2, placeholder = NA)\n"
+                "  tie_outputs <- c(list(profile = tie_outputs$economic + 1), tie_outputs)\n"
+                "  tie_outputs <- c(list(anchor = tie_score_anchor(tie_inputs, tie_outputs)), tie_outputs)\n"
+                "  tie_outputs <- c(list(overrides_and_caps = tie_anchor_overrides(tie_inputs, tie_outputs)), tie_outputs)\n"
+                "}\n")
+        units, _ = helpers.units_of({"R/model-engine.R": code})
+        self.assertEqual([(u["kind"], bool(u["roxygen"])) for u in units if u["name"] == "tie_model_call"], [(core.KIND_FUNCTION, True)],
+                         "the roxygen block and the function are one row")
+        flow = runner.Dataflow(units, (), runner.flowr_ready()).run()
+        nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
+        steps = sorted((n for n in nodes.values() if n["function"] == "tie_model_call" and n["name"] == "tie_outputs"), key=lambda n: n["line"])
+        self.assertEqual(len(steps), 4)
+        for before, after in zip(steps, steps[1:]):
+            self.assertIn(before["node"], after["from"], "each step reads the one before it")
+        element = next(n for n in nodes.values() if n["name"] == "overrides_and_caps")
+        self.assertIn(element["node"], steps[3]["from"])
+        call = nodes[element["from"][0]]
+        self.assertEqual((call["kind"], call["callee"], call["bindings"]["tie_outputs"]), ("call", "tie_anchor_overrides", [steps[2]["node"]]))
+        self.assertEqual(nodes["tie_model_call:return"]["from"], [steps[3]["node"]], "what the function returns is the last step")
+        self.assertEqual(element["code"], "overrides_and_caps = tie_anchor_overrides(tie_inputs, tie_outputs)",
+                         "an element's own code, not the whole statement it sits in")
+        placeholder = next(n for n in nodes.values() if n["name"] == "placeholder")
+        self.assertEqual((placeholder["from"], placeholder["code"]), ([], "placeholder = NA"))
+        self.assertIn(placeholder["node"], steps[0]["from"], "an element holding NA is listed as much as any other")
+
+    def test_flowr_lives_in_a_folder_of_this_users_own_and_is_ready_only_once_it_has_run(self):
+        """Found on Databricks: a shared cluster runs every notebook session as a system user of its own,
+        and one folder for everyone left the next session unable to write into it (Errno 13)."""
+        folder = runner.flowr_ready("")
+        self.assertTrue(folder.endswith("-%d" % os.getuid()), folder)
+        self.assertEqual(os.stat(folder).st_mode & 0o777, 0o700, "no other session can read or change it")
+        nodes, edges = runner.flowr_read(folder, "y <- 2\n")
+        self.assertTrue(nodes and edges is not None, "ready means it has read R code here")
 
     def test_the_pronouns_of_dplyr_are_read_as_dplyr_reads_them(self):
         """Packages written for CRAN name columns as .data$x, to keep the checks quiet, and values of the
@@ -323,12 +369,23 @@ class ImplementationMapSheet(unittest.TestCase):
             if row["fn_ref"]:
                 self.assertTrue(row["function_name"], row["map_id"])
 
+    def test_a_terminal_input_says_so_and_a_final_output_shows_its_function(self):
+        """Found on a real run: tie_inputs showed the whole function as its code, though nothing computes it;
+        and the final output's row repeated its child's statement instead of the function that assembles it."""
+        for row in self.rows:
+            if row["role"].startswith("Raw input"):
+                self.assertTrue(row["output_variable"].endswith(" (terminal input)"), row)
+                self.assertEqual(row["ov_code"], "", row["output_variable"])
+        top = self.rows[0]
+        self.assertTrue(top["ov_code"].startswith("harbour_rating <- function("), top["ov_code"][:60])
+        self.assertNotEqual(top["ov_code"], self.rows[1]["ov_code"], "a parent does not repeat its child's code")
+
     def test_every_argument_is_a_variable_of_a_row_beneath_it(self):
         by_id = {row["map_id"]: row for row in self.rows}
         for row in self.rows:
             children = [other for other in self.rows if other["map_id"].rsplit(".", 1)[0] == row["map_id"] and other["map_id"] != row["map_id"]]
             named = [name.strip() for name in row["arguments"].split(";") if name.strip()]
-            self.assertEqual(named, [child["output_variable"] for child in children], row["map_id"])
+            self.assertEqual(named, [child["output_variable"].replace(" (terminal input)", "") for child in children], row["map_id"])
             self.assertTrue(all(child["map_id"] in by_id for child in children))
 
     def test_the_map_ids_dissect_into_columns_that_filter_the_tree(self):
@@ -344,7 +401,7 @@ class ImplementationMapSheet(unittest.TestCase):
         with open(os.path.join(helpers.SAMPLES_DIR, "J_pipeline", "gold_map.yaml"), encoding="utf-8") as handle:
             gold = yaml.safe_load(handle)
         self.assertEqual(self.rows[0]["output_variable"], "harbour_rating")
-        variables = {row["output_variable"] for row in self.rows}
+        variables = {row["output_variable"].replace(" (terminal input)", "") for row in self.rows}
         for kind in ("argument", "column_of_an_argument", "stored_data", "hard_coded_number"):
             for name in gold["raw_inputs"][kind]:
                 self.assertIn(name, variables, kind)
@@ -378,10 +435,8 @@ class ImplementationMapSheet(unittest.TestCase):
         links = {cell.value: cell.hyperlink.location for row in sheet.iter_rows(min_row=2) for cell in row if cell.hyperlink}
         self.assertTrue(links, "a reference links to the row that holds it")
         model_rows = {row[0].value: number for number, row in enumerate(book["Chunks_Model"].iter_rows(min_row=2), start=2)}
-        concept_rows = {row[0].value: number for number, row in enumerate(book["Concepts"].iter_rows(min_row=2), start=2)}
-        for value, location in links.items():
-            where = model_rows if value.startswith("M-") else concept_rows
-            self.assertEqual(location, "'%s'!A%d" % ("Chunks_Model" if value.startswith("M-") else "Concepts", where[value]), value)
+        for value, location in links.items():                   # Function Name - Model Ref, to its row on Chunks_Model
+            self.assertEqual(location, "'Chunks_Model'!A%d" % model_rows[value], value)
 
     def test_capital_k_enters_each_call_with_that_calls_arguments(self):
         import standin_chat
@@ -389,7 +444,7 @@ class ImplementationMapSheet(unittest.TestCase):
         rows = runner.implementation_map(runner.open_store(paths, settings), settings)
         top = [row for row in rows if row["map_id"] == "01"][0]
         self.assertEqual((top["output_variable"], top["function_name"]), ("capital_k", "capital_k"))
-        variables = {row["output_variable"] for row in rows}
+        variables = {row["output_variable"].replace(" (terminal input)", "") for row in rows}   # the name, without the label
         self.assertTrue({"lgd", "segment", "lgd_floors", "0.999"} <= variables, sorted(variables))
 
 
@@ -415,9 +470,6 @@ class MapSignOff(unittest.TestCase):
             if "QUESTION TYPE: trace-gap" in main_prompt:
                 return {"answer": json.dumps({"action": "declare_edge",
                                               "args": {"value": "steps", "from": ["rating_scale"], "quote": "steps <- invented(code)"}})}
-            if "QUESTION TYPE: name-steps" in main_prompt:
-                shown = re.findall(r"^\[(S\d+)\]", main_prompt, re.M)
-                return {"answer": json.dumps({"names": {step: "a critical error needing urgent attention" for step in shown}})}
             return standin_chat.chat_well_behaved(system_prompt, main_prompt)
         text = develop.map_report(misbehaving, samples=("J_pipeline",), label="a misbehaving model")
         self.assertIn("**The bar is NOT met.**", text)
