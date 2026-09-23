@@ -89,9 +89,10 @@ class NotebookCells(unittest.TestCase):
             return Reply()
 
         import types
-        widgets = types.SimpleNamespace(get=lambda name: {"projects_dir": helpers.scratch(), "model_id": "NBCHAT",
+        widgets = types.SimpleNamespace(get=lambda name: {"model_id": "NBCHAT",
                                                           "project": "2026-01-01"}.get(name, ""))
-        space = {"live": live_values.get, "verifier": runner, "w": widgets, "os": os, "__name__": "notebook"}
+        space = {"live": live_values.get, "verifier": runner, "w": widgets, "os": os, "PROJECTS": helpers.scratch(),
+                 "__name__": "notebook"}
         with mock.patch("requests.post", post), contextlib.redirect_stdout(io.StringIO()):
             exec(compile(source, "cell 2", "exec"), space)
             live_values.update("https://gateway.example/chat", "tok-SECOND", "mel_lorenzo")
@@ -107,9 +108,9 @@ class NotebookCells(unittest.TestCase):
         cells = self.cells()
         self.assertEqual(len(cells), 4)
         projects = helpers.scratch()
-        values = {"model_id": "NBTEST", "projects_dir": projects, "llm_token": "tok-SECRET-123", "llm_endpoint": "https://x",
-                  "reviewer_id": "analyst.one", "project": "", "run": "",
-                  "jfrog_index_url": "", "concurrency_limit": "4", "token_cap": "40000", "scratch_dir": ""}
+        values = {"model_id": "NBTEST", "llm_token": "tok-SECRET-123", "llm_endpoint": "https://x",
+                  "reviewer_id": "analyst.one", "project": "",
+                  "jfrog_index_url": "", "concurrency_limit": "4", "token_cap": "40000"}
         space = {"dbutils": FakeDbutils(values), "__name__": "notebook"}
 
         def run_cell(number, replace=None):
@@ -125,7 +126,8 @@ class NotebookCells(unittest.TestCase):
         previous = os.getcwd()
         os.chdir(helpers.ROOT_DIR)
         try:
-            shown = run_cell(1, {"HOME = notebook_folder()": "HOME = %r" % helpers.ROOT_DIR})
+            shown = run_cell(1, {"HOME = notebook_folder()": "HOME = %r" % helpers.ROOT_DIR,     # projects go to scratch,
+                                 'PROJECTS = os.path.join(HOME, "Projects")': "PROJECTS = %r" % projects})   # never the repo
             self.assertIn("engine", shown)
             self.assertNotIn("tok-SECRET-123", shown, "the token is never printed")
             self.assertIn("14 characters", shown)

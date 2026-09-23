@@ -191,7 +191,7 @@ class Concepts(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.paths, cls.settings, _ = helpers.run_sample("F_capital", settings={"concept_subject": "financial"})
+        cls.paths, cls.settings, _ = helpers.run_sample("F_capital")
         cls.store = runner.open_store(cls.paths, cls.settings)
         cls.concepts, cls.per_unit = review.latest_concepts(cls.store.read)
 
@@ -234,10 +234,10 @@ class Concepts(unittest.TestCase):
             with self.assertRaises(review.Rejected):
                 review.validate_concepts(question, bad)
 
-    def test_the_chunks_sheets_show_only_the_units_words_under_the_renamed_header(self):
+    def test_the_chunks_sheets_show_only_the_units_words_under_their_header(self):
         import openpyxl
         book = openpyxl.load_workbook(os.path.join(self.paths.run_dir, "Output.xlsx"), read_only=True)
-        header = "Extracted financial concepts with candidate equivalent in model"
+        header = "Extracted concepts with candidate equivalent in model"
         rows = list(book["Chunks_Canon"].iter_rows(values_only=True))
         for name in ("Chunks_Canon", "Chunks_Doc", "Chunks_Model"):
             self.assertIn(header, next(book[name].iter_rows(max_row=1, values_only=True)), name)

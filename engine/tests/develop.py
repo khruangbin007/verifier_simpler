@@ -1025,13 +1025,12 @@ def widget(name, default, label):
         return default
 widget("llm_endpoint", "", "01 LLM endpoint"); widget("llm_token", "", "02 LLM token")
 widget("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)")
-widget("model_id", "", "04 Model ID"); widget("project", "", "05 Project date (empty = new project today)"); widget("run", "", "06 Run (empty = new run)")
-widget("projects_dir", os.path.join(HOME, "Projects"), "07 Projects folder"); widget("jfrog_index_url", "", "08 Package index URL")
-widget("concurrency_limit", "4", "09 Concurrency limit"); widget("token_cap", "40000", "10 Token cap")
-widget("scratch_dir", "", "11 Scratch folder (usually empty)")
-widget("concept_subject", "", "12 Subject of the documents, for concepts (e.g. financial)")
-widget("flowr_archive", "", "13 flowR archive (empty = the pinned release from GitHub)")
-for old_widget in ("llm_user_id", "reviewer_role"):      # widgets of an earlier notebook, no longer used
+widget("model_id", "", "04 Model ID"); widget("project", "", "05 Project date (empty = new project today)")
+widget("jfrog_index_url", "", "06 Package index URL")
+widget("concurrency_limit", "4", "07 Concurrency limit"); widget("token_cap", "40000", "08 Token cap")
+PROJECTS = os.path.join(HOME, "Projects")                # every project, in its own folder: <model id>/<date>/Inputs
+for old_widget in ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive"):
+    # widgets of an earlier notebook, no longer used
     try:
         w.remove(old_widget)
     except Exception:
@@ -1100,19 +1099,18 @@ else:
 
     def current_settings():
         return verifier.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
-                                     "reviewer_id": w.get("reviewer_id"), "concept_subject": w.get("concept_subject").strip(),
-                                     "flowr_archive": w.get("flowr_archive").strip()})
+                                     "reviewer_id": w.get("reviewer_id")})
 
     def open_current():
         """The run the widgets name, opened; or None with a message when the project has no inputs yet. Used
         by cells 3, 4 and 5, so that a cell run before cell 3 - or after Python restarted - says what to do."""
-        _, missing = verifier.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
+        _, missing = verifier.setup_project(PROJECTS, w.get("model_id"), w.get("project"))
         if missing:
             print("\n".join(missing)); print("Put the files in, then run cell 3.")
             return None
-        if globals().get("PATHS") is not None and PATHS.model_id == w.get("model_id") and (not w.get("project") or PATHS.project_date == w.get("project")) and (not w.get("run") or PATHS.run_id == w.get("run")):
+        if globals().get("PATHS") is not None and PATHS.model_id == w.get("model_id") and (not w.get("project") or PATHS.project_date == w.get("project")):
             return PATHS                               # keep working on the run this session opened
-        return verifier.open_run(w.get("projects_dir"), w.get("model_id"), w.get("project"), w.get("run"), scratch_root=w.get("scratch_dir"))
+        return verifier.open_run(PROJECTS, w.get("model_id"), w.get("project"))   # a new session starts a new run
     print("Folder:", HOME, "| Python", sys.version.split()[0], "| engine", verifier.ENGINE_VERSION)
     for name in REQUIRED + ("pdfplumber", "pypdf"):
         try:
@@ -1122,20 +1120,21 @@ else:
     token = LIVE.get("llm_token")
     print("Endpoint set:", bool(LIVE.get("llm_endpoint")), "| token:", ("%d characters, pasted %.1f minutes ago" % (len(token), LIVE.token_age_minutes())) if token else "none pasted yet")
     try:                                            # flowR reads the R code: fetched once, checked against its pinned SHA-256
-        print("flowR %s ready in %s" % (verifier.FLOWR_VERSION, verifier.flowr_ready(w.get("flowr_archive").strip())))
+        staged = os.path.join(HOME, verifier.FLOWR_URL.format(verifier.FLOWR_VERSION).rsplit("/", 1)[-1])
+        print("flowR %s ready in %s" % (verifier.FLOWR_VERSION, verifier.flowr_ready(staged if os.path.exists(staged) else "")))
     except Exception as problem:
         print("flowR IS NOT READY: %s" % problem)
-        if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by staging it in a Volume
-            print("The cluster could not download it. Download %s on an approved machine, put it in a Volume, and give"
-                  " its path in widget 13." % verifier.FLOWR_URL.format(verifier.FLOWR_VERSION))
+        if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by putting it here
+            print("The cluster could not download it. Download %s on an approved machine and put it in %s, next to this"
+                  " notebook." % (verifier.FLOWR_URL.format(verifier.FLOWR_VERSION), HOME))
     print("")
     print("THE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
     print("  Cell 4  check the finished run folder against its own record.")
-    print("Widgets 01 to 03 carry the endpoint, the token and your user id; widget 04 the model id, 05 the")
-    print("project date, 07 the projects folder. Paste a fresh token into widget 02 at any time - it is read")
-    print("at the moment each call is made, so a run already working picks it up.")
+    print("Widgets 01 to 03 carry the endpoint, the token and your user id; 04 the model id; 05 the project date.")
+    print("Paste a fresh token into widget 02 at any time - it is read at the moment each call is made, so a run")
+    print("already working picks it up.")
     print("Next: cell 2.")
 '''
 
@@ -1179,7 +1178,7 @@ except Exception as problem:
     print("chat() did not answer (%s: %s). Check widgets 01, 02 and 03, then run this cell again."
           % (type(problem).__name__, problem))
 else:
-    project_dir, missing = verifier.setup_project(w.get("projects_dir"), w.get("model_id"), w.get("project"))
+    project_dir, missing = verifier.setup_project(PROJECTS, w.get("model_id"), w.get("project"))
     print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
     for _, folder, note in verifier.INPUT_FOLDERS:
         print("  %s" % os.path.join(project_dir, "Inputs", folder))

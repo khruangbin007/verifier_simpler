@@ -5197,7 +5197,7 @@ def trace_dataflow(ctx):
     a dplyr verb creates, every stored table, file and hard-coded number, and the gaps code cannot follow.
     Proposes the final outputs: exported functions nothing in the package calls, and those its tests and
     vignettes call. Enforces: R2, R4, R7, R14"""
-    flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"], flowr_ready(ctx.settings["flowr_archive"]))
+    flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"], flowr_ready())
     records = flow.run()
     count = lambda kind: sum(1 for r in records if r.get("kind") == kind)
     gaps = [r for r in records if r["record_type"] == "gap"]
@@ -6027,12 +6027,11 @@ def likely_concepts(text, concepts, limit):
 def concept_match_question(group, shown, by_id, settings):
     """One question: some passages, and the model concepts they may name, each with the names the code
     gives it and how the model describes it. The model says which it names and copies the words."""
-    subject = settings.get("concept_subject") or ""
     listing = "\n".join("[%s] %s%s" % (cid, " / ".join(by_id[cid]["identifiers"]),
                                        " \u2014 described in the model as: %s" % "; ".join(by_id[cid]["described"]) if by_id[cid]["described"] else "")
                         for cid in shown)
     passages = "\n".join("[%s]\n%s" % (ref, words) for ref, words in group)
-    label = ("THE DOCUMENTS ARE ABOUT: %s\n" % subject if subject else "") + "THE MODEL'S CONCEPTS\n" + listing + "\nTHE PASSAGES"
+    label = "THE MODEL'S CONCEPTS\n" + listing + "\nTHE PASSAGES"
     return narrow_question("match-concepts", group[0][0], [(label, passages)], settings,
                            more={"unit_texts": {ref: words for ref, words in group}, "concept_ids": list(shown)})
 
@@ -6923,9 +6922,8 @@ DEFAULT_SETTINGS = {
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True,
-    "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
-    "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
-    "flowr_archive": "", "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
+    "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"], "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
+    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -8247,8 +8245,6 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
     wrap = Alignment(wrap_text=True, vertical="top")
     for number, column in enumerate(columns, start=1):
         header = column["header"]
-        if column["field"] == "concepts" and settings.get("concept_subject"):   # "Extracted financial concepts with ..."
-            header = header.replace("Extracted concepts", "Extracted %s concepts" % settings["concept_subject"].strip().lower(), 1)
         cell = sheet.cell(row=1, column=number, value=header)
         cell.font, cell.alignment = Font(bold=True), wrap
         cell.fill = PatternFill("solid", start_color=colours[column["group"]])
