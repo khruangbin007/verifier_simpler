@@ -132,3 +132,7 @@ map-bar,2026-09-23,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=1
 freeze,2026-09-23,the four settled samples,deliberate,"Chunks_Model rows made mutually exclusive and self-contained: a roxygen block is one row with what it documents, statements and functions inside a function are part of its row, and two rows over the same lines are one. Fewer model_units; no field removed or renamed."
 map-bar,2026-09-23,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=1 steps=137
 map-bar,2026-09-23,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=137
+map-bar,2026-09-23,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=1 steps=137
+map-bar,2026-09-23,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=137
+map-bar,2026-09-23,J_pipeline,the real model,gaps_open=1 held=2 of=4 refused=1 steps=137
+map-bar,2026-09-23,J_pipeline,stand-in,gaps_open=0 held=4 of=4 refused=0 steps=137

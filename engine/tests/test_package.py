@@ -419,10 +419,8 @@ class ImplementationMapSheet(unittest.TestCase):
         links = {cell.value: cell.hyperlink.location for row in sheet.iter_rows(min_row=2) for cell in row if cell.hyperlink}
         self.assertTrue(links, "a reference links to the row that holds it")
         model_rows = {row[0].value: number for number, row in enumerate(book["Chunks_Model"].iter_rows(min_row=2), start=2)}
-        concept_rows = {row[0].value: number for number, row in enumerate(book["Concepts"].iter_rows(min_row=2), start=2)}
-        for value, location in links.items():
-            where = model_rows if value.startswith("M-") else concept_rows
-            self.assertEqual(location, "'%s'!A%d" % ("Chunks_Model" if value.startswith("M-") else "Concepts", where[value]), value)
+        for value, location in links.items():                   # Function Name - Model Ref, to its row on Chunks_Model
+            self.assertEqual(location, "'Chunks_Model'!A%d" % model_rows[value], value)
 
     def test_capital_k_enters_each_call_with_that_calls_arguments(self):
         import standin_chat

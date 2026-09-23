@@ -466,21 +466,6 @@ def expr_to_text(expr, parent_rank=0):
 # the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
 # version and asks new questions. Enforces: R3, R5, R9
 PROMPTS = {
-    'match-concepts': r'''VERSION 1
-=== SYSTEM ===
-You check where documents name the concepts of a model. You are given the model's concepts - each with the names its code gives it and how the model itself describes it - and some passages from the methodology and the documentation. For each passage you say which of those concepts it names, and you copy the words the passage uses for it, exactly as the passage writes them: an acronym, an abbreviation, a synonym or the full name. You never name a concept that is not listed, never write words the passage does not contain, and leave out a concept the passage does not name. Reply with JSON only. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: match-concepts
-TASK: For each passage below, say which of the model's concepts it names, and copy its words for each.
-[[UNIT]]
-ANSWER FORMAT
-{"units": {"C-0001": [{"concept": "K-0007", "words": "the words exactly as the passage writes them"}]}}
-Rules on your answer:
-- every key of units must be the reference of a passage shown above, and every concept must be one of the model's concepts listed above;
-- every words must appear in that passage word for word (upper and lower case may differ);
-- name a concept only where the passage means that same thing; where in doubt, leave it out;
-- give an empty list for a passage that names none of them.
-''',
     'trace-gap': r'''VERSION 1
 === SYSTEM ===
 You trace how an R package computes its values, one step at a time. You are given one place in its code that the tool could not follow by reading it, what the tool already knows about that function, and a list of actions. Each turn you choose exactly one action; the tool carries it out and shows you what it found. Once you know what the value at that place is computed from, you declare it, copying the code that shows it word for word. You never use a name that is not in the code, never write code of your own, and you stop when the place is traced or when the code cannot tell. Reply with JSON only. Do not rate importance.
@@ -506,17 +491,6 @@ Rules on your answer:
 - a quote must be copied from the code word for word;
 - never repeat an action you have already taken;
 - end with done once you have declared what the value is computed from, or with give_up.
-''',
-    'interpret-code': r'''VERSION 1
-=== SYSTEM ===
-You explain what one piece of R code does, in plain words, for a reader who validates models and is not a programmer. You are shown the piece itself and where it sits in the whole package. Say only what the code shows; do not guess at intentions the code does not show. Reply with JSON only. Quote exact characters of the code; do not paraphrase inside the quotation field. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: interpret-code
-TASK: Say what the piece of code does and what it is for within the package, in at most 80 words. Name what it takes in and what it produces. Where it applies a number, a limit or a condition, say so with the number exactly as written. Use what you are told about the package only to say what the piece is for; describe the piece, not the package.
-[[UNIT]]
-[[ABOUT]]
-ANSWER FORMAT
-{"interpretation":"plain words, at most 80 words","quote_from_unit":"exact characters of the piece of code that the interpretation chiefly rests on"}
 ''',
     'judge-doc-to-canon': r'''VERSION 1
 === SYSTEM ===
@@ -595,107 +569,8 @@ ANSWER FORMAT
 Allowed relation words: describes, consistent with, inconsistent with.
 If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
 ''',
-    'package-plan': r'''VERSION 2
-=== SYSTEM ===
-THE READER'S PROCEDURE
-1. Unpack the package - a tarball, a ZIP, or a source folder put in unpacked - refusing any member that breaks the limits; where it is not an R package, say so. 2. Work out which reader each member gets from where it lies and what it is; where the built-in tests give a member none, ask which existing reader should take it and apply the answer. 3. Parse R source into functions, objects and formula statements. 4. Decode stored data into tables of values. 5. Read help pages and vignettes. 6. Tie each roxygen block to what it documents. 7. Number every unit in a fixed order.
+}
 
-QUALITY RULES THE READER WORKS UNDER
-- Every non-blank line of every member that holds text lies inside a unit, is refused with a reason, or is carried by a unit that says it could not be read. A member the tool cannot read as text is counted as one piece of its own.
-- A reader chosen for a member changes only which existing reader takes it. It never changes how that reader works.
-- Where a member's first lines show assignments and calls it is R code, wherever in the package it lies.
-
-THE READER NEVER
-- Never leave a member of the package out of the account in silence. An open account is written down, and the run goes on.
-- Never write text of your own into an answer about a package. Name only paths you were shown as not placed, and give only readers from the list you were given.
-- Never ask for a member to be skipped: there is no such reader. A file that cannot be made sense of becomes a unit that says so.
-- Never let an answer reach the parsing of R code, the building of expression trees or the decoding of stored data. Reading code is a parse, not an opinion.
-Never execute or evaluate anything from a package. Never import a package to inspect it.
-
-You are given the list of files inside one R package, with how large each is and which reader the built-in tests already give it. For the files those tests leave unplaced you are shown the first few lines. Your task is to say WHICH EXISTING READER should take each unplaced file.
-You choose from a fixed list only. You never write text of your own into an answer: every path you name must be one shown to you as not placed, and every reader you give must be one of the readers listed. Reply with JSON only. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: package-plan
-TASK: Give every file marked NOT PLACED one of the readers below.
-THE FILES IN THE PACKAGE
-[[UNIT]]
-READERS YOU MAY USE
-r-source: R code, to be parsed into functions and objects. Use for a file of R code wherever it lies, including a folder the tests do not expect.
-r-data: stored data to be decoded into a table of values.
-help-page: a written help page for an object (an .Rd page).
-vignette: a longer written piece mixing prose and code.
-table-file: a table of values stored as text, such as comma- or tab-separated rows.
-prose: plain writing with no code and no table in it. Use this when none of the others fits.
-WHAT TO LOOK FOR
-R code usually shows assignments with <- and calls with round brackets. A help page shows braces after a backslash. A vignette opens with a block between two lines of three dashes, or holds fenced code. A table file shows the same separator repeated on every line, with a first line of column names.
-ANSWER FORMAT
-{"readers":{"inst/extra/helpers.R":"r-source","inst/extdata/floors.csv":"table-file"},"why":{"inst/extra/helpers.R":"a short reason in plain words"}}
-Rules on your answer:
-- every key of readers must be a path shown to you above as NOT PLACED;
-- every file marked NOT PLACED must appear in readers: leave none out;
-- every value of readers must be one of the six readers listed above;
-- there is no reader that means skip, ignore or leave unread. A file you cannot make sense of is given "prose", and the reader will say plainly that it could not read it;
-- every key of why, if you give any, must also be a path marked NOT PLACED.
-''',
-    'second-opinion': r'''VERSION 1
-=== SYSTEM ===
-You look for differences between one item and lettered passages. Reply with JSON only. Use only the letters shown. Quote exact words; do not paraphrase inside quotation fields. Naming no difference is a valid and common answer. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: second-opinion
-TASK: Identify any difference between what the unit does or states and what the passages state.
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"differences":[{"letter":"A","quote_from_passage":"exact words","quote_from_unit":"exact words","what_differs":"one plain sentence"}]}
-If there is no difference, return {"differences":[]}.
-''',
-    'slice-rules': r'''VERSION 2
-=== SYSTEM ===
-THE READER'S PROCEDURE
-1. Detect the format from the content, looking inside a ZIP to tell a Word file from a spreadsheet or a slide deck; refuse a format the tool does not read in plain words with a next step, and never decode binary data as text; convert Markdown, delimited rows, spreadsheets, RTF and LaTeX to markup the walker already reads. 2. Repair what must be repaired and record each repair. 3. Work out what each tag of the file is for; where the built-in rules are unsure, ask what the shape of the file means and apply the answer under everything the rules already know. 4. Read blocks in document order. 5. Infer levels where nesting is flat. 6. Keep each table whole. 7. Read equation markup into linear notation and an expression tree. 8. Hash every chunk.
-
-QUALITY RULES THE READER WORKS UNDER
-- Every smallest piece of text in the file ends in one named class: kept in a unit, kept in a unit's other fields, read into another form, left out under a named rule, or reported as not read. What is in none of them is counted and located on Model_Package_Info.
-- Nothing a unit shows may come from anywhere but the file or a transform named in the code.
-- A heading names the block around it: it usually occurs about as often as that block, holds short text of its own, and opens it. A paragraph holds longer text and does not open the block around it. A tag that holds other tags is a container or a heading, never a paragraph: reading it as a paragraph would make the file say twice what it says once.
-- Where the words of a file are already read correctly and only its shape is in doubt, change the shape and leave the words exactly where they are.
-A table is never split and never merged with its neighbours. A figure or equation that cannot be read is still a chunk. Reading order is stable.
-
-THE READER NEVER
-- Never close the account over a file that yielded nothing and said nothing: a large file with no text and no reason is a file that was not opened.
-- Never leave a piece of the file out of the account in silence. An open account is written down, and the run goes on.
-- Never write text of your own into an answer about a file's shape. Name only tags you were shown, and give only families from the list you were given. There is no way to tell the reader to skip a tag, and no answer may leave a word of the file out of a unit.
-- Never overrule what a person wrote in Inputs/tag_rules.yaml, a schema the tool already ships, or a table whose rows were counted. Speak where the reader guessed, and nowhere else.
-Never execute or evaluate anything from an input. Never skip a block silently. Never keep a document-type declaration.
-
-You are given the SHAPE of one document: a list of the tags it uses and how each behaves, with a few short samples. You never see the document. Your task is to say what each tag is FOR, so that a reader can slice the document into citable units.
-You choose from fixed lists only. You never write text of your own into an answer: every tag you name must be one shown to you, and every family you give must be one of the families listed. Reply with JSON only. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: slice-rules
-TASK: Give each tag a family, and say which tags are headings of the blocks around them.
-THE SHAPE OF THE FILE
-[[UNIT]]
-FAMILIES YOU MAY USE
-heading: names the section around it, and everything below it belongs under it
-container: holds other blocks and little or no text of its own
-paragraph: a statement, a sentence or a run of prose
-list_container: holds items; list_item: one item of such a list
-These five are the whole list. Tables, rows, cells, captions, figures, equations and inline marks are worked out by the reader itself and are not yours to give; where a tag is one of those it is marked ALREADY READ AS and you should leave it alone.
-WHAT TO LOOK FOR
-A heading usually occurs about as often as the container it names, holds short text of its own, and is the FIRST CHILD of that container. A paragraph holds longer text and is not the first child. A container holds other tags and little or no text of its own.
-A tag marked ALREADY READ AS is one the reader already knows for certain; leave it exactly as it is. A tag marked GUESSED AS is one the reader worked out on the spot and is unsure of: that is where your answer is wanted. A tag marked neither is one the reader has nothing at all to say about.
-ANSWER FORMAT
-{"families":{"tagname":"heading","othertag":"paragraph"},"levels":{"tagname":1},"why":{"tagname":"a short reason in plain words"}}
-Rules on your answer:
-- every key of families, levels and why must be a tag shown to you above;
-- every value of families must be one of the five families listed above;
-- a tag shown as holding other tags may only be heading, container or list_container: reading it as a paragraph would say its contents twice;
-- every value of levels must be a whole number from 1 to 9, and levels may name only tags you called heading;
-- "ignore" is not a family you may use, and there is no way to tell the reader to skip a tag;
-- give a family for every tag you are shown, including ones already read.
-'''}
 
 def load_prompt(question_type):
     """A prompt template: its version line, its SYSTEM part and its MAIN part with slots."""
@@ -5770,7 +5645,6 @@ def table_shape_score(table, chunk_table, stop):
 
 # ---------------------------------------------------------------- fusion and reasons
 REASON_TEMPLATES = {      # every phrase the search stage can put into "How established"
-    "concepts": "shares the concept {detail}",
     "fields": "shares the words {detail}",
     "bridge": "{detail}",
     "references": "it is cited as written ({detail})",
@@ -5778,21 +5652,19 @@ REASON_TEMPLATES = {      # every phrase the search stage can put into "How esta
     "signatures": "its formula has a similar structure",
     "table shape": "its table has similar headers, row keys or values",
     "propagation": "inherited from {detail}"}
-SIGNAL_ORDER = ("concepts", "references", "fields", "bridge", "anchors", "table shape", "signatures", "propagation")
+SIGNAL_ORDER = ("references", "fields", "bridge", "anchors", "table shape", "signatures", "propagation")
 
-def fuse(rankings, settings, cited=(), reserve_from=("concepts", "anchors", "propagation")):
+def fuse(rankings, settings, cited=(), reserve_from=("anchors", "propagation")):
     """Reciprocal rank fusion: score = sum over signals of 1 / (60 + rank). Only ranks are
-    combined, so no signal's raw scale matters. Shared concepts come first: that signal counts
-    concept_weight times, and it is the first to fill the reserved places, so a passage sharing a
-    concept with the unit reaches the judge even where the words differ. Explicitly cited chunks
-    are always included (up to three); ties break by reference. Enforces: R5"""
+    combined, so no signal's raw scale matters. Explicitly cited chunks are always included (up to
+    three); ties break by reference. Enforces: R5"""
     constant, k = settings["rrf_constant"], int(settings["k_candidates"])
     scores, ranks = {}, {}
     for signal in SIGNAL_ORDER:
         refs = rankings.get(signal, [])
         if signal == "signatures":                       # used to re-order, never alone
             refs = [ref for ref in refs if ref in scores]
-        weight = float(settings["concept_weight"]) if signal == "concepts" else 1.0
+        weight = 1.0
         for rank, ref in enumerate(refs, start=1):
             scores[ref] = scores.get(ref, 0.0) + weight / (constant + rank)
             ranks.setdefault(ref, {})[signal] = rank
@@ -5810,281 +5682,22 @@ def reason_text(signals, details):
                if signal in signals and (details.get(signal) or "{detail}" not in REASON_TEMPLATES[signal])]
     return "Proposed because: " + "; ".join(phrases) if phrases else "Proposed by rank only"
 
-# ---------------------------------------------------------------- concepts: the model's own, and where the documents name them
-# The model is the basis. Its concepts are the names its code gives things - functions, their
-# arguments, the variables its statements set, its stored tables and their columns - together with
-# how its own roxygen and help pages describe them. The methodology, the documentation and the rest of
-# the model are then searched for those concepts, and nothing else: a term in the documents that has
-# no likely equivalent in the model is never extracted. What a unit shows is always the words that
-# unit writes, character for character. Code finds the same words; the model is asked only where code
-# sees a likely candidate it cannot prove, and its guesses - synonyms, acronyms, abbreviations - are
-# kept apart and shown as guesses on the Concepts sheet. Enforces: R3, R4, R9
-CONCEPT_STOP = {"the", "a", "an", "of", "and", "or", "to", "for", "in", "on", "at", "by", "with", "as", "&", "is", "are"}
-GENERIC_NAMES = {"data", "value", "values", "result", "results", "out", "output", "input", "df", "dt", "tmp", "temp", "obj",
-                 "object", "list", "vec", "vector", "arg", "args", "id", "name", "names", "type", "flag", "idx", "index",
-                 "row", "col", "file", "path", "table", "fn", "fun", "res", "ret", "val", "var", "len", "num", "count",
-                 "na", "null", "true", "false", "self", "env", "call", "x", "y", "z", "i", "j", "k", "n", "m", "t", "f"}
-ACRONYM = re.compile(r"(?<![\w&])([A-Z][A-Z0-9&]{1,7})(s?)(?![\w&])")
-LONG_THEN_SHORT = re.compile(r"((?:[A-Za-z][\w'\u2019&/-]*\s+){0,7}[A-Za-z][\w'\u2019&/-]*)\s*\(\s*([A-Z][A-Za-z0-9&]{1,9})\s*\)")
-SHORT_THEN_LONG = re.compile(r"(?<![\w&])([A-Z][A-Z0-9&]{1,9})\s*\(\s*([A-Za-z][^()]{3,90})\)")
-CONCEPT_TOKEN = re.compile(r"[A-Za-z0-9]+")
 
-def concept_singular(word):
-    if len(word) > 4 and word.endswith("ies"):
-        return word[:-3] + "y"
-    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
-        return word[:-1]
-    return word
 
-def identifier_words(name):
-    """The words of a name the code gives: debt_to_net_revenue, debtToNetRevenue and debt.to.net.revenue
-    all give debt, to, net, revenue."""
-    return [part.lower() for part in re.split(r"[_.]+|(?<=[a-z0-9])(?=[A-Z])", name or "") if part]
 
-def concept_key(text):
-    """How forms are compared: lower case, each word singular, no article or preposition at either end."""
-    words = [concept_singular(w) for w in CONCEPT_TOKEN.findall((text or "").replace("_", " ").lower())]
-    while words and words[0] in CONCEPT_STOP:
-        words.pop(0)
-    while words and words[-1] in CONCEPT_STOP:
-        words.pop()
-    return " ".join(words)
 
-def spells(short, words):
-    """Do the words spell the acronym by their initials, hyphenated compounds counted word by word,
-    starting at its first letter? Uses the search's own initials_match for the order."""
-    parts = [part for word in words for part in re.split(r"[-/]", word) if part]
-    letters = [c for c in short.lower() if c.isalpha()]
-    return bool(parts and letters) and parts[0][0].lower() == letters[0] and len(parts) <= len(letters) + 3 and initials_match(short, parts)
 
-def defined_acronyms(text):
-    """Acronyms a text defines, as (acronym, what it stands for, the defining words): 'discounted cash
-    flow (DCF)' and 'DCF (discounted cash flow)'. The long form is the shortest run of words beside the
-    brackets that spells the acronym. Both sides are the text's own words."""
-    found = []
-    for match in LONG_THEN_SHORT.finditer(text):
-        words, short = match.group(1).split(), re.sub(r"(?<=[A-Z0-9])s$", "", match.group(2))
-        for size in range(1, min(len(words), 9) + 1):
-            if spells(short, words[-size:]):
-                found.append((short, " ".join(words[-size:]), match.group(0).strip()))
-                break
-    for match in SHORT_THEN_LONG.finditer(text):
-        short, words = match.group(1), match.group(2).split()
-        for size in range(len(words), 0, -1):
-            if spells(short, words[:size]):
-                found.append((short, " ".join(words[:size]).rstrip(".,;:"), match.group(0).strip()))
-                break
-    return found
 
-def glossary_definition(unit):
-    """A glossary entry written as its own heading - '108. SACP.' - over a paragraph that begins with
-    what it stands for. Returns (acronym, long form, evidence) or None; both are the document's words."""
-    chain = unit.get("heading_chain") or []
-    short = re.sub(r"^\s*(?:\d+(?:\.\d+)*\.?|[A-Za-z][.)])\s+", "", chain[-1]).strip(" .:;") if chain else ""
-    if not ACRONYM.fullmatch(short):
-        return None
-    words = re.split(r"[.:;]", unit.get("text") or "", maxsplit=1)[0].split()
-    for size in range(1, min(len(words), 9) + 1):
-        if spells(short, words[:size]):
-            return short, " ".join(words[:size]), "under the heading '%s': %s" % (chain[-1], " ".join(words[:size]))
-    return None
 
-def first_clause(text):
-    """The name a description gives, as written: its first line up to a comma, a colon, a stop or a bracket,
-    and only if it is short enough to be a name. None otherwise."""
-    clause = re.split(r"[,;:.(\n]", (text or "").strip(), maxsplit=1)[0].strip()
-    return clause if clause and re.search(r"[A-Za-z]{2}", clause) and len(clause.split()) <= 8 else None
 
-def model_concepts(units):
-    """The model's concepts, by key: each with the names the code gives it and where, and how the
-    model's own roxygen and help pages describe it, word for word. Names the code only calls (base
-    functions) and generic names (x, data, result) are not concepts."""
-    seeds = {}
-    def add(name, ref, how):
-        name = (name or "").strip()
-        key = concept_key(" ".join(identifier_words(name)))
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", name) or len(name) < 2 or not key or key in GENERIC_NAMES:
-            return
-        seed = seeds.setdefault(key, {"key": key, "identifiers": {}, "described": {}, "how": []})
-        if ref not in seed["identifiers"].setdefault(name, []):
-            seed["identifiers"][name].append(ref)
-        seed["how"].append("%s: %s in %s" % (name, how, ref))
-    def describe(name, text, ref, how):
-        key, phrase = concept_key(" ".join(identifier_words(name or ""))), first_clause(text)
-        if key in seeds and phrase and concept_key(phrase) != key:
-            if ref not in seeds[key]["described"].setdefault(phrase, []):
-                seeds[key]["described"][phrase].append(ref)
-            seeds[key]["how"].append("%s is described in the model as \u201c%s\u201d (%s, %s)" % (name, phrase, how, ref))
-    for unit in units:
-        code, data = unit.get("code") or {}, unit.get("data") or {}
-        if unit["kind"] in (KIND_FUNCTION, KIND_FORMULA):
-            add(unit["name"], unit["ref"], "a function" if unit["kind"] == KIND_FUNCTION else "a variable a statement sets")
-        for formal, _ in code.get("formals") or []:
-            add(formal, unit["ref"], "an argument of %s" % unit["name"])
-        for written in code.get("symbols_written") or []:
-            add(written, unit["ref"], "a variable the code sets")
-        if data.get("object_name"):
-            add(data["object_name"], unit["ref"], "a stored table")
-            for column, _ in data.get("columns") or []:
-                add(column, unit["ref"], "a column of %s" % data["object_name"])
-    for unit in units:
-        roxygen, helppage = unit.get("roxygen") or {}, unit.get("helppage") or {}
-        for tag in roxygen.get("tags") or []:
-            if tag.get("tag") == "param":
-                describe(tag.get("name"), tag.get("text"), unit["ref"], "roxygen @param")
-            elif tag.get("tag") in ("title", "description") and roxygen.get("documents_name"):
-                describe(roxygen["documents_name"], tag.get("text"), unit["ref"], "roxygen")
-        for name, text in helppage.get("arguments") or []:
-            describe(name, text, unit["ref"], "help page")
-        if helppage.get("title") and helppage.get("rd_name"):
-            describe(helppage["rd_name"], helppage["title"], unit["ref"], "help page title")
-    return seeds
 
-def concept_forms(seeds):
-    """Every form a model concept may be written in, as the words that must be found: the words of
-    each name the code gives it, and each description the model gives it. [(words, key, how)]"""
-    forms = []
-    for key, seed in seeds.items():
-        for name in seed["identifiers"]:
-            forms.append((tuple(concept_singular(w) for w in identifier_words(name)), key, "the same words as the model's %s" % name))
-        for phrase, refs in seed["described"].items():
-            forms.append((tuple(concept_key(phrase).split()), key, "the words the model uses to describe %s (%s)" % (next(iter(seed["identifiers"])), refs[0])))
-    return [(words, key, how) for words, key, how in forms if words]
 
-def concept_spans(text, forms):
-    """Where a text writes any form, as (the words exactly as the text writes them, key, how). Words
-    are compared in lower case and singular; between them only spaces, hyphens or underscores may
-    stand, so a match never runs across a full stop. The longest form wins at each place."""
-    tokens = [(m.start(), m.end(), concept_singular(m.group(0).lower())) for m in CONCEPT_TOKEN.finditer(text or "")]
-    starting = {}
-    for words, key, how in forms:
-        starting.setdefault(words[0], []).append((words, key, how))
-    found, position = [], 0
-    while position < len(tokens):
-        best = None
-        for words, key, how in starting.get(tokens[position][2], ()):
-            end = position + len(words)
-            if end <= len(tokens) and tuple(t[2] for t in tokens[position:end]) == words and (best is None or len(words) > len(best[0])):
-                gaps = [text[tokens[j][1]:tokens[j + 1][0]] for j in range(position, end - 1)]
-                if all(re.fullmatch(r"[\s\-_\u2010-\u2015]{1,3}", gap) for gap in gaps):
-                    best = (words, key, how)
-        if best:
-            end = position + len(best[0])
-            found.append((text[tokens[position][0]:tokens[end - 1][1]], best[1], best[2]))
-            position = end
-        else:
-            position += 1
-    return found
 
-def concept_sources(ctx):
-    """The units whose concepts are read: the three corners, in order."""
-    return [(unit, corner) for kind, corner in (("chunks_canon", "canon"), ("chunks_doc", "doc"), ("model_units", "model"))
-            for unit in ctx.read(kind)]
 
-def concept_registry(sources, guessed=()):
-    """The registry and each unit's concepts. Model first: its concepts; then every definition the
-    documents give of an acronym whose one side is already a model concept's form, which adds the
-    other side, with the unit that defines it; then every unit searched for every form. `guessed` are
-    the model's accepted answers, (ref, words as written, key), kept apart. Returns (concepts, per unit)."""
-    seeds = model_concepts([unit for unit, corner in sources if corner == "model"])
-    forms = concept_forms(seeds)
-    known = {words: key for words, key, _ in forms}
-    for unit, corner in sources:
-        if corner == "model":
-            continue
-        definitions = defined_acronyms(unit.get("text") or "") + ([glossary_definition(unit)] if glossary_definition(unit) else [])
-        for short, long_form, evidence in definitions:
-            short_words, long_words = (concept_singular(short.lower()),), tuple(concept_key(long_form).split())
-            key = known.get(short_words) or known.get(long_words)
-            if key:
-                for words in (short_words, long_words):
-                    if words not in known:
-                        known[words] = key
-                        forms.append((words, key, "defined in %s: \u201c%s\u201d" % (unit["ref"], evidence[:120])))
-                        seeds[key]["how"].append("defined in %s: \u201c%s\u201d" % (unit["ref"], evidence[:120]))
-    order = list(seeds)
-    ids = {key: "K-%04d" % number for number, key in enumerate(order, start=1)}
-    found = {key: {"canon": {}, "doc": {}, "model": {}} for key in seeds}
-    per_unit, guessed_by_ref = [], {}
-    for ref, words, key in guessed:
-        guessed_by_ref.setdefault(ref, []).append((words, key))
-    guesses = {key: {"canon": {}, "doc": {}} for key in seeds}
-    for unit, corner in sources:
-        spans = [(words, key) for words, key, _ in concept_spans(unit.get("text") or "", forms)]
-        for words, key in spans:
-            refs = found[key][corner].setdefault(words, [])
-            if unit["ref"] not in refs:
-                refs.append(unit["ref"])
-        for words, key in guessed_by_ref.get(unit["ref"], []):
-            if key in guesses and corner in guesses[key] and unit["ref"] not in guesses[key][corner].setdefault(words, []):
-                guesses[key][corner][words].append(unit["ref"])
-        spans += [pair for pair in guessed_by_ref.get(unit["ref"], []) if pair[1] in ids]
-        per_unit.append({"unit_ref": unit["ref"], "corner": corner, "concepts": list(dict.fromkeys(ids[key] for _, key in spans)),
-                         "as_written": list(dict.fromkeys(words for words, _ in spans))})
-    concepts = [{"concept_id": ids[key], "key": key, "identifiers": seeds[key]["identifiers"], "described": seeds[key]["described"],
-                 "found": found[key], "guessed": guesses[key], "how": list(dict.fromkeys(seeds[key]["how"]))} for key in order]
-    return concepts, per_unit
 
-def latest_concepts(read):
-    """The registry and the units' concepts of the latest stage that wrote them: the model's, once
-    judge-concepts has run, and code's before that. read is a store's or a step context's read."""
-    for stage in ("ai", "code"):
-        concepts = [r for r in read("concepts") if r.get("stage") == stage]
-        if concepts:
-            return concepts, [r for r in read("unit_concepts") if r.get("stage") == stage]
-    return [], []
 
-def extract_concepts(ctx):
-    """Step 06, extract-concepts: the model's concepts, and every place the methodology, the
-    documentation and the rest of the model write one of them in the same words - before any model
-    call. Enforces: R3, R4"""
-    concepts, per_unit = concept_registry(concept_sources(ctx))
-    for record in concepts + per_unit:
-        record["stage"] = "code"
-    return StepResult({"concepts": concepts, "unit_concepts": per_unit},
-                           {"concepts in the model": len(concepts),
-                            "document units naming one": sum(1 for u in per_unit if u["corner"] != "model" and u["concepts"])},
-                           ["%d concepts in the model; %d methodology and documentation units name one in the same words."
-                            % (len(concepts), sum(1 for u in per_unit if u["corner"] != "model" and u["concepts"]))])
 
-def likely_concepts(text, concepts, limit):
-    """Model concepts a unit may name without the same words: a name whose parts begin words of the
-    unit (adj_rating, 'adjusted rating'), an acronym-like name whose letters are the initials of words
-    of the unit (sacp, 'stand-alone credit profile'), or a description sharing its words with the unit.
-    Scored, best first; these are only candidates for the model to judge."""
-    words = [w.lower() for w in re.findall(r"[A-Za-z][\w'-]*", text or "")]
-    plain = {concept_singular(p) for w in words for p in re.split(r"[-']", w) if p}
-    scores = {}
-    for concept in concepts:
-        score = 0.0
-        for name in concept["identifiers"]:
-            parts = identifier_words(name)
-            begun = sum(1 for p in parts if p in plain or (len(p) >= 3 and any(w.startswith(p) for w in plain)))
-            if len(parts) >= 2 and begun == len(parts):
-                score += 2.0
-            elif len(parts) >= 2:
-                score += begun / (2.0 * len(parts))
-            if len(parts) == 1 and 2 <= len(parts[0]) <= 6 and any(spells(parts[0], words[start:start + size])
-                                                                    for start in range(len(words)) for size in range(len(parts[0]), len(parts[0]) + 3)):
-                score += 2.0
-        for phrase in concept["described"]:
-            mine = set(concept_key(phrase).split()) - CONCEPT_STOP
-            if mine:
-                score += len(mine & plain) / len(mine)
-        if score >= 1.0:
-            scores[concept["concept_id"]] = score
-    return sorted(scores, key=lambda cid: (-scores[cid], cid))[:limit]
 
-def concept_match_question(group, shown, by_id, settings):
-    """One question: some passages, and the model concepts they may name, each with the names the code
-    gives it and how the model describes it. The model says which it names and copies the words."""
-    listing = "\n".join("[%s] %s%s" % (cid, " / ".join(by_id[cid]["identifiers"]),
-                                       " \u2014 described in the model as: %s" % "; ".join(by_id[cid]["described"]) if by_id[cid]["described"] else "")
-                        for cid in shown)
-    passages = "\n".join("[%s]\n%s" % (ref, words) for ref, words in group)
-    label = "THE MODEL'S CONCEPTS\n" + listing + "\nTHE PASSAGES"
-    return narrow_question("match-concepts", group[0][0], [(label, passages)], settings,
-                           more={"unit_texts": {ref: words for ref, words in group}, "concept_ids": list(shown)})
 
 def verbatim(words, text):
     """The words exactly as the text writes them, found without regard to upper or lower case or the
@@ -6093,57 +5706,7 @@ def verbatim(words, text):
     found = re.search(pattern, text or "", re.I) if (words or "").strip() else None
     return found.group(0) if found else None
 
-def validate_concepts(question, answer):
-    """match-concepts: every passage and every concept must be one that was shown, and every name
-    must be in its passage word for word, so no concept is ever one the model wrote. Enforces: R3"""
-    units = answer.get("units")
-    if not isinstance(units, dict):
-        raise Rejected(REJECTION_REASONS[0])
-    for ref, named in units.items():
-        if ref not in question["unit_texts"] or not isinstance(named, list):
-            raise Rejected(REJECTION_REASONS[1])
-        for item in named:
-            if not isinstance(item, dict) or item.get("concept") not in question["concept_ids"]:
-                raise Rejected(REJECTION_REASONS[1])
-            if not isinstance(item.get("words"), str) or verbatim(item["words"], question["unit_texts"][ref]) is None:
-                raise Rejected(REJECTION_REASONS[2])
 
-def judge_concepts(ctx):
-    """Step 07b, judge-concepts: after the outline is confirmed, for the methodology and documentation
-    units where code sees a likely model concept it could not prove - an abbreviation, an acronym, a
-    description in other words - the model is shown the unit and those concepts and asked which it
-    names, copying the words. A name not in the unit word for word refuses the whole answer. Accepted
-    words are kept as the unit writes them, and on the Concepts sheet as the model's guesses, apart
-    from what code proved. Without a model, code's registry stands. Enforces: R3, R4"""
-    sources, settings = concept_sources(ctx), ctx.settings
-    concepts, per_unit = concept_registry(sources)
-    guessed = []
-    if ctx.ask is not None and settings["concepts_with_ai"] and concepts:
-        by_id, text_of = {c["concept_id"]: c for c in concepts}, {u["ref"]: u.get("text") or "" for u, _ in sources}
-        proved = {u["unit_ref"]: set(u["concepts"]) for u in per_unit}
-        wanted = [(unit["ref"], [cid for cid in likely_concepts(unit.get("text"), concepts, int(settings["concept_candidates_max"]))
-                                 if cid not in proved.get(unit["ref"], set())]) for unit, corner in sources if corner != "model"]
-        wanted = [(ref, cids) for ref, cids in wanted if cids]
-        size, limit = max(1, int(settings["concept_batch"])), int(settings["max_passage_chars"])
-        questions = []
-        for start in range(0, len(wanted), size):
-            batch = wanted[start:start + size]
-            shown = sorted({cid for _, cids in batch for cid in cids})[:int(settings["concept_candidates_max"])]
-            questions.append(concept_match_question([(ref, cut_text(text_of[ref], limit)) for ref, _ in batch], shown, by_id, settings))
-        answers = ctx.ask([q for q in questions if not q["too_large"]]) if questions else {}
-        for question in questions:
-            for ref, named in (((answers.get(question["question_id"]) or {}).get("answer") or {}).get("units") or {}).items():
-                for item in named:
-                    words = verbatim(item["words"], text_of.get(ref, ""))
-                    if words:
-                        guessed.append((ref, words, by_id[item["concept"]]["key"]))
-        concepts, per_unit = concept_registry(sources, guessed)
-    for record in concepts + per_unit:
-        record["stage"] = "ai"
-    return StepResult({"concepts": concepts, "unit_concepts": per_unit},
-                           {"concepts in the model": len(concepts), "names guessed by the model": len(guessed)},
-                           ["%d concepts in the model; the model named %d more of them in other words, kept as guesses on the Concepts sheet."
-                            % (len(concepts), len(guessed))])
 
 
 # ---------------------------------------------------------------- the skill map-implementation: the implementation map's agents
@@ -6389,12 +5952,6 @@ def search_one(source_ref, representation, corner, world, settings):
     """All signals for one unit and one target corner, fused into a shortlist of candidates."""
     targets, index, enabled = world["targets"][corner], world["index"][corner], settings["signals"]
     rankings, details = {}, {}
-    mine = world["concepts_of"].get(source_ref, set())
-    if "concepts" in enabled and mine:                   # shared concepts, the rarer the concept the stronger
-        shared = {ref: sum(world["concept_idf"][c] for c in mine & world["concepts_of"].get(ref, set())) for ref in targets}
-        rankings["concepts"] = ranked({ref: score for ref, score in shared.items() if score > 0})
-        details["concepts"] = {ref: ", ".join(sorted(world["concept_names"][c] for c in mine & world["concepts_of"].get(ref, set()))[:3])
-                               for ref in rankings["concepts"]}
     query = {word: 1.0 for words in representation["fields"].values() for word in words}
     expansions = expansions_for(representation, world["bridge_by_term"]) if "bridge" in enabled else []
     if "fields" in enabled:
@@ -6501,16 +6058,7 @@ def build_world(ctx, search_pass):
                "model": {u["ref"]: u for u in units if is_searched(u, settings)}}
     index = {corner: build_index({ref: representations[ref] for ref in targets[corner]}) for corner in targets}
     signatures = {ref: r["signature"] for ref, r in representations.items() if r.get("signature")}
-    concepts, unit_concepts = latest_concepts(ctx.read)
-    concepts_of = {u["unit_ref"]: set(u["concepts"]) for u in unit_concepts}
-    frequency = {}
-    for found in concepts_of.values():
-        for concept in found:
-            frequency[concept] = frequency.get(concept, 0) + 1
-    total = max(1, len(concepts_of))
-    return {"concepts_of": concepts_of, "concept_idf": {c: math.log(1 + total / n) for c, n in frequency.items()},
-            "concept_names": {c["concept_id"]: next(iter(c["identifiers"]), c["key"]) for c in concepts},
-            "representations": representations, "targets": targets, "index": index, "bridge_by_term": bridge_by_term,
+    return {"representations": representations, "targets": targets, "index": index, "bridge_by_term": bridge_by_term,
             "anchors": anchors, "weights": weights, "walk": walk, "signatures": signatures, "lists": lists,
             "units": units, "doc": doc, "canon": canon, "propagated": {}, "search_pass": search_pass}
 
@@ -6706,62 +6254,6 @@ def validate_judge(question, answer):
     if answer["matches"] and str(answer.get("none_reason") or "").strip():
         raise Rejected(REJECTION_REASONS[4])
 
-def validate_narrow(question, answer):
-    """The narrow question types. Each check mirrors what the prompt allows."""
-    kind = question["question_type"]
-    if kind == "second-opinion":
-        if not isinstance(answer.get("differences"), list):
-            raise Rejected(REJECTION_REASONS[0])
-        for difference in answer["differences"]:
-            if not isinstance(difference, dict) or difference.get("letter") not in question["letters"]:
-                raise Rejected(REJECTION_REASONS[1])
-            check_quote(difference.get("quote_from_passage"), question["passage_texts"][difference["letter"]])
-            check_quote(difference.get("quote_from_unit"), question["unit_text"])
-    elif kind == "interpret-code":
-        words = answer.get("interpretation")
-        if not isinstance(words, str) or not 3 <= len(words.split()) <= 150:
-            raise Rejected(REJECTION_REASONS[0])
-        check_quote(answer.get("quote_from_unit"), question["code_text"])     # it has to rest on code that is there
-    elif kind == "check-rule":
-        if answer.get("outcome") not in ("applied", "applied differently", "not applied"):
-            raise Rejected(REJECTION_REASONS[0])
-        check_quote(answer.get("quote_from_passage"), question["rule_text"])
-        check_quote(answer.get("quote_from_unit"), question["code_text"], required=answer["outcome"] != "not applied")
-    elif kind == "align-symbols":
-        pairs = answer.get("alignment")
-        if not isinstance(pairs, list) or not isinstance(answer.get("cannot_align", False), bool):
-            raise Rejected(REJECTION_REASONS[0])
-        codes, equations = [p.get("code") for p in pairs if isinstance(p, dict)], [p.get("equation") for p in pairs if isinstance(p, dict)]
-        if len(codes) != len(pairs) or set(codes) - set(question["code_symbols"]) or set(equations) - set(question["equation_symbols"]):
-            raise Rejected(REJECTION_REASONS[1])
-        if len(set(codes)) != len(codes) or len(set(equations)) != len(equations) or (pairs and answer.get("cannot_align")):
-            raise Rejected(REJECTION_REASONS[4])
-    elif kind == "read-formula-from-prose":
-        formula = answer.get("formula")
-        if not isinstance(formula, str) or (not formula.strip()) != bool(answer.get("no_formula_stated")):
-            raise Rejected(REJECTION_REASONS[4] if isinstance(formula, str) else REJECTION_REASONS[0])
-        if formula.strip():
-            try:
-                tree = parse_formula(formula, question["notation"])
-            except NotReadable:
-                raise Rejected(REJECTION_REASONS[0])
-            text = question["unit_text"].lower()
-            if any(symbol.lower().replace("_", " ") not in text and symbol.lower() not in text for symbol in expr_symbols(tree)):
-                raise Rejected(REJECTION_REASONS[2])
-    elif kind == "map-table-columns":
-        if answer.get("table") == "NONE":
-            return
-        if answer.get("table") not in question["letters"]:
-            raise Rejected(REJECTION_REASONS[1])
-        columns, key = answer.get("columns"), answer.get("key")
-        if not isinstance(columns, list) or not isinstance(key, dict) or not columns:
-            raise Rejected(REJECTION_REASONS[0])
-        ours, theirs = question["package_header"], question["other_headers"][answer["table"]]
-        pairs = [(c.get("package"), c.get("other")) for c in columns if isinstance(c, dict)]
-        if len(pairs) != len(columns) or any(a not in ours or b not in theirs for a, b in pairs + [(key.get("package"), key.get("other"))]):
-            raise Rejected(REJECTION_REASONS[1])
-        if len({a for a, _ in pairs}) != len(pairs) or len({b for _, b in pairs}) != len(pairs):
-            raise Rejected(REJECTION_REASONS[4])
 
 def validate_answer(question, text):
     """The validators, in a fixed order: remove any thought block and code fence; take the last
@@ -6781,14 +6273,12 @@ def validate_answer(question, text):
             answer = None
         if not isinstance(answer, dict):
             raise Rejected(REJECTION_REASONS[0])
-        if question["question_type"] == "match-concepts":
-            validate_concepts(question, answer)
-        elif question["question_type"] == "trace-gap":
+        if question["question_type"] == "trace-gap":
             validate_trace(question, answer)
         elif question["question_type"] in JUDGE_RELATIONS:
             validate_judge(question, answer)
-        else:
-            validate_narrow(question, answer)
+        else:                                                  # a question the tool no longer asks
+            raise Rejected(REJECTION_REASONS[0])
     except Rejected as problem:
         return "rejected: %s" % problem, None
     return "accepted", answer
@@ -6808,80 +6298,8 @@ def shown_ai_text(text):
 # ---------------------------------------------------------------- what each piece of code does, in plain words
 INTERPRETED_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST)
 
-def package_outline(units, package):
-    """The whole package in a few lines, as every interpretation question sees it: its name and
-    title, then for each file the functions defined there with their arguments and the first
-    line of their documentation, and the stored data. Also returns the documentation block of
-    each unit, by the reference of the unit it documents."""
-    described = {u["roxygen"]["documents_ref"]: u for u in units if u.get("roxygen") and u["roxygen"].get("documents_ref")}
-    title = next((row["value"] for row in package.get("rows", []) if row.get("item") == "Title"), "")
-    lines, by_file = ["Package %s %s: %s" % (package.get("name", ""), package.get("version", ""), title)], {}
-    for unit in units:
-        if unit["kind"] == KIND_FUNCTION and not unit["inside"]:
-            tags = described[unit["ref"]]["roxygen"]["tags"] if unit["ref"] in described else []
-            says = next((tag["text"].split("\n")[0] for tag in tags if tag["tag"] in ("title", "description")), "")
-            formals = ", ".join(name for name, _ in (unit.get("code") or {}).get("formals", []))
-            by_file.setdefault(unit["file"], []).append("%s(%s)%s" % (unit["name"], formals, " - " + says if says else ""))
-        elif unit["kind"] in (KIND_TABLE, KIND_OBJECT):
-            by_file.setdefault(unit["file"], []).append("stored data %s" % unit["name"])
-    return "\n".join(lines + ["%s: %s" % (file, "; ".join(by_file[file])) for file in sorted(by_file)]), described
 
-def interpret_question(unit, functions, outline, described, settings):
-    """The question about one piece of code. The piece is shown whole; around it goes what a
-    person would look up to understand it: the function a statement sits inside, the
-    documentation the package gives, what calls it and what it calls, the stored data it reads,
-    and the outline of the whole package cut around the piece's own name."""
-    inside = functions.get(unit["inside"]) if unit["inside"] else None
-    about, owner = [], inside or unit
-    if inside is not None:
-        about.append("This piece is one statement inside the function %s. The whole function:\n%s" % (inside["name"], cut_code(inside["text"], settings["max_unit_chars"])))
-    if owner["ref"] in described and described[owner["ref"]]["ref"] != owner["ref"]:   # its own roxygen is in the piece
-        about.append("What the package's own documentation says:\n%s" % cut_text(described[owner["ref"]]["text"], settings["max_passage_chars"]))
-    code = owner.get("code") or {}
-    callers = sorted(name for name, other in functions.items() if owner["name"] and owner["name"] in (other.get("code") or {}).get("calls", []))
-    facts = [("It is called by", callers), ("Within this package it calls", sorted(c for c in code.get("calls", []) if c in functions)),
-             ("It reads the stored data", sorted({r["object"] for r in code.get("reads_data", [])}))]
-    about.extend("%s: %s." % (says, ", ".join(names)) for says, names in facts if names)
-    about.append("The whole package:\n%s" % cut_text(outline, 4000, keep_words=(owner["name"],)))
-    where = "%s%s, %s%s" % (unit["kind"], " " + unit["name"] if unit["name"] else "", unit["file"],
-                           " lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "")
-    blocks = [("THE PIECE OF CODE (%s)" % where, cut_code(unit["text"], settings["max_unit_chars"])),
-              ("WHERE IT SITS IN THE PACKAGE", "\n\n".join(about))]
-    return narrow_question("interpret-code", unit["ref"], blocks, settings, more={"code_text": unit["text"]})
 
-def interpret_code(ctx):
-    """Step 07a, interpret-code. One question per function, formula statement, top-level
-    statement and test block: what does this piece do, given where it sits in the package?
-    Accepted answers fill the column "LLM Interpretation" of Chunks_Model. An interpretation
-    is an aid to reading and nothing more: it gives no status, raises no flagged item and takes
-    no part in the coverage identity, and a question that fails leaves a plain note. Enforces: R3"""
-    units = ctx.read("model_units")
-    if not ctx.settings.get("interpret_code", True):
-        return StepResult(messages=["Interpreting the code is switched off (setting interpret_code)."])
-    outline, described = package_outline(units, (ctx.read("package_info") or [{}])[0])
-    functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u["inside"]}
-    questions, records = {}, []
-    for unit in units:
-        if unit["kind"] in INTERPRETED_KINDS and unit["text"].strip():
-            question = interpret_question(unit, functions, outline, described, ctx.settings)
-            if question["too_large"]:
-                records.append({"unit_ref": unit["ref"], "interpretation": "", "question_id": "", "note": "Not asked: the question was too large to ask."})
-            else:
-                questions[question["question_id"]] = question
-    answers = ctx.ask(list(questions.values())) if questions and ctx.ask else {}
-    for question_id in sorted(questions, key=lambda key: questions[key]["unit_ref"]):
-        final = answers.get(question_id)
-        if final is not None and final["outcome"] == "accepted":
-            records.append({"unit_ref": questions[question_id]["unit_ref"], "interpretation": final["answer"]["interpretation"].strip(),
-                            "quote_from_unit": final["answer"]["quote_from_unit"], "question_id": question_id, "note": ""})
-        else:
-            reason = (final or {}).get("outcome", "failed: no answer was obtained").split(": ", 1)[-1]
-            records.append({"unit_ref": questions[question_id]["unit_ref"], "interpretation": "", "question_id": question_id,
-                            "note": "The AI's answer could not be used: %s." % reason})
-    done = sum(1 for record in records if record["interpretation"])
-    return StepResult({"interpretations": sorted(records, key=lambda record: record["unit_ref"])},
-                             counts={"pieces_of_code": len(records), "interpreted": done},
-                             messages=["%d of %d pieces of code were given an interpretation by the AI." % (done, len(records))])
 
 def judge_links(ctx):
     """Steps 07 and 09, judge-links. Builds one question per unit and corner, asks them
@@ -6972,8 +6390,8 @@ DEFAULT_SETTINGS = {
                                                    r"(?s)<\|channel\|>thought.*?<\|channel\|>"], "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
     "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True,
-    "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"], "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
+    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
+    "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"],
     "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
 
 def make_settings(overrides=None):
@@ -7727,13 +7145,7 @@ def plain_cell(value, input_text, store):
             text = CELL_WITHHELD
     return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
 
-def lines_by_ref(pairs):
-    """Several values in one cell: each on its own line, prefixed with its reference."""
-    return "\n".join("%s: %s" % (ref, value) for ref, value in pairs if value not in (None, ""))
 
-def texts_by_ref(pairs):
-    """Several quoted texts in one cell, separated by a line of dashes."""
-    return "\n----------\n".join("%s: %s" % (ref, text) for ref, text in pairs)
 
 def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
@@ -7776,46 +7188,8 @@ def rows_package_info(store, paths, settings, progress):
         add("AI calls", label, value)
     return rows
 
-def chunk_note(chunk):
-    """What a reader should know about one chunk: unreadable, how an equation was read, reconstructed numbering."""
-    notes = ["Could not be read: %s" % chunk["not_read_reason"]] if chunk.get("not_read_reason") else []
-    equation = chunk.get("equation") or {}
-    if chunk["kind"] == "Equation" and not equation.get("readable"):
-        notes.append("Could not be read: %s" % (equation.get("not_readable_reason") or "unknown form"))
-    if chunk["kind"] == "Equation" and equation.get("readable"):
-        notes.append("Read as: %s" % equation.get("linear", ""))
-    if chunk["kind"] == "Figure":
-        notes.append("The content of a figure is never read; it is raised for manual review")
-    if chunk.get("numbering_reconstructed"):
-        notes.append("Heading numbering was reconstructed by counting")
-    return "; ".join(notes)
 
-def concept_names_by_ref(store):
-    """Each unit's concepts as the Chunks sheets show them: the words that unit writes, exactly, for
-    each model concept it names, joined by '; '. Never the model's name for it: that mapping, and
-    every guess in it, is on the Concepts sheet only."""
-    _, unit_concepts = latest_concepts(store.read)
-    return {u["unit_ref"]: "; ".join(u.get("as_written") or []) for u in unit_concepts}
 
-def rows_concepts(store):
-    """The rows of Concepts: one per model concept, model first - the names its code gives it and how
-    its roxygen and help pages describe it - then the same words found in the methodology, the
-    documentation and the rest of the model, and apart from those, the model's guesses of synonyms,
-    acronyms and abbreviations. Every form is shown as written, with the units that write it."""
-    concepts, _ = latest_concepts(store.read)
-    def listed(forms):
-        return "\n".join("%s (%s)" % (form, ", ".join(refs)) for form, refs in forms.items())
-    rows = []
-    for concept in concepts:
-        found, guessed = concept["found"], concept["guessed"]
-        rows.append({"concept_id": concept["concept_id"], "in_model": listed(concept["identifiers"]),
-                     "described": listed(concept["described"]),
-                     "canon": listed(found.get("canon", {})), "doc": listed(found.get("doc", {})),
-                     "model": listed({form: refs for form, refs in found.get("model", {}).items()}),
-                     "guessed": "\n".join("%s: %s" % (corner, listed(forms).replace("\n", "; ")) for corner, forms in
-                                          (("Methodology", guessed.get("canon", {})), ("Documentation", guessed.get("doc", {}))) if forms),
-                     "established": "\n".join(concept["how"][:12])})
-    return rows
 
 MAP_ROLES = {"return": "Final output", "value": "Intermediate value", "column": "Column", "argument": "Parameter",
              "stored data": "Raw input: stored data", "file": "Raw input: file", "number": "Raw input: hard-coded number",
@@ -7842,8 +7216,6 @@ def implementation_map(store, settings=None):
     units = store.read("model_units")
     functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
     outputs, _, _ = decided_outputs(flow, {})
-    concepts, _ = latest_concepts(store.read)
-    concept_of = {name: c["concept_id"] for c in concepts for name in c["identifiers"]}
     by_function = (settings or DEFAULT_SETTINGS)["map_granularity"] == "function"
     rows_max = int((settings or DEFAULT_SETTINGS)["map_rows_max"])
     rows, cut = [], []
@@ -7940,7 +7312,7 @@ def implementation_map(store, settings=None):
         variable = variable_of(node)
         name, ref = function_of(node)
         row = dict(blank_row(), map_id=map_id, level=level, output_variable=variable, ov_ref=ref_of(node),
-                   ov_code=node.get("code") or node.get("file") or "", ov_concept=concept_of.get(variable, ""),
+                   ov_code=node.get("code") or node.get("file") or "", 
                    function_name=name, fn_ref=ref, role=MAP_ROLES.get(node["kind"], node["kind"]),
                    arguments="; ".join(dict.fromkeys(variable_of(nodes[child]) for child, _ in kids if child in nodes)))
         if node["kind"] == "argument" and frames[-1][1] is None:
@@ -7960,7 +7332,7 @@ def implementation_map(store, settings=None):
 
 def blank_row():
     """Every column of the map, empty: a row fills the ones it has."""
-    row = {"map_id": "", "level": 0, "output_variable": "", "ov_ref": "", "ov_code": "", "ov_concept": "",
+    row = {"map_id": "", "level": 0, "output_variable": "", "ov_ref": "", "ov_code": "",
            "function_name": "", "fn_ref": "", "arguments": "", "role": ""}
     row.update({"id%d" % number: "" for number in range(1, MAP_ID_COLUMNS + 1)})
     return row
@@ -8007,96 +7379,24 @@ def not_on_the_map(store, map_rows, settings=None):
         return bool(stated) and stated <= used
     checkable = lambda chunk: states_something_checkable(
         {"type": chunk["kind"].lower(), "text": chunk["text"], "not_read_reason": chunk.get("not_read_reason", "")}, rules)
-    named = {record["unit_ref"] for record in latest_concepts(store.read)[1] if record["concepts"]}
     return {"model_units": [u["ref"] for u in units if u["ref"] not in on_map],
             "methodology": [c["ref"] for c in store.read("chunks_canon") if c["ref"] not in linked and checkable(c) and not by_values(c)],
-            "documentation": [c["ref"] for c in store.read("chunks_doc") if c["ref"] not in linked and c["ref"] not in named],
+            "documentation": [c["ref"] for c in store.read("chunks_doc") if c["ref"] not in linked],
             "on_map": on_map, "linked": linked, "final_outputs": outputs,
             "linked_units": {unit for unit in on_map if links.get(unit)}}
 
-def rows_chunks(chunks, named=None):
+def rows_chunks(chunks):
     """The rows of Chunks_Canon and Chunks_Doc."""
-    rows, named = [], named or {}
-    for chunk in chunks:
-        rows.append({"ref": chunk["ref"], "concepts": named.get(chunk["ref"], ""), "level": chunk["level"], "section": " > ".join(chunk["heading_chain"]),
-                     "para_no": chunk.get("para_label") or chunk["para_no"],
-                     "kind": chunk["kind"], "text": chunk["text"],
-                     "source_file": chunk["source_file"], "refs_out": "; ".join(chunk["refs_out"]),
-                     "checkable": chunk.get("checkable"), "reading_note": chunk_note(chunk)})
-    return rows
+    return [{"ref": c["ref"], "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": c["text"],
+             "source_file": c["source_file"]} for c in chunks]
 
-def unit_expression(unit):
-    """A unit's formula or arguments as shown on Chunks_Model."""
-    code, data = unit.get("code") or {}, unit.get("data") or {}
-    if unit["kind"] == KIND_FUNCTION:
-        formals = ["%s = %s" % (n, d) if d not in (None, "") else n for n, d in code.get("formals", [])]
-        return "arguments: " + (", ".join(formals) or "none")
-    if code.get("expression"):
-        return expr_to_text(expr_from_dict(code["expression"]))
-    if data:
-        return "rows identified by: %s; %s" % (", ".join(data.get("row_keys", [])) or "row number",
-                                               " x ".join(str(d) for d in data.get("dims", [])))
-    return ""
 
-def rows_model_units(units, interpretations=(), named=None):
-    """The rows of Chunks_Model. What the AI said a piece of code does is shown as a quotation
-    (in \u201c \u201d), because the words are the model's and not the tool's own. Enforces: R10"""
-    rows, said, named = [], {record["unit_ref"]: record for record in interpretations}, named or {}
-    for unit in units:
-        code, told = unit.get("code") or {}, said.get(unit["ref"], {})
-        lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else ""
-        rows.append({"ref": unit["ref"], "concepts": named.get(unit["ref"], ""), "kind": unit["kind"], "file": unit["file"], "lines": lines,
-                     "name": unit["name"], "inside": unit["inside"], "text": unit["text"],
-                     "expression": unit_expression(unit), "exported": code.get("exported"),
-                     "numbers": "; ".join(n["as_written"] for n in code.get("numbers", [])),
-                     "reading_note": unit.get("read_problem") or "", "llm_interpretation": told.get("note") or (
-                         "\u201c%s\u201d" % re.sub("[\u201c\u201d]", '"', told["interpretation"]) if told.get("interpretation") else ""),
-                     "where": "%s%s" % (unit["file"], " lines " + lines if lines else "")})
-    return rows
+def rows_model_units(units):
+    """The rows of Chunks_Model: each a whole piece of code, as written."""
+    return [{"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"],
+             "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""} for u in units]
 
-def link_columns(unit_ref, prefix, corner_letter, links, searches, texts):
-    """The block of columns that shows what one unit was linked to in one corner."""
-    mine = [e for e in links.get(unit_ref, []) if e["target"].startswith(corner_letter)]
-    latest = {}
-    for edge in mine:                                 # a later edge on the same pair has the last word
-        latest[edge["target"]] = edge
-    shown = [latest[ref] for ref in sorted(latest)]
-    search = searches.get((unit_ref, prefix), {})
-    return {prefix + "_refs": "\n".join(e["target"] for e in shown),
-            prefix + "_relation": lines_by_ref((e["target"], e["relation"]) for e in shown),
-            prefix + "_how": lines_by_ref((e["target"], e["evidence"].get("how_text", "")) for e in shown),
-            prefix + "_searched": search.get("searched_text", "") or (NOT_RUN_YET if not searches else ""),
-            prefix + "_why_not": "" if shown else search.get("note", ""),
-            prefix + "_text": texts_by_ref((e["target"], texts.get(e["target"], "")) for e in shown)}
 
-def assessment_of(store):
-    """What the review made of each unit, for whichever sheet shows it: the links it was given with how
-    each was established, what was searched for it and why it was not linked, its checks, its status and
-    its flagged items. Until the two mapping sheets were removed this laid out those sheets; the same
-    words now go to Chunks_Doc, to Chunks_Model and to the map."""
-    units = store.read("model_units") + store.read("chunks_doc")
-    texts = {r["ref"]: r["text"] for kind in ("chunks_canon", "chunks_doc", "model_units") for r in store.read(kind)}
-    links, searches = {}, {}
-    for record in store.read("graph_ledger"):
-        if record.get("record_type") == "edge" and record["kind"] == "corresponds":
-            links.setdefault(record["source"], []).append(record)
-            links.setdefault(record["target"], []).append(dict(record, target=record["source"]))   # the same link, seen from the other side
-    corner_names = {"canon": "canon", "doc": "doc", "model": "model"}
-    for record in store.read("search_records"):
-        key = (record["unit_ref"], corner_names[record["target_corner"]])
-        merged = dict(searches.get(key, {}))
-        merged.update({k: v for k, v in record.items() if v})
-        searches[key] = merged
-    found = {}
-    for unit in units:
-        model = unit["ref"].startswith("M-")
-        row = dict(link_columns(unit["ref"], "canon", "C-", links, searches, texts))
-        other = ("doc", "D-") if model else ("model", "M-")
-        row.update(link_columns(unit["ref"], other[0], other[1], links, searches, texts))
-        row["searched"] = "\n".join(filter(None, [row.get("canon_searched", ""), row.get("canon_why_not", ""),
-                                                  row.get(other[0] + "_searched", ""), row.get(other[0] + "_why_not", "")])) or NOT_APPLICABLE
-        found[unit["ref"]] = row
-    return found
 
 def coverage_rows(store, map_rows, model_rows, doc_rows, settings=None):
     """Mapping_Coverage, counted from the map and from what the map does not reach. One row per final
@@ -8136,28 +7436,18 @@ def coverage_rows(store, map_rows, model_rows, doc_rows, settings=None):
              "rule that no step implements. The rest state nothing to implement."),
             ("Documentation passages", "passages of the model documentation", len(doc_refs),
              len(doc_refs & missing["linked"]), len(missing["documentation"]),
-             "Covered = passages a unit on the map is linked to; not covered = passages describing nothing in the map "
-             "and naming none of the model's concepts.")):
+             "Covered = passages a unit on the map is linked to; not covered = passages describing nothing in the map.")):
         rows.append({"row": label, "counts_what": counts_what, "total": total, "covered": covered,
                      "not_covered": not_covered, "how_to_read": how})
     return rows
 
 def sheet_rows(store, paths, settings, progress):
-    """The rows of all eight sheets, by sheet name."""
+    """The rows of all six sheets, by sheet name."""
     mapped = implementation_map(store, settings)
-    assessed = assessment_of(store)
-    def with_assessment(rows):
-        for row in rows:
-            row.update(assessed.get(row["ref"], {}))
-        return rows
-    model_rows = with_assessment(rows_model_units(store.read("model_units"), store.read("interpretations"), concept_names_by_ref(store)))
-    doc_rows = with_assessment(rows_chunks(store.read("chunks_doc"), concept_names_by_ref(store)))
+    model_rows, doc_rows = rows_model_units(store.read("model_units")), rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Canon": rows_chunks(store.read("chunks_canon"), concept_names_by_ref(store)),
-            "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
-            "Concepts": rows_concepts(store),
-            "Model_Implementation_Map": mapped,
-            "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows, settings)}
+            "Chunks_Canon": rows_chunks(store.read("chunks_canon")), "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
+            "Model_Implementation_Map": mapped, "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows, settings)}
 
 def check_written_totals(rows, store):
     """The identity of the workbook: every unit read is one row of its sheet, and no row is anything
@@ -8184,60 +7474,24 @@ sheets:
 - name: Chunks_Canon
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Level, group: identity, field: level, width: 7}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
-  - {header: Para no., group: identity, field: para_no, width: 9}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: methodology, field: text, width: 90, input_text: true}
-  - {header: Extracted concepts with candidate equivalent in model, group: methodology, field: concepts, width: 42}
   - {header: Source file, group: identity, field: source_file, width: 28}
-  - {header: Cross-references, group: methodology, field: refs_out, width: 24}
-  - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Chunks_Doc
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Level, group: identity, field: level, width: 7}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
-  - {header: Para no., group: identity, field: para_no, width: 9}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: documentation, field: text, width: 90, input_text: true}
-  - {header: Extracted concepts with candidate equivalent in model, group: documentation, field: concepts, width: 42}
   - {header: Source file, group: identity, field: source_file, width: 28}
-  - {header: Cross-references, group: documentation, field: refs_out, width: 24}
-  - {header: States something checkable, group: assessments, field: checkable, width: 16}
-  - {header: Canon ref(s), group: methodology, field: canon_refs, width: 14}
-  - {header: Relation (canon), group: methodology, field: canon_relation, width: 22}
-  - {header: How established (canon), group: methodology, field: canon_how, width: 50}
-  - {header: Model ref(s), group: documentation, field: model_refs, width: 14}
-  - {header: Relation (model), group: documentation, field: model_relation, width: 22}
-  - {header: How established (model), group: documentation, field: model_how, width: 50}
-  - {header: What was searched / why not mapped, group: methodology, field: searched, width: 40}
-  - {header: Reading note, group: assessments, field: reading_note, width: 40}
 - name: Chunks_Model
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
   - {header: Kind, group: identity, field: kind, width: 20}
   - {header: File, group: identity, field: file, width: 30}
   - {header: Lines, group: identity, field: lines, width: 10}
-  - {header: Name, group: identity, field: name, width: 24, input_text: true}
-  - {header: Inside, group: identity, field: inside, width: 20}
   - {header: Text, group: code_text, field: text, width: 80, input_text: true}
-  - {header: Extracted concepts with candidate equivalent in model, group: code_text, field: concepts, width: 42}
-  - {header: LLM Interpretation, group: assessments, field: llm_interpretation, width: 60}
-  - {header: Expression / arguments, group: code_text, field: expression, width: 50, input_text: true}
-  - {header: Numbers used, group: code_text, field: numbers, width: 20}
-  - {header: Exported, group: identity, field: exported, width: 10}
-  - {header: Reading note, group: assessments, field: reading_note, width: 40}
-- name: Concepts
-  columns:
-  - {header: Concept id, group: identity, field: concept_id, width: 11}
-  - {header: 'In the model, as the code names it', group: identity, field: in_model, width: 30}
-  - {header: Described in the model as, group: identity, field: described, width: 34}
-  - {header: Same words in the methodology, group: assessments, field: canon, width: 34}
-  - {header: Same words in the documentation, group: assessments, field: doc, width: 34}
-  - {header: Same words in the rest of the model, group: assessments, field: model, width: 30}
-  - {header: Candidate synonyms and acronyms (AI guess), group: assessments, field: guessed, width: 40}
-  - {header: How established, group: assessments, field: established, width: 60}
 - name: Model_Implementation_Map
   columns:
   - {header: MapID1, group: identity, field: id1, width: 7}
@@ -8254,9 +7508,7 @@ sheets:
   - {header: MapID12, group: identity, field: id12, width: 7}
   - {header: Level, group: identity, field: level, width: 7}
   - {header: Output Variable, group: identity, field: output_variable, width: 28}
-  - {header: Output Variable - Model Ref, group: assessments, field: ov_ref, width: 16, links_to: Chunks_Model}
   - {header: Output Variable - Model Code, group: code_text, field: ov_code, width: 60}
-  - {header: Output Variable - Mapped Concept Ref, group: methodology, field: ov_concept, width: 18, links_to: Concepts}
   - {header: Function Name, group: identity, field: function_name, width: 24}
   - {header: Function Name - Model Ref, group: assessments, field: fn_ref, width: 16, links_to: Chunks_Model}
   - {header: Arguments, group: assessments, field: arguments, width: 46}
@@ -8329,7 +7581,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
         sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsx on local disk from the record of the run. All seven sheets always
+    """Build Output.xlsx on local disk from the record of the run. All six sheets always
     exist; a sheet whose step has not run shows its header only."""
     import openpyxl
     layout = load_layout()
@@ -8337,8 +7589,7 @@ def build_workbook(store, paths, settings, progress, target):
     check_written_totals(rows, store)
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
-    index = {"Chunks_Model": {row["ref"]: number for number, row in enumerate(rows.get("Chunks_Model") or [], start=2)},
-             "Concepts": {row.get("concept_id"): number for number, row in enumerate(rows.get("Concepts") or [], start=2)}}
+    index = {"Chunks_Model": {row["ref"]: number for number, row in enumerate(rows.get("Chunks_Model") or [], start=2)}}
     for sheet_layout in layout["sheets"]:
         sheet = workbook.create_sheet(sheet_layout["name"])
         write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store, index)
@@ -8496,13 +7747,12 @@ def read_inputs(ctx):
 
 def build_map(ctx):
     """Step 03, build-map: by code alone, before any model call - the graph of what the files say about
-    each other, the data flow of the package, and the concepts the model names. Enforces: R2, R4, R14"""
-    return combine(ctx, build_graph, trace_dataflow, extract_concepts)
+    each other, and the data flow of the package. Enforces: R2, R4, R14"""
+    return combine(ctx, build_graph, trace_dataflow)
 
 def read_with_ai(ctx):
-    """Step 05, read-with-ai: what each piece of code does, the concepts only a reader can confirm, and
-    the map's agents closing the gaps code named. Enforces: R3, R5"""
-    return combine(ctx, interpret_code, judge_concepts, map_implementation)
+    """Step 04, read-with-ai: the map's agents closing the gaps code named. Enforces: R3, R5"""
+    return combine(ctx, map_implementation)
 
 def link_units(ctx):
     """Step 06, link-units: two passes of search and judgement - candidates by code, then the model's
@@ -8517,12 +7767,9 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
     "read_package": read_package,
     "build_graph": build_graph,
     "trace_dataflow": trace_dataflow,
-    "extract_concepts": extract_concepts,
-    "judge_concepts": judge_concepts,
     "map_implementation": map_implementation,
     "find_candidates": find_candidates,
     "judge_links": judge_links,
-    "interpret_code": interpret_code,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,
     "build_map": build_map,

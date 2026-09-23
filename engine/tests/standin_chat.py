@@ -170,14 +170,6 @@ def second_opinion(prompt, name_a_difference):
                              "what_differs": "The two texts do not state the same thing."}]}
 
 
-def interpret_code(main_prompt):
-    """No model reads the code here: the stand-in names the piece and the symbols in it, and quotes
-    its first line, which is what makes the answer pass the check that the quotation is in the code."""
-    label, code = re.search(r"THE PIECE OF CODE \((.*?)\)\n<<<\n(.*?)\n>>>", main_prompt, re.S).groups()
-    first = next(line.strip() for line in code.split("\n") if line.strip())
-    names = list(dict.fromkeys(re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", code)))[:6]
-    return {"interpretation": "Stand-in reading of %s: it works with %s." % (label.split(",")[0], ", ".join(names)),
-            "quote_from_unit": first[:200]}
 
 
 def slice_rules(main_prompt, misbehave=False):
@@ -257,45 +249,6 @@ def name_steps(main_prompt):
     return {"names": names}
 
 
-def match_concepts(main_prompt, misbehave=False):
-    """What a careful reader would answer: for each passage, each listed concept whose name the passage
-    writes in other words it can see - an acronym-like name spelled by the initials of words in a row,
-    or a name whose parts begin words in a row - with those words copied from the passage. A
-    misbehaving answer copies words the passage does not hold, which the validator has to refuse."""
-    concepts, passages, ref, reading = {}, {}, None, "concepts"
-    for line in main_prompt.split("\n"):
-        stripped = line.strip()
-        if stripped == "THE PASSAGES":
-            reading = "passages"
-            continue
-        found = re.match(r"^\[(K-\d{4})\] (.+?)(?: \u2014 described in the model as: .*)?$", stripped)
-        if reading == "concepts" and found:
-            concepts[found.group(1)] = [name.strip() for name in found.group(2).split(" / ")]
-        found = re.match(r"^\[([CDM]-\d{4})\]$", stripped)
-        if reading == "passages" and found:
-            ref = found.group(1)
-            passages[ref] = ""
-        elif reading == "passages" and ref and stripped not in (">>>", "<<<"):
-            passages[ref] += line + "\n"
-    units = {}
-    for ref, text in passages.items():
-        words = re.findall(r"[A-Za-z][\w'-]*", text)
-        named = []
-        for cid, names in concepts.items():
-            for name in names:
-                parts = [p.lower() for p in re.split(r"[_.]+", name) if p]
-                size = len(parts[0]) if len(parts) == 1 else len(parts)
-                for start in range(len(words) - size + 1):
-                    window = words[start:start + size]
-                    initials = "".join(w[0].lower() for w in window)
-                    if (len(parts) == 1 and 2 <= len(parts[0]) <= 6 and initials == parts[0]) or \
-                       (len(parts) >= 2 and all(w.lower().startswith(p) for w, p in zip(window, parts))):
-                        named.append({"concept": cid, "words": " ".join(window)})
-                        break
-        if misbehave and concepts:
-            named.append({"concept": sorted(concepts)[0], "words": "words no passage holds"})
-        units[ref] = [dict(t) for t in dict.fromkeys(tuple(sorted(n.items())) for n in named)]
-    return {"units": units}
 
 
 def package_plan(main_prompt, misbehave=False):
@@ -362,14 +315,8 @@ def answer_for(system_prompt, main_prompt, misbehave):
         return json.dumps(trace_gap(main_prompt, misbehave and bucket == 3))
     if question_type == "name-steps":
         return json.dumps(name_steps(main_prompt))
-    if question_type == "match-concepts":
-        return json.dumps(match_concepts(main_prompt, misbehave and bucket == 3))
     if question_type == "check-rule":
         return json.dumps(check_rule(main_prompt))
-    if question_type == "interpret-code":
-        if misbehave and bucket == 0:
-            return json.dumps({"interpretation": "It works out the price.", "quote_from_unit": "words that are not in the code at all"})
-        return json.dumps(interpret_code(main_prompt))
     return json.dumps({"ok": True})
 
 

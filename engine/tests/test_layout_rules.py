@@ -83,7 +83,7 @@ class StaticWordingLint(unittest.TestCase):
         import verifier as review
         domain_words = re.compile(r"\b(credit|loan|bank|capital|default|dose|dosing|patient|clearance|obligor|mortgage)\b", re.I)
         checked = dict(core.PROMPTS, stopwords=review.STOPWORDS_TEXT, bridge_patterns=review.BRIDGE_PATTERNS_YAML)
-        self.assertGreaterEqual(len(checked), 11, "every prompt and both word lists are checked")
+        self.assertGreaterEqual(len(checked), 7, "every prompt and both word lists are checked")
         for name, text in sorted(checked.items()):
             self.assertIsNone(domain_words.search(text), "domain word in %s" % name)
 

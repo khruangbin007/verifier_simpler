@@ -1217,8 +1217,8 @@ if PATHS is not None:
         print("\nWAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and")
         print("run this cell again; the steps already finished are not repeated.")
     print("\nRun folder:", PATHS.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Concepts the model's own")
-    print("names, Model_Implementation_Map how it computes what it returns, and Mapping_Coverage what is covered.")
+    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Model_Implementation_Map")
+    print("how the model computes what it returns, and Mapping_Coverage what is covered.")
     print("Then run cell 4 to check the run folder against its own record.")
 '''
 

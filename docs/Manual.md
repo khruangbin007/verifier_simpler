@@ -176,7 +176,7 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 |---|---|---|
 | **cell 1** | Makes the widgets, installs a package only if one the engine imports is missing, loads the engine, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
 | **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `live()` at the moment it is called. Asks it one question, then makes the project's `Inputs` folders and prints their paths | when the gateway or your id changes |
-| **cell 3** | Reads every input file, maps how the model computes what it returns, and asks your model to interpret the code, name the concepts, close the gaps and judge every link. Prints what each step did | after a token expires, a cluster restarts, or you add an input: finished steps are never repeated |
+| **cell 3** | Reads every input file, maps how the model computes what it returns, asks your model to close the gaps code could not follow, and links the passages of the three inputs. Prints what each step did | after a token expires, a cluster restarts, or you add an input: finished steps are never repeated |
 | **cell 4** | Checks the finished run folder against its own record | after any run |
 
 **The widgets.** Eight: the endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the name recorded against the run; the model id (04) and project date (05); a package index (06), used only if a package must be installed; how many calls at once (07); and the token cap (08). Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
@@ -211,9 +211,8 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 |---|---|
 | `Model_Package_Info` | what was read and what was not, each file's content account, the coverage identity, the run's progress |
 | `Chunks_Canon` | every unit of the methodology, with its place in the outline |
-| `Chunks_Doc` | every unit of the documentation, with what it was linked to, what was searched, its checks, its status and its flagged items |
-| `Chunks_Model` | every unit of the model package, with the AI's interpretation, its status and its flagged items |
-| `Concepts` | one row per concept of the model, with every form it is written in and where |
+| `Chunks_Doc` | every unit of the documentation, with its place in the outline |
+| `Chunks_Model` | every unit of the model package: each a whole piece of code, as written |
 | `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, one row per variable |
 | `Mapping_Coverage` | one row per final output and one per corner: what is covered and what is not |
 
@@ -278,29 +277,20 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 | Column | Colour group | What it shows |
 |---|---|---|
 | Ref | identity |  |
-| Level | identity |  |
 | Section (heading chain) | identity |  |
-| Para no. | identity |  |
 | Type | identity |  |
 | Text | methodology |  |
 | Source file | identity |  |
-| Cross-references | methodology |  |
-| Reading note | assessments |  |
 
 **Chunks_Doc**
 
 | Column | Colour group | What it shows |
 |---|---|---|
 | Ref | identity |  |
-| Level | identity |  |
 | Section (heading chain) | identity |  |
-| Para no. | identity |  |
 | Type | identity |  |
 | Text | documentation |  |
 | Source file | identity |  |
-| Cross-references | documentation |  |
-| States something checkable | assessments |  |
-| Reading note | assessments |  |
 
 **Chunks_Model**
 
@@ -310,14 +300,7 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 | Kind | identity |  |
 | File | identity |  |
 | Lines | identity |  |
-| Name | identity |  |
-| Inside | identity |  |
 | Text | code text |  |
-| LLM Interpretation | assessments |  |
-| Expression / arguments | code text |  |
-| Numbers used | code text |  |
-| Exported | identity |  |
-| Reading note | assessments |  |
 
 **Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets, one of the model to the methodology and the documentation, the other of the documentation to the methodology and the model, held one row per model unit and one row per documentation unit: what each was linked to, what was searched for it, its checks, its status and its flagged items. The Model Implementation Map now shows the model unit in its place in the computation, so those two sheets are gone and nothing they held is lost. A model unit's status and flagged items are on `Chunks_Model`, beside the unit itself. A documentation unit's links, what was searched, its checks, its status and its flagged items are on `Chunks_Doc`, beside the passage.
 
@@ -327,7 +310,7 @@ Eight sheets, always in this order; a sheet whose step has not run yet shows its
 |---|---|---|
 | Model units | units a final output reaches: a row of the map, or the roxygen, help page, test or statement belonging to one | the units no final output reaches: dead code, a second way in, a function only the tests call |
 | Methodology passages | passages a unit on the map is linked to | passages stating a number, formula or rule that no step implements. The rest state nothing to implement |
-| Documentation passages | passages a unit on the map is linked to | passages describing nothing in the map and naming none of the model's concepts |
+| Documentation passages | passages a unit on the map is linked to | passages describing nothing in the map |
 
 Every number on this sheet is counted from the rows written to the map and to the Chunks sheets, so the sheet and the map always agree. The coverage identity is checked separately, by counting the statuses on `Chunks_Model` and `Chunks_Doc` against what the step account-coverage counted.
 
@@ -359,20 +342,6 @@ A called function is entered with the arguments that call gives it, so what it c
 
 **Choosing the final outputs.** Code proposes as a final output a function nothing in the package calls that is exported or that the package's tests or vignettes call (step 05a); cell 3 and cell 4 both say which. Where code proposes none, every function nothing in the package calls stands in, so the map always has a top.
 
-## 8a. Concepts
-
-**The model is the basis.** A concept is one of the model's: a name its code gives something — a function, an argument, a variable a statement sets, a stored table or one of its columns — together with how the model's own roxygen and help pages describe it, word for word (`pd`, described by its `@param` as *probability of default*). Names the code only calls, such as base functions, and generic names such as `x`, `data` or `result`, are not concepts.
-
-**The documents are searched for those, and nothing else.** A term of the methodology or the documentation is extracted only when it has a likely equivalent in the model; a term with none is never extracted, however important it looks. Three kinds of evidence, kept apart:
-
-1. **The same words, found by code** (step 06, `extract-concepts`, in cell 3, before any model call): the words of the model's name (`asset_correlation` in *asset correlation*), or the words the model uses to describe it (*probability of default*), compared in lower case and singular, with only spaces, hyphens or underscores between them. Where the documents define an acronym — *stand-alone credit profile (SACP)*, or a glossary entry written as its own heading — and one side of it is already one of the model's forms, the other side becomes one too, with the unit that defines it.
-2. **The rest of the model**: other model files that write a concept's name — a test, a vignette, a help page — found the same way.
-3. **Candidate synonyms and acronyms, guessed by the model** (step 07b, `judge-concepts`, after you confirm the outline): only for methodology and documentation units where code sees a likely model concept it could not prove — a name whose parts begin the unit's words (`adj_rating`, *adjusted rating*), an acronym-like name spelled by the initials of words in a row, a description sharing its words. The model is shown those concepts and asked which the unit names, copying the unit's words; a name not in the unit word for word refuses the whole answer.
-
-**Verbatim, always.** The Chunks sheets' column **Extracted concepts with candidate equivalent in model** shows, for each unit, the words that unit writes, character for character — *PD*, not the model's `pd`; *PDc* as the text capitalises it — joined by `;`. It never shows the model's name for them. That mapping, and every guess in it, is on the sheet **Concepts** only: one row per model concept, with the names the code gives it, how the model describes it, the same words found in the methodology, the documentation and the rest of the model, and — in a column of their own, headed as the AI's guess — the synonyms and acronyms the model found, each as written and with its units.
-
-**How concepts steer the mapping.** The search for corresponding passages (step 07c) runs after the concepts, and a passage that names the same model concept as the unit comes first: that signal counts `concept_weight` times as much as any other and is the first to fill the places reserved on each shortlist. The reason shown for such a candidate begins *shares the concept*.
-
 ## 11. The run folder as an evidence pack
 
 The three files in `_audit/` are the record. `records.jsonl` holds every record of every kind, one per line, each tagged with its kind, in the order written and never rewritten; `calls.jsonl.gz` holds every exchange with the model, prompt and reply; `manifest.json` holds the run's identity, the fingerprint of every input, the fingerprint of every engine file that ran, the coverage account and the package as described. Cell 5 verifies a pack from these three files alone: that the inputs are the ones fingerprinted, that the engine files match the release, that re-reading the inputs gives the recorded content hashes, that the hash chains verify (the graph, the determinations, and your decisions on what is in scope and what the final outputs are), that every unit has one status and every citation resolves, and that no token was written anywhere. A changed byte in an input, a removed record or an edited status is caught.
@@ -396,8 +365,6 @@ The three files in `_audit/` are the record. `records.jsonl` holds every record 
 ## 13. Known limitations
 
 - The content of images is never evidence. Formulas given only as pictures end *Not assessed* or make the linked code *Traced - check undecided*. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself. The Figure still ends *Not assessed - for manual review*.
-- **LLM Interpretation** on `Chunks_Model` says in plain words what a function, a formula statement, a top-level statement or a test block does. The AI is shown the piece itself together with where it sits in the whole package: the function a statement is inside, the package's own documentation of it, what calls it, what it calls, the stored data it reads, and an outline of every file. The words are the model's, so the cell shows them in quotation marks. They are an aid to reading and nothing more: an interpretation gives a unit no status, raises no flagged item, and is never used in a check. The tool only accepts an answer whose quotation is in the code word for word; where an answer could not be used the cell says why. Other kinds of unit (documentation blocks, help pages, stored data) are not asked about.
-- **Para no.** shows the paragraph number the document itself gives (`36.`), gaps included, where it gives one. A PDF gives none, so its paragraphs are labelled with their page and their place on it (`p.4 ¶2`); so are the paragraphs of a Word file in which Word noted where its pages ended. Otherwise it is the tool's own count under the heading.
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
 - A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
 - Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
@@ -426,8 +393,8 @@ Five steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, a
 |---|---|---|
 | 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
-| 03 | build-map | by code alone: the graph, the data flow of the package (read by flowR), and the model's concepts |
-| 04 | read-with-ai | what each piece of code does, the concepts only a reader can confirm, the map's agents closing the gaps code named |
+| 03 | build-map | by code alone: the graph, and the data flow of the package (read by flowR) |
+| 04 | read-with-ai | the map's agents closing the gaps code named |
 | 05 | link-units | two passes of search and judgement: candidates by code, then the model's judgement on each |
 
 **How the data flow is read.** The package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3). flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places left as gaps for the model's agents. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
@@ -499,10 +466,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `reviewer_id` |  | Who runs the notebook; recorded with confirmations and determinations. |
 | `reviewer_role` |  | The role of that person. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
-| `interpret_code` | True | Ask the AI to say in plain words what each function, formula statement, top-level statement and test block does, shown with where it sits in the whole package. Fills the column LLM Interpretation on Chunks_Model. One question per piece of code; switch it off to save the calls. |
 | `signals` | ['fields', 'bridge', 'references', 'anchors', 'signatures', 'propagation'] | The search signals in use; the recall ladder (`develop.recall`) switches them off one by one. |
-
-`concept_weight` (default 2.0): how much more a shared concept counts in the search than any other signal. `concept_batch` (default 8): how many units one extraction question shows the model. `concept_candidates_max` (default 40): the most model concepts shown to the model in one question, and the most suggested for one unit. `concepts_with_ai` (default true): whether the model is asked for synonyms and acronyms code could not prove; switched off, only what code proved stands.
 
 `map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting. `map_hops_max` (default 8): the most turns the Tracer takes on one gap. `map_calls_max` (default 200): the most questions the map's agents ask in one run, the Tracer's and the Namer's together. `map_with_ai` (default true): whether the map's agents are asked at all.
 
