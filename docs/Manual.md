@@ -98,12 +98,12 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 
 | Cell | What it does | When to run it again |
 |---|---|---|
-| **cell 1** | `verifier.setup(dbutils)`: makes the widgets, installs a package only if one the engine imports is missing, gets flowR ready, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
+| **cell 1** | `verifier.setup(dbutils)`: makes the widgets, installs a package only if one the engine imports is missing, installs Docling into a folder of its own the first time on a cluster, gets flowR ready, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
 | **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | when the gateway or your id changes |
 | **cell 3** | `verifier.review()`: reads every input file and maps how the model computes what it returns. Prints what each step did | after the cluster restarts, or you add an input: finished steps are never repeated |
 | **cell 4** | `verifier.verify()`: checks the finished run folder against its own record | after any run |
 
-**The widgets.** Eight: the endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the name recorded against the run; the model id (04) and project date (05); a package index (06), used only if a package must be installed; how many calls at once (07); and the token cap (08). Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
+**The widgets.** Eight: the endpoint and token for the model gateway (01, 02); your user id (03), which is both the id sent to the gateway and the name recorded against the run; the model id (04) and project date (05); the package index (06) - its pip address, which on Artifactory ends in `/api/pypi/<repository>/simple`; several may be given, separated by spaces, the first the index and the others extra indexes - used only when something must be installed; how many calls at once (07); and the token cap (08). Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
 
 **No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Nothing is installed from an index you did not name: to install from pip's own default index, call `verifier.setup(dbutils, allow_default_index=True)`.
 
@@ -298,10 +298,10 @@ After any change, see section 23.
 | PyYAML>=6.0 | required | the pipeline and the tool's own rule files |
 | numpy>=1.24 | required | reading stored data |
 | rdata>=1.0 | required | reads stored R data without running R |
-| docling>=2.130 | required | reads the methodology and the documentation; brings PyTorch |
+| docling>=2.129 | required | reads the methodology and the documentation, in a process of its own; cell 1 installs it into a folder of its own, from `engine/requirements-docling.txt` |
 | flowR 2.15.8 (not a Python package) | required | reads the package's R code; fetched and checked by cell 1 |
 
-**Installing Docling.** Docling brings PyTorch. On a cluster without a GPU, install the CPU build of torch and torchvision first, both from the same index, so that the two match: a torchvision that does not match torch cannot load Docling's PDF models. Cell 1 then installs Docling itself when it is missing.
+**Installing Docling.** Docling needs pandas 2 and PyTorch, which a managed runtime may not carry - a Databricks runtime may keep pandas 1.5 - so cell 1 installs it into a folder of its own on the cluster's local disk, never into the runtime's packages, and the tool runs it in a process of its own. The runtime's pandas, numpy and pyarrow are never changed. The first time on a cluster this takes several minutes. Widget 06 may name several indexes, separated by spaces: the first is the index, the others extra indexes. Put your index's PyTorch CPU repository second, so that pip takes torch without GPU libraries. On a cluster that can reach no index, download the wheels on an approved machine for the cluster's Python and platform - `pip download -r engine/requirements-docling.txt -d docling-wheels --only-binary=:all: --python-version 3.12 --platform manylinux2014_x86_64` - and put the folder next to the notebook as `docling-wheels`; cell 1 installs from it.
 
 **Docling's models on a cluster without internet.** Reading a PDF needs Docling's layout and table models, fetched from Hugging Face the first time. Where the cluster cannot reach Hugging Face, run `docling-tools models download layout tableformer` on an approved machine and put the folder it writes next to the notebook as `docling-models`; cell 1 finds it there and says so. Word, HTML, Markdown and plain text need no models.
 

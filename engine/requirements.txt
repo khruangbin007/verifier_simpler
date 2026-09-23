@@ -1,11 +1,8 @@
-# What the engine imports. Cell 1 installs these, and only if one of them is missing.
+# What the engine itself imports. Cell 1 installs these, and only if one of them is missing.
 # Lower bounds, not pins: a managed runtime usually has openpyxl and PyYAML already, and
 # forcing an exact version would replace the runtime's own copy for no gain.
 openpyxl>=3.1
 PyYAML>=6.0
 numpy>=1.24
 rdata>=1.0
-# Docling reads the methodology and the documentation. It brings PyTorch: on a cluster without a
-# GPU, install the CPU build of torch and torchvision first, from the same index, so that the two
-# match (a mismatched torchvision cannot load Docling's PDF models).
-docling>=2.130
+# Docling is not here: it runs in a process of its own, from its own folder - see requirements-docling.txt.

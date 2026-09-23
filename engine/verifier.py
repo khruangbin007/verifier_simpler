@@ -45,7 +45,6 @@ import zlib
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
-import importlib.metadata
 from email import policy
 
 
@@ -780,59 +779,132 @@ domains:
 
 # ---------------------------------------------------------------- the methodology and the documentation, read by Docling
 # Docling reads every document into its parts - headings, paragraphs, tables, figures, equations - and its
-# hierarchical chunker makes one unit of each part, with the headings above it. What Docling does not read
-# itself (XML, saved web archives, plain text) is first turned into a page it does read.
-DOCLING = {}                              # the converter and the chunker, made once per session
+# hierarchical chunker makes one unit of each part, with the headings above it. It runs in a process of its own,
+# from a folder of its own: it needs pandas 2 and PyTorch, which a managed runtime may not carry, and the
+# runtime's own packages are never changed for it. What Docling does not read itself (XML, saved web archives,
+# plain text) is first turned here into a page it does read.
 DOCLING_MODELS = ""                       # Docling's model folder, when one is staged next to the notebook
+DOCLING_HOME = {}                         # where Docling runs from, once found: {"path": its folder, or "" for the runtime}
 UNIT_KIND_OF_LABEL = (("table", "Table"), ("picture", "Figure"), ("formula", "Equation"))
+DOCLING_WORKER = r'''
+"""Docling, in a process of its own: reads each file of a request into units - [heading chain, kind, text] -
+and writes them back as JSON. Started by verifier.docling_read; it never imports the engine."""
+import io, json, sys, importlib.metadata
+request = json.load(open(sys.argv[1], encoding="utf-8"))
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import InputFormat, DocumentStream
+from docling.datamodel.pipeline_options import HeadingHierarchyOptions, PdfPipelineOptions
+from docling_core.transforms.chunker import HierarchicalChunker
+options = PdfPipelineOptions(do_ocr=False, artifacts_path=request["models"] or None, generate_parsed_pages=True)
+options.heading_hierarchy_options = HeadingHierarchyOptions(enabled=True)   # a PDF's heading levels: outline, numbering, type
+convert = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}).convert
+chunk, kinds = HierarchicalChunker().chunk, request["kinds"]
+label = lambda item: str(getattr(item.label, "value", item.label))
+answer = {"version": importlib.metadata.version("docling"), "files": []}
+for name, path in request["files"]:
+    try:
+        with open(path, "rb") as handle:
+            document = convert(DocumentStream(name=name, stream=io.BytesIO(handle.read()))).document
+        title = next((item.text.strip() for item in document.texts if label(item) == "title"), "")
+        units = []
+        for piece in chunk(document):
+            chain = list(piece.meta.headings or [])
+            chain = [title] + chain if title and chain[:1] != [title] else chain     # the document's title heads every chain
+            found = {label(item) for item in piece.meta.doc_items}
+            if piece.text.strip():
+                units.append([chain, next((kind for part, kind in kinds if part in found), "Paragraph"), piece.text])
+        answer["files"].append({"units": units})
+    except Exception as problem:                     # one file that cannot be read never stops the others
+        answer["files"].append({"error": ("%s: %s" % (type(problem).__name__, problem))[:300]})
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump(answer, handle)
+'''
 
-def docling_reader():
-    """Docling's converter - no OCR: the documents carry their text; a PDF's heading levels worked out - and its
-    hierarchical chunker."""
-    if not DOCLING:
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import HeadingHierarchyOptions, PdfPipelineOptions
-        from docling_core.transforms.chunker import HierarchicalChunker
-        options = PdfPipelineOptions(do_ocr=False, artifacts_path=DOCLING_MODELS or None, generate_parsed_pages=True)
-        options.heading_hierarchy_options = HeadingHierarchyOptions(enabled=True)   # a PDF's heading levels, from its outline, numbering and type
-        DOCLING["convert"] = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}).convert
-        DOCLING["chunk"] = HierarchicalChunker().chunk
-        DOCLING["version"] = importlib.metadata.version("docling")
-    return DOCLING
+def docling_folder():
+    """Docling's own folder: on the machine's local disk, and this system user's own - a shared cluster runs each
+    notebook session as a user of its own."""
+    base = "/local_disk0/tmp" if os.path.isdir("/local_disk0/tmp") else tempfile.gettempdir()
+    return os.path.join(base, "docling-%d" % os.getuid())
 
-def read_document(path):
-    """One file's units in reading order: (heading chain, kind, text)."""
-    from docling.datamodel.base_models import DocumentStream
-    reader = docling_reader()
-    with open(path, "rb") as handle:
-        name, data = page_of(os.path.basename(path), handle.read())
-    document = reader["convert"](DocumentStream(name=name, stream=io.BytesIO(data))).document
-    title = next((item.text.strip() for item in document.texts if str(getattr(item.label, "value", item.label)) == "title"), "")
-    for chunk in reader["chunk"](document):
-        labels = {str(getattr(item.label, "value", item.label)) for item in chunk.meta.doc_items}
-        chain = tuple(chunk.meta.headings or ())
-        chain = (title,) + chain if title and chain[:1] != (title,) else chain      # the document's title heads every chain
-        if chunk.text.strip():
-            yield chain, next((kind for label, kind in UNIT_KIND_OF_LABEL if label in labels), "Paragraph"), chunk.text
+def docling_environment(folder):
+    """The environment a Docling process runs in: its folder first on the path, ahead of the runtime's packages."""
+    environment = dict(os.environ)
+    if folder:
+        environment["PYTHONPATH"] = folder + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else "")
+    return environment
+
+def docling_ready():
+    """Where Docling runs from: its own folder, or "" when the runtime itself carries it; None when it is nowhere yet."""
+    if "path" not in DOCLING_HOME:
+        for folder in (docling_folder(), ""):         # its own folder first: the runtime's copy, if any, may not fit
+            if folder and not os.path.isdir(folder):
+                continue
+            probe = subprocess.run([sys.executable, "-s", "-c", "import docling, docling_core"], env=docling_environment(folder),
+                                   capture_output=True, text=True, timeout=600)
+            if probe.returncode == 0:
+                DOCLING_HOME["path"] = folder
+                break
+    return DOCLING_HOME.get("path")
+
+def docling_install(urls, wheels, allow_default_index=False):
+    """Install Docling into its own folder - never into the runtime's packages - from the index(es) of widget 06, or
+    from a staged folder of wheels. Returns what pip said when it failed, else ""."""
+    requirements = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements-docling.txt")
+    source = ["--no-index", "--find-links", wheels] if wheels else index_arguments(urls)
+    if not source and not allow_default_index:
+        return "no package index is named in widget 06, and no wheels are staged"
+    done = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "--target", docling_folder(), "-r", requirements] + source,
+                          capture_output=True, text=True)
+    DOCLING_HOME.clear()
+    return done.stderr if done.returncode else ""
+
+def docling_read(pages):
+    """Every page of a corner read by ONE Docling process - its models are loaded once - into
+    {"version", "files": one {"units"} or {"error"} per page, in order}."""
+    folder = docling_ready()
+    if folder is None:
+        return {"version": "", "files": [{"error": "Docling is not installed here - run cell 1"} for _ in pages]}
+    with tempfile.TemporaryDirectory(prefix="docling-") as work:
+        request = {"models": DOCLING_MODELS, "kinds": UNIT_KIND_OF_LABEL, "files": []}
+        for number, (name, data) in enumerate(pages):
+            request["files"].append([name, os.path.join(work, "%04d" % number)])
+            with open(request["files"][-1][1], "wb") as handle:
+                handle.write(data)
+        for file_name, text in (("worker.py", DOCLING_WORKER), ("request.json", json.dumps(request))):
+            with open(os.path.join(work, file_name), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        answer = os.path.join(work, "answer.json")
+        done = subprocess.run([sys.executable, "-s", os.path.join(work, "worker.py"), os.path.join(work, "request.json"), answer],
+                              env=docling_environment(folder), capture_output=True, text=True, cwd=work, timeout=3600)
+        if done.returncode or not os.path.exists(answer):
+            reason = ((done.stderr or "").strip().splitlines() or ["it gave no answer"])[-1]
+            return {"version": "", "files": [{"error": "Docling stopped: %s" % reason[:300]} for _ in pages]}
+        with open(answer, encoding="utf-8") as handle:
+            return json.load(handle)
 
 def read_corner(ctx, corner, input_key, label):
     """Read every file of one corner, in file-name order, into units numbered in reading order. A file that
     cannot be read is said so, and the others are still read. Enforces: R2"""
-    inputs, chunks, info_rows = ctx.options["inputs"], [], []
+    inputs, chunks, info_rows, pages, not_read = ctx.options["inputs"], [], [], [], {}
     for left_out, why in (inputs.get("skipped") or {}).get(input_key, []):
         info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
     for path in inputs[input_key]:
-        name = os.path.basename(path)
         try:
-            found = list(read_document(path))
+            with open(path, "rb") as handle:
+                pages.append((path,) + page_of(os.path.basename(path), handle.read()))
         except Exception as problem:                 # one file that cannot be read never stops the others (R2)
-            info_rows.append({"group": label, "item": name, "value": "Not read: %s" % (str(problem)[:300] or type(problem).__name__)})
+            not_read[path] = str(problem)[:300] or type(problem).__name__
+    read = docling_read([(name, data) for _, name, data in pages]) if pages else {"version": "", "files": []}
+    results = dict(zip([path for path, _, _ in pages], read["files"]))
+    for path in inputs[input_key]:
+        name, found = os.path.basename(path), results.get(path) or {"error": not_read.get(path, "not read")}
+        if "error" in found:
+            info_rows.append({"group": label, "item": name, "value": "Not read: %s" % found["error"]})
             continue
-        for chain, kind, text in found:
+        for chain, kind, text in found["units"]:
             chunks.append(dataclasses.asdict(Chunk("%s-%04d" % ("C" if corner == "canon" else "D", len(chunks) + 1),
-                                                   corner, name, kind, chain, text, content_hash(text))))
-        info_rows.append({"group": label, "item": name, "value": "Read by Docling %s: %d units" % (DOCLING["version"], len(found))})
+                                                   corner, name, kind, tuple(chain), text, content_hash(text))))
+        info_rows.append({"group": label, "item": name, "value": "Read by Docling %s: %d units" % (read["version"], len(found["units"]))})
     return StepResult({"chunks_canon" if corner == "canon" else "chunks_doc": chunks, "info_rows": info_rows},
                       {"files": len(inputs[input_key]), "units": len(chunks)}, [])
 
@@ -905,7 +977,7 @@ def html_of_xml(data):
         if len(rows) >= 2 and len(rows) >= len(children) - 1 and len({local(r.tag) for r in rows}) == 1 and \
                 sum(len(c.split()) for c in cells) <= 8 * len(cells):     # rows of short cells, not sections of sentences
             caption = " ".join(words(c) for c in children if c not in rows)
-            out.append("<table>%s%s</table>" % ("<caption>%s</caption>" % html.escape(caption) if caption else "",
+            out.append("%s<table>%s</table>" % ("<p>%s</p>" % html.escape(caption) if caption else "",
                         "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % html.escape(words(cell)) for cell in r) for r in rows)))
             return
         tags = {local(c.tag) for c in children}
@@ -927,6 +999,10 @@ def html_of_xml(data):
     return "<html><body>%s</body></html>" % "".join(out)
 
 
+def captions_out(page):
+    """A table's <caption> as a paragraph just before the table: some Docling versions drop a caption."""
+    return re.sub(r"(<table\b[^>]*>)\s*<caption\b[^>]*>(.*?)</caption>", r"<p>\2</p>\1", page, flags=re.I | re.S)
+
 def page_of(name, data):
     """(name, bytes) Docling reads: a format told by its content, not its name - an .xml, .txt or any file may
     hold XML, a page or plain text."""
@@ -934,11 +1010,11 @@ def page_of(name, data):
     if low.endswith(".docx"):
         return name, docx_for_docling(data)
     if low.endswith((".mhtml", ".mht")) or head.startswith(b"mime-version") or b"content-type: multipart/related" in head:
-        return name + ".html", html_of_mhtml(data).encode("utf-8")
+        return name + ".html", captions_out(html_of_mhtml(data)).encode("utf-8")
     if low.endswith((".pdf", ".pptx", ".xlsx", ".csv", ".md")):
         return name, data
     if head.startswith((b"<!doctype html", b"<html")) or low.endswith((".html", ".htm")):
-        return name + ("" if low.endswith((".html", ".htm")) else ".html"), data
+        return name + ("" if low.endswith((".html", ".htm")) else ".html"), captions_out(decode_text(data)).encode("utf-8")
     if head.startswith(b"<"):
         return name + ".html", html_of_xml(data).encode("utf-8")
     return name + ".html", html_of_text(data.decode("utf-8", "replace")).encode("utf-8")
@@ -3468,7 +3544,7 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
 # Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
 # cell 1 is setup(dbutils), cell 2 check_chat(chat), cell 3 review(), cell 4 verify(). The session - the
 # widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
-REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata", "docling")   # what the engine imports; installed only if missing
+REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
 WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
            ("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)"),
            ("model_id", "", "04 Model ID"), ("project", "", "05 Project date (empty = new project today)"),
@@ -3533,6 +3609,15 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
     models = os.path.join(home, "docling-models")      # Docling's models, staged for a cluster that cannot reach Hugging Face
     globals()["DOCLING_MODELS"] = models if os.path.isdir(models) else ""
     print("Docling models:", models if os.path.isdir(models) else "fetched from Hugging Face the first time a PDF is read")
+    if docling_ready() is None:                      # Docling in a folder of its own: the runtime's packages are never changed for it
+        wheels = os.path.join(home, "docling-wheels")
+        print("Installing Docling into its own folder, %s - the first time on a cluster this takes several minutes." % docling_folder())
+        said = docling_install(widgets.get("jfrog_index_url").split(), wheels if os.path.isdir(wheels) else "", allow_default_index)
+        if said:
+            print("DOCLING IS NOT READY. What pip said:\n" + pip_said(said))
+            print("Documents cannot be read until it is; the runtime's own packages were not changed.")
+    if docling_ready() is not None:
+        print("Docling ready, from", docling_ready() or "the runtime's own packages")
     print("\nTHE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
@@ -3541,6 +3626,22 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
     print("Paste a fresh token into widget 02 at any time - it is read at the moment each call is made, so a run")
     print("already working picks it up.")
     print("Next: cell 2.")
+
+def index_arguments(urls):
+    """pip's arguments for the index(es) of widget 06: the first URL is the index, any further one an extra index."""
+    return (["--index-url", urls[0]] + [part for url in urls[1:] for part in ("--extra-index-url", url)]) if urls else []
+
+def pip_said(stderr):
+    """What pip said, without any credentials of an index URL, and what its most common failure means."""
+    text = re.sub(r"//[^/@\s]+@", "//...@", stderr or "")[-1500:]
+    missing = re.findall(r"satisfies the requirement ([\w.\-\[\]]+)", stderr or "")
+    if "from versions: none" in (stderr or ""):
+        text += ("\nThe index offered no version at all of %s. When that is a package every index carries, the URL in widget 06 is "
+                 "likely not the index's own address - on Artifactory it ends in /api/pypi/<repository>/simple - or the repository "
+                 "does not let this cluster have it." % (missing[0] if missing else "that package"))
+    elif "ResolutionImpossible" in (stderr or "") or "conflicting dependencies" in (stderr or ""):
+        text += "\nThe packages asked for cannot be installed together; the lines above say which."
+    return text
 
 def install(missing, dbutils, requirements, index_url, allow_default_index=False):
     """Install what the engine needs from the index named in widget 06, the runtime's own packages pinned
@@ -3561,12 +3662,12 @@ def install(missing, dbutils, requirements, index_url, allow_default_index=False
     constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
     with open(constraints, "w") as handle:
         handle.write("\n".join(pins) + "\n")
-    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + (["--index-url", index_url] if index_url else [])
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + index_arguments(index_url.split())
     print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode:
-        print("The install did not finish. What pip said:\n" + hide(done.stderr)[-1500:])
-        print("Nothing the runtime needs was changed. Ask for the package pip names to be added to the index in widget 06.")
+        print("The install did not finish. What pip said:\n" + pip_said(done.stderr))
+        print("Nothing the runtime needs was changed.")
         return
     with open(requirements, encoding="utf-8") as handle:
         wanted = handle.read().split("# --- optional ---")

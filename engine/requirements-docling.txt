@@ -1,0 +1,6 @@
+# Docling and all it brings - PyTorch, pandas 2, transformers - installed by cell 1 into a folder of its
+# own, never into the runtime's packages: Docling runs in a process of its own, so the runtime keeps its
+# pandas, numpy and pyarrow as they are.
+# PyTorch without GPU libraries: add your index's PyTorch CPU repository to widget 06 after the main index
+# (URLs separated by spaces); pip then prefers torch's +cpu build.
+docling>=2.129
