@@ -1030,6 +1030,7 @@ widget("projects_dir", os.path.join(HOME, "Projects"), "07 Projects folder"); wi
 widget("concurrency_limit", "4", "09 Concurrency limit"); widget("token_cap", "40000", "10 Token cap")
 widget("scratch_dir", "", "11 Scratch folder (usually empty)")
 widget("concept_subject", "", "12 Subject of the documents, for concepts (e.g. financial)")
+widget("flowr_archive", "", "13 flowR archive (empty = the pinned release from GitHub)")
 for old_widget in ("llm_user_id", "reviewer_role"):      # widgets of an earlier notebook, no longer used
     try:
         w.remove(old_widget)
@@ -1099,7 +1100,8 @@ else:
 
     def current_settings():
         return verifier.make_settings({"concurrency_limit": int(w.get("concurrency_limit") or 4), "token_cap": int(w.get("token_cap") or 40000),
-                                     "reviewer_id": w.get("reviewer_id"), "concept_subject": w.get("concept_subject").strip()})
+                                     "reviewer_id": w.get("reviewer_id"), "concept_subject": w.get("concept_subject").strip(),
+                                     "flowr_archive": w.get("flowr_archive").strip()})
 
     def open_current():
         """The run the widgets name, opened; or None with a message when the project has no inputs yet. Used
@@ -1119,6 +1121,11 @@ else:
             print("  %-11s not installed%s" % (name, "" if name in ("pdfplumber", "pypdf") else " - run this cell again"))
     token = LIVE.get("llm_token")
     print("Endpoint set:", bool(LIVE.get("llm_endpoint")), "| token:", ("%d characters, pasted %.1f minutes ago" % (len(token), LIVE.token_age_minutes())) if token else "none pasted yet")
+    try:                                            # flowR reads the R code: fetched once, checked against its pinned SHA-256
+        print("flowR %s ready in %s" % (verifier.FLOWR_VERSION, verifier.flowr_ready(w.get("flowr_archive").strip())))
+    except Exception as problem:
+        print("flowR IS NOT READY (%s). Without internet, download %s on an approved machine, put it in a Volume,"
+              " and give its path in widget 13." % (problem, verifier.FLOWR_URL.format(verifier.FLOWR_VERSION)))
     print("")
     print("THE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")

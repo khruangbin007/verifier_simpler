@@ -30,6 +30,7 @@ import json
 import lzma
 import math
 import os
+import subprocess
 import random
 import re
 import shutil
@@ -1277,8 +1278,6 @@ def account_of_package(files, units, refused, is_text_file):
 # never the file. The digest is built by code from plain facts, is bounded, and is recorded, so
 # a reviewer can see exactly what was put in front of the model. Enforces: R3, R7
 
-DIGEST_SAMPLE_CHARS = 120
-DIGEST_SAMPLES = 3
 # The families a PROPOSAL may use, and why it is only these five. Each keeps the words of the
 # element it is given to wherever that element sits: a heading's text goes into the chain of
 # everything below it and, where nothing sits below it, into a unit of its own; a paragraph's
@@ -1293,7 +1292,6 @@ DIGEST_SAMPLES = 3
 # A family whose safety depends on where a tag sits is not a family a proposal may give.
 # This is what makes "no answer can lose a word" true by construction rather than by hope.
 # Enforces: R13
-SLICE_FAMILIES = ("heading", "container", "paragraph", "list_container", "list_item")
 
 
 
@@ -1303,7 +1301,6 @@ SLICE_FAMILIES = ("heading", "container", "paragraph", "list_container", "list_i
 
 # Families discovery does not guess at: it counts the widths of the rows and refuses to call
 # something a table unless the counting holds up. A proposal may not overturn them.
-PROVEN_BY_SHAPE = ("table", "table_part", "row", "header_cell", "cell")
 
 
 # ---------------------------------------------------------------- asking about the shape of a file
@@ -1318,8 +1315,6 @@ PROVEN_BY_SHAPE = ("table", "table_part", "row", "header_cell", "cell")
 # expression trees or the decoder of stored data: a model's reading of code is an assertion
 # ABOUT the code, not a parse OF it. Enforces: R7, R13
 
-PACKAGE_READERS = ("r-source", "r-data", "help-page", "vignette", "table-file", "prose")
-MANIFEST_SAMPLE_LINES = 5
 
 
 
@@ -4801,241 +4796,340 @@ OPAQUE_CALLS = {"do.call": "do.call over arguments built at run time", "eval": "
                 "setRefClass": "an object system (reference classes)", "R6Class": "an object system (R6)", "setClass": "an object system (S4)",
                 "setMethod": "an object system (S4 methods)", "local": "code run in an environment of its own"}
 
-class Dataflow:
-    """The data flow of one package, traced function by function. Node ids:
-    'f:v' a value v set in function f; 'f:arg:a' a parameter; 'f:return' what f returns;
-    'call:f:line:g' one call of g from f; 'column:c' a data-frame column; 'data:t' a stored table;
-    'file:path'; 'number:value:f:line'; 'guard:f:line' a call whose value is not kept;
-    'outside:name' a name from outside the package (R itself, another package, the session)."""
+# ---------------------------------------------------------------- flowR: the program the data flow is read with
+# flowR (Sihler and Tichy, Ulm University; GPLv3) parses R with tree-sitter and tells, for every name, the
+# definition it reads, for every call, the function it calls, and for every argument, the parameter it becomes.
+# It is fetched once, verified against the pinned SHA-256, and run in one-shot mode: no R process, no server,
+# no open port, no network. Its answer is written to a file - through a pipe it stops at 128 KiB.
+FLOWR_VERSION = "2.15.8"
+FLOWR_SHA256 = "39e1b9e5e4fab67f76204dbf6856d32e9e7f2a36132b1323e02cc8e3392436e4"
+FLOWR_URL = "https://github.com/flowr-analysis/flowr-r-adapter/releases/download/flowr-v{0}/flowr-{0}-linux-x64.tar.gz"
+READS, CALLS, BINDS = 1, 4, 16          # flowR's edge bits: reads, calls, defines-on-call; any other bit is ignored
 
-    def __init__(self, units, trivial=()):
+def flowr_ready(source=""):
+    """flowR's folder, fetched once from source - a staged archive, such as one in a Volume - or from the
+    pinned release, and refused unless its SHA-256 is the pinned one. Never run unverified. Enforces: R12"""
+    import tarfile, urllib.request
+    folder = os.path.join(tempfile.gettempdir(), "flowr-" + FLOWR_VERSION)
+    if os.path.exists(os.path.join(folder, "flowr")):
+        return folder
+    os.makedirs(folder, exist_ok=True)
+    archive = os.path.join(folder, "flowr.tar.gz")
+    shutil.copyfile(source, archive) if source else urllib.request.urlretrieve(FLOWR_URL.format(FLOWR_VERSION), archive)
+    if file_sha256(archive) != FLOWR_SHA256:
+        os.remove(archive)
+        raise RuntimeError("The flowR archive is not the pinned release %s: its checksum differs." % FLOWR_VERSION)
+    with tarfile.open(archive) as bundle:
+        bundle.extractall(folder, members=[m for m in bundle.getmembers() if m.isfile() and "/" not in m.name.strip("./")])
+    os.chmod(os.path.join(folder, "flowr"), 0o755)
+    return folder
+
+def flowr_read(folder, text):
+    """flowR's syntax tree of one R source, indexed by id, and its edges as {id: [(target, bits)]}."""
+    with tempfile.TemporaryDirectory() as work:
+        source, answer = os.path.join(work, "package.R"), os.path.join(work, "answer.json")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        with open(answer, "w", encoding="utf-8") as sink:
+            subprocess.run([os.path.join(folder, "flowr"), "--no-ansi", "--no-fs", "--default-engine", "tree-sitter",
+                            "--engine.r-shell.disabled", "--engine.tree-sitter.wasm-path", os.path.join(folder, "tree-sitter-r.wasm"),
+                            "--engine.tree-sitter.tree-sitter-wasm-path", os.path.join(folder, "tree-sitter.wasm"), "--execute",
+                            ':query* [{"type":"dataflow"},{"type":"normalized-ast"}] file://' + source],
+                           stdout=sink, stderr=subprocess.DEVNULL, cwd=work, timeout=900)
+        with open(answer, encoding="utf-8") as handle:
+            said = handle.read()
+    if "{" not in said:
+        raise RuntimeError("flowR gave no answer for the package's R code.")
+    found = json.JSONDecoder().raw_decode(said[said.index("{"):])[0]
+    tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
+    edges = {str(s): [(str(t), e["types"]) for t, e in targets] for s, targets in found["dataflow"]["graph"]["edgeInformation"]}
+    nodes, stack = {}, [(tree, None)]
+    while stack:                                   # every node once, with its parent; no recursion, so no depth limit
+        node, up = stack.pop()
+        if isinstance(node, dict):
+            if "type" in node and "info" in node:
+                node["up"], up = up, str(node["info"]["id"])
+                nodes[up] = node
+            stack += [(value, up) for key, value in node.items() if key not in ("info", "location", "lexeme", "up")]
+        elif isinstance(node, list):
+            stack += [(value, up) for value in node]
+    return nodes, edges
+
+class Dataflow:
+    """The data flow of one package, read by flowR and laid out as the map needs it. flowR says which
+    definition each name reads, which function each call calls and which parameter each argument becomes;
+    what is the model's own - dplyr columns, stored tables, files read, the gaps left for the agents - is
+    decided here, as it was before flowR. Node ids: 'f:v' a value v set in function f; 'f:arg:a' a
+    parameter; 'f:return' what f returns; 'call:f:line:g' one call of g from f; 'column:c' a data-frame
+    column; 'data:t' a stored table; 'file:path'; 'number:value:f:line'; 'outside:name'."""
+
+    def __init__(self, units, trivial=(), folder=None):
         self.units, self.trivial = units, set(trivial)
         self.functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
         self.tables = {u["data"]["object_name"]: u for u in units if (u.get("data") or {}).get("object_name")}
-        self.nodes, self.records, self.parsed = {}, [], {}
-        for name, unit in self.functions.items():
-            found = parse_r_source(unit["text"])
-            node = found[0] if found and not isinstance(found[0], tuple) else None
-            parts = assignment_parts(node) if node is not None else None
-            self.parsed[name] = parts[1] if parts and parts[1].kind == "function" else node if node is not None and node.kind == "function" else None
+        self.nodes, self.records, self.at, text = {}, [], [], []
+        for unit in sorted(self.functions.values(), key=lambda u: u["ref"]):   # the package's functions, one source
+            lines = unit["text"].split("\n")
+            self.at += [(unit["name"], number) for number in range(1, len(lines) + 1)] + [(None, 0)]
+            text += lines + [""]
+        self.tree, self.edges = flowr_read(folder or flowr_ready(), "\n".join(text)) if text else ({}, {})
+        named = lambda n: (n["lhs"].get("lexeme") or "").strip("`")          # an operator is defined as `%||%`
+        self.defs = {str(n["rhs"]["info"]["id"]): named(n) for n in self.tree.values()
+                     if n["type"] == "RBinaryOp" and n.get("rhs", {}).get("type") == "RFunctionDefinition"
+                     and named(n) in self.functions and self.place(n)[0] == named(n)}
 
-    # ------------------------------------------------ records
+    # ------------------------------------------------ where a node is, and what it holds
+    def place(self, node):
+        """(function, first line, last line) of a node, the lines counted in its function's own unit."""
+        where = node["info"].get("fullRange") or node.get("location") or [0, 0, 0, 0]
+        first, last = self.at[max(where[0], 1) - 1], self.at[max(where[2], 1) - 1]
+        return first[0], first[1], last[1] if last[0] == first[0] else first[1]
+
+    def owner(self, node_id):
+        while node_id and node_id not in self.defs:
+            node_id = self.tree[node_id]["up"] if node_id in self.tree else None
+        return self.defs.get(node_id)
+
+    def kids(self, node):
+        found = []
+        for key, value in node.items():
+            if key not in ("info", "location", "lexeme", "up", "grouping"):      # ( ) and { } group; they are not names
+                found += [v for v in (value if isinstance(value, list) else [value]) if isinstance(v, dict) and "type" in v]
+        return found
+
     def node(self, node_id, kind, name, env=None, at=None, sources=(), **extra):
         record = self.nodes.get(node_id)
         if record is None:
-            record = {"record_type": "node", "node": node_id, "kind": kind, "name": name, "function": env["function"] if env else "",
-                      "function_ref": self.functions[env["function"]]["ref"] if env else "", "line": self.line_of(env, at),
-                      "code": self.code_of(env, at), "from": []}
-            self.nodes[node_id] = record
-        if env and not record["function"] and kind == "column" and at is not None:   # read before it was created: take its creation site
+            record = self.nodes[node_id] = {"record_type": "node", "node": node_id, "kind": kind, "name": name,
+                                            "function": env["function"] if env else "", "line": self.line_of(env, at),
+                                            "function_ref": self.functions[env["function"]]["ref"] if env else "",
+                                            "code": self.code_of(env, at), "from": []}
+        elif env and not record["function"] and kind == "column" and at is not None:   # read before it was created
             record.update(function=env["function"], function_ref=self.functions[env["function"]]["ref"],
                           line=self.line_of(env, at), code=self.code_of(env, at))
-        for source in sources:
-            if source not in record["from"] and source != node_id:
-                record["from"].append(source)
+        record["from"] += [s for s in dict.fromkeys(sources) if s not in record["from"] and s != node_id]
         record.update(extra)
         return node_id
+
+    def line_of(self, env, at):
+        return self.functions[env["function"]]["lines"][0] + self.place(at)[1] - 1 if env and at else 0
+
+    def code_of(self, env, at):
+        if not env or not at:
+            return ""
+        _, first, last = self.place(at)
+        return "\n".join(self.functions[env["function"]]["text"].split("\n")[first - 1:max(first, last)]).strip()
 
     def gap(self, env, at, why):
         self.records.append({"record_type": "gap", "function": env["function"], "function_ref": self.functions[env["function"]]["ref"],
                              "line": self.line_of(env, at), "code": self.code_of(env, at), "why": why})
 
-    def line_of(self, env, at):
-        return self.functions[env["function"]]["lines"][0] + at.line - 1 if env and at is not None and at.line else 0
-
-    def code_of(self, env, at):
-        """The code as written: the lines of the unit's own text that the node spans."""
-        if not env or at is None or not at.line:
-            return ""
-        lines = self.functions[env["function"]]["text"].split("\n")
-        return "\n".join(lines[at.line - 1:max(at.line, at.end_line or at.line)]).strip()
-
     # ------------------------------------------------ one function
     def trace(self, name):
-        function = self.parsed.get(name)
-        env = {"function": name, "formals": set(), "locals": set(), "lambda": set()}
-        if function is None:
-            self.records.append({"record_type": "gap", "function": name, "function_ref": self.functions[name]["ref"], "line": self.functions[name]["lines"][0],
-                                 "code": self.functions[name]["text"].split("\n")[0], "why": "the function could not be read"})
+        fdef = next((i for i, n in self.defs.items() if n == name), None)
+        env = {"function": name}
+        if fdef is None:
+            self.records.append({"record_type": "gap", "function": name, "function_ref": self.functions[name]["ref"],
+                                 "line": self.functions[name]["lines"][0], "code": self.functions[name]["text"].split("\n")[0],
+                                 "why": "the function could not be read"})
             return
-        env["formals"] = set(function.names)
-        env["locals"] = {parts[0].value for inner in walk_nodes(function.args[-1]) for parts in [assignment_parts(inner)]
-                         if parts and parts[0].kind in ("name", "str")}
-        for formal, default in zip(function.names, function.args[:-1]):
-            defaults = self.sources(default, env) if default.kind != "missing" else []
-            self.node("%s:arg:%s" % (name, formal), "argument", formal, env, function, default_from=defaults,
-                      default_code=self.code_of(env, default) if default.kind != "missing" else "")
-        returned = self.body(function.args[-1], env)
-        for inner in walk_nodes(function.args[-1]):
-            if inner.kind == "call" and callee_name(inner) == "return" and len(inner.args) > 1:
-                returned += self.sources(inner.args[1], env)
-        body = function.args[-1]
-        last = (body.args[-1] if body.kind == "block" and body.args else body)
-        # what a function returns is placed at the statement that computes it, where a statement unit and its checks sit
-        self.node("%s:return" % name, "return", "the value %s returns" % name, env, last if last is not None else function, list(dict.fromkeys(returned)))
+        function = self.tree[fdef]
+        for parameter in function.get("parameters") or []:
+            default = parameter.get("defaultValue")
+            self.node("%s:arg:%s" % (name, parameter["name"]["lexeme"]), "argument", parameter["name"]["lexeme"], env, function,
+                      default_from=self.sources(default, env) if default else [], default_code=self.code_of(env, default) if default else "")
+        body = function["body"]
+        returned, stack = self.body(body, env), [body]
+        while stack:                                       # return() anywhere, but not inside a function written in place
+            inner = stack.pop()
+            if inner["type"] == "RFunctionCall" and inner["functionName"].get("lexeme") == "return" and inner.get("arguments"):
+                returned += self.sources(inner["arguments"][0], env)
+            stack += [k for k in self.kids(inner) if k["type"] != "RFunctionDefinition"]
+        items = body.get("children") if body["type"] == "RExpressionList" else [body]
+        self.node("%s:return" % name, "return", "the value %s returns" % name, env, (items or [function])[-1], returned)
 
     def body(self, block, env):
-        """The statements of a body, each set value a node; returns the sources of what the body gives."""
-        items = list(block.args) if block.kind == "block" else [block]
-        given = []
+        """The statements of a body, each value it sets a node; returns the sources of what the body gives."""
+        items, given = (block.get("children") or []) if block["type"] == "RExpressionList" else [block], []
         for position, item in enumerate(items):
             last = position == len(items) - 1
-            parts = assignment_parts(item)
-            if parts:
-                target = parts[0]
-                while target.kind in ("dollar", "index") and target.args:
-                    target = target.args[0]                 # x$c <- v and x[i] <- v change x
-                if item.value in ("<<-", "->>"):
+            if item["type"] == "RBinaryOp" and item.get("lexeme") in ("<-", "=", "<<-", "->", "->>"):
+                target, value = (item["rhs"], item["lhs"]) if item["lexeme"].startswith("-") else (item["lhs"], item["rhs"])
+                while target["type"] == "RAccess":                          # x$c <- v and x[i] <- v change x
+                    target = target["accessed"]
+                if "<<" in item["lexeme"] or ">>" in item["lexeme"]:
                     self.gap(env, item, "a value assigned outside the function with <<-")
-                if target.kind in ("name", "str"):
-                    extra = self.sources(parts[0], env) if parts[0] is not target else []
-                    node = self.node("%s:%s" % (env["function"], target.value), "value", target.value, env, item,
-                                     self.sources(parts[1], env) + extra)
+                if target["type"] in ("RSymbol", "RString"):
+                    changed = item["rhs"] if item["lexeme"].startswith("-") else item["lhs"]
+                    extra = self.sources(changed, env) if changed is not target else []
+                    node = self.node("%s:%s" % (env["function"], target["lexeme"].strip("\"'`")), "value",
+                                     target["lexeme"].strip("\"'`"), env, item, self.sources(value, env) + extra)
                     given = [node] if last else given
-            elif item.kind == "if" and not last:
-                self.sources(item.args[0], env)
-                for branch in item.args[1:]:
-                    self.body(branch, env)
-            elif item.kind in ("for", "while", "repeat"):
-                self.sources(item.args[0], env) if item.kind != "repeat" else None
-                self.body(item.args[-1], env)
+            elif item["type"] == "RIfThenElse" and not last:
+                self.sources(item["condition"], env)
+                for branch in (item.get("then"), item.get("otherwise")):
+                    if branch:
+                        self.body(branch, env)
+            elif item["type"] in ("RForLoop", "RWhileLoop", "RRepeatLoop"):
+                self.body(item["body"], env)
             elif last:
                 given = self.sources(item, env)
-            elif not (item.kind == "call" and callee_name(item) == "return"):
-                self.node("guard:%s:%d" % (env["function"], item.line), "guard", self.code_of(env, item).split("\n")[0][:80], env, item,
-                          self.sources(item, env))
         return given
 
     # ------------------------------------------------ what a value is computed from
     def sources(self, node, env, masked=False):
-        kind = node.kind
-        if kind == "num":
-            value = node.value.rstrip("Li")
-            return [self.node("number:%s:%s:%d" % (value, env["function"], node.line), "number", value, env, node, trivial=value in self.trivial)]
-        if kind in ("str", "missing"):
+        kind = node["type"] if node else ""
+        if kind == "RNumber":
+            value = node["lexeme"].rstrip("Li")
+            return [self.node("number:%s:%s:%d" % (value, env["function"], self.place(node)[1]), "number", value, env, node,
+                              trivial=value in self.trivial)]
+        if kind in ("", "RString", "RLogical", "RComment"):
             return []
-        if kind == "name":
-            return self.resolve(node.value, env, masked)
-        if kind == "binary" and node.value in ("%>%", "|>"):
-            left, right = node.args
-            call = right if right.kind == "call" else Node("call", "(", (right,), (), right.line, right.end_line)
-            return self.sources(Node("call", "(", (call.args[0], left) + tuple(call.args[1:]), ("",) + tuple(call.names),
-                                     call.line, call.end_line), env, masked)
-        if kind == "binary" and node.value in ASSIGNMENT_SIGNS:
-            self.body(Node("block", "", (node,), (), node.line, node.end_line), env)
-            parts = assignment_parts(node)
-            return self.resolve(parts[0].value, env, masked) if parts and parts[0].kind == "name" else []
-        if kind == "dollar":
-            holder, field = node.args[0], node.args[1] if len(node.args) > 1 else None
-            if holder.kind == "name" and holder.value == ".data" and field is not None:
-                return self.resolve(field.value, dict(env, locals=set(), formals=set()), True)   # dplyr's pronoun: a column
-            if holder.kind == "name" and holder.value == ".env" and field is not None:
-                return self.resolve(field.value, env, False)                                   # dplyr's pronoun: not a column
-            return self.sources(holder, env, masked)
-        if kind == "ns":
-            return []
-        if kind == "function":
-            self.gap(env, node, "a function written in place, whose arguments are given at run time")
-            inner = dict(env, **{"lambda": set(env["lambda"]) | set(node.names)})
-            return self.sources(node.args[-1], inner, masked)
-        if kind == "call":
+        if kind == "RSymbol":
+            return self.resolve(node, env, masked)
+        if kind == "RArgument":
+            return self.sources(node.get("value"), env, masked)
+        if kind == "RPipe":
+            return self.call(node["rhs"], env, masked, first=node["lhs"].get("value", node["lhs"]))
+        if kind == "RFunctionCall":
             return self.call(node, env, masked)
-        return [source for child in node.args for source in self.sources(child, env, masked)]
+        if kind == "RBinaryOp" and node.get("lexeme") in ("<-", "=", "<<-"):
+            self.body(node, env)
+            return self.resolve(node["lhs"], env, masked) if node["lhs"]["type"] == "RSymbol" else []
+        if kind == "RAccess":
+            accessed, access = node["accessed"], node.get("access") or []
+            access = access if isinstance(access, list) else [access]
+            if accessed.get("lexeme") in (".data", ".env") and access:
+                field = access[0].get("value") or access[0]
+                if accessed["lexeme"] == ".data":
+                    return self.column(field["lexeme"])
+                own = [i % (env["function"], field["lexeme"]) for i in ("%s:arg:%s", "%s:%s") if i % (env["function"], field["lexeme"]) in self.nodes]
+                return own[:1] or self.resolve(field, env, False)
+            return self.sources(accessed, env, masked) + ([] if node.get("lexeme") == "$" else
+                                                          [s for a in access for s in self.sources(a, env, masked)])
+        if kind == "RFunctionDefinition":
+            self.gap(env, node, "a function written in place, whose arguments are given at run time")
+            return self.sources(node["body"], env, masked)
+        return [s for k in self.kids(node) for s in self.sources(k, env, masked)]
 
-    def resolve(self, name, env, masked):
-        if name in CONSTANT_NAMES or name in env["lambda"]:
+    def resolve(self, symbol, env, masked):
+        """What a name reads, as flowR resolves it: a parameter, a value set in a function, or a column a
+        dplyr verb created. A name flowR finds no definition for is a stored table, a column of the data,
+        or a name from outside the package."""
+        name = symbol["lexeme"]
+        if name in CONSTANT_NAMES:
             return []
-        if name in env["locals"]:
-            return ["%s:%s" % (env["function"], name)]
-        if name in env["formals"]:
-            return ["%s:arg:%s" % (env["function"], name)]
+        # a name reads only what has that name: inside a verb flowR also links a column the same verb made
+        # earlier, which a later argument may use - but berth_utilisation does not read throughput_score
+        found, reads = [], [t for t, bits in self.edges.get(str(symbol["info"]["id"]), []) if bits & READS and t in self.tree
+                            and name in (self.tree[t].get("lexeme"), (self.tree[t].get("name") or {}).get("lexeme"))]
+        for target in reads:
+            up = self.tree.get(self.tree[target]["up"] or "", {})
+            if up.get("type") == "RParameter":                       # a parameter: of a function of the package, or of a lambda
+                owner = self.defs.get(up["up"])
+                found += ["%s:arg:%s" % (owner, name)] if owner else []
+            elif "RArgument" in (up.get("type"), self.tree[target]["type"]):   # a column a verb named: mutate(name = ...)
+                found += self.column(name)
+            elif self.tree[target]["lexeme"] not in self.functions and self.owner(target):
+                found.append("%s:%s" % (self.owner(target), self.tree[target]["lexeme"]))
+        if reads:
+            return list(dict.fromkeys(found))
         if name in self.tables:
             return [self.table_node(name)]
         if name in self.functions:
-            return []                                        # a function passed as a value: its call is what counts
-        if masked:                                           # inside dplyr, a bare name is a column of the data
-            return [self.node("column:%s" % name, "column", name, created_in=self.nodes.get("column:%s" % name, {}).get("created_in", []))]
-        return [self.node("outside:%s" % name, "outside", name)]
+            return []
+        return self.column(name) if masked else [self.node("outside:%s" % name, "outside", name)]
+
+    def column(self, name):
+        return [self.node("column:%s" % name, "column", name, created_in=self.nodes.get("column:%s" % name, {}).get("created_in", []))]
 
     def table_node(self, name):
         table = self.tables[name]
         return self.node("data:%s" % name, "stored data", name, file=table["data"].get("container_file", ""), unit_ref=table["ref"],
                          columns=[column for column, _ in table["data"].get("columns") or []])
 
-    def call(self, node, env, masked):
-        name = callee_name(node)
-        args = list(node.args[1:])
-        names = list(node.names) + [""] * (len(args) - len(node.names))
+    def call(self, node, env, masked, first=None):
+        name = (node.get("functionName") or {}).get("lexeme", "")
+        pairs = [((a.get("name") or {}).get("lexeme", ""), a.get("value")) for a in node.get("arguments") or [] if a]
+        pairs = ([("", first)] if first is not None else []) + pairs
+        values = [v for _, v in pairs]
+        if name == "%>%" and len(values) == 2:                       # a %>% f(b) is f(a, b)
+            left, right = values
+            return self.call(right, env, masked, first=left) if right and right["type"] == "RFunctionCall" else self.sources(left, env, masked)
+        flat = lambda inner: [s for v in values for s in self.sources(v, env, inner)]
         if name in OPAQUE_CALLS:
             self.gap(env, node, OPAQUE_CALLS[name])
-            return [source for arg in args for source in self.sources(arg, env, masked)]
+            return flat(masked)
         if name in FILE_READERS:
-            path = self.file_path(args[0]) if args else ""
+            path = self.file_path(values[0]) if values else ""
             if not path:
                 self.gap(env, node, "a file read from a path built at run time")
-                return [source for arg in args for source in self.sources(arg, env, masked)]
+                return flat(masked)
             table = next((t for t, u in self.tables.items() if u["data"].get("container_file") == path), None)
             return [self.node("file:%s" % path, "file", path, unit_ref=self.tables[table]["ref"] if table else "")]
         if name in DPLYR_CREATE:
-            frame = self.sources(args[0], env, masked) if args and not names[0] else []
-            created = []
-            for arg, column in zip(args, names):
-                if column:
-                    created.append(self.node("column:%s" % column, "column", column, env, node, self.sources(arg, env, True)))
-                    self.nodes["column:%s" % column].setdefault("created_in", [])
-                    if env["function"] not in self.nodes["column:%s" % column]["created_in"]:
-                        self.nodes["column:%s" % column]["created_in"].append(env["function"])
-                elif arg is not args[0]:
+            created = self.sources(values[0], env, masked) if pairs and not pairs[0][0] else []
+            for label, value in pairs:
+                if label:
+                    column = self.node("column:%s" % label, "column", label, env, node, self.sources(value, env, True))
+                    self.nodes[column].setdefault("created_in", [])
+                    if env["function"] not in self.nodes[column]["created_in"]:
+                        self.nodes[column]["created_in"].append(env["function"])
+                    created.append(column)
+                elif value is not values[0]:
                     self.gap(env, node, "columns created by an expression that does not name them")
-            return frame + created
+            return created
         if name in DPLYR_JOIN:
-            keys = {inner.value for arg, label in zip(args, names) if label == "by" for inner in walk_nodes(arg) if inner.kind == "str"}
+            keys = {k["lexeme"].strip("\"'") for label, value in pairs if label == "by" and value
+                    for k in [value] + self.kids(value) if k["type"] == "RString"}
             joined = []
-            for arg in args[:2]:
-                joined += self.sources(arg, env, masked)
-                if arg.kind == "name" and arg.value in self.tables:     # the table's columns join the data; its keys only match
-                    for column in self.nodes[self.table_node(arg.value)]["columns"]:
-                        if column not in keys:
-                            joined.append(self.node("column:%s" % column, "column", column, env, node, ["data:%s" % arg.value]))
+            for value in values[:2]:
+                joined += self.sources(value, env, masked)
+                if value and value["type"] == "RSymbol" and value["lexeme"] in self.tables:
+                    table = self.nodes[self.table_node(value["lexeme"])]
+                    joined += [self.node("column:%s" % c, "column", c, env, node, [table["node"]]) for c in table["columns"] if c not in keys]
             return joined
-        if name in APPLIERS:
-            found = []
-            for arg in args:
-                if arg.kind == "name" and arg.value in self.functions:
-                    found.append(self.record_call(arg.value, env, node, [], [], masked))
-                else:
-                    found += self.sources(arg, env, masked)
-            return found
+        callee = next((self.defs[t] for t, bits in self.edges.get(str(node["info"]["id"]), []) if bits & CALLS and t in self.defs), None)
+        if callee is None and name in APPLIERS:                     # map(x, f): a package function handed over by name
+            handed = [v["lexeme"] for v in values if v and v["type"] == "RSymbol" and v["lexeme"] in self.functions]
+            return [self.record_call(f, env, node, [], []) for f in handed] + [s for v in values if not (v and v["type"] == "RSymbol"
+                    and v["lexeme"] in self.functions) for s in self.sources(v, env, masked)]
         inner = masked or name in DPLYR_MASKING
-        values = [self.sources(arg, env, inner) for arg in args]
-        if name in self.functions:
-            return [self.record_call(name, env, node, values, names, inner)]
-        return [source for value in values for source in value]
+        if callee:
+            return [self.record_call(callee, env, node, pairs, [self.sources(v, env, inner) for v in values])]
+        return flat(inner)
 
-    def record_call(self, callee, env, node, values, names, masked):
-        """One call of a package function: its node, the parameter each argument goes to there - by name
-        first, then by position, R's own order - and what a parameter left out takes: its default."""
-        formals = list(self.parsed[callee].names) if self.parsed.get(callee) is not None else []
-        bound, free = {}, [f for f in formals if f not in names and f != "..."]
-        for value, name in zip(values, names):
-            if name in formals:
-                bound[name] = value
+    def record_call(self, callee, env, node, pairs, values):
+        """One call of a package function: which parameter each argument becomes there - as flowR binds it,
+        and for what flowR leaves unbound (a value piped in, say) as R does, by name and then by position -
+        and a parameter left out takes its default."""
+        formals = [p["name"]["lexeme"] for p in self.tree[next(i for i, n in self.defs.items() if n == callee)].get("parameters") or []]
+        bound, left = {}, []
+        for (label, value), got in zip(pairs, values):
+            ids = [str(value["info"]["id"])] if value else []
+            binds = [self.tree[t]["lexeme"] for i in ids for t, bits in self.edges.get(i, []) if bits & BINDS and t in self.tree]
+            target = next((b for b in binds if b in formals and b not in bound), None)
+            (bound.__setitem__(target, got) if target else left.append((label, got)))
+        free = [f for f in formals if f not in bound and f != "..."]
+        for label, got in left:
+            if label in free:
+                bound[label] = got
+                free.remove(label)
             elif free:
-                bound[free.pop(0)] = value
+                bound[free.pop(0)] = got
             elif "..." in formals:
-                bound.setdefault("...", []).extend(value)
-        bindings = {formal: bound.get(formal, ["default"]) for formal in formals}
-        call_id = "call:%s:%d:%s" % (env["function"], node.line, callee)
-        self.node(call_id, "call", "%s()" % callee, env, node, [source for value in values for source in value] + ["%s:return" % callee],
-                  callee=callee, bindings=bindings)
-        return call_id
+                bound.setdefault("...", []).extend(got)
+        call_id = "call:%s:%d:%s" % (env["function"], self.place(node)[1], callee)
+        return self.node(call_id, "call", "%s()" % callee, env, node, [s for got in values for s in got] + ["%s:return" % callee],
+                         callee=callee, bindings={f: bound.get(f, ["default"]) for f in formals})
 
-    def file_path(self, arg):
+    def file_path(self, value):
         """The path a reader is given: a string as written, or system.file(...), which names a file under inst/."""
-        if arg.kind == "str":
-            return arg.value
-        if arg.kind == "call" and callee_name(arg) == "system.file":
-            parts = [a.value for a, n in zip(arg.args[1:], list(arg.names) + [""] * len(arg.args)) if a.kind == "str" and not n]
+        if value and value["type"] == "RString":
+            return value["lexeme"].strip("\"'")
+        if value and value["type"] == "RFunctionCall" and value["functionName"].get("lexeme") == "system.file":
+            parts = [a["value"]["lexeme"].strip("\"'") for a in value.get("arguments") or []
+                     if a and not a.get("name") and (a.get("value") or {}).get("type") == "RString"]
             return "inst/" + "/".join(parts) if parts else ""
         return ""
 
@@ -5066,6 +5160,7 @@ class Dataflow:
                                                          "called by a test or vignette" if name in entry else ""])) for name in uncalled}}
         return list(self.nodes.values()) + self.records + [roots]
 
+
 def walk_nodes(node):
     """Every node of a tree, the tree itself first, without entering functions written inside it."""
     yield node
@@ -5079,7 +5174,7 @@ def trace_dataflow(ctx):
     a dplyr verb creates, every stored table, file and hard-coded number, and the gaps code cannot follow.
     Proposes the final outputs: exported functions nothing in the package calls, and those its tests and
     vignettes call. Enforces: R2, R4, R7, R14"""
-    flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"])
+    flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"], flowr_ready(ctx.settings["flowr_archive"]))
     records = flow.run()
     count = lambda kind: sum(1 for r in records if r.get("kind") == kind)
     gaps = [r for r in records if r["record_type"] == "gap"]
@@ -6807,7 +6902,7 @@ DEFAULT_SETTINGS = {
     "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True, "interpret_code": True,
     "signals": ["concepts", "fields", "bridge", "references", "anchors", "signatures", "propagation"],
     "concept_subject": "", "concept_weight": 2.0, "concept_batch": 8, "concept_candidates_max": 40, "concepts_with_ai": True,
-    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
+    "flowr_archive": "", "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -7757,7 +7852,9 @@ def implementation_map(store, settings=None):
                 if key not in seen:                              # the same value twice under one step is one row
                     seen.add(key)
                     once.append((child, child_frames))
-        return once
+        # in the order the code runs: what is computed first stands first; what has no line - a table,
+        # a column of the data, a name from outside - after everything that does
+        return sorted(once, key=lambda pair: nodes.get(pair[0], {}).get("line") or float("inf"))
 
     def emit(node_id, frames, map_id, level, path):
         node = nodes.get(node_id)

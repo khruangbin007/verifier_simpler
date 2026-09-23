@@ -424,9 +424,11 @@ Five steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, a
 |---|---|---|
 | 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
-| 03 | build-map | by code alone: the graph, the data flow of the package, and the model's concepts |
+| 03 | build-map | by code alone: the graph, the data flow of the package (read by flowR), and the model's concepts |
 | 04 | read-with-ai | what each piece of code does, the concepts only a reader can confirm, the map's agents closing the gaps code named |
 | 05 | link-units | two passes of search and judgement: candidates by code, then the model's judgement on each |
+
+**How the data flow is read.** The package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3). flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places left as gaps for the model's agents. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`.
 
 A step that carries out several parts keeps them in order, and a later part reads what the earlier ones have just recorded, as it would if each were still a step of its own.
 
@@ -500,7 +502,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 `concept_subject` (default empty): the subject of the documents, from widget 12; it tells the model what kind of concepts to look for and names the concepts column. `concept_weight` (default 2.0): how much more a shared concept counts in the search than any other signal. `concept_batch` (default 8): how many units one extraction question shows the model. `concept_candidates_max` (default 40): the most model concepts shown to the model in one question, and the most suggested for one unit. `concepts_with_ai` (default true): whether the model is asked for synonyms and acronyms code could not prove; switched off, only what code proved stands.
 
-`map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting. `map_hops_max` (default 8): the most turns the Tracer takes on one gap. `map_calls_max` (default 200): the most questions the map's agents ask in one run, the Tracer's and the Namer's together. `map_with_ai` (default true): whether the map's agents are asked at all.
+`map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting. `flowr_archive` (default empty): where cell 1 finds flowR, the program that reads the package's R code. Empty means the pinned release on GitHub; on a cluster without internet, download that archive on an approved machine, put it in a Volume, and give its path here (widget 13). Either way it is refused unless its SHA-256 is the pinned one. `map_hops_max` (default 8): the most turns the Tracer takes on one gap. `map_calls_max` (default 200): the most questions the map's agents ask in one run, the Tracer's and the Namer's together. `map_with_ai` (default true): whether the map's agents are asked at all.
 
 ## 21. Extending the tool safely
 
@@ -532,6 +534,7 @@ After any change, see section 23.
 | pdfplumber>=0.10 | optional | PDF text and tables |
 | pypdf>=4.0 | optional | a second PDF reader |
 | rapidocr-onnxruntime>=1.3 | optional | the words inside pictures (OCR) |
+| flowR 2.15.8 (not a Python package) | required | reads the package's R code; fetched and checked by cell 1 |
 
 **The implementation map.** `develop.map_measure` measures the map of `J_pipeline` against its answer key, part by part, and `develop.map_report` is the sign-off bar of its agents, four tests: the map holds every part of the answer key, including the gaps on the path the agents traced; every link the AI declared quotes the code word for word; the shape of the map is the same as with no model at all, because code decides it; and every question the agents asked was answered and accepted the first time, with every gap on the path ending traced or with a reason. With the stand-in all four hold, and the bar says so while reporting itself **not met**: the stand-in shows the machinery is sound, not how a model traces a gap it has never seen. Run it on your own gateway from cell 5 with `APPENDIX = "map-sign-off"`. Rehearsed against a model that declares links quoting code that is not there, the fourth test does not hold and the bar says NOT met.
 
