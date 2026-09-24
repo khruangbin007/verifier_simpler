@@ -4914,7 +4914,7 @@ def unit_place(unit):
 def linked_units(unit, links, by_ref):
     """The units a unit takes something from, each with the names it takes, and the units that take something from it:
     step 03's links, as [(unit, names)] twice."""
-    linked = links.get(unit["ref"]) or {}
+    linked = links.get(unit.get("unit_ref", unit["ref"])) or {}
     upstream = [(by_ref[ref], (linked.get("via") or {}).get(ref, [])) for ref in linked.get("upstream") or () if ref in by_ref]
     downstream = [(by_ref[ref], []) for ref in linked.get("downstream") or () if ref in by_ref]
     return upstream, downstream
@@ -4954,8 +4954,9 @@ def code_question(unit, upstream=(), downstream=(), room=None):
     it takes - and the units that take something from it (step 03's links), in whatever room the question has left."""
     room = room or question_room(DEFAULT_SETTINGS, CODE_QUESTION)
     text = shown_cut(unit["text"], min(CODE_TOKENS_MAX, room // 2))
-    first = "THE PIECE TO EXPLAIN\nKind: %s\nFile: %s%s\nName: %s\n\n%s" % (
-        unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "", unit.get("name") or "-", text)
+    first = "THE PIECE TO EXPLAIN\nKind: %s\nFile: %s%s\nName: %s%s\n\n%s" % (
+        unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "", unit.get("name") or "-",
+        "\n" + part_note(unit) if part_note(unit) else "", text)
     left = room - estimate_tokens(CODE_SYSTEM_PROMPT) - estimate_tokens(first) - 200
     main = "\n\n\n".join([first] + context_block(upstream, downstream, left))
     return CODE_SYSTEM_PROMPT, main, sha256_text(CODE_SYSTEM_PROMPT + "\n\n" + main)
@@ -4967,8 +4968,8 @@ def interpret_code(ctx):
     the units that take from it (step 03's links) as context, and at the length the model judges it needs. Questions
     go out parallel_chats at a time (ask_all); a question already answered in this run is not asked again, and while
     any is left unanswered the step does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
-    units = ctx.read("model_units")
-    by_ref = {u["ref"]: u for u in units}
+    whole = ctx.read("model_units")
+    units, by_ref = model_rows(whole, ctx.settings), {u["ref"]: u for u in whole}
     links = {r["ref"]: r for r in ctx.read("unit_links")}
     recorded = {call["question_id"] for call in ctx.read("llm_calls")
                 if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
@@ -5009,6 +5010,10 @@ def interpret_code(ctx):
     missing = sum(1 for question_id in questions if question_id not in answered)
     counts.update({"interpreted": len(questions) - missing, "not answered": missing, "most at once": peak})
     messages = [stopped] if stopped else []
+    sliced = sorted({row["unit_ref"] for row in units if row["parts"] > 1})
+    if sliced:
+        messages.append("%d pieces of code too long for one row are shown, and asked about, in parts - rows %s-1, %s-2 and "
+                        "so on: %s." % (len(sliced), sliced[0], sliced[0], ", ".join(sliced[:10]) + (" and more" if len(sliced) > 10 else "")))
     if missing and not stopped:
         messages.append("The model gave no interpretation for %d of %d code blocks. Run cell 3 again to ask for those "
                         "again; what went wrong is in run_log.txt." % (missing, len(questions)))
@@ -5177,10 +5182,85 @@ def neighbours_line(upstream, downstream):
     return "\n".join(lines)
 
 
+SLICE_CHARS = 30000          # the most characters one row of Chunks_Model shows; a cell of Excel holds 32,767
+
+
+def slice_limits(settings):
+    """(tokens, characters) one row of Chunks_Model may hold: few enough characters for a cell of Excel, and few
+    enough tokens for every question of steps 04 and 05 to show the row whole, beside what the model wrote about
+    it, which takes at most a third of the unit's room (unit_part)."""
+    _, search_unit = search_shares(settings)
+    _, compare_unit, _ = compare_shares(settings)
+    return max(500, min(search_unit, compare_unit) * 2 // 3 - 600), SLICE_CHARS
+
+
+def text_slices(text, tokens, chars):
+    """A text in consecutive slices of at most `tokens` and `chars` each, cut at line ends; a line too long for a slice
+    of its own is cut inside. Returns [(slice, joined)]: joined where a slice ends inside a line, which the next one
+    continues. Joined back - a line break after each slice that is not joined - the slices are the text exactly."""
+    slices, part, size, cost = [], [], 0, 0
+    for line in text.split("\n"):
+        line_cost, line_size = estimate_tokens(line) + 1, len(line) + 1
+        if part and (cost + line_cost > tokens or size + line_size > chars):
+            slices.append(("\n".join(part), False))
+            part, size, cost = [], 0, 0
+        while line_cost > tokens or line_size > chars:
+            head = cut_to_tokens(line, tokens - 1)[0][:chars - 1] or line[:1]
+            slices.append((head, True))
+            line = line[len(head):]
+            line_cost, line_size = estimate_tokens(line) + 1, len(line) + 1
+        part.append(line)
+        size, cost = size + line_size, cost + line_cost
+    slices.append(("\n".join(part), False))
+    return slices
+
+
+def joined_rows(rows):
+    """The text of a unit, rebuilt from its rows in order."""
+    return "".join(row["text"] + ("" if row.get("joined") or number == len(rows) - 1 else "\n")
+                   for number, row in enumerate(rows))
+
+
+def model_rows(units, settings):
+    """The rows of Chunks_Model. A unit is one row, or - when its text is too long for a cell of Excel, or for the
+    questions of steps 04 and 05 to show whole - several: M-0003-1, M-0003-2 and so on, cut at line ends, each with
+    its own lines. They stay one analytical chunk: they are sliced so that nothing of the piece is cut, in the
+    workbook or in a question, and every character of it is in exactly one of its rows. Enforces: R2, R13"""
+    tokens, chars = slice_limits(settings)
+    rows = []
+    for unit in units:
+        text = unit["text"] or ""
+        if len(text) <= chars and estimate_tokens(text) <= tokens:
+            rows.append(dict(unit, unit_ref=unit["ref"], part=1, parts=1, joined=False, unit_lines=unit.get("lines")))
+            continue
+        slices, first = text_slices(text, tokens, chars), (unit.get("lines") or [None])[0]
+        line, mine = first, []
+        for number, (piece, joined) in enumerate(slices, start=1):
+            lines = [line, line + piece.count("\n")] if first is not None else None
+            mine.append(dict(unit, ref="%s-%d" % (unit["ref"], number), unit_ref=unit["ref"], part=number, parts=len(slices),
+                             text=piece, lines=lines, joined=joined, unit_lines=unit.get("lines")))
+            line = lines[1] + (0 if joined else 1) if lines else None
+        if joined_rows(mine) != text:
+            raise EngineFault("The rows of %s do not rebuild its text. This is a defect in the tool, not in the model under "
+                              "review." % unit["ref"])
+        rows += mine
+    return rows
+
+
+def part_note(row):
+    """What a question says of a row that is one part of a long piece, or "" for a whole one."""
+    if row.get("parts", 1) < 2:
+        return ""
+    whole = " (lines %d-%d)" % tuple(row["unit_lines"]) if row.get("unit_lines") else ""
+    return ("Part %d of %d of %s%s, which is too long to show whole: each part is asked about on its own. Where this "
+            "part relies on something set in another part, say so." % (row["part"], row["parts"], row["unit_ref"], whole))
+
+
 def unit_part(unit, said, neighbours, room):
     """One unit as a question of step 05 shows it: what and where it is, what it takes from and gives to, its text as
     written, and what step 04's model wrote about it - cut to `room` tokens, the code keeping two thirds of it or more."""
     head = "THE PIECE: %s, %s%s" % (unit["ref"], unit_place(unit), " - %s" % unit["name"] if unit.get("name") else "")
+    head += "\n" + part_note(unit) if part_note(unit) else ""
     head += "\n" + neighbours if neighbours else ""
     said, code = said or "(none)", unit["text"]
     left = room - estimate_tokens(head) - 40
@@ -5431,7 +5511,8 @@ def search_methodology(ctx):
     only for its pieces not yet searched. A question already answered in this run is not
     asked again, and while any unit is not searched and compared in full the step does not finish:
     running cell 3 again asks only for what is open. Enforces: R2, R3, R5, R8"""
-    units, chunks, calls = ctx.read("model_units"), ctx.read("chunks_canon"), ctx.read("llm_calls")
+    whole, chunks, calls = ctx.read("model_units"), ctx.read("chunks_canon"), ctx.read("llm_calls")
+    units = model_rows(whole, ctx.settings)
     types = (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON)
     recorded = {call["question_id"] for call in calls if call.get("question_type") in types and call.get("outcome") == "answered"}
     start = methodology_account(units, chunks, calls + held_answers(ctx, types), ctx.settings)
@@ -5439,6 +5520,7 @@ def search_methodology(ctx):
     position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
     by_key = {(piece["ref"], piece["part"]): piece for piece in pieces}
     by_ref = {unit["ref"]: unit for unit in units}
+    wholes = {unit["ref"]: unit for unit in whole}
     links = {r["ref"]: r for r in ctx.read("unit_links")}
     said = {call["unit_ref"]: call["answer"] for call in calls
             if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
@@ -5468,7 +5550,7 @@ def search_methodology(ctx):
     def build(item):
         kind, ref, keys = item
         unit = by_ref[ref]
-        upstream, downstream = linked_units(unit, links, by_ref)
+        upstream, downstream = linked_units(unit, links, wholes)
         if kind == METHODOLOGY_SEARCH:
             if ref not in neighbours:
                 neighbours[ref] = neighbours_line(upstream, downstream)
@@ -5757,6 +5839,12 @@ def rows_package_info(store, paths, settings, progress):
     for info in store.read("package_info"):
         for row in info.get("rows", []):
             add(row["group"], row["item"], row["value"])
+    split = [(row["unit_ref"], row["parts"]) for row in model_rows(store.read("model_units"), settings) if row["part"] == 1 and row["parts"] > 1]
+    if split:                                             # beside the package's other rows: which pieces take several rows
+        at = max((number for number, row in enumerate(rows) if row["group"] == "Package"), default=len(rows) - 1) + 1
+        rows.insert(at, {"group": "Package", "item": "Pieces shown in several rows",
+                         "value": "; ".join("%s in %d rows, %s-1 to %s-%d" % (ref, n, ref, ref, n) for ref, n in split) +
+                                  ". Each is one piece of code, too long for one row: its rows are asked about part by part."})
     for row in store.read("info_rows"):
         add(row["group"], row["item"], row["value"])
     repairs = {}
@@ -5775,7 +5863,8 @@ def rows_chunks(chunks):
 
 
 def rows_model_units(units, calls=(), links=None, methodology=None):
-    """The rows of Chunks_Model: each a whole piece of code, as written; the units it takes something
+    """The rows of Chunks_Model, as model_rows makes them: each a whole piece of code, or one part of a long one, as
+    written; the units the piece takes something
     from and the units that take something from it (step 03); what the organisation's model says
     happens in it (step 04); and the chunks of the methodology it found to bear on it, with the potential
     deviations it flagged (step 05, from `methodology`, the account of that step). Enforces: R2, R3"""
@@ -5793,9 +5882,10 @@ def rows_model_units(units, calls=(), links=None, methodology=None):
         interpretation = said.get(u["ref"]) or (NO_ANSWER if u["ref"] in unanswered else "")
         if not interpretation and asked and not askable(u):
             interpretation = NOT_ASKED
-        linked = links.get(u["ref"]) or {}
+        linked = links.get(u.get("unit_ref", u["ref"])) or {}
         refs, deviations = methodology_cells(methodology[u["ref"]]) if methodology and u["ref"] in methodology else ("", "")
-        rows.append({"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"], "interpretation": interpretation,
+        rows.append({"ref": u["ref"], "unit_ref": u.get("unit_ref", u["ref"]), "joined": u.get("joined", False),
+                     "kind": u["kind"], "file": u["file"], "text": u["text"], "interpretation": interpretation,
                      "methodology_refs": refs, "deviations": deviations,
                      "upstream": "; ".join(linked.get("upstream") or ()), "downstream": "; ".join(linked.get("downstream") or ()),
                      "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""})
@@ -5804,19 +5894,30 @@ def rows_model_units(units, calls=(), links=None, methodology=None):
 def sheet_rows(store, paths, settings, progress):
     """The rows of all four sheets, by sheet name."""
     links = {r["ref"]: r for r in store.read("unit_links")}
-    units, calls = store.read("model_units"), store.read("llm_calls")
+    units, calls = model_rows(store.read("model_units"), settings), store.read("llm_calls")
     searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
         call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
     methodology = methodology_account(units, store.read("chunks_canon"), calls, settings) if searched else None
-    model_rows = rows_model_units(units, calls, links, methodology)
+    unit_rows = rows_model_units(units, calls, links, methodology)
     doc_rows = rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": model_rows}
+            "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows}
 
 def check_written_totals(rows, store):
-    """The identity of the workbook: every unit read is one row of its sheet, and no row is anything
-    else. Raised as a fault of the tool, never as a remark about the model. Enforces: R2"""
-    for kind, sheet in (("model_units", "Chunks_Model"), ("chunks_doc", "Chunks_Documentation"), ("chunks_canon", "Chunks_Methodology")):
+    """The identity of the workbook: every unit read is one row of its sheet, and no row is anything else - on
+    Chunks_Model, one row or several, whose texts joined back are the unit's text exactly. Raised as a fault of the
+    tool, never as a remark about the model. Enforces: R2, R13"""
+    units = {unit["ref"]: unit for unit in store.read("model_units")}
+    written, by_unit = rows["Chunks_Model"], {}
+    for row in written:
+        by_unit.setdefault(row["unit_ref"], []).append(row)
+    refs = [row["ref"] for row in written]
+    if set(by_unit) != set(units) or len(set(refs)) != len(refs) or \
+            any(joined_rows(by_unit[ref]) != (units[ref]["text"] or "") for ref in units):
+        raise EngineFault(
+            "The workbook does not hold exactly what was read: %d unit(s) read for Chunks_Model and %d row(s) written. "
+            "This is a defect in the tool, not in the model under review." % (len(units), len(written)))
+    for kind, sheet in (("chunks_doc", "Chunks_Documentation"), ("chunks_canon", "Chunks_Methodology")):
         read = [record["ref"] for record in store.read(kind)]
         written = [row["ref"] for row in rows[sheet]]
         if sorted(read) != sorted(written) or len(set(written)) != len(written):
