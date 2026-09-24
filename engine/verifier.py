@@ -5036,7 +5036,7 @@ COMPARE_CONTEXT_TOKENS = 5000   # tokens of context code in a comparison; a cont
 NEIGHBOURS_NAMED = 20           # units named on the line of what a unit takes from, and on the line of what it gives to
 DEVIATION_KINDS = {"differs": "The code differs", "omits": "Not done in the code",
                    "adds": "Not described in the methodology", "ambiguous": "The methodology can be read more than one way"}
-DEVIATION_PARTS = (("methodology", "Methodology"), ("code", "Code"), ("why", "Why it deviates"), ("effect", "Effect"))
+DEVIATION_PARTS = (("methodology", "Methodology"), ("code", "Code"), ("why", "Why it potentially deviates"), ("effect", "Effect"))
 NOT_SEARCHED = "Not searched: nothing was read from this file."
 NOT_COMPARED = "Not compared: nothing was read from this file."
 SEARCH_SYSTEM_PROMPT = (
@@ -5125,21 +5125,46 @@ def compare_shares(settings):
     return max(200, room - unit - context), unit, context
 
 
+def piece_cap(settings):
+    """The most tokens one piece of the methodology may take in a question of step 05: small enough for a batch of
+    its own, and for a comparison."""
+    batch, _ = search_shares(settings)
+    chunk_room, _, _ = compare_shares(settings)
+    return min(batch, chunk_room)
+
+
+def piece_slices(text, head_tokens, tokens, chars):
+    """How a chunk's text is cut into rows: whole when it fits `chars` characters and, beside a head line of
+    `head_tokens`, `tokens` tokens; otherwise text_slices, with room for a part's head line."""
+    if len(text) <= chars and head_tokens + estimate_tokens(text) + 1 <= tokens:
+        return [(text, False)]
+    return text_slices(text, max(100, tokens - head_tokens - 30), chars)
+
+
+def chunk_where(chunk):
+    """The headings a chunk of the methodology sits under, and its type, as a question shows them."""
+    return "%s | %s" % (" > ".join(chunk.get("heading_chain") or ()) or "(no heading)", chunk["kind"])
+
+
+def methodology_slices(chunk, cap):
+    """The rows a chunk of the methodology takes - on Chunks_Methodology and in the questions of step 05 alike: whole,
+    or cut at line ends into parts small enough for a cell of Excel and for a batch of their own. Enforces: R2, R13"""
+    return piece_slices(chunk["text"] or "", estimate_tokens("[%s] %s" % (chunk["ref"], chunk_where(chunk))), cap, SLICE_CHARS)
+
+
 def methodology_pieces(chunks, cap):
     """Every chunk of the methodology as the model is shown it: its ref, the headings it sits under, its type and its
-    text. A chunk longer than cap tokens is shown in parts cut at line ends, each small enough for a batch of its own,
-    so that nothing of a long chunk goes unsearched. Enforces: R2"""
+    text - whole, or, when too long, in the parts it takes as rows of Chunks_Methodology, each headed as the part it is
+    ([C-0045-2, part 2 of 3 of C-0045]), so that nothing of a long chunk goes unsearched and a part is the same row in
+    the sheet and in a question. The parts stay one chunk: what the model finds in any of them counts for the whole.
+    Enforces: R2"""
     pieces = []
     for chunk in chunks:
-        where = "%s | %s" % (" > ".join(chunk.get("heading_chain") or ()) or "(no heading)", chunk["kind"])
-        whole = "[%s] %s\n%s" % (chunk["ref"], where, chunk["text"] or "")
-        if estimate_tokens(whole) <= cap:
-            pieces.append({"ref": chunk["ref"], "part": 1, "parts": 1, "text": whole})
-            continue
-        parts = split_to_tokens(chunk["text"], max(100, cap - estimate_tokens(where) - 30))
-        pieces += [{"ref": chunk["ref"], "part": number, "parts": len(parts),
-                    "text": "[%s, part %d of %d] %s\n%s" % (chunk["ref"], number, len(parts), where, part)}
-                   for number, part in enumerate(parts, start=1)]
+        slices = methodology_slices(chunk, cap)
+        for number, (part, _) in enumerate(slices, start=1):
+            head = ("[%s] %s" % (chunk["ref"], chunk_where(chunk)) if len(slices) == 1 else
+                    "[%s-%d, part %d of %d of %s] %s" % (chunk["ref"], number, number, len(slices), chunk["ref"], chunk_where(chunk)))
+            pieces.append({"ref": chunk["ref"], "part": number, "parts": len(slices), "text": head + "\n" + part})
     for piece in pieces:
         piece["tokens"] = estimate_tokens(piece["text"])
     return pieces
@@ -5161,8 +5186,7 @@ def methodology_batches(pieces, cap):
 def methodology_plan(chunks, settings):
     """The methodology as step 05 puts it to the model: (its pieces, the batches they go in)."""
     batch, _ = search_shares(settings)
-    chunk_room, _, _ = compare_shares(settings)
-    pieces = methodology_pieces(chunks, min(batch, chunk_room))
+    pieces = methodology_pieces(chunks, piece_cap(settings))
     return pieces, methodology_batches(pieces, batch)
 
 
@@ -5247,20 +5271,22 @@ def model_rows(units, settings):
     return rows
 
 
-def part_note(row):
-    """What a question says of a row that is one part of a long piece, or "" for a whole one."""
+def part_note(row, comparing=False):
+    """What a question says of a row that is one part of a long unit, or "" for a whole one."""
     if row.get("parts", 1) < 2:
         return ""
     whole = " (lines %d-%d)" % tuple(row["unit_lines"]) if row.get("unit_lines") else ""
-    return ("Part %d of %d of %s%s, which is too long to show whole: each part is asked about on its own. Where this "
+    note = ("Part %d of %d of %s%s, which is too long to show whole: each part is asked about on its own. Where this "
             "part relies on something set in another part, say so." % (row["part"], row["parts"], row["unit_ref"], whole))
+    return note + (" A requirement this part does not meet may be met in another part: say so, rather than list it "
+                   "as not done." if comparing else "")
 
 
-def unit_part(unit, said, neighbours, room):
+def unit_part(unit, said, neighbours, room, comparing=False):
     """One unit as a question of step 05 shows it: what and where it is, what it takes from and gives to, its text as
     written, and what step 04's model wrote about it - cut to `room` tokens, the code keeping two thirds of it or more."""
     head = "THE PIECE: %s, %s%s" % (unit["ref"], unit_place(unit), " - %s" % unit["name"] if unit.get("name") else "")
-    head += "\n" + part_note(unit) if part_note(unit) else ""
+    head += "\n" + part_note(unit, comparing) if part_note(unit) else ""
     head += "\n" + neighbours if neighbours else ""
     said, code = said or "(none)", unit["text"]
     left = room - estimate_tokens(head) - 40
@@ -5300,7 +5326,7 @@ def compare_question(unit, said, upstream, downstream, chosen, room, context_roo
     title = "THE METHODOLOGY: THE CHUNKS FOUND TO BEAR ON THIS PIECE\n\n"
     chunks = title + "\n\n".join(piece["text"] for piece in chosen)
     blocks = context_block(upstream, downstream, context_room)
-    piece = unit_part(unit, said, "", room)
+    piece = unit_part(unit, said, "", room, comparing=True)
     ask = ("List every potential deviation between the chunks of the methodology above and this piece. Answer with the "
            "JSON object only.")
     return question_of(METHODOLOGY_COMPARISON, unit, chosen, COMPARE_SYSTEM_PROMPT,
@@ -5437,52 +5463,65 @@ def deviation_lines(deviations, gated=False):
 
 
 def methodology_account(units, chunks, calls, settings):
-    """How far step 05 has got with each unit, worked out from the recorded answers alone - and those arrived but not
-    yet written - so that the step and the workbook always agree: the batches of the methodology not yet searched for
-    it, the chunks found to bear on it, those not yet compared with it, and the deviations the model named, in reading
-    order. A question answered twice counts once. Enforces: R2, R3"""
+    """How far step 05 has got with each analytical chunk of Chunks_Model - a unit, in one row or several - worked out
+    from the recorded answers alone, and those arrived but not yet written, so that the step and the workbook always
+    agree. A unit is one chunk however many rows it takes: each row is searched against every piece of the methodology;
+    a chunk of the methodology any row finds counts for the whole unit; once every row is searched, each row is
+    compared with every chunk found for the unit, in all its parts; the deviations named for any row are the unit's, in
+    the order of its rows. A question answered twice counts once. Enforces: R2, R3"""
     pieces, batches = methodology_plan(chunks, settings)
     position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
+    parts_of = {}
+    for piece in pieces:
+        parts_of.setdefault(piece["ref"], []).append((piece["ref"], piece["part"]))
+    every, batch_keys = [(p["ref"], p["part"]) for p in pieces], [{(p["ref"], p["part"]) for p in batch} for batch in batches]
+    chunk_of, order = {row["ref"]: row["unit_ref"] for row in units}, {row["ref"]: number for number, row in enumerate(units)}
     searched, relevant, compared, named, seen = {}, {}, {}, {}, set()
     for call in calls:
         kind = call.get("question_type")
         if kind not in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) or call.get("outcome") != "answered" \
-                or call["question_id"] in seen:
+                or call["question_id"] in seen or call.get("unit_ref") not in chunk_of:
             continue
         seen.add(call["question_id"])
-        unit, keys = call["unit_ref"], [(ref, part) for ref, part, _ in call.get("pieces") or ()]
-        reading = call.get("reading") or {}
+        row, keys = call["unit_ref"], [(ref, part) for ref, part, _ in call.get("pieces") or ()]
+        chunk, reading = chunk_of[row], call.get("reading") or {}
         if kind == METHODOLOGY_SEARCH:
-            searched.setdefault(unit, set()).update(keys)
-            part_of = dict(keys)
+            searched.setdefault(row, set()).update(keys)
+            shown = {ref for ref, _ in keys}
             for item in reading.get("relevant") or ():
-                if item["ref"] in part_of:
-                    relevant.setdefault(unit, {})[(item["ref"], part_of[item["ref"]])] = item
+                if item["ref"] in shown:
+                    relevant.setdefault(chunk, {}).setdefault(item["ref"], item)
         else:
-            compared.setdefault(unit, set()).update(keys)
+            compared.setdefault(chunk, set()).update((row, key) for key in keys)
             first = min([position.get(key, len(pieces)) for key in keys] or [len(pieces)])
-            named.setdefault(unit, []).append((first, call["question_id"], reading.get("deviations") or []))
-    account = {}
-    for unit in units:
-        ref, done = unit["ref"], searched.get(unit["ref"], set())
-        keys = sorted(relevant.get(ref, {}), key=lambda key: position.get(key, len(pieces)))
+            named.setdefault(chunk, []).append((order[row], first, call["question_id"], reading.get("deviations") or []))
+    by_chunk, account = {}, {}
+    for row in units:
+        by_chunk.setdefault(row["unit_ref"], []).append(row)
+    for chunk, rows in by_chunk.items():
+        asked = [row for row in rows if askable(row)]
+        unsearched = {row["ref"]: [key for key in every if key not in searched.get(row["ref"], ())] for row in asked}
+        missing = {key for keys in unsearched.values() for key in keys}
+        found = relevant.get(chunk, {})
+        refs = sorted(found, key=lambda ref: position.get(parts_of.get(ref, [(ref, 1)])[0], len(pieces)))
+        done = compared.get(chunk, set())
         deviations = []
-        for _, _, items in sorted(named.get(ref, [])):
+        for _, _, _, items in sorted(named.get(chunk, []), key=lambda entry: entry[:3]):
             deviations += [item for item in items if item not in deviations]
-        account[ref] = {"askable": askable(unit), "batches": len(batches), "chunks": len({p["ref"] for p in pieces}),
-                        "unsearched": sorted({p["ref"] for p in pieces if (p["ref"], p["part"]) not in done}),
-                        "unsearched keys": [(p["ref"], p["part"]) for p in pieces if (p["ref"], p["part"]) not in done],
-                        "open batches": [n for n, batch in enumerate(batches)
-                                         if any((p["ref"], p["part"]) not in done for p in batch)],
-                        "relevant keys": keys, "relevant": [relevant[ref][key] for key in keys],
-                        "to compare": [key for key in keys if key not in compared.get(ref, set())],
-                        "deviations": deviations}
+        account[chunk] = {"askable": bool(asked), "batches": len(batches), "chunks": len(parts_of),
+                          "open batches": [number for number, keys in enumerate(batch_keys) if not keys.isdisjoint(missing)],
+                          "unsearched": sorted({ref for ref, _ in missing}), "unsearched keys": unsearched,
+                          "relevant": [found[ref] for ref in refs],
+                          "to compare": [(row["ref"], key) for row in asked for ref in refs for key in parts_of.get(ref, [])
+                                         if (row["ref"], key) not in done],
+                          "deviations": deviations}
     return {"pieces": pieces, "batches": batches, "units": account}
 
 
 def methodology_cells(state):
-    """A unit's two cells of step 05: the chunks found to bear on it, as refs joined with "; ", and the deviations
-    named, each opening with the refs it rests on. What is not finished says so, and says what to do. Enforces: R2, R10"""
+    """A unit's two cells of step 05: the chunks of the methodology found to bear on it, as refs joined with "; ", and
+    the deviations named, each opening with the refs it rests on. What is not finished says so, and says what to do.
+    Enforces: R2, R10"""
     if not state["askable"]:
         return NOT_SEARCHED, NOT_COMPARED
     refs = "; ".join(dict.fromkeys(item["ref"] for item in state["relevant"]))
@@ -5496,7 +5535,7 @@ def methodology_cells(state):
         return "None found", "Nothing to compare: no chunk of the methodology was found to bear on this piece."
     lines = deviation_lines(state["deviations"], gated=True)
     if state["to compare"]:
-        open_refs = "; ".join(dict.fromkeys(ref for ref, _ in state["to compare"]))
+        open_refs = "; ".join(dict.fromkeys(key[0] for _, key in state["to compare"]))
         return refs, (lines + "\n\n" if lines else "") + ("Not compared in full: %s not yet compared with this piece. "
                                                          "Run cell 3 again." % open_refs)
     return refs, lines or "None flagged against %s." % refs
@@ -5526,60 +5565,79 @@ def search_methodology(ctx):
             if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
     _, unit_room = search_shares(ctx.settings)
     chunk_room, compare_room, context_room = compare_shares(ctx.settings)
-    to_search = {ref: set(state["unsearched keys"]) for ref, state in states.items() if state["askable"]}
-    found = {ref: dict(zip(state["relevant keys"], state["relevant"])) for ref, state in states.items()}
+    rows_of, parts_of = {}, {}
+    for row in units:
+        rows_of.setdefault(row["unit_ref"], []).append(row)
+    for piece in pieces:
+        parts_of.setdefault(piece["ref"], []).append((piece["ref"], piece["part"]))
+    to_search = {row: set(keys) for state in states.values() for row, keys in state["unsearched keys"].items()}
+    found = {chunk: {item["ref"]: item for item in state["relevant"]} for chunk, state in states.items()}
 
-    def comparisons(ref, keys):
-        """The comparison questions still to ask for a unit: its chunks in reading order, as many to a question as fit."""
-        groups, used = [[]], 0
-        for key in sorted(keys, key=position.get):
-            if groups[-1] and used + by_key[key]["tokens"] + 2 > chunk_room:
-                groups.append([])
-                used = 0
-            groups[-1].append(key)
-            used += by_key[key]["tokens"] + 2
-        return [(METHODOLOGY_COMPARISON, ref, group) for group in groups if group]
+    def comparisons(pairs):
+        """Comparison questions for (row, piece of the methodology) pairs: for each row, its pieces in reading order,
+        as many to a question as fit."""
+        items = []
+        for row in dict.fromkeys(row for row, _ in pairs):
+            groups, used = [[]], 0
+            for key in sorted((key for r, key in pairs if r == row), key=position.get):
+                if groups[-1] and used + by_key[key]["tokens"] + 2 > chunk_room:
+                    groups.append([])
+                    used = 0
+                groups[-1].append(key)
+                used += by_key[key]["tokens"] + 2
+            items += [(METHODOLOGY_COMPARISON, row, group) for group in groups if group]
+        return items
 
-    work = [item for ref, state in states.items() if state["askable"] and not state["open batches"]
-            for item in comparisons(ref, state["to compare"])]
-    work += [(METHODOLOGY_SEARCH, unit["ref"], [(p["ref"], p["part"]) for p in batch if (p["ref"], p["part"]) in to_search[unit["ref"]]])
-             for number, batch in enumerate(batches) for unit in units
-             if unit["ref"] in to_search and number in states[unit["ref"]]["open batches"]]
-    neighbours, unit_parts = {}, {}
+    def compare_whole(chunk):
+        """A unit, once every row of it is searched: each row against every chunk of the methodology found for any of
+        them, in all its parts - the unit and those chunks each treated as a whole."""
+        refs = sorted(found[chunk], key=lambda ref: position.get(parts_of[ref][0], 0))
+        return comparisons([(row["ref"], key) for row in rows_of[chunk] if askable(row) for ref in refs for key in parts_of[ref]])
+
+    work = [item for state in states.values() if state["askable"] and not state["open batches"]
+            for item in comparisons(state["to compare"])]
+    for batch in batches:
+        keys = [(p["ref"], p["part"]) for p in batch]
+        work += [(METHODOLOGY_SEARCH, row["ref"], [key for key in keys if key in to_search[row["ref"]]])
+                 for row in units if row["ref"] in to_search and any(key in to_search[row["ref"]] for key in keys)]
+    neighbours = {}
 
     def build(item):
         kind, ref, keys = item
-        unit = by_ref[ref]
-        upstream, downstream = linked_units(unit, links, wholes)
+        row = by_ref[ref]
+        upstream, downstream = linked_units(row, links, wholes)
+        chosen = [by_key[key] for key in keys]
         if kind == METHODOLOGY_SEARCH:
-            if ref not in neighbours:
-                neighbours[ref] = neighbours_line(upstream, downstream)
-            question = search_question(unit, said.get(ref, ""), neighbours[ref], [by_key[key] for key in keys], unit_room)
+            if row["unit_ref"] not in neighbours:
+                neighbours[row["unit_ref"]] = neighbours_line(upstream, downstream)
+            question = search_question(row, said.get(ref, ""), neighbours[row["unit_ref"]], chosen, unit_room)
         else:
-            question = compare_question(unit, said.get(ref, ""), upstream, downstream, [by_key[key] for key in keys],
-                                        compare_room, context_room)
+            question = compare_question(row, said.get(ref, ""), upstream, downstream, chosen, compare_room, context_room)
         if question["tokens"] > question_room(ctx.settings, kind):
             raise EngineFault("A question of step 05 would take %d tokens where chat() holds %d with its answer. This is a "
                               "defect in the tool, not in the model under review." % (question["tokens"], question_room(ctx.settings, kind)))
         return question
 
     def after(question, result):
-        """What an answer leads to: a unit whose search is now complete is compared, and a question left without an
-        answer that shows more than one piece of the methodology is asked again in two halves - one piece may be what
-        the gateway refuses, or the question too long for it. Splitting costs nothing when the model answers nothing at
-        all, as when the token has run out: ask_all stops after the same number of questions either way."""
+        """What an answer leads to: a unit whose rows are now all searched is compared as a whole, and a question left
+        without an answer that shows more than one piece of the methodology is asked again in two halves - one piece
+        may be what the gateway refuses, or the question too long for it. Splitting costs nothing when the model
+        answers nothing at all, as when the token has run out: ask_all stops after the same number of questions either
+        way."""
         ref, keys = question["unit_ref"], [(p[0], p[1]) for p in question["pieces"]]
         if not result["answer"]:
             half = len(keys) // 2
             return [(question["type"], ref, keys[:half]), (question["type"], ref, keys[half:])] if half else []
         if question["type"] != METHODOLOGY_SEARCH:
             return []
-        part_of = dict(keys)
+        chunk, shown = by_ref[ref]["unit_ref"], {r for r, _ in keys}
         for item in result["reading"]["relevant"]:
-            found[ref][(item["ref"], part_of[item["ref"]])] = item
-        was_open = bool(to_search[ref])
+            if item["ref"] in shown:
+                found[chunk].setdefault(item["ref"], item)
+        mine = [row["ref"] for row in rows_of[chunk] if row["ref"] in to_search]
+        was_open = any(to_search[r] for r in mine)
         to_search[ref] -= set(keys)
-        return comparisons(ref, found[ref]) if was_open and not to_search[ref] else []
+        return compare_whole(chunk) if was_open and not any(to_search[r] for r in mine) else []
 
     chat = NOTEBOOK["chat"]
     if work and chat is None:
@@ -5819,7 +5877,7 @@ def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
     return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id}
 
-def rows_package_info(store, paths, settings, progress):
+def rows_package_info(store, paths, settings, progress, split=None):
     """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
     identity, rows = run_identity(store, paths), []
     def add(group, item, value):
@@ -5839,14 +5897,18 @@ def rows_package_info(store, paths, settings, progress):
     for info in store.read("package_info"):
         for row in info.get("rows", []):
             add(row["group"], row["item"], row["value"])
-    split = [(row["unit_ref"], row["parts"]) for row in model_rows(store.read("model_units"), settings) if row["part"] == 1 and row["parts"] > 1]
-    if split:                                             # beside the package's other rows: which pieces take several rows
-        at = max((number for number, row in enumerate(rows) if row["group"] == "Package"), default=len(rows) - 1) + 1
-        rows.insert(at, {"group": "Package", "item": "Pieces shown in several rows",
-                         "value": "; ".join("%s in %d rows, %s-1 to %s-%d" % (ref, n, ref, ref, n) for ref, n in split) +
-                                  ". Each is one piece of code, too long for one row: its rows are asked about part by part."})
     for row in store.read("info_rows"):
         add(row["group"], row["item"], row["value"])
+    for group, several in (split or {}).items():          # beside the other rows of their group: what takes several rows
+        if several:
+            at = max((number for number, row in enumerate(rows) if row["group"] == group), default=len(rows) - 1) + 1
+            code = group == "Package"
+            rows.insert(at, {"group": group, "item": "Pieces shown in several rows" if code else "Chunks shown in several rows",
+                             "value": "; ".join("%s in %d rows, %s-1 to %s-%d" % (ref, n, ref, ref, n) for ref, n in several) +
+                                      (". Each is one piece of code, too long for one row, and is treated as one wherever it is "
+                                       "used: the model is asked about its parts one by one, and what it says of them stands "
+                                       "together on the piece's first row." if code else
+                                       ". Each is one chunk, too long for one row, and is treated as one wherever it is used.")})
     repairs = {}
     for repair in store.read("read_repairs"):
         repairs.setdefault(repair["file"], []).append(repair["kind"])
@@ -5856,18 +5918,57 @@ def rows_package_info(store, paths, settings, progress):
     return rows
 
 
-def rows_chunks(chunks):
-    """The rows of Chunks_Methodology and Chunks_Documentation."""
-    return [{"ref": c["ref"], "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": c["text"],
-             "source_file": c["source_file"]} for c in chunks]
+def rows_chunks(chunks, slicer=None):
+    """The rows of Chunks_Methodology and Chunks_Documentation: a chunk in one row or, too long for one, in rows
+    C-0045-1, C-0045-2 and so on as `slicer` cuts it, each with the chunk's section, type and file. Enforces: R2, R13"""
+    rows = []
+    for c in chunks:
+        slices = slicer(c) if slicer else [(c["text"], False)]
+        for number, (part, joined) in enumerate(slices, start=1):
+            rows.append({"ref": c["ref"] if len(slices) == 1 else "%s-%d" % (c["ref"], number), "chunk_ref": c["ref"],
+                         "joined": joined, "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": part,
+                         "source_file": c["source_file"]})
+    return rows
+
+
+def interpretation_of(parts, said, unanswered, asked):
+    """What the organisation's model says of a unit: its answer, or, for a unit asked about in parts, the answers of
+    all its parts together, each under the part and the lines it explains."""
+    texts = []
+    for part in parts:
+        answer = said.get(part["ref"]) or (NO_ANSWER if part["ref"] in unanswered else "")
+        texts.append(answer or (NOT_ASKED if asked and not askable(part) else ""))
+    if len(parts) == 1:
+        return texts[0]
+    return "\n\n".join("Part %d of %d%s: %s" % (part["part"], part["parts"], ", lines %d-%d" % tuple(part["lines"]) if part.get("lines") else "", answer)
+                        for part, answer in zip(parts, texts) if answer)
+
+
+def spread_rows(ref, parts, columns):
+    """The rows a unit takes on Chunks_Model: its code down its parts, and each of its own columns from the first row
+    down, continued on the rows below where longer than a cell, never cut. A unit takes as many rows as the longest of
+    these needs; with more than one, they are numbered M-0003-1, M-0003-2 and so on. Enforces: R2, R13"""
+    cut = {field: [piece for piece, _ in text_slices(value, float("inf"), SLICE_CHARS)] if value else []
+           for field, value in columns.items()}
+    count = max([len(parts)] + [len(pieces) for pieces in cut.values()])
+    rows = []
+    for number in range(count):
+        part = parts[number] if number < len(parts) else None
+        lines = part.get("lines") if part else None
+        row = {"ref": ref if count == 1 else "%s-%d" % (ref, number + 1), "unit_ref": ref, "code_row": part is not None,
+               "joined": part["joined"] if part else False, "kind": parts[0]["kind"], "file": parts[0]["file"],
+               "text": part["text"] if part else "", "lines": "%d-%d" % tuple(lines) if lines else ""}
+        row.update({field: pieces[number] if number < len(pieces) else "" for field, pieces in cut.items()})
+        rows.append(row)
+    return rows
 
 
 def rows_model_units(units, calls=(), links=None, methodology=None):
-    """The rows of Chunks_Model, as model_rows makes them: each a whole piece of code, or one part of a long one, as
-    written; the units the piece takes something
-    from and the units that take something from it (step 03); what the organisation's model says
-    happens in it (step 04); and the chunks of the methodology it found to bear on it, with the potential
-    deviations it flagged (step 05, from `methodology`, the account of that step). Enforces: R2, R3"""
+    """The rows of Chunks_Model. `units` are the rows model_rows makes: a unit whole, or the parts of a long one. A unit
+    is one analytical chunk however many rows it takes: the units it takes something from and gives something to
+    (step 03), what the organisation's model says of it (step 04 - its parts' explanations together), and the chunks
+    of the methodology found for it with the potential deviations flagged (step 05) stand once, from its first row
+    down, and its code runs down its rows (spread_rows). Enforces: R2, R3"""
     links, methodology = links or {}, (methodology or {}).get("units")
     said, unanswered = {}, set()
     for call in calls:
@@ -5877,50 +5978,55 @@ def rows_model_units(units, calls=(), links=None, methodology=None):
                 unanswered.discard(call["unit_ref"])
             elif call["unit_ref"] not in said:
                 unanswered.add(call["unit_ref"])
-    asked, rows = bool(said or unanswered), []
-    for u in units:
-        interpretation = said.get(u["ref"]) or (NO_ANSWER if u["ref"] in unanswered else "")
-        if not interpretation and asked and not askable(u):
-            interpretation = NOT_ASKED
-        linked = links.get(u.get("unit_ref", u["ref"])) or {}
-        refs, deviations = methodology_cells(methodology[u["ref"]]) if methodology and u["ref"] in methodology else ("", "")
-        rows.append({"ref": u["ref"], "unit_ref": u.get("unit_ref", u["ref"]), "joined": u.get("joined", False),
-                     "kind": u["kind"], "file": u["file"], "text": u["text"], "interpretation": interpretation,
-                     "methodology_refs": refs, "deviations": deviations,
-                     "upstream": "; ".join(linked.get("upstream") or ()), "downstream": "; ".join(linked.get("downstream") or ()),
-                     "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""})
+    asked, by_unit, rows = bool(said or unanswered), {}, []
+    for row in units:
+        by_unit.setdefault(row["unit_ref"], []).append(row)
+    for ref, parts in by_unit.items():
+        linked = links.get(ref) or {}
+        refs, deviations = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", "")
+        rows += spread_rows(ref, parts, {"interpretation": interpretation_of(parts, said, unanswered, asked),
+                                         "methodology_refs": refs, "deviations": deviations,
+                                         "upstream": "; ".join(linked.get("upstream") or ()),
+                                         "downstream": "; ".join(linked.get("downstream") or ())})
     return rows
 
+def several_rows(rows, key):
+    """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)]."""
+    counts = {}
+    for row in rows:
+        counts[row[key]] = counts.get(row[key], 0) + 1
+    return [(ref, count) for ref, count in counts.items() if count > 1]
+
+
 def sheet_rows(store, paths, settings, progress):
-    """The rows of all four sheets, by sheet name."""
+    """The rows of all four sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
     links = {r["ref"]: r for r in store.read("unit_links")}
-    units, calls = model_rows(store.read("model_units"), settings), store.read("llm_calls")
+    parts, calls, canon = model_rows(store.read("model_units"), settings), store.read("llm_calls"), store.read("chunks_canon")
     searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
         call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
-    methodology = methodology_account(units, store.read("chunks_canon"), calls, settings) if searched else None
-    unit_rows = rows_model_units(units, calls, links, methodology)
-    doc_rows = rows_chunks(store.read("chunks_doc"))
-    return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows}
+    methodology = methodology_account(parts, canon, calls, settings) if searched else None
+    unit_rows = rows_model_units(parts, calls, links, methodology)
+    cap = piece_cap(settings)
+    canon_rows = rows_chunks(canon, lambda chunk: methodology_slices(chunk, cap))
+    doc_rows = rows_chunks(store.read("chunks_doc"), lambda chunk: piece_slices(chunk["text"] or "", 0, float("inf"), SLICE_CHARS))
+    split = {"Package": several_rows(unit_rows, "unit_ref"), "Methodology files": several_rows(canon_rows, "chunk_ref"),
+             "Documentation files": several_rows(doc_rows, "chunk_ref")}
+    return {"Model_Package_Info": rows_package_info(store, paths, settings, progress, split),
+            "Chunks_Methodology": canon_rows, "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows}
 
 def check_written_totals(rows, store):
-    """The identity of the workbook: every unit read is one row of its sheet, and no row is anything else - on
-    Chunks_Model, one row or several, whose texts joined back are the unit's text exactly. Raised as a fault of the
-    tool, never as a remark about the model. Enforces: R2, R13"""
-    units = {unit["ref"]: unit for unit in store.read("model_units")}
-    written, by_unit = rows["Chunks_Model"], {}
-    for row in written:
-        by_unit.setdefault(row["unit_ref"], []).append(row)
-    refs = [row["ref"] for row in written]
-    if set(by_unit) != set(units) or len(set(refs)) != len(refs) or \
-            any(joined_rows(by_unit[ref]) != (units[ref]["text"] or "") for ref in units):
-        raise EngineFault(
-            "The workbook does not hold exactly what was read: %d unit(s) read for Chunks_Model and %d row(s) written. "
-            "This is a defect in the tool, not in the model under review." % (len(units), len(written)))
-    for kind, sheet in (("chunks_doc", "Chunks_Documentation"), ("chunks_canon", "Chunks_Methodology")):
-        read = [record["ref"] for record in store.read(kind)]
-        written = [row["ref"] for row in rows[sheet]]
-        if sorted(read) != sorted(written) or len(set(written)) != len(written):
+    """The identity of the workbook: every unit read is one row of its sheet, or several, and no row is anything else;
+    a unit's rows, joined back, are its text exactly, character for character. Raised as a fault of the tool, never as
+    a remark about the model. Enforces: R2, R13"""
+    for kind, sheet, key in (("model_units", "Chunks_Model", "unit_ref"), ("chunks_doc", "Chunks_Documentation", "chunk_ref"),
+                             ("chunks_canon", "Chunks_Methodology", "chunk_ref")):
+        read, written, texts = {record["ref"]: record for record in store.read(kind)}, rows[sheet], {}
+        for row in written:
+            if row.get("code_row", True):
+                texts.setdefault(row[key], []).append(row)
+        refs = [row["ref"] for row in written]
+        if {row[key] for row in written} != set(read) or len(set(refs)) != len(refs) or \
+                any(joined_rows(texts.get(ref, [])) != (read[ref]["text"] or "") for ref in read):
             raise EngineFault(
                 "The workbook does not hold exactly what was read: %d unit(s) read for %s and %d row(s) written. "
                 "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
