@@ -3635,15 +3635,13 @@ def table_of(value):
 
 
 def table_display(header, rows):
-    """The one-cell display form: at most 50 rows, always below Excel's limit for one cell."""
-    shown = ["; ".join(header)] + ["; ".join(row) for row in rows[:50]]
-    if len(rows) > 50:
-        shown.append("... %d more rows; the full table is in the audit files" % (len(rows) - 50))
-    text = "\n".join(shown)
-    return text if len(text) < 30000 else text[:30000] + "\n... (cut here; the full table is in the audit files)"
+    """A stored table as the workbook shows it: its header and every row, one line each, cells joined by "; ".
+    Nothing is left out; a table too long for one row of Chunks_Model takes several (model_rows). Enforces: R13"""
+    return "\n".join(["; ".join(header)] + ["; ".join(row) for row in rows])
 
 def data_object_unit(name, value, path, settings):
-    """One stored object to a unit and, when it is assessable, its full values."""
+    """One stored object to a unit: a table shown whole (table_display), or, when it has no tabular meaning, described
+    in a sentence. Too large to be a parameter table, it is marked not assessable: a dataset (asked_rows)."""
     found = table_of(value)
     if found is None:
         described = "An object of Python type %s after decoding; it has no tabular meaning, so it is described and not compared." % type(value).__name__
@@ -3782,7 +3780,7 @@ def file_units(path, data, context, facts, reader=""):
         return []
     if lowered.endswith((".rmd", ".rnw", ".qmd")):
         return vignette_units(path, text, context)
-    return [draft(KIND_OTHER, path, (1, text.count("\n") + 1), os.path.basename(path), text[:2000])]
+    return [draft(KIND_OTHER, path, (1, text.count("\n") + 1), os.path.basename(path), text)]
 
 def link_documentation_units(units):
     """Tie each roxygen block to the object it documents."""
@@ -4968,7 +4966,8 @@ def interpret_code(ctx):
     go out parallel_chats at a time (ask_all); a question already answered in this run is not asked again, and while
     any is left unanswered the step does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
     whole = ctx.read("model_units")
-    units, by_ref = model_rows(whole, ctx.settings), {u["ref"]: u for u in whole}
+    units, by_ref = asked_rows(whole, ctx.settings), {u["ref"]: u for u in whole}
+    datasets = [unit["ref"] for unit in whole if is_dataset(unit)]
     links = {r["ref"]: r for r in ctx.read("unit_links")}
     recorded = {call["question_id"] for call in ctx.read("llm_calls")
                 if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
@@ -5010,8 +5009,13 @@ def interpret_code(ctx):
     counts.update({"interpreted": len(questions) - missing, "not answered": missing, "most at once": peak})
     messages = [stopped] if stopped else []
     sliced = sorted({row["unit_ref"] for row in units if row["parts"] > 1})
+    if datasets:
+        messages.append("%d stored dataset%s, too large to be a parameter table, %s asked about once, from a view of its "
+                        "columns and first %d rows; Chunks_Model shows it whole: %s." % (len(datasets), "" if len(datasets) == 1 else "s",
+                                                                                        "is" if len(datasets) == 1 else "are", DATASET_VIEW_ROWS,
+                                                                                         ", ".join(datasets[:10]) + (" and more" if len(datasets) > 10 else "")))
     if sliced:
-        messages.append("%d pieces of code too long for one row are shown, and asked about, in parts - rows %s-1, %s-2 and "
+        messages.append("%d pieces of the package too long for one row are shown, and asked about, in parts - rows %s-1, %s-2 and "
                         "so on: %s." % (len(sliced), sliced[0], sliced[0], ", ".join(sliced[:10]) + (" and more" if len(sliced) > 10 else "")))
     if missing and not stopped:
         messages.append("The model gave no interpretation for %d of %d code blocks. Run cell 3 again to ask for those "
@@ -5267,6 +5271,47 @@ def model_rows(units, settings):
             raise EngineFault("The rows of %s do not rebuild its text. This is a defect in the tool, not in the model under "
                               "review." % unit["ref"])
         rows += mine
+    return rows
+
+
+DATASET_VIEW_ROWS = 50       # the rows of a stored dataset a question shows; the workbook shows every row
+
+
+def is_dataset(unit):
+    """A stored table too large to be a parameter table - more cells than max_parameter_cells, or more columns than
+    max_parameter_columns: a dataset."""
+    data = unit.get("data") or {}
+    return data.get("assessable") is False and bool(data.get("dims"))
+
+
+def dataset_view(unit, tokens):
+    """What a question shows of a stored dataset: what it is, its size, and its columns and first rows - as many of the
+    first DATASET_VIEW_ROWS as fit in `tokens` - saying that this is a view, and that the workbook shows it whole."""
+    count, width = (list(unit["data"]["dims"]) + [0, 0])[:2]
+    head = ("A stored dataset of %d rows and %d columns - too large to be a parameter table, so it is shown here as a "
+            "view: its columns and first rows. Chunks_Model shows it whole." % (count, width))
+    lines, shown = unit["text"].split("\n"), []
+    for line in lines[:DATASET_VIEW_ROWS + 1]:
+        if estimate_tokens(head + "\n" + "\n".join(shown + [line])) > tokens:
+            break
+        shown.append(line)
+    rest = len(lines) - len(shown)
+    return head + "\n" + "\n".join(shown) + ("\n[%d more rows are not in this view.]" % rest if rest > 0 else "")
+
+
+def asked_rows(units, settings):
+    """The rows steps 04 and 05 ask about: every part of every unit, as model_rows cuts it - so that no piece of code
+    is cut in a question - except a stored dataset, which is asked about once, from dataset_view, the question saying
+    that it is a view: the model is told what the data is, not asked to read every row. What it says stands for the
+    whole unit (rows_model_units). Enforces: R3, R13"""
+    tokens, _ = slice_limits(settings)
+    rows = []
+    for unit in units:
+        if is_dataset(unit):
+            rows.append(dict(unit, unit_ref=unit["ref"], part=1, parts=1, joined=False, unit_lines=unit.get("lines"),
+                             text=dataset_view(unit, tokens)))
+        else:
+            rows += model_rows([unit], settings)
     return rows
 
 
@@ -5550,7 +5595,7 @@ def search_methodology(ctx):
     asked again, and while any unit is not searched and compared in full the step does not finish:
     running cell 3 again asks only for what is open. Enforces: R2, R3, R5, R8"""
     whole, chunks, calls = ctx.read("model_units"), ctx.read("chunks_canon"), ctx.read("llm_calls")
-    units = model_rows(whole, ctx.settings)
+    units = asked_rows(whole, ctx.settings)
     types = (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON)
     recorded = {call["question_id"] for call in calls if call.get("question_type") in types and call.get("outcome") == "answered"}
     start = methodology_account(units, chunks, calls + held_answers(ctx, types), ctx.settings)
@@ -5903,9 +5948,8 @@ def rows_package_info(store, paths, settings, progress, split=None):
             code = group == "Package"
             rows.insert(at, {"group": group, "item": "Pieces shown in several rows" if code else "Chunks shown in several rows",
                              "value": "; ".join("%s in %d rows, %s-1 to %s-%d" % (ref, n, ref, ref, n) for ref, n in several) +
-                                      (". Each is one piece of code, too long for one row, and is treated as one wherever it is "
-                                       "used: the model is asked about its parts one by one, and what it says of them stands "
-                                       "together on the piece's first row." if code else
+                                      (". Each is one piece of the package, too long for one row, and is treated as one wherever "
+                                       "it is used: what the model says of it stands together on its first row." if code else
                                        ". Each is one chunk, too long for one row, and is treated as one wherever it is used.")})
     repairs = {}
     for repair in store.read("read_repairs"):
@@ -5961,7 +6005,7 @@ def spread_rows(ref, parts, columns):
     return rows
 
 
-def rows_model_units(units, calls=(), links=None, methodology=None):
+def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
     """The rows of Chunks_Model. `units` are the rows model_rows makes: a unit whole, or the parts of a long one. A unit
     is one analytical chunk however many rows it takes: the units it takes something from and gives something to
     (step 03), what the organisation's model says of it (step 04 - its parts' explanations together), and the chunks
@@ -5976,13 +6020,15 @@ def rows_model_units(units, calls=(), links=None, methodology=None):
                 unanswered.discard(call["unit_ref"])
             elif call["unit_ref"] not in said:
                 unanswered.add(call["unit_ref"])
-    asked, by_unit, rows = bool(said or unanswered), {}, []
+    was_asked, by_unit, questioned, rows = bool(said or unanswered), {}, {}, []
     for row in units:
         by_unit.setdefault(row["unit_ref"], []).append(row)
+    for row in asked if asked is not None else units:       # the rows the model was asked about: a dataset once
+        questioned.setdefault(row["unit_ref"], []).append(row)
     for ref, parts in by_unit.items():
         linked = links.get(ref) or {}
         refs, deviations = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", "")
-        rows += spread_rows(ref, parts, {"interpretation": interpretation_of(parts, said, unanswered, asked),
+        rows += spread_rows(ref, parts, {"interpretation": interpretation_of(questioned.get(ref, parts), said, unanswered, was_asked),
                                          "methodology_refs": refs, "deviations": deviations,
                                          "upstream": "; ".join(linked.get("upstream") or ()),
                                          "downstream": "; ".join(linked.get("downstream") or ())})
@@ -5999,11 +6045,12 @@ def several_rows(rows, key):
 def sheet_rows(store, paths, settings, progress):
     """The rows of all four sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
     links = {r["ref"]: r for r in store.read("unit_links")}
-    parts, calls, canon = model_rows(store.read("model_units"), settings), store.read("llm_calls"), store.read("chunks_canon")
+    whole, calls, canon = store.read("model_units"), store.read("llm_calls"), store.read("chunks_canon")
+    parts, asked = model_rows(whole, settings), asked_rows(whole, settings)
     searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
         call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
-    methodology = methodology_account(parts, canon, calls, settings) if searched else None
-    unit_rows = rows_model_units(parts, calls, links, methodology)
+    methodology = methodology_account(asked, canon, calls, settings) if searched else None
+    unit_rows = rows_model_units(parts, calls, links, methodology, asked)
     cap = piece_cap(settings)
     canon_rows = rows_chunks(canon, lambda chunk: methodology_slices(chunk, cap))
     doc_rows = rows_chunks(store.read("chunks_doc"), lambda chunk: piece_slices(chunk["text"] or "", 0, float("inf"), SLICE_CHARS))
