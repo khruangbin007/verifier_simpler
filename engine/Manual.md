@@ -8,17 +8,17 @@ One document for everyone: the person who runs a review, the person who reads it
 
 ## 1. What the tool is, and what it is not
 
-A model comes with three things: a **methodology** that says what it should do, a **package** of code and data that does it, and **documentation** that describes it. The tool reads all three, works out what corresponds to what, checks by code whether the things that correspond agree — formulas, values, stated rules — and raises what it could not line up as a question for a person.
+A model comes with three things: a **methodology** that says what it should do, a **package** of code and data that does it, and **documentation** that describes it. The tool reads all three into small numbered units, links each piece of the package to the pieces it takes something from and gives something to, and asks the organisation's language model to explain each piece of code, to find the chunks of the methodology behind it, and to flag where the code may depart from them.
 
-It does not run the model. It does not judge whether the methodology is sound. It rates nothing: no grade, no score, no verdict. It shows what was read, how the model computes what it returns, and what is covered; a person decides what it means.
+It does not run the model. It does not judge whether the methodology is sound. It rates nothing: no grade, no score, no verdict. It shows what was read and what the organisation's model says of it, marked as the model's; a person decides what it means.
 
-Its reading, its accounts and its map assume no field: the methodology can be about anything the package computes, and what the tool knows about a project comes from the project's own files. Its code interpretations are written for credit: step 04 asks the organisation's model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology. Step 05 then asks it, for each piece, which chunks of the methodology describe, explain or inform it, and where the code departs from them.
+Its reading and its accounts assume no field: the methodology can be about anything the package computes, and what the tool knows about a project comes from the project's own files. Its code interpretations are written for credit: step 04 asks the organisation's model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology. Step 05 then asks it, for each piece, which chunks of the methodology describe, explain or inform it, and where the code departs from them.
 
 **What comes out.** One run produces a folder with two deliverables and a record:
 
 ```
 Run_2026-09-22_1430/
-  Output.xlsx               five sheets: what was read, and how the model computes what it returns
+  Output.xlsx               four sheets: what was read, and what the organisation's model says of the code
   _audit/
     Audit_Log.xlsx          the record: the run, every step, every record, every exchange with the model
 ```
@@ -29,31 +29,30 @@ The record is what makes the run an **evidence pack**: from that workbook alone,
 
 1. **Put the files in.** A project folder has three input folders: the methodology, the package, the documentation. Almost any format works (section 6).
 2. **Read.** The tool reads every file into small citable units — a paragraph, a table, a formula, a function — each with its place in the document and a fingerprint of its content. No model is involved yet. You are shown the outline it found and asked to confirm it.
-3. **Map.** The tool maps how the model computes what it returns, from each final output down to its rawest inputs, with flowR reading the R code. No model is involved in the map.
+3. **Link.** The tool links each piece of the package to the pieces it takes something from and gives something to, with flowR reading the R code. No model is involved.
 4. **Ask.** Through your `chat()`, the organisation's model explains each piece of code (step 04), finds the chunks of the methodology that bear on it and flags where the code may depart from them (step 05). Its words fill three columns of Chunks_Model, each headed as the model's own.
-5. **Read.** `Output.xlsx` shows everything that was read, the map, and what the model said.
+5. **Read.** `Output.xlsx` shows everything that was read, and what the model said.
 6. **Keep.** The run folder is the evidence pack.
 
 ## 3. Design rules
 
-Fourteen rules, each enforced by named code: its docstring says so (`Enforces: R2`).
+Thirteen rules, each enforced by named code: its docstring says so (`Enforces: R2`).
 
 | Rule | Statement |
 |---|---|
 | R1 | The tool shows; people decide. No rating of seriousness. The policy terms never appear in anything the tool produces or names. |
 | R2 | Closed accounting. Every unit read is one row of its sheet, and no row is anything else; this identity is checked on every run. A file, a step or a call that fails is written down, and the run goes on. |
-| R3 | The model's opinion is never the last word. What a language model writes is marked as its own - three columns, each headed "(... by LLM ...)" - and recorded, question and answer, in the audit log; code checks that every chunk the model names was shown to it; everything else the workbook shows is read and parsed by code, and nothing the code reads, maps or checks depends on an answer. |
+| R3 | The model's opinion is never the last word. What a language model writes is marked as its own - three columns, each headed "(... by LLM ...)" - and recorded, question and answer, in the audit log; code checks that every chunk the model names was shown to it; everything else the workbook shows is read and parsed by code, and nothing the code reads, links or checks depends on an answer. |
 | R4 | Every record carries its provenance - the run and the step - and every unit can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
 | R6 | Inputs are never modified. A run writes only inside its own folder. |
 | R7 | Nothing taken from an input or from the model is ever executed or evaluated: no R, no evaluation of text, no unpickling, no string parsing by a symbolic library, safe reading of archives, safe loading of YAML only. |
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
-| R9 | Credit is the domain of the model's interpretations. Step 04 asks the model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology, and step 05 to find the methodology behind each piece and where the code departs from it; the reading, the accounts and the map assume no field. |
+| R9 | Credit is the domain of the model's interpretations. Step 04 asks the model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology, and step 05 to find the methodology behind each piece and where the code departs from it; the reading and the accounts assume no field. |
 | R10 | Plain language outward. No internal names, no technical traces, whole numbers shown as whole numbers, in anything an analyst reads. |
 | R11 | One engine file, plain code. The notebook's four cells are calls into it and hold no code of their own but the organisation's `chat()`. |
 | R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, read into another form, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
-| R14 | The map is exhaustive and verifiable. Every step of the Model Implementation Map is parsed from the code or quotes it word for word; every model unit is a step of the map, belongs to one, or is in the branch of units no final output reaches; every step ends at a named raw input; and what the tool cannot follow is a named gap, never a silence. |
 
 **The wording rule.** The tool rates nothing. Words that grade how serious something is, and the two policy terms that classify an observation, never appear in anything the tool produces, because grading and classifying are decisions of the validation policy and of people, not of a tool. The tool says what it observed, where, and what a sensible next step would be. The list of words lives in one place in `verifier.py`, and a test scans the engine, the workbook, the report and this manual for them on every build.
 
@@ -77,7 +76,7 @@ Every wording the tool shows for a kind of unit, a kind of chunk or a piece that
 | File not read |
 | Other file |
 
-The rows of Chunks_Model never overlap, and each is a whole piece of code: a roxygen block is one row with the function or statement it documents, and what is written inside a function - its statements, a function defined within it - is part of the function's row. Model_Implementation_Map is where a function is taken apart: every assignment is a step of its own, so a value set four times is four steps, each computed from the one before; a named element of a list, such as `overrides_and_caps`, is a step of its own too; and a function's row has the value it returns as its child. A help page (`man/*.Rd`) is not read: it is generated from the roxygen comments in the R files, which are; Model_Package_Info counts how many were left out.
+The rows of Chunks_Model never overlap, and each is a whole piece of code: a roxygen block is one row with the function or statement it documents, and what is written inside a function - its statements, a function defined within it - is part of the function's row. A help page (`man/*.Rd`) is not read: it is generated from the roxygen comments in the R files, which are; Model_Package_Info counts how many were left out.
 
 **Kinds of chunk**
 
@@ -108,12 +107,12 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 |---|---|---|
 | **cell 1** | `verifier.setup(dbutils)`: makes the widgets, installs a package only if one the engine imports is missing, gets flowR ready, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
 | **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | when the gateway or your id changes |
-| **cell 3** | `verifier.review()`: reads every input file, maps how the model computes what it returns, then asks your `chat()` to describe each piece of the model's code (step 04), and to find the methodology behind each piece and where the code departs from it (step 05). Prints what each step did | after the cluster restarts, or you add an input: finished steps are never repeated |
+| **cell 3** | `verifier.review()`: reads every input file, links the units of the package, then asks your `chat()` to describe each piece of the model's code (step 04), and to find the methodology behind each piece and where the code departs from it (step 05). Prints what each step did | after the cluster restarts, or you add an input: finished steps are never repeated |
 | **cell 4** | `verifier.verify()`: checks the finished run folder against its own record | after any run |
 
 **The widgets.** Four: the endpoint and token for the model gateway (01, 02), the model id (03) and the project date (04). Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
 
-**No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Packages come from PyPI, named in the engine (section 22).
+**No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Packages come from PyPI, named in the engine (section 18).
 
 **The token.** It is read at the moment `chat()` is called, never stored. Cell 2 calls `chat()` once; cell 3 calls it once for each piece of the model's code in step 04, and in step 05 once for each piece and each batch of the methodology, then once more for each piece the methodology bears on. When the token runs out during cell 3, the questions start failing, and once the questions already out and four more have all failed, cell 3 sends no more and says so. Paste a fresh token into widget 02 and run cell 3 again: every answer received is kept, and only the questions still open are asked.
 
@@ -137,17 +136,14 @@ Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.d
 
 ## 7. Reading `Output.xlsx`
 
-Five sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
+Four sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
 
 | Sheet | What it holds |
 |---|---|
 | `Model_Package_Info` | what was read and what was not, each file's content account, the coverage identity, the run's progress |
 | `Chunks_Methodology` | every unit of the methodology, with its place in the outline |
 | `Chunks_Documentation` | every unit of the documentation, with its place in the outline |
-| `Chunks_Model` | every unit of the model package: each a whole piece of code, as written, and what the model says happens in it |
-| `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, one row per variable |
-
-**How to read one row of the map.** One row is one variable: where it sits (the Map ID, a column per level, and how deep it is), the variable itself with the code as written, the function that defines it with its unit, and what it is computed from — each of those a row beneath it. Section 8 describes the sheet in full.
+| `Chunks_Model` | every unit of the model package: each a whole piece of code, as written, the units it takes from and gives to, and what the organisation's model says of it - its interpretation, the chunks of the methodology behind it, and where the code may depart from them |
 
 **The sheets and columns.** As laid out in the one place that defines them, `verifier.WORKBOOK_LAYOUT_YAML`:
 
@@ -196,24 +192,11 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 
 **How the links are found.** R looks a name up inside the function first, then in the script it runs in, then in the package, and the two link columns follow the same order. flowR reads each function, and each script whole: a test file, a vignette, or the top-level code of an R file. It resolves every name it can to where it is defined, such as a parameter, a value set earlier, or a variable an earlier statement of the same script set, so a link between statements of one script is flowR's own. A name flowR cannot resolve inside a unit is one the unit takes from outside, and the package names it: one of its functions, a variable its R files set at top level, or its stored data. A data file named in the code, as in `read.csv(system.file("extdata", "limits.csv", ...))`, links to that file's row. A package function named like a base function wins, as it does in R. A function or variable set in a test or vignette is seen only later in the same file, and a test helper by every test. What is not a link: a name of another package (`dplyr::filter`), a parameter or local value that shares a name with a package function, the export list in `NAMESPACE`, and documentation naming a dataset.
 
-**Where the two mapping sheets went.** Two mapping sheets once held one row per model unit and one per documentation unit, with what each was linked to. The Model Implementation Map now shows each model unit in its place in the computation, so those two sheets are gone.
-
-## 8. The Model Implementation Map
-
-
-**The Model Implementation Map.** The sheet `Model_Implementation_Map` shows how the model computes what it returns, and nothing else: only what a calculation reaches is on it. One row is one variable. Reading a row from left to right: where it sits (the Map ID, one column per level — `MapID1`, `MapID2`, … — so any level can be filtered, and a parent leaves the deeper columns empty; the columns fold away with the + above them), then **Output Variable**, the one variable that row is about, with the code as written; then **Function Name**, the function that defines it, with its model unit; then **Arguments**, what the variable is computed from, separated by semicolons. Every name in Arguments is the Output Variable of a row directly beneath it, so a value can be followed down to the raw inputs it rests on: an argument of the final output, a column of the data given, a stored table, a file, or a hard-coded number, each a row with no function of its own. A reference is a link: clicking a `M-` reference opens that unit's row on `Chunks_Model`. The rows are grouped, each parent above its members, so a branch opens and closes with the + and − at the left; Excel groups eight levels deep and a deeper row is indented instead.
-
-A called function is entered with the arguments that call gives it, so what it computes inside stands under the value it produces, and a parameter is never a row of its own: the row is the argument the call gave it. A function that calls itself stops there, keeping what the call is given. What no final output reaches is **not on this sheet**: dead code, a second way in, and a function only the tests call are not rows of the map.
-
-**What each row's code is.** A final output's row shows the whole function that assembles it; every other row shows only its own code: an assignment shows its statement, and a named element of a list or a column a verb creates shows `name = value` alone, not the statement it sits in. Every named element of a list is a row, one holding only `NA` as much as any other. A row nothing computes - an argument of a final output, a column of the data given, a stored table, a file, a hard-coded number - is where a calculation starts: its Output Variable says so, `tie_inputs (terminal input)`, and its code is empty.
-
-**Choosing the final outputs.** Code proposes as a final output a function nothing in the package calls that is exported or that the package's tests or vignettes call. Where code proposes none, every function nothing in the package calls stands in, so the map always has a top.
-
-## 11. The run folder as an evidence pack
+## 8. The run folder as an evidence pack
 
 `_audit/Audit_Log.xlsx` is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsx` carries this run's ids and fingerprints, and that no access token was written anywhere in the folder.
 
-## 12. When something goes wrong
+## 9. When something goes wrong
 
 | What you see | What it means and what to do |
 |---|---|
@@ -221,7 +204,7 @@ A called function is entered with the arguments that call gives it, so what it c
 | `cell 1` says "flowR IS NOT READY" | The reason follows it. If the download failed, download the archive it names on an approved machine and put it next to the notebook. If flowR "could not run on this cluster", the cluster does not let a notebook start a program: use one in dedicated (single-user) access mode. |
 | "Step 04 (interpret-code) did not finish" | The model gave no answer for some pieces of code - the gateway was busy or down, or the token ran out. Check it with `cell 2`, paste a fresh token if needed, then run `cell 3` again: only those pieces are asked again. |
 | "Step 05 (search-methodology) did not finish" | Some pieces of code are not yet searched and compared in full; their rows say how far each got. Paste a fresh token if needed and run `cell 3` again: only what is open is asked. |
-| "The model stopped answering: the last N questions got no answer" | Usually the token has run out: paste a fresh one into widget 02 and run `cell 3` again. If it happens again at once with a fresh token, the gateway may hold fewer tokens than `chat_token_limit` allows for: lower it (section 19). |
+| "The model stopped answering: the last N questions got no answer" | Usually the token has run out: paste a fresh one into widget 02 and run `cell 3` again. If it happens again at once with a fresh token, the gateway may hold fewer tokens than `chat_token_limit` allows for: lower it (section 16). |
 | "No question showing C-0012 has been answered" | Questions showing the rest of the methodology were answered, but none showing that chunk: the gateway may refuse what it holds. The rows of the pieces affected say which chunk is still to search. |
 | A deviation reads "The model's words for this one cannot be shown in plain words" | The model kept using words the workbook may not hold, three times running. Its answer is in the audit log's Model_Calls sheet; the Refs at the start of the line say which chunks it rests on. |
 | The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. A new session starts a new run; the earlier run folder stays as it was. |
@@ -230,7 +213,7 @@ A called function is entered with the arguments that call gives it, so what it c
 | A cell reads "This text could not be shown in plain words" | The tool withheld a text that contained technical traces; the text is in `_audit/run_log.txt`. Please report it; it is a defect in the tool. |
 | "This is a defect in the tool, not in the model under review" | The coverage identity did not hold and the run stopped on purpose. Keep the run folder and report it. |
 
-## 13. Known limitations
+## 10. Known limitations
 
 - The content of images is never evidence. A formula given only as a picture is kept as a figure and never read as a formula. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself.
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
@@ -240,21 +223,21 @@ A called function is entered with the arguments that call gives it, so what it c
 - A spreadsheet is read sheet by sheet, each sheet a heading over one table. A formula is never worked out: the value the spreadsheet saved with it is what is read, so save the workbook after it has calculated.
 - The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 - PDF input is read by position on the page; multi-column layouts and tables without ruling lines may be cut wrongly. Check the outline.
-- R code is never run. The package's units are read by the tool's own reader, and its data flow by flowR. Unusual syntax becomes a *File not read* unit for that expression only.
+- R code is never run. flowR reads it, for the package's units and for the links between them. Unusual syntax becomes a *File not read* unit for that expression only.
 - Stored data is decoded without R. Objects that are not tables, vectors or short lists are described but not taken apart; missing values of different kinds are not told apart.
 - The relevant chunks and the deviations are the model's readings, not the tool's: code checks only that every chunk named was shown to the model. A search judges one batch of the methodology at a time, so a chunk that counts only beside another in a different batch can be missed; the comparison then sees every chunk found at once. A comparison whose chunks do not fit one question is asked in parts, each part seeing only its own chunks.
-- The model's tokenizer is not at hand, so the tool counts tokens its own way, on the high side (section 16): questions are smaller than they could be, never larger.
+- The model's tokenizer is not at hand, so the tool counts tokens its own way, on the high side (section 13): questions are smaller than they could be, never larger.
 - The tool was developed against invented sample projects and a stand-in for `chat()`; results with a real model on a real package are still to be measured.
 
 ---
 
 # Part III — For whoever reads the code
 
-## 14. The one engine file
+## 11. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the run, and `Output.xlsx`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the links between its units, the organisation's model and the two steps that ask it, the run, and `Output.xlsx`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
-## 15. The pipeline
+## 12. The pipeline
 
 Five steps, named in `verifier.PIPELINE`; nothing is loaded by path, and only a function the engine offers may be named.
 
@@ -262,15 +245,15 @@ Five steps, named in `verifier.PIPELINE`; nothing is loaded by path, and only a 
 |---|---|---|
 | 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
-| 03 | build-map | the data flow of the package, read by flowR, and the links between the units of Chunks_Model |
+| 03 | link-chunks | the links between the units of Chunks_Model - the Immediate Upstream and Downstream Model Chunk columns - read by flowR |
 | 04 | interpret-code | each unit of Chunks_Model put to the organisation's model through your `chat()`, with the units it takes from and gives to as context, `parallel_chats` questions at a time, for the Code Interpretation (by LLM) column; a step with questions left unanswered does not finish, and cell 3 run again asks only for those |
 | 05 | search-methodology | each unit of Chunks_Model searched against every batch of the methodology, then compared with the chunks found, through your `chat()`, `parallel_chats` questions at a time, for the columns Relevant Chunks in Methodology (searched by LLM) and Potential Deviations (flagged by LLM, subject to human review); it finishes only when every unit is searched and compared in full |
 
-**How R code is read.** All of the package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3); the tool has no R parser of its own. In step 02 one flowR run reads every R file of the package and its NAMESPACE: the syntax trees give the units of Chunks_Model - functions, statements, tests - and the NAMESPACE says which functions are exported. A package too large for one answer is read a file at a time. In step 03 flowR reads each function's data flow, one function at a time so that memory stays bounded by the largest function. flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places code cannot follow, recorded as gaps. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
+**How R code is read.** All of the package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3); the tool has no R parser of its own. In step 02 one flowR run reads every R file of the package and its NAMESPACE: the syntax trees give the units of Chunks_Model - functions, statements, tests - and the NAMESPACE says which functions are exported. A package too large for one answer is read a file at a time. In step 03 flowR reads each function alone, so that memory stays bounded by the largest function, and each script - a test file, a vignette, the top-level code of an R file - whole. flowR parses the code with tree-sitter and decides, for every name, the definition it reads and, for every call, the function it calls; what it leaves unresolved, the package names (section 7). flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
 
 A step that carries out several parts keeps them in order, and a later part reads what the earlier ones have just recorded, as it would if each were still a step of its own.
 
-## 16. How the model is used, and held
+## 13. How the model is used, and held
 
 Cell 2 asks your `chat()` one question, to check the gateway answers. Cell 3 asks it three kinds of question, all through the same machinery.
 
@@ -284,13 +267,13 @@ Cell 2 asks your `chat()` one question, to check the gateway answers. Cell 3 ask
 
 **Many questions at once, and none lost.** Questions go out `parallel_chats` at a time, and how many adapts: a call that fails halves it, and an answer without trouble adds one back, so a busy gateway is not flooded. Every answer is held in memory the moment it arrives, by the thread that received it; only one thread writes records, in the order of the units, so the record never depends on which answer came back first. A cell that is interrupted, or a step that stops, therefore loses no answer: cell 3 run again writes what arrived and asks only for the rest. A question is exact - its id is the hash of what was sent - so one already answered in this run is never asked again. When the questions already out, and four more, all come back without an answer, no more are sent: the model has stopped answering, most often because the token ran out. A question of step 05 left without an answer that shows more than one piece of the methodology is asked again split in two, so that one chunk the gateway refuses, or a question too long for it, holds up only itself.
 
-**What is recorded.** The audit log's Model_Calls sheet holds every exchange: the question's id, the unit, the pieces of the methodology it showed, the tokens it took, every try and what went wrong with it, the answer, and what code read from it. A question of step 04 is kept word for word; a question of step 05 is kept by what it was built from - its unit, its pieces and its id - because it repeats the methodology, which the Records sheet holds already. An answer that uses words the workbook may not hold is asked for again, naming them; words inside curly quotes, which quote the methodology or the code, may stay. Everything else the workbook shows - the reading, the accounts, the map - is made by code alone, and nothing in it depends on an answer.
+**What is recorded.** The audit log's Model_Calls sheet holds every exchange: the question's id, the unit, the pieces of the methodology it showed, the tokens it took, every try and what went wrong with it, the answer, and what code read from it. A question of step 04 is kept word for word; a question of step 05 is kept by what it was built from - its unit, its pieces and its id - because it repeats the methodology, which the Records sheet holds already. An answer that uses words the workbook may not hold is asked for again, naming them; words inside curly quotes, which quote the methodology or the code, may stay. Everything else the workbook shows - the reading, the accounts, the links - is made by code alone, and nothing in it depends on an answer.
 
-## 17. Reading, and the content account
+## 14. Reading, and the content account
 
 Every file read keeps a **content account** (`verifier.account`): the file's smallest pieces of text are counted straight from its bytes, then counted again in the units the tool produced, and the two must agree. A piece that is read but lands in no unit leaves the account open, and the file is named on `Model_Package_Info` with the reason, so nothing is dropped in silence.
 
-## 18. What ships
+## 15. What ships
 
 The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
 
@@ -298,7 +281,7 @@ The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requ
 
 # Part IV — Reference
 
-## 19. Settings
+## 16. Settings
 
 Settings are an allow-list: a name that is not in this table is refused. The notebook sets the reviewer id, taken from Databricks.
 
@@ -307,9 +290,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `max_parameter_cells` | 5000 | A stored object with more cells is profiled and not compared. |
 | `max_parameter_columns` | 50 | A stored object with more columns is profiled and not compared. |
 | `protect_sheets` | True | Lock every cell except the yellow ones (filtering stays allowed; no password). |
-| `trivial_numbers` | ['0', '1', '2', '-1', '10', '100'] | Numbers that are not looked up in the methodology. |
-| `bm25_k1` | 1.2 | Text ranking: how fast repeated words stop counting. |
-| `bm25_b` | 0.75 | Text ranking: how much long passages are scaled down. |
+| `trivial_numbers` | ['0', '1', '2', '-1', '10', '100'] | Hard-coded numbers that do not, on their own, make a top-level assignment a Formula statement. |
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
 | `reviewer_id` |  | Who runs the notebook, taken from Databricks by cell 1; sent to the gateway by `chat()` and recorded against the run. |
 | `parallel_chats` | 16 | How many questions steps 04 and 05 have out with the model at once, at most; fewer while calls fail. Lower it if the gateway limits how many calls may run together. |
@@ -317,18 +298,17 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `methodology_batch_tokens` | 12000 | About how many tokens of the methodology go into one search question of step 05. Smaller batches mean more questions, each judged more closely; a batch never takes more than the question has room for. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 
-`map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting.
 
-## 21. Extending the tool safely
+## 17. Extending the tool safely
 
 | You want to add | Where |
 |---|---|
 | a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` |
 | a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` |
 
-After any change, see section 23.
+After any change, see section 19.
 
-## 22. What the tool needs
+## 18. What the tool needs
 
 **Dependencies.**
 
@@ -346,6 +326,6 @@ After any change, see section 23.
 
 **What leaves the cluster.** Only this. In cell 1, pip asks PyPI for packages - their names and versions, nothing of yours - and flowR is downloaded from GitHub unless its archive is staged. In cell 2, one short test question goes to your `chat()`. In cell 3, step 04 sends each piece of the model's code - its text, file and lines, as Chunks_Model shows them - to your `chat()`, and so to your organisation's model gateway; step 05 sends the methodology too, chunk by chunk as Chunks_Methodology shows it, with each piece of code and its interpretation. Nothing else of a review leaves: the documents are read on the cluster by the tool itself, and flowR reads the code there in one-shot mode, needing no network.
 
-## 23. Maintaining the tool
+## 19. Maintaining the tool
 
-Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 21). After a change, run a review on a project you know and compare its `Output.xlsx` with the one before: every sheet should differ only where the change meant it to.
+Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 17). After a change, run a review on a project you know and compare its `Output.xlsx` with the one before: every sheet should differ only where the change meant it to.

@@ -1,17 +1,16 @@
 """
 Verifier - verifier.py - the whole engine, in one file. For every reviewer.
 
-Reads a model's methodology, its package of code and data, and its documentation; maps how the model
-computes what it returns, from each final output down to its rawest inputs; links what corresponds;
-checks by code whether linked formulas, values and stated rules agree; and raises what it could not line
-up as questions for a person. One deliverable: Output.xlsx. Everything a run does is recorded, and a run
-replays from its record without a model.
+Reads a model's methodology, its package of code and data, and its documentation into numbered units;
+links each unit of the package to the units it takes something from and gives something to; and asks the
+organisation's language model, through the chat() of cell 2, to explain each unit of code, to find the
+chunks of the methodology that bear on it, and to flag where the code may depart from them. One
+deliverable: Output.xlsx. Everything a run does is recorded in _audit/Audit_Log.xlsx.
 
-The file is one piece of engineering in four parts, in dependency order:
+The file is one piece of engineering in three parts, in dependency order:
   the contracts, the reading floor and the front door
   reading the methodology, the documentation and the model package
-  the map: how the model computes what it returns
-  the run: its folder, its record and Output.xlsx
+  the run: its folder, its record, the organisation's model and Output.xlsx
 """
 import bz2
 import collections
@@ -3182,8 +3181,6 @@ def parse_r_source(source):
 
 ARITHMETIC_SIGNS = ("+", "-", "*", "/", "^", "%%", "%/%")
 COMPARISON_SIGNS = ("==", "!=", "<", ">", "<=", ">=")
-CONSTANT_NAMES = ("TRUE", "FALSE", "NULL", "NA", "NA_integer_", "NA_real_", "NA_character_", "Inf", "NaN",
-                  "T", "F", "break", "next", "...")
 
 def flowr_node(n):
     """One flowR node as the tool's Node. Kinds and argument order are those Node documents."""
@@ -3460,8 +3457,8 @@ def units_from_r_source(path, source, context, line_offset=0):
 
 def self_contained(units):
     """Rows that never overlap, each a whole piece of code: what is written inside a function is the
-    function's (its statements are taken apart on Model_Implementation_Map, not here); a roxygen block
-    is one row with what it documents; and two rows over the same lines are one row."""
+    function's; a roxygen block is one row with what it documents; and two rows over the same lines are
+    one row."""
     kept = []
     for unit in sorted((u for u in units if not u["parent_key"]), key=lambda u: (u["lines"][0], -u["lines"][1])):
         last = kept[-1] if kept else None
@@ -3733,7 +3730,7 @@ def data_reads(function_node, formals, data_names, data_files):
             note(node.args[0].value, "", column=columns[0] if columns else "", row_key=literals[0] if literals else "")
     return tuple(reads[name] for name in sorted(reads))
 
-# ---------------------------------------------------------------- step 04: read-package
+# ---------------------------------------------------------------- reading the package
 DATA_EXTENSIONS = (".rda", ".rdata", ".rds")
 
 def is_data_file(path):
@@ -3915,39 +3912,15 @@ def read_package(ctx):
                               },
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)
 
-# ---------------------------------------------------------------- the data flow of a package: the implementation map's backbone
-# Every function traced by code alone: each value it sets and the values it is computed from; each call,
-# with which argument went to which parameter there; each column a dplyr verb creates and from what; the
-# stored tables, files and hard-coded numbers everything comes from. What code cannot follow - a lambda
-# purrr applies, do.call over a list built at run time, eval, <<-, an object system - is a named gap with
-# its code, for the agents. Nothing here is guessed, and the units are not touched: this is a record of its
-# own, so every M- reference stays as it was. Enforces: R2, R4, R7
-DPLYR_CREATE = {"mutate", "transmute", "summarise", "summarize", "reframe"}
-DPLYR_JOIN = {"left_join", "inner_join", "right_join", "full_join", "semi_join", "anti_join"}
-DPLYR_MASKING = DPLYR_CREATE | DPLYR_JOIN | {"filter", "select", "arrange", "group_by", "rename", "distinct", "count", "pull",
-                                              "case_when", "if_else", "slice", "relocate", "summarise_at", "with", "within", "subset", "transform"}
-FILE_READERS = {"read.csv", "read.csv2", "read.table", "read.delim", "readRDS", "read_csv", "read_csv2", "read_tsv", "read_delim",
-                "read_excel", "read_xlsx", "read_xls", "fread", "load", "scan", "readLines", "read_rds", "read_parquet", "fromJSON", "read_yaml"}
-APPLIERS = {"map", "map_dbl", "map_chr", "map_int", "map_lgl", "map_df", "map_dfr", "map_dfc", "map2", "map2_dbl", "pmap", "imap", "walk",
-            "reduce", "keep", "discard", "lapply", "sapply", "vapply", "mapply", "Map", "Reduce", "Filter", "apply", "tapply", "outer"}
-OPAQUE_CALLS = {"do.call": "do.call over arguments built at run time", "eval": "code built at run time and evaluated",
-                "evalq": "code built at run time and evaluated", "parse": "code built from text at run time",
-                "get": "a value looked up by a name built at run time", "mget": "values looked up by names built at run time",
-                "assign": "a value stored under a name built at run time", "match.fun": "a function chosen at run time",
-                "UseMethod": "a function chosen by the class of its argument at run time", "NextMethod": "a function chosen by class at run time",
-                "setRefClass": "an object system (reference classes)", "R6Class": "an object system (R6)", "setClass": "an object system (S4)",
-                "setMethod": "an object system (S4 methods)", "local": "code run in an environment of its own"}
-
-# ---------------------------------------------------------------- flowR: the program the data flow is read with
+# ---------------------------------------------------------------- flowR: the program R code is read with
 # flowR (Sihler and Tichy, Ulm University; GPLv3) parses R with tree-sitter and tells, for every name, the
 # definition it reads, for every call, the function it calls, and for every argument, the parameter it becomes.
 # It is fetched once, verified against the pinned SHA-256, and run in one-shot mode: no R process, no server,
 # no open port, no network. Its answer is written to a file - through a pipe it stops at 128 KiB.
-ELEMENT_MAKERS = ("list", "c", "data.frame", "tibble", "data.table")   # a named argument here is an element, a value of its own
 FLOWR_VERSION = "2.15.8"
 FLOWR_SHA256 = "39e1b9e5e4fab67f76204dbf6856d32e9e7f2a36132b1323e02cc8e3392436e4"
 FLOWR_URL = "https://github.com/flowr-analysis/flowr-r-adapter/releases/download/flowr-v{0}/flowr-{0}-linux-x64.tar.gz"
-READS, CALLS, BINDS = 1, 4, 16          # flowR's edge bits: reads, calls, defines-on-call; any other bit is ignored
+READS, CALLS = 1, 4                     # flowR's edge bits: reads, calls; any other bit is ignored
 FLOWR_ANSWER_MAX = 200 * 1024 * 1024    # flowR answers ~64 KB of JSON per line of R, and Python needs ~8x that to read it
 
 FLOWR_FOLDERS = {}                      # once ready in a session, ready for the rest of it
@@ -4003,372 +3976,31 @@ def flowr_read(folder, text, prefix=""):
             stack += [(value, up) for value in node]
     return nodes, edges
 
-class Dataflow:
-    """The data flow of one package, read by flowR and laid out as the map needs it. flowR says which
-    definition each name reads, which function each call calls and which parameter each argument becomes;
-    what is the model's own - dplyr columns, stored tables, files read, the gaps left for the agents - is
-    decided here, as it was before flowR. Node ids: 'f:v' a value v set in function f; 'f:arg:a' a
-    parameter; 'f:return' what f returns; 'call:f:line:g' one call of g from f; 'column:c' a data-frame
-    column; 'data:t' a stored table; 'file:path'; 'number:value:f:line'; 'outside:name'."""
-
-    def __init__(self, units, trivial=(), folder=None):
-        self.units, self.trivial = units, set(trivial)
-        self.functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-        self.tables = {u["data"]["object_name"]: u for u in units if (u.get("data") or {}).get("object_name")}
-        self.nodes, self.records, self.tree, self.edges, self.unit_of, self.unread = {}, [], {}, {}, {}, {}
-        folder = folder or flowr_ready()
-        for number, unit in enumerate(sorted(self.functions.values(), key=lambda u: u["ref"])):
-            prefix = "%d:" % number             # one function at a time: memory is bounded by the largest function,
-            self.unit_of[prefix] = unit["name"]  # not by the package - the whole package at once took a driver down
-            try:
-                tree, edges = flowr_read(folder, unit["text"], prefix)
-            except (ValueError, KeyError, OSError, subprocess.SubprocessError) as problem:
-                self.unread[unit["name"]] = "flowR could not read it: %s" % problem
-                continue
-            self.tree.update(tree)
-            self.edges.update(edges)
-        named = lambda n: (n["lhs"].get("lexeme") or "").strip("`")          # an operator is defined as `%||%`
-        self.defs = {str(n["rhs"]["info"]["id"]): named(n) for n in self.tree.values()
-                     if n["type"] == "RBinaryOp" and n.get("rhs", {}).get("type") == "RFunctionDefinition"
-                     and named(n) in self.functions and self.place(n)[0] == named(n)}
-        self.assigned = {}                              # (function, name) -> how many times it is set there
-        for n in self.tree.values():
-            for label in self.set_here(n):
-                key = (self.owner(str(n["info"]["id"])), label)
-                self.assigned[key] = self.assigned.get(key, 0) + 1
-
-    # ------------------------------------------------ where a node is, and what it holds
-    def place(self, node):
-        """(function, first line, last line) of a node, the lines counted in its function's own unit."""
-        where = node["info"].get("fullRange") or node.get("location") or [0, 0, 0, 0]
-        return self.unit_of[node["info"]["id"].split(":")[0] + ":"], max(where[0], 1), max(where[2], where[0], 1)
-
-    def set_here(self, node):
-        """The names a node sets: the variable an assignment sets, or the names of a list's elements."""
-        if node["type"] == "RBinaryOp" and node.get("lexeme") in ("<-", "=", "<<-", "->", "->>"):
-            target = node["rhs"] if node["lexeme"].startswith("-") else node["lhs"]
-            while target["type"] == "RAccess":
-                target = target["accessed"]
-            return [target["lexeme"].strip("\"'`")] if target["type"] in ("RSymbol", "RString") else []
-        if node["type"] == "RFunctionCall" and node["functionName"].get("lexeme") in ELEMENT_MAKERS:
-            return [a["name"]["lexeme"] for a in node.get("arguments") or [] if a and a.get("name") and a.get("value")]
-        return []
-
-    def value_id(self, function, name, at):
-        """A value set once is 'f:v'; one set several times is 'f:v@line', one node for each time it is set -
-        tie_outputs set four times in tie_model_call is four nodes, each reading the one before it."""
-        many = self.assigned.get((function, name), 0) > 1
-        return "%s:%s@%d" % (function, name, self.place(at)[1]) if many else "%s:%s" % (function, name)
-
-    def owner(self, node_id):
-        while node_id and node_id not in self.defs:
-            node_id = self.tree[node_id]["up"] if node_id in self.tree else None
-        return self.defs.get(node_id)
-
-    def kids(self, node):
-        found = []
-        for key, value in node.items():
-            if key not in ("info", "location", "lexeme", "up", "grouping"):      # ( ) and { } group; they are not names
-                found += [v for v in (value if isinstance(value, list) else [value]) if isinstance(v, dict) and "type" in v]
-        return found
-
-    def node(self, node_id, kind, name, env=None, at=None, sources=(), **extra):
-        record = self.nodes.get(node_id)
-        if record is None:
-            record = self.nodes[node_id] = {"record_type": "node", "node": node_id, "kind": kind, "name": name,
-                                            "function": env["function"] if env else "", "line": self.line_of(env, at),
-                                            "function_ref": self.functions[env["function"]]["ref"] if env else "",
-                                            "code": self.code_of(env, at), "from": []}
-        elif env and not record["function"] and kind == "column" and at is not None:   # read before it was created
-            record.update(function=env["function"], function_ref=self.functions[env["function"]]["ref"],
-                          line=self.line_of(env, at), code=self.code_of(env, at))
-        record["from"] += [s for s in dict.fromkeys(sources) if s not in record["from"] and s != node_id]
-        record.update(extra)
-        return node_id
-
-    def line_of(self, env, at):
-        return self.functions[env["function"]]["lines"][0] + self.place(at)[1] - 1 if env and at else 0
-
-    def code_of(self, env, at):
-        if not env or not at:
-            return ""
-        _, first, last = self.place(at)
-        return "\n".join(self.functions[env["function"]]["text"].split("\n")[first - 1:max(first, last)]).strip()
-
-    def exact_of(self, env, at, to=None):
-        """The characters from where a node starts to where `to` ends, not whole lines: a named argument's
-        range covers its name only, so overrides_and_caps = tie_anchor_overrides(...) runs to the value's end."""
-        span = lambda n: n["info"].get("fullRange") or n.get("location") or [0, 0, 0, 0]
-        (first, c1), (last, c2) = span(at)[:2], span(to or at)[2:]
-        lines = self.functions[env["function"]]["text"].split("\n")[first - 1:last]
-        if not lines:
-            return ""
-        lines[-1] = lines[-1][:c2] if len(lines) > 1 else lines[-1][c1 - 1:c2]
-        lines[0] = lines[0][c1 - 1:] if len(lines) > 1 else lines[0]
-        return "\n".join(lines).strip()
-
-    def gap(self, env, at, why):
-        self.records.append({"record_type": "gap", "function": env["function"], "function_ref": self.functions[env["function"]]["ref"],
-                             "line": self.line_of(env, at), "code": self.code_of(env, at), "why": why})
-
-    # ------------------------------------------------ one function
-    def trace(self, name):
-        fdef = next((i for i, n in self.defs.items() if n == name), None)
-        env = {"function": name}
-        if fdef is None:
-            self.records.append({"record_type": "gap", "function": name, "function_ref": self.functions[name]["ref"],
-                                 "line": self.functions[name]["lines"][0], "code": self.functions[name]["text"].split("\n")[0],
-                                 "why": self.unread.get(name, "the function could not be read")})
-            return
-        function = self.tree[fdef]
-        for parameter in function.get("parameters") or []:
-            default = parameter.get("defaultValue")
-            self.node("%s:arg:%s" % (name, parameter["name"]["lexeme"]), "argument", parameter["name"]["lexeme"], env, function,
-                      default_from=self.sources(default, env) if default else [], default_code=self.code_of(env, default) if default else "")
-        body = function["body"]
-        returned, stack = self.body(body, env), [body]
-        while stack:                                       # return() anywhere, but not inside a function written in place
-            inner = stack.pop()
-            if inner["type"] == "RFunctionCall" and inner["functionName"].get("lexeme") == "return" and inner.get("arguments"):
-                returned += self.sources(inner["arguments"][0], env)
-            stack += [k for k in self.kids(inner) if k["type"] != "RFunctionDefinition"]
-        items = body.get("children") if body["type"] == "RExpressionList" else [body]
-        self.node("%s:return" % name, "return", "the value %s returns" % name, env, (items or [function])[-1], returned)
-
-    def body(self, block, env):
-        """The statements of a body, each value it sets a node; returns the sources of what the body gives."""
-        items, given = (block.get("children") or []) if block["type"] == "RExpressionList" else [block], []
-        for position, item in enumerate(items):
-            last = position == len(items) - 1
-            if item["type"] == "RBinaryOp" and item.get("lexeme") in ("<-", "=", "<<-", "->", "->>"):
-                target, value = (item["rhs"], item["lhs"]) if item["lexeme"].startswith("-") else (item["lhs"], item["rhs"])
-                while target["type"] == "RAccess":                          # x$c <- v and x[i] <- v change x
-                    target = target["accessed"]
-                if "<<" in item["lexeme"] or ">>" in item["lexeme"]:
-                    self.gap(env, item, "a value assigned outside the function with <<-")
-                if target["type"] in ("RSymbol", "RString"):
-                    changed = item["rhs"] if item["lexeme"].startswith("-") else item["lhs"]
-                    extra = self.sources(changed, env) if changed is not target else []
-                    name = target["lexeme"].strip("\"'`")
-                    node = self.node(self.value_id(env["function"], name, target), "value", name, env, item,
-                                     self.sources(value, env) + extra)
-                    given = [node] if last else given
-            elif item["type"] == "RIfThenElse" and not last:
-                self.sources(item["condition"], env)
-                for branch in (item.get("then"), item.get("otherwise")):
-                    if branch:
-                        self.body(branch, env)
-            elif item["type"] in ("RForLoop", "RWhileLoop", "RRepeatLoop"):
-                self.body(item["body"], env)
-            elif last:
-                given = self.sources(item, env)
-        return given
-
-    # ------------------------------------------------ what a value is computed from
-    def sources(self, node, env, masked=False):
-        kind = node["type"] if node else ""
-        if kind == "RNumber":
-            value = node["lexeme"].rstrip("Li")
-            return [self.node("number:%s:%s:%d" % (value, env["function"], self.place(node)[1]), "number", value, env, node,
-                              trivial=value in self.trivial)]
-        if kind in ("", "RString", "RLogical", "RComment"):
-            return []
-        if kind == "RSymbol":
-            return self.resolve(node, env, masked)
-        if kind == "RArgument":
-            return self.sources(node.get("value"), env, masked)
-        if kind == "RPipe":
-            return self.call(node["rhs"], env, masked, first=node["lhs"].get("value", node["lhs"]))
-        if kind == "RFunctionCall":
-            return self.call(node, env, masked)
-        if kind == "RBinaryOp" and node.get("lexeme") in ("<-", "=", "<<-"):
-            self.body(node, env)
-            return self.resolve(node["lhs"], env, masked) if node["lhs"]["type"] == "RSymbol" else []
-        if kind == "RAccess":
-            accessed, access = node["accessed"], node.get("access") or []
-            access = access if isinstance(access, list) else [access]
-            if accessed.get("lexeme") in (".data", ".env") and access:
-                field = access[0].get("value") or access[0]
-                if accessed["lexeme"] == ".data":
-                    return self.column(field["lexeme"])
-                own = [i % (env["function"], field["lexeme"]) for i in ("%s:arg:%s", "%s:%s") if i % (env["function"], field["lexeme"]) in self.nodes]
-                return own[:1] or self.resolve(field, env, False)
-            return self.sources(accessed, env, masked) + ([] if node.get("lexeme") == "$" else
-                                                          [s for a in access for s in self.sources(a, env, masked)])
-        if kind == "RFunctionDefinition":
-            self.gap(env, node, "a function written in place, whose arguments are given at run time")
-            return self.sources(node["body"], env, masked)
-        return [s for k in self.kids(node) for s in self.sources(k, env, masked)]
-
-    def resolve(self, symbol, env, masked):
-        """What a name reads, as flowR resolves it: a parameter, a value set in a function, or a column a
-        dplyr verb created. A name flowR finds no definition for is a stored table, a column of the data,
-        or a name from outside the package."""
-        name = symbol["lexeme"]
-        if name in CONSTANT_NAMES:
-            return []
-        # a name reads only what has that name: inside a verb flowR also links a column the same verb made
-        # earlier, which a later argument may use - but berth_utilisation does not read throughput_score
-        found, reads = [], [t for t, bits in self.edges.get(str(symbol["info"]["id"]), []) if bits & READS and t in self.tree
-                            and name in (self.tree[t].get("lexeme"), (self.tree[t].get("name") or {}).get("lexeme"))]
-        for target in reads:
-            up = self.tree.get(self.tree[target]["up"] or "", {})
-            if up.get("type") == "RParameter":                       # a parameter: of a function of the package, or of a lambda
-                owner = self.defs.get(up["up"])
-                found += ["%s:arg:%s" % (owner, name)] if owner else []
-            elif "RArgument" in (up.get("type"), self.tree[target]["type"]):   # a column a verb named: mutate(name = ...)
-                found += self.column(name)
-            elif self.tree[target]["lexeme"] not in self.functions and self.owner(target):   # the very assignment it reads
-                found.append(self.value_id(self.owner(target), self.tree[target]["lexeme"], self.tree[target]))
-        if reads:
-            return list(dict.fromkeys(found))
-        if name in self.tables:
-            return [self.table_node(name)]
-        if name in self.functions:
-            return []
-        return self.column(name) if masked else [self.node("outside:%s" % name, "outside", name)]
-
-    def column(self, name):
-        return [self.node("column:%s" % name, "column", name, created_in=self.nodes.get("column:%s" % name, {}).get("created_in", []))]
-
-    def table_node(self, name):
-        table = self.tables[name]
-        return self.node("data:%s" % name, "stored data", name, file=table["data"].get("container_file", ""), unit_ref=table["ref"],
-                         columns=list(table["data"].get("columns") or []))
-
-    def call(self, node, env, masked, first=None):
-        name = (node.get("functionName") or {}).get("lexeme", "")
-        args = ([None] if first is not None else []) + [a for a in node.get("arguments") or [] if a]
-        pairs = [("", first)] if first is not None else []
-        pairs += [((a.get("name") or {}).get("lexeme", ""), a.get("value")) for a in node.get("arguments") or [] if a]
-        values = [v for _, v in pairs]
-        if name == "%>%" and len(values) == 2:                       # a %>% f(b) is f(a, b)
-            left, right = values
-            return self.call(right, env, masked, first=left) if right and right["type"] == "RFunctionCall" else self.sources(left, env, masked)
-        flat = lambda inner: [s for v in values for s in self.sources(v, env, inner)]
-        if name in OPAQUE_CALLS:
-            self.gap(env, node, OPAQUE_CALLS[name])
-            return flat(masked)
-        if name in ELEMENT_MAKERS and any(label for label, _ in pairs):
-            made = []            # list(overrides_and_caps = tie_anchor_overrides(...)): every named element is a value,
-            for (label, value), argument in zip(pairs, args):   # one holding only NA as much as any other
-                got = self.sources(value, env, masked)
-                if label and value is not None:
-                    made.append(self.node(self.value_id(env["function"], label, value), "value", label, env, argument, got,
-                                          code=self.exact_of(env, argument, value)))
-                else:
-                    made += got
-            return made
-        if name in FILE_READERS:
-            path = self.file_path(values[0]) if values else ""
-            if not path:
-                self.gap(env, node, "a file read from a path built at run time")
-                return flat(masked)
-            table = next((t for t, u in self.tables.items() if u["data"].get("container_file") == path), None)
-            return [self.node("file:%s" % path, "file", path, unit_ref=self.tables[table]["ref"] if table else "")]
-        if name in DPLYR_CREATE:
-            created = self.sources(values[0], env, masked) if pairs and not pairs[0][0] else []
-            for (label, value), argument in zip(pairs, args):
-                if label:
-                    column = self.node("column:%s" % label, "column", label, env, argument, self.sources(value, env, True),
-                                       code=self.exact_of(env, argument, value))
-                    self.nodes[column].setdefault("created_in", [])
-                    if env["function"] not in self.nodes[column]["created_in"]:
-                        self.nodes[column]["created_in"].append(env["function"])
-                    created.append(column)
-                elif value is not values[0]:
-                    self.gap(env, node, "columns created by an expression that does not name them")
-            return created
-        if name in DPLYR_JOIN:
-            keys = {k["lexeme"].strip("\"'") for label, value in pairs if label == "by" and value
-                    for k in [value] + self.kids(value) if k["type"] == "RString"}
-            joined = []
-            for value in values[:2]:
-                joined += self.sources(value, env, masked)
-                if value and value["type"] == "RSymbol" and value["lexeme"] in self.tables:
-                    table = self.nodes[self.table_node(value["lexeme"])]
-                    joined += [self.node("column:%s" % c, "column", c, env, node, [table["node"]]) for c in table["columns"] if c not in keys]
-            return joined
-        callee = next((self.defs[t] for t, bits in self.edges.get(str(node["info"]["id"]), []) if bits & CALLS and t in self.defs),
-                      name if name in self.functions else None)   # another function of the package: by its name
-        if callee is None and name in APPLIERS:                     # map(x, f): a package function handed over by name
-            handed = [v["lexeme"] for v in values if v and v["type"] == "RSymbol" and v["lexeme"] in self.functions]
-            return [self.record_call(f, env, node, [], []) for f in handed] + [s for v in values if not (v and v["type"] == "RSymbol"
-                    and v["lexeme"] in self.functions) for s in self.sources(v, env, masked)]
-        inner = masked or name in DPLYR_MASKING
-        if callee:
-            return [self.record_call(callee, env, node, pairs, [self.sources(v, env, inner) for v in values])]
-        return flat(inner)
-
-    def record_call(self, callee, env, node, pairs, values):
-        """One call of a package function: which parameter each argument becomes there - as flowR binds it,
-        and for what flowR leaves unbound (a value piped in, say) as R does, by name and then by position -
-        and a parameter left out takes its default."""
-        formals = [p["name"]["lexeme"] for p in self.tree[next(i for i, n in self.defs.items() if n == callee)].get("parameters") or []]
-        bound, left = {}, []
-        for (label, value), got in zip(pairs, values):
-            ids = [str(value["info"]["id"])] if value else []
-            binds = [self.tree[t]["lexeme"] for i in ids for t, bits in self.edges.get(i, []) if bits & BINDS and t in self.tree]
-            target = next((b for b in binds if b in formals and b not in bound), None)
-            (bound.__setitem__(target, got) if target else left.append((label, got)))
-        free = [f for f in formals if f not in bound and f != "..."]
-        for label, got in left:
-            if label in free:
-                bound[label] = got
-                free.remove(label)
-            elif free:
-                bound[free.pop(0)] = got
-            elif "..." in formals:
-                bound.setdefault("...", []).extend(got)
-        call_id = "call:%s:%d:%s" % (env["function"], self.place(node)[1], callee)
-        return self.node(call_id, "call", "%s()" % callee, env, node, [s for got in values for s in got] + ["%s:return" % callee],
-                         callee=callee, bindings={f: bound.get(f, ["default"]) for f in formals})
-
-    def file_path(self, value):
-        """The path a reader is given: a string as written, or system.file(...), which names a file under inst/."""
-        if value and value["type"] == "RString":
-            return value["lexeme"].strip("\"'")
-        if value and value["type"] == "RFunctionCall" and value["functionName"].get("lexeme") == "system.file":
-            parts = [a["value"]["lexeme"].strip("\"'") for a in value.get("arguments") or []
-                     if a and not a.get("name") and (a.get("value") or {}).get("type") == "RString"]
-            return "inst/" + "/".join(parts) if parts else ""
-        return ""
-
-    # ------------------------------------------------ the whole package
-    def run(self):
-        for name in sorted(self.functions, key=lambda n: self.functions[n]["ref"]):
-            self.trace(name)
-        calls = [r for r in self.nodes.values() if r["kind"] == "call"]
-        called = {r["callee"] for r in calls if r["callee"] != r["function"]}
-        entry = set()
-        parse_r_sources([unit["text"] for unit in self.units if unit["kind"] in (KIND_TEST, KIND_TOPLEVEL, KIND_VIGNETTE)])
-        for unit in self.units:                          # the tests and vignettes that call a package function
-            if unit["kind"] in (KIND_TEST, KIND_TOPLEVEL, KIND_VIGNETTE):
-                for found in parse_r_source(unit["text"]):
-                    if not isinstance(found, tuple):
-                        entry |= {callee_name(inner) for inner in walk_nodes(found) if inner.kind == "call"} & set(self.functions)
-        uncalled = set(self.functions) - called
-        proposed = sorted(name for name in uncalled if (self.functions[name].get("code") or {}).get("exported") or name in entry)
-        reached, frontier = set(proposed), list(proposed)
-        while frontier:
-            caller = frontier.pop()
-            for record in calls:
-                if record["function"] == caller and record["callee"] not in reached:
-                    reached.add(record["callee"])
-                    frontier.append(record["callee"])
-        roots = {"record_type": "roots", "proposed": proposed, "not_reached": sorted(set(self.functions) - reached),
-                 "why": {name: ", ".join(filter(None, ["nothing in the package calls it",
-                                                         "exported" if (self.functions[name].get("code") or {}).get("exported") else "",
-                                                         "called by a test or vignette" if name in entry else ""])) for name in uncalled}}
-        return list(self.nodes.values()) + self.records + [roots]
+@dataclass
+class FunctionReadings:
+    """flowR's readings of a package's functions, each read alone: the function each prefix stands for, the
+    functions themselves, those flowR could not read and why, and the syntax tree and edges of the rest, every id
+    carrying its reading's prefix. The chunk links add the readings of the package's scripts to the same tree."""
+    functions: dict; unit_of: dict = field(default_factory=dict); unread: dict = field(default_factory=dict)
+    tree: dict = field(default_factory=dict); edges: dict = field(default_factory=dict)
 
 
-def walk_nodes(node):
-    """Every node of a tree, the tree itself first, without entering functions written inside it."""
-    yield node
-    for child in node.args:
-        if child.kind != "function":
-            yield from walk_nodes(child)
+def read_functions(units, folder):
+    """Every function of the package read by flowR, one at a time: memory is then bounded by the largest function,
+    not by the package - the whole package at once once took a driver down. Enforces: R7"""
+    readings = FunctionReadings({u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")})
+    for number, unit in enumerate(sorted(readings.functions.values(), key=lambda u: u["ref"])):
+        prefix = "%d:" % number
+        readings.unit_of[prefix] = unit["name"]
+        try:
+            tree, edges = flowr_read(folder, unit["text"], prefix)
+        except (ValueError, KeyError, OSError, subprocess.SubprocessError) as problem:
+            readings.unread[unit["name"]] = "flowR could not read it: %s" % problem
+            continue
+        readings.tree.update(tree)
+        readings.edges.update(edges)
+    return readings
+
 
 # Which units of Chunks_Model a unit takes something from - a function it calls, a variable, a stored
 # table or a file another unit defines - and which take something from it. R looks a name up inside the
@@ -4377,7 +4009,7 @@ def walk_nodes(node):
 # (a test file, a vignette, the top-level code of an R file), the statement that set a variable before it
 # was read. What flowR leaves unresolved is what the unit takes from outside, and the package names it:
 # its functions, the variables its R files set at top level, and its stored data. The package's own name
-# comes before a base function of the same name, as it does in R. Enforces: R2, R4, R7, R14
+# comes before a base function of the same name, as it does in R. Enforces: R2, R4, R7
 SCRIPT_KINDS = (KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST)
 ASSIGNING, ASSIGNING_RIGHT = ("<-", "<<-", "=", ":="), ("->", "->>")
 BY_NAME_CALLS = ("do.call", "match.fun", "get", "get0", "exists", "mget", "data")
@@ -4439,9 +4071,10 @@ def visible(definer, user):
         os.path.basename(home).startswith(("helper", "setup"))
 
 
-def unit_links(units, flow, folder, package):
-    """The immediate upstream and downstream units of every unit, as dataflow records of type unit_links,
-    each with the names that make each link, and the units flowR could not read for their links."""
+def unit_links(units, parsed, folder, package):
+    """The immediate upstream and downstream units of every unit, as records of kind unit_links, each with the
+    names that make each link, and the units flowR could not read for their links. `parsed` holds flowR's
+    readings of the functions (read_functions); the scripts are read here."""
     by_ref = {u["ref"]: u for u in units}
     definers = {}                                          # name -> the units that define it
     for u in units:
@@ -4455,9 +4088,9 @@ def unit_links(units, flow, folder, package):
         for name in names:
             definers.setdefault(name, []).append(u["ref"])
     readings, unread = [], set()                           # (prefix, [(first line, last line, ref)])
-    for prefix, name in flow.unit_of.items():             # every function: flowR read it already, alone
-        unit = flow.functions[name]
-        if name in flow.unread:
+    for prefix, name in parsed.unit_of.items():             # every function: flowR read it already, alone
+        unit = parsed.functions[name]
+        if name in parsed.unread:
             unread.add(unit["ref"])
         else:
             readings.append((prefix, [(1, unit["text"].count("\n") + 1, unit["ref"])]))
@@ -4472,8 +4105,8 @@ def unit_links(units, flow, folder, package):
             spans.append((line, line + size - 1, u["ref"]))
             text, line = text + u["text"] + "\n\n", line + size + 1
         tree, edges = flowr_read(folder, text, prefix)
-        flow.tree.update(tree)
-        flow.edges.update(edges)
+        parsed.tree.update(tree)
+        parsed.edges.update(edges)
         readings.append((prefix, spans))
     for number, (file, members) in enumerate(sorted(scripts.items())):
         members.sort(key=lambda u: (u.get("lines") or [0])[0])
@@ -4490,7 +4123,7 @@ def unit_links(units, flow, folder, package):
         if u["kind"] in (KIND_TABLE, KIND_OBJECT):
             data_files.setdefault(os.path.basename(u["file"]), []).append(u["ref"])
     by_prefix = {}
-    for key, node in flow.tree.items():
+    for key, node in parsed.tree.items():
         by_prefix.setdefault(key.split(":", 1)[0] + ":", []).append(node)
     via = {}                                               # (definer, user) -> names
     def link(definer, user, name):
@@ -4498,7 +4131,7 @@ def unit_links(units, flow, folder, package):
     for prefix, spans in readings:
         def unit_at(node):
             while node is not None and not node.get("location"):
-                node = flow.tree.get(node.get("up") or "")
+                node = parsed.tree.get(node.get("up") or "")
             line = node["location"][0] if node else 0
             return next((ref for first, last, ref in spans if first <= line <= last), None)
         for node in by_prefix.get(prefix, []):
@@ -4508,19 +4141,19 @@ def unit_links(units, flow, folder, package):
                 for definer in data_files.get(os.path.basename(written), []) if user else ():
                     if by_ref[definer]["file"].endswith(written) and definer != user:
                         link(definer, user, os.path.basename(written))
-            found = symbol_read(flow.tree, node, package)
+            found = symbol_read(parsed.tree, node, package)
             user = unit_at(node) if found else None
             if user is None:
                 continue
             name, named_package = found
-            up = flow.tree.get(node.get("up") or "", {})
-            ends = [t for t, bits in flow.edges.get(node_id(node), []) if bits & (CALLS if node["type"] in ("RBinaryOp", "RUnaryOp")
-                                                                                 else READS) and t in flow.tree]
+            up = parsed.tree.get(node.get("up") or "", {})
+            ends = [t for t, bits in parsed.edges.get(node_id(node), []) if bits & (CALLS if node["type"] in ("RBinaryOp", "RUnaryOp")
+                                                                                 else READS) and t in parsed.tree]
             if up.get("type") == "RFunctionCall" and node_id(up.get("functionName")) == node_id(node):
-                ends += [t for t, bits in flow.edges.get(node_id(up), []) if bits & CALLS and t in flow.tree]
+                ends += [t for t, bits in parsed.edges.get(node_id(up), []) if bits & CALLS and t in parsed.tree]
             if ends and not named_package:                 # flowR found where it is defined: in this reading
                 for end in ends:
-                    definer = unit_at(flow.tree[end])
+                    definer = unit_at(parsed.tree[end])
                     if definer and definer != user:
                         link(definer, user, name)
                 continue
@@ -4543,98 +4176,20 @@ def unit_links(units, flow, folder, package):
              "not_read_by_flowr": u["ref"] in unread} for u in units]
 
 
-def trace_dataflow(ctx):
-    """Step 05a, trace-dataflow: the package's data flow, by code alone - every value each function sets
-    and what it is computed from, every call with its arguments matched to their parameters, every column
-    a dplyr verb creates, every stored table, file and hard-coded number, and the gaps code cannot follow.
-    Proposes the final outputs: exported functions nothing in the package calls, and those its tests and
-    vignettes call. Enforces: R2, R4, R7, R14"""
+def link_chunks(ctx):
+    """Step 03, link-chunks: for every unit of Chunks_Model, the units it takes something from and the units that
+    take something from it, read by flowR - each function alone, each script whole - and resolved as R resolves a
+    name. Enforces: R2, R4, R7"""
     units = ctx.read("model_units")
-    flow = Dataflow(units, ctx.settings["trivial_numbers"], flowr_ready())
-    records = flow.run()
+    folder = flowr_ready()
     package = ((ctx.read("package_info") or [{}])[0] or {}).get("name", "")
-    links = unit_links(units, flow, flowr_ready(), package)
-    records = records[:-1] + links + records[-1:]
-    count = lambda kind: sum(1 for r in records if r.get("kind") == kind)
-    gaps = [r for r in records if r["record_type"] == "gap"]
-    roots = records[-1]
+    links = unit_links(units, read_functions(units, folder), folder, package)
     unread = [r["ref"] for r in links if r["not_read_by_flowr"]]
-    notes = ["flowR could not read %s, so %s no links of %s own." % (", ".join(unread), "it has" if len(unread) == 1 else "they have",
-                                                                   "its" if len(unread) == 1 else "their")] if unread else []
-    return StepResult({"dataflow": records},
-                           {"values": count("value"), "calls": count("call"), "columns": count("column"), "gaps": len(gaps),
-                            "proposed final outputs": len(roots["proposed"]), "chunk links": sum(len(r["upstream"]) for r in links)},
-                           ["Traced %d functions: %d values, %d calls, %d columns; %d gaps for the agents. Proposed final outputs: %s."
-                            % (len(flow.functions), count("value"), count("call"), count("column"), len(gaps), ", ".join(roots["proposed"]) or "none")] + notes)
-
-
-def decided_outputs(records, decisions):
-    """The final outputs a run works from, and why each is one: code's proposal, then a person's decisions
-    over it - 'yes' makes any function a final output, 'no' takes one away. Where nothing is left, every
-    function nothing in the package calls stands in, so the map always has a top. Returns (outputs, how,
-    not reached): how says of each output where it came from; not reached are the functions no output
-    reaches, following the calls. Enforces: R1, R2"""
-    roots = next((r for r in records if r["record_type"] == "roots"), {"proposed": [], "not_reached": [], "why": {}})
-    calls = [r for r in records if r["record_type"] == "node" and r["kind"] == "call"]
-    functions = {r["function"] for r in records if r["record_type"] == "node" and r.get("function")} | set(roots["why"])
-    outputs, how = [], {}
-    for name in roots["proposed"]:
-        if decisions.get(name) != "no":
-            outputs.append(name)
-            how[name] = "proposed by code: %s" % roots["why"].get(name, "")
-    for name in sorted(decisions):
-        if decisions[name] == "yes" and name in functions and name not in outputs:
-            outputs.append(name)
-            how[name] = "your decision"
-    if not outputs:
-        outputs = sorted(roots["why"])
-        how = {name: "nothing in the package calls it (no final output was proposed or decided)" for name in outputs}
-    reached, frontier = set(outputs), list(outputs)
-    while frontier:
-        caller = frontier.pop()
-        for call in calls:
-            if call["function"] == caller and call["callee"] not in reached:
-                reached.add(call["callee"])
-                frontier.append(call["callee"])
-    return outputs, how, sorted(functions - reached)
-
-
-# ================================================================================================
-# the map: how the model computes what it returns
-# ================================================================================================
-# ---------------------------------------------------------------- the graph and the map
-
-# ---------------------------------------------------------------- the ledger and the graph in memory
-
-
-
-
-
-# ---------------------------------------------------------------- words: splitting, stemming, word lists
-
-
-
-
-
-
-
-# ---------------------------------------------------------------- S3: explicit references as written
-
-
-# ---------------------------------------------------------------- the skill map-implementation: the implementation map's agents
-# Code traced the data flow (step 05a); these agents work only where it stopped. The Tracer is given one
-# gap on the path from a final output and a fixed list of actions; each turn it chooses one, code carries
-# it out on the records and shows what it found, and every link it declares must copy the code word for
-# word and use only names that code holds. Each turn is a question of its own, recorded, so a run replays
-# without a model. The Namer gives each step a plain name, outside the accounting. The Auditor is code.
-# The model chooses; code executes. Enforces: R3, R4, R5
-
-
-# ---------------------------------------------------------------- step 05: build-graph
-
-
-
-# ---------------------------------------------------------------- what each piece of code does, in plain words
+    count = sum(len(r["upstream"]) for r in links)
+    notes = [("flowR could not read %s, so %s no links of %s own." % (", ".join(unread), "it has" if len(unread) == 1 else "they have",
+                                                                     "its" if len(unread) == 1 else "their"))] if unread else []
+    return StepResult({"unit_links": links}, {"chunk links": count, "not read by flowR": len(unread)},
+                      ["%d links between the units of Chunks_Model, read by flowR." % count] + notes)
 
 
 # ================================================================================================
@@ -4652,7 +4207,7 @@ DEFAULT_SETTINGS = {
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
-    "map_granularity": "statement", "map_rows_max": 5000, "parallel_chats": 16,
+    "parallel_chats": 16,
     "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
 
 def make_settings(overrides=None):
@@ -5338,7 +4893,7 @@ def interpret_code(ctx):
     any is left unanswered the step does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
     units = ctx.read("model_units")
     by_ref = {u["ref"]: u for u in units}
-    links = {r["ref"]: r for r in ctx.read("dataflow") if r.get("record_type") == "unit_links"}
+    links = {r["ref"]: r for r in ctx.read("unit_links")}
     recorded = {call["question_id"] for call in ctx.read("llm_calls")
                 if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
     arrived = {call["question_id"] for call in held_answers(ctx, (CODE_QUESTION,)) if call["outcome"] == "answered"}
@@ -5786,7 +5341,7 @@ def search_methodology(ctx):
     position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
     by_key = {(piece["ref"], piece["part"]): piece for piece in pieces}
     by_ref = {unit["ref"]: unit for unit in units}
-    links = {r["ref"]: r for r in ctx.read("dataflow") if r.get("record_type") == "unit_links"}
+    links = {r["ref"]: r for r in ctx.read("unit_links")}
     said = {call["unit_ref"]: call["answer"] for call in calls
             if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
     _, unit_room = search_shares(ctx.settings)
@@ -5892,9 +5447,9 @@ def search_methodology(ctx):
                         "are affected." % (", ".join(unsearched), "that chunk holds" if len(unsearched) == 1 else "those chunks hold"))
     elif not open_units:
         messages.append("Each of the %d pieces of code was searched against all %d chunks of the methodology, in %d "
-                        "batches of up to %d tokens; %d chunks were found to bear on them, and %d potential deviations "
-                        "flagged." % (len(final), len(chunks), len(batches), search_shares(ctx.settings)[0],
-                                      counts["chunks found relevant"], counts["deviations flagged"]))
+                        "batch%s of up to %d tokens; %d chunks were found to bear on them, and %d potential deviations "
+                        "flagged." % (len(final), len(chunks), len(batches), "" if len(batches) == 1 else "es",
+                                      search_shares(ctx.settings)[0], counts["chunks found relevant"], counts["deviations flagged"]))
     return StepResult({"llm_calls": records}, counts, messages, finished=not open_units)
 
 
@@ -5902,7 +5457,7 @@ def search_methodology(ctx):
 PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. Enforces: R11
     {"id": "01", "name": "prepare-run", "carried_out_by": "prepare_run"},
     {"id": "02", "name": "read-inputs", "carried_out_by": "read_inputs"},
-    {"id": "03", "name": "build-map", "carried_out_by": "build_map"},
+    {"id": "03", "name": "link-chunks", "carried_out_by": "link_chunks"},
     {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"},
     {"id": "05", "name": "search-methodology", "carried_out_by": "search_methodology"})
 
@@ -6119,146 +5674,6 @@ def rows_package_info(store, paths, settings, progress):
     return rows
 
 
-MAP_ROLES = {"return": "Final output", "value": "Intermediate value", "column": "Column", "argument": "Parameter",
-             "stored data": "Raw input: stored data", "file": "Raw input: file", "number": "Raw input: hard-coded number",
-             "outside": "From outside the package"}
-MAP_OUTLINE_MAX = 7          # Excel groups rows eight levels deep (outline levels 0 to 7); deeper rows are indented only
-MAP_ID_COLUMNS = 12          # the Map ID, one column per level, for filtering; a deeper level joins the last column
-
-
-def implementation_map(store, settings=None):
-    """The rows of Model_Implementation_Map: one row per value the model computes, from each final output
-    down to the rawest inputs. A row says one thing: this variable, computed here, by this function, from
-    these arguments - and every argument is a row of its own beneath it, where it is the variable. A called
-    function is entered with that call's own arguments, and what it computes inside stands under the value
-    it produces. Nothing that is not part of a calculation appears: what no final output reaches is not a
-    row of this sheet. Enforces: R2, R4, R14"""
-    flow = store.read("dataflow")
-    if not flow:
-        return []
-    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
-    units = store.read("model_units")
-    functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-    outputs, _, _ = decided_outputs(flow, {})
-    by_function = (settings or DEFAULT_SETTINGS)["map_granularity"] == "function"
-    rows_max = int((settings or DEFAULT_SETTINGS)["map_rows_max"])
-    rows, cut = [], []
-
-    def variable_of(node):
-        """The one variable a row is about. What a function returns is the function's own result: its row
-        is the function, and the value it returns - the last tie_outputs, say - is that row's child."""
-        return node.get("function", "") if node["kind"] == "return" else node["name"]
-
-
-    def function_of(node):
-        """The function that defines this value: for what a function returns, that function; otherwise the
-        package function this value calls, else the function named in the code itself (a function of R or
-        of another package, which has no unit of its own). A raw input is defined by no function."""
-        if node["kind"] not in ("value", "column", "return"):
-            return "", ""
-        if node["kind"] == "return":
-            return node.get("function", ""), functions.get(node.get("function"), {}).get("ref", "")
-        calls = [nodes[s] for s in node["from"] if nodes.get(s, {}).get("kind") == "call"]
-        if calls:
-            callee = calls[0]["callee"]
-            return callee, functions.get(callee, {}).get("ref", "")
-        code = (node.get("code") or "").split("\n")[0]
-        written = re.sub(r"^\s*[A-Za-z._][\w.]*\s*(?:<-|=[^=])", "", code)
-        found = re.search(r"(?:([A-Za-z._][\w.]*)::)?([A-Za-z._][\w.]*)\s*\(", written)
-        return (found.group(2) if found else ""), ""
-
-    def expand(source, frames, depth=0):
-        """One source, resolved to the values that are rows: a call becomes what it was given and what the
-        called function computes inside from it; a parameter becomes the argument the call gave it, or its
-        default; and, asked for a map by function, a value becomes what it rests on. Everything else is a
-        row of its own."""
-        record = nodes.get(source)
-        if record is None or record["kind"] == "guard" or depth > 60:
-            return []
-        if record["kind"] == "call":
-            callee = record["callee"]
-            found = [pair for argument in record["from"] if argument != "%s:return" % callee
-                     for pair in expand(argument, frames, depth + 1)]
-            if callee in (name for name, _ in frames):
-                return found                                     # the function calls itself: its arguments stand, the descent stops
-            inner = frames + [(callee, record["bindings"])]
-            for inside in nodes.get("%s:return" % callee, {"from": []})["from"]:
-                kid = nodes.get(inside, {})
-                if kid.get("kind") == "argument" and kid.get("function") == callee:
-                    if record["bindings"].get(kid["name"], ["default"]) == ["default"]:
-                        found += [pair for value in kid.get("default_from") or [] for pair in expand(value, inner, depth + 1)]
-                    continue                                     # a parameter is the argument the call gave, already a row
-                found += expand(inside, inner, depth + 1)
-            return found
-        if record["kind"] == "argument" and record.get("function") == frames[-1][0] and frames[-1][1] is not None:
-            given = frames[-1][1].get(record["name"], ["default"])
-            if given == ["default"]:
-                return [pair for value in record.get("default_from") or [] for pair in expand(value, frames, depth + 1)]
-            return [pair for value in given for pair in expand(value, frames[:-1], depth + 1)]
-        if by_function and record["kind"] in ("value", "column") and record["from"]:
-            return [pair for value in record["from"] for pair in expand(value, frames, depth + 1)]
-        return [(source, frames)]
-
-    def children(node, frames):
-        """What this value is computed from, each a row of its own beneath it."""
-        seen, once = set(), []
-        for source in node["from"]:
-            for child, child_frames in expand(source, frames):
-                key = (child, tuple(name for name, _ in child_frames))
-                if key not in seen:                              # the same value twice under one step is one row
-                    seen.add(key)
-                    once.append((child, child_frames))
-        return once                                          # in the order the code gives them: c(overrides_and_caps, tie_outputs)
-
-    def emit(node_id, frames, map_id, level, path):
-        node = nodes.get(node_id)
-        if node is None or node["kind"] == "guard":
-            return
-        key = (node_id, tuple(name for name, _ in frames))
-        if key in path:                                          # a value that feeds itself: the descent stops
-            return
-        if len(rows) >= rows_max:
-            if not cut:
-                cut.append(True)
-                rows.append(dict(blank_row(), map_id=map_id, level=level, output_variable="the map was cut here",
-                                 arguments="the setting map_rows_max stopped the map; ask for a map by function (map_granularity) or raise it"))
-            return
-        kids = children(node, frames)
-        variable = variable_of(node)
-        name, ref = function_of(node)
-        row = dict(blank_row(), map_id=map_id, level=level, output_variable=variable, 
-                   ov_code=node.get("code") or node.get("file") or "", 
-                   function_name=name, fn_ref=ref, role=MAP_ROLES.get(node["kind"], node["kind"]),
-                   arguments="; ".join(dict.fromkeys(variable_of(nodes[child]) for child, _ in kids if child in nodes)))
-        if node["kind"] == "argument" and frames[-1][1] is None:
-            row["role"] = "Raw input: argument of the final output"
-        if node["kind"] == "column" and not node["from"]:
-            row["role"] = "Raw input: column of the data given"
-        if row["role"].startswith("Raw input"):                 # never calculated: where the calculation starts
-            row["output_variable"], row["ov_code"] = "%s (terminal input)" % variable, ""
-        elif node["kind"] == "return" and node.get("function") in functions:    # the function that assembles it all
-            text = functions[node["function"]]["text"].split("\n")
-            start = next((n for n, line in enumerate(text) if re.match(r"\s*`?%s`?\s*(<-|=)" % re.escape(node["function"]), line)), 0)
-            row["ov_code"] = "\n".join(text[start:]).strip()
-        for position, part in enumerate(map_id.split(".")[:MAP_ID_COLUMNS], start=1):
-            row["id%d" % position] = ".".join(map_id.split(".")[MAP_ID_COLUMNS - 1:]) if position == MAP_ID_COLUMNS else part
-        rows.append(row)
-        width = max(2, len(str(len(kids))))
-        for position, (child, child_frames) in enumerate(kids, start=1):
-            emit(child, child_frames, "%s.%0*d" % (map_id, width, position), level + 1, path | {key})
-
-    for position, output in enumerate(outputs, start=1):
-        emit("%s:return" % output, [(output, None)], "%02d" % position, 0, frozenset())
-    return rows
-
-def blank_row():
-    """Every column of the map, empty: a row fills the ones it has."""
-    row = {"map_id": "", "level": 0, "output_variable": "", "ov_code": "",
-           "function_name": "", "fn_ref": "", "arguments": "", "role": ""}
-    row.update({"id%d" % number: "" for number in range(1, MAP_ID_COLUMNS + 1)})
-    return row
-
-
 def rows_chunks(chunks):
     """The rows of Chunks_Methodology and Chunks_Documentation."""
     return [{"ref": c["ref"], "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": c["text"],
@@ -6269,7 +5684,7 @@ def rows_model_units(units, calls=(), links=None, methodology=None):
     """The rows of Chunks_Model: each a whole piece of code, as written; the units it takes something
     from and the units that take something from it (step 03); what the organisation's model says
     happens in it (step 04); and the chunks of the methodology it found to bear on it, with the potential
-    deviations it flagged (step 05, from `methodology`, the account of that step). Enforces: R2, R3, R14"""
+    deviations it flagged (step 05, from `methodology`, the account of that step). Enforces: R2, R3"""
     links, methodology = links or {}, (methodology or {}).get("units")
     said, unanswered = {}, set()
     for call in calls:
@@ -6293,9 +5708,8 @@ def rows_model_units(units, calls=(), links=None, methodology=None):
     return rows
 
 def sheet_rows(store, paths, settings, progress):
-    """The rows of all five sheets, by sheet name."""
-    mapped = implementation_map(store, settings)
-    links = {r["ref"]: r for r in store.read("dataflow") if r.get("record_type") == "unit_links"}
+    """The rows of all four sheets, by sheet name."""
+    links = {r["ref"]: r for r in store.read("unit_links")}
     units, calls = store.read("model_units"), store.read("llm_calls")
     searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
         call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
@@ -6303,8 +5717,7 @@ def sheet_rows(store, paths, settings, progress):
     model_rows = rows_model_units(units, calls, links, methodology)
     doc_rows = rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": model_rows,
-            "Model_Implementation_Map": mapped}
+            "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": model_rows}
 
 def check_written_totals(rows, store):
     """The identity of the workbook: every unit read is one row of its sheet, and no row is anything
@@ -6354,38 +5767,17 @@ sheets:
   - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
   - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
   - {header: 'Potential Deviations (flagged by LLM, subject to human review)', group: model, field: deviations, width: 90}
-- name: Model_Implementation_Map
-  columns:
-  - {header: MapID1, group: identity, field: id1, width: 7}
-  - {header: MapID2, group: identity, field: id2, width: 7}
-  - {header: MapID3, group: identity, field: id3, width: 7}
-  - {header: MapID4, group: identity, field: id4, width: 7}
-  - {header: MapID5, group: identity, field: id5, width: 7}
-  - {header: MapID6, group: identity, field: id6, width: 7}
-  - {header: MapID7, group: identity, field: id7, width: 7}
-  - {header: MapID8, group: identity, field: id8, width: 7}
-  - {header: MapID9, group: identity, field: id9, width: 7}
-  - {header: MapID10, group: identity, field: id10, width: 7}
-  - {header: MapID11, group: identity, field: id11, width: 7}
-  - {header: MapID12, group: identity, field: id12, width: 7}
-  - {header: Level, group: identity, field: level, width: 7}
-  - {header: Output Variable, group: identity, field: output_variable, width: 28}
-  - {header: Output Variable - Model Code, group: code_text, field: ov_code, width: 60}
-  - {header: Function Name, group: identity, field: function_name, width: 24}
-  - {header: Function Name - Model Ref, group: assessments, field: fn_ref, width: 16, links_to: Chunks_Model}
-  - {header: Arguments, group: assessments, field: arguments, width: 46}
 '''
 
 def load_layout():
     """The workbook layout: every sheet and every column of Output.xlsx."""
     return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
-def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None):
+def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     """One generic writer for every sheet: header row and first column frozen, filter on
     the header, wrapped text, no merged cells, reviewer columns yellow and unlocked."""
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.hyperlink import Hyperlink
     columns = sheet_layout["columns"]
     wrap = Alignment(wrap_text=True, vertical="top")
     for number, column in enumerate(columns, start=1):
@@ -6399,26 +5791,6 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
             value = row.get(column["field"])
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap
-    if sheet_layout["name"] == "Model_Implementation_Map":     # collapsible: each parent a summary row above its members
-        sheet.sheet_properties.outlinePr.summaryBelow = False
-        sheet.column_dimensions.group(get_column_letter(1), get_column_letter(MAP_ID_COLUMNS), outline_level=1)
-        at_variable = [c["field"] for c in columns].index("output_variable") + 1
-        for number, row in enumerate(rows, start=2):
-            level = int(row.get("level") or 0)
-            if level:
-                sheet.row_dimensions[number].outline_level = min(level, MAP_OUTLINE_MAX)
-            sheet.cell(row=number, column=at_variable).alignment = Alignment(wrap_text=True, vertical="top", indent=min(level, 15))
-    index = index or {}
-    for number, column in enumerate(columns, start=1):         # a reference is a link to the row that holds it
-        target = column.get("links_to")
-        if not target:
-            continue
-        for row_number, row in enumerate(rows, start=2):
-            where = (index.get(target) or {}).get(row.get(column["field"]))
-            if where:
-                cell = sheet.cell(row=row_number, column=number)
-                cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, where))
-                cell.style = "Hyperlink"
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
@@ -6428,7 +5800,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
         sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsx on local disk from the record of the run. All five sheets always
+    """Build Output.xlsx on local disk from the record of the run. All four sheets always
     exist; a sheet whose step has not run shows its header only."""
     import openpyxl
     layout = load_layout()
@@ -6436,10 +5808,9 @@ def build_workbook(store, paths, settings, progress, target):
     check_written_totals(rows, store)
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
-    index = {"Chunks_Model": {row["ref"]: number for number, row in enumerate(rows.get("Chunks_Model") or [], start=2)}}
     for sheet_layout in layout["sheets"]:
         sheet = workbook.create_sheet(sheet_layout["name"])
-        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store, index)
+        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
     workbook.properties.title = "the tool Output"
     workbook.properties.description = canonical_json(run_identity(store, paths))
     workbook.save(target)
@@ -6571,21 +5942,15 @@ def read_inputs(ctx):
     into units, in that order. Enforces: R2, R7"""
     return combine(ctx, read_methodology, read_documentation, read_package)
 
-def build_map(ctx):
-    """Step 03, build-map: the data flow of the package, read by flowR. Enforces: R2, R4, R14"""
-    return trace_dataflow(ctx)
-
-
 STEP_FUNCTIONS = {        # the function that carries out each step of PIPELINE. Enforces: R11
     "read_methodology": read_methodology,
     "read_documentation": read_documentation,
     "read_package": read_package,
-    "trace_dataflow": trace_dataflow,
     "interpret_code": interpret_code,
     "search_methodology": search_methodology,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,
-    "build_map": build_map}
+    "link_chunks": link_chunks}
 
 # ---------------------------------------------------------------- the notebook: four cells, each one call
 # Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
@@ -6779,8 +6144,8 @@ def open_current():
     return paths
 
 def review():
-    """Cell 3: read the inputs and map how the model computes what it returns, in this cell; then say
-    what each step did. A step already finished is never repeated."""
+    """Cell 3: read the inputs, link the units of the package and put them to the organisation's model, in this
+    cell; then say what each step did. A step already finished is never repeated."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
         return
@@ -6797,9 +6162,9 @@ def review():
         for message in record["messages"]:
             print("      " + message)
     print("\nRun folder:", paths.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read - Chunks_Model with what the")
+    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
     print("organisation's model says of each piece, the chunks of the methodology it found for it, and the potential")
-    print("deviations it flagged - and Model_Implementation_Map how the model computes what it returns.")
+    print("deviations it flagged.")
     print("Then run cell 4 to check the run folder against its own record.")
 
 def verify():
