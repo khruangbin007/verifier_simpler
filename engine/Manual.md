@@ -264,7 +264,7 @@ Every file read keeps a **content account** (`verifier.account`): the file's sma
 
 ## 18. What ships
 
-The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. `Engine_Map.xlsx` lists every function of the engine as the code stands. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
+The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
 
 ---
 
