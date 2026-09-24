@@ -17,7 +17,7 @@ Its reading and its accounts assume no field: the methodology can be about anyth
 **What comes out.** A run writes two files into the project's folder, beside its inputs:
 
 ```
-Projects/<model id>/<date>/
+Projects/<project name>/
   Inputs/                   the methodology, the package and the documentation, as you put them there
   Output.xlsx               four sheets: what was read, and what the organisation's model says of the code
   Audit_Log.xlsx            the record: the run, every step, every record, every exchange with the model
@@ -107,12 +107,12 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 
 | Cell | What it does | When to run it again |
 |---|---|---|
-| **cell 1** | `verifier.setup(dbutils)`: makes the four widgets, takes your user id from Databricks, installs a package only if one the engine imports is missing (then restarts Python and asks for the cell once more), gets flowR ready, and prints what the other three cells do | whenever Python restarts |
+| **cell 1** | `verifier.setup(dbutils)`: makes the three widgets, takes your user id from Databricks, installs a package only if one the engine imports is missing (then restarts Python and asks for the cell once more), gets flowR ready, and prints what the other three cells do | whenever Python restarts |
 | **cell 2** | Your organisation's `chat()`, already filled in; it returns the model's reply under `"answer"` and reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Cell 3 calls it from many threads at once, up to 256, so it keeps nothing from one call to the next. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | whenever Python restarts, and when the gateway or your id changes |
 | **cell 3** | `verifier.review()`: reads every input file, links the units of the package, then asks your `chat()` to describe each piece of the model's code (step 04), and to find the methodology behind each piece and where the code departs from it (step 05), with a line of progress every minute. Prints what each step did and where the project folder is | when it says a step did not finish - after pasting a fresh token, if it ran out: finished steps are never repeated, and no answer received is asked for again, even after an interruption. After Python restarts, run cells 1 and 2 first: cell 3 carries the run on where it stopped |
 | **cell 4** | `verifier.verify()`: eight checks of the project's two files against their own record, each Confirmed or Not confirmed | after any run |
 
-**The widgets.** Four: the endpoint and token for the model gateway (01, 02), the model id (03) and the project date (04). Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>`, with its `Inputs` and the two files a run writes beside them. A run is named by the minute it started, as `2026-09-22_1430`. Cell 3 carries the project's run on, in this session or a later one, until an input file, the engine or a setting changes; then it starts a new one.
+**The widgets.** Three: the endpoint and token for the model gateway (01, 02), and the project's name (03), which can be a model id and names the project's folder. Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<project name>`, with its `Inputs` and the two files a run writes beside them. A name holds at most 24 characters, from letters, digits, hyphen and underscore. A run is named by the minute it started, as `2026-09-22_1430`. Cell 3 carries the project's run on, in this session or a later one, until an input file, the engine or a setting changes; then it starts a new one.
 
 **No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Packages come from PyPI, named in the engine (section 18).
 

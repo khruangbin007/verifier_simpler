@@ -4223,7 +4223,7 @@ def make_settings(overrides=None):
     return settings
 
 # ---------------------------------------------------------------- paths and project setup
-MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
 LONGEST_AUDIT_NAME = "Output.xlsx"
 PATH_BUDGET = 100
 
@@ -4233,7 +4233,7 @@ class RunPaths:
     beside its Inputs folder - run_dir, outputs_dir and audit_dir are that one folder, each name kept so that
     every reader says which file it means - and local_dir is scratch space on the driver. previous is the
     manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
-    projects_dir: str; model_id: str; project_date: str; project_dir: str; inputs_dir: str
+    projects_dir: str; project: str; project_dir: str; inputs_dir: str
     run_id: str; run_dir: str; outputs_dir: str; audit_dir: str; local_dir: str
     previous: Optional[dict] = None; opened: str = ""
 
@@ -4241,20 +4241,20 @@ class RunPaths:
 class OutputsEdited(Exception):
     """The project's Output.xlsx was changed after the tool wrote it: a person's work, never replaced."""
 
-def check_model_id(model_id):
-    """Return "" when the model ID is usable, otherwise a plain sentence saying why not."""
-    if MODEL_ID_RE.match(model_id or ""):
+def check_project_name(project):
+    """Return "" when the project name - a model id will do - is usable as a folder's name, otherwise a plain
+    sentence saying why not."""
+    if PROJECT_NAME_RE.match(project or ""):
         return ""
-    return ("The model ID may hold at most 24 characters from letters, digits, hyphen and "
-            "underscore. Please shorten or change '%s'." % model_id)
+    return ("The project name may hold at most 24 characters from letters, digits, hyphen and "
+            "underscore. Please shorten or change '%s'." % project)
 
-def setup_project(projects_dir, model_id, project_date=""):
+def setup_project(projects_dir, project):
     """Create the project skeleton and say what is still missing. Inputs are never touched."""
-    problem = check_model_id(model_id)
+    problem = check_project_name(project)
     if problem:
         raise ValueError(problem)
-    project_date = project_date or datetime.date.today().isoformat()
-    project_dir = os.path.join(projects_dir, model_id, project_date)
+    project_dir = os.path.join(projects_dir, project)          # the project's folder: its Inputs, and a run's two files
     missing = []
     for _, folder, readme in INPUT_FOLDERS:
         path = os.path.join(project_dir, "Inputs", folder)
@@ -4336,21 +4336,20 @@ def pick_scratch_root(preferred=""):
         "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
         "cluster." % "; ".join(refused))
 
-def open_run(projects_dir, model_id, project_date="", scratch_root="", now=None, settings=None):
+def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
     """The project's run, and its local scratch folder. A project holds one run: its two files, Output.xlsx and
     Audit_Log.xlsx, sit beside its Inputs folder. The run the audit log records is carried on - by this session
     or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
     run starts, replaces both files, and records what changed since the run before. An Output.xlsx a person has
     changed since the tool wrote it is never replaced: OutputsEdited says so. Inputs are never touched.
     Enforces: R6, R12"""
-    project_dir, _ = setup_project(projects_dir, model_id, project_date)
-    project_date = os.path.basename(project_dir)
+    project_dir, _ = setup_project(projects_dir, project)
     inputs_dir = os.path.join(project_dir, "Inputs")
     record = recorded_manifest(project_dir)
     why = run_changes(record, inputs_dir, settings or make_settings({}))
     scratch_root = pick_scratch_root(scratch_root)
     place = sha256_text(os.path.abspath(project_dir))[:8]   # two Projects folders never share scratch space
-    local_of = lambda run: os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run, place))
+    local_of = lambda run: os.path.join(scratch_root, "%s_%s_%s" % (project, run, place))
     previous = None
     if not why:
         run_id = record["run_id"]
@@ -4366,13 +4365,13 @@ def open_run(projects_dir, model_id, project_date="", scratch_root="", now=None,
         opened = ("A new run, %s: %s since run %s, so Output.xlsx and Audit_Log.xlsx are replaced." % (run_id, why, record["run_id"])
                   if record and record.get("run_id") else "A new run, %s." % run_id)
     local_dir = local_of(run_id)
-    paths = RunPaths(projects_dir, model_id, project_date, project_dir, inputs_dir, run_id, project_dir,
+    paths = RunPaths(projects_dir, project, project_dir, inputs_dir, run_id, project_dir,
                      project_dir, project_dir, local_dir, previous, opened)
     longest = os.path.join(paths.project_dir, LONGEST_AUDIT_NAME)
     relative = os.path.relpath(longest, os.path.dirname(os.path.abspath(projects_dir)))
     if len(relative) > PATH_BUDGET:
         raise ValueError("The folder path is %d characters long and the limit is %d, so that "
-                         "Excel can still open downloaded files. Please use a shorter model ID "
+                         "Excel can still open downloaded files. Please use a shorter project name "
                          "or Projects folder." % (len(relative), PATH_BUDGET))
     os.makedirs(paths.local_dir, exist_ok=True)
     if why:                                                 # a new run: the record of the one it replaces is not read back
@@ -5739,7 +5738,7 @@ def run_step(step, store, paths, settings):
     provenance = Provenance(paths.run_id, step["id"], step["name"])
     options = dict(step.get("with") or {})
     options.update({"inputs": list_input_files(paths.inputs_dir), "paths": paths,
-                    "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
+                    "run": {"project": paths.project, "run_id": paths.run_id}})
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
     context = StepContext(settings, options, store.read, work_dir, notes.append, provenance)
@@ -5875,15 +5874,14 @@ def plain_cell(value, input_text, store):
 
 def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
-    return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id}
+    return {"project": paths.project, "run_id": paths.run_id}
 
 def rows_package_info(store, paths, settings, progress, split=None):
     """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
     identity, rows = run_identity(store, paths), []
     def add(group, item, value):
         rows.append({"group": group, "item": item, "value": value})
-    add("Identity", "Model ID", identity["model_id"])
-    add("Identity", "Date initiated", identity["date_initiated"])
+    add("Identity", "Project", identity["project"])
     add("Identity", "Run", identity["run_id"])
     add("Identity", "Run progress", progress)
     manifest = (store.read("run_manifest") or [{}])[0]
@@ -6260,9 +6258,9 @@ STEP_FUNCTIONS = {        # the function that carries out each step of PIPELINE.
 # widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
 REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
 WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
-           ("model_id", "", "03 Model ID"), ("project", "", "04 Project date (empty = new project today)"))
+           ("project_name", "", "03 Project Name (can be a model ID)"))
 OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
-               "reviewer_id", "jfrog_index_url", "concurrency_limit", "token_cap")
+               "reviewer_id", "jfrog_index_url", "concurrency_limit", "token_cap", "model_id", "project")
 PYPI = "https://pypi.org/simple/"          # where every package comes from: named here, so no pip setting of the cluster redirects it
 NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": None, "chat": None, "paths": None, "result": None}
 
@@ -6307,11 +6305,16 @@ def setup(dbutils, home=None, projects=None):
     what to do next. Safe to run any number of times; run it again after anything restarts Python."""
     import importlib.util
     widgets = dbutils.widgets
+    carried = {}                                      # a project name typed into an earlier notebook's 03 Model ID stays
+    try:
+        carried["project_name"] = widgets.get("model_id")
+    except Exception:
+        pass
     for name, default, label in WIDGETS:              # made before anything is installed: a bare cluster works
         try:
             widgets.get(name)
         except Exception:
-            widgets.text(name, default, label)
+            widgets.text(name, carried.get(name, default), label)
     for name in OLD_WIDGETS:                          # widgets of an earlier notebook, no longer used
         try:
             widgets.remove(name)
@@ -6341,7 +6344,7 @@ def setup(dbutils, home=None, projects=None):
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
     print("  Cell 4  check the project's Output.xlsx and Audit_Log.xlsx against their own record.")
-    print("Widgets 01 and 02 carry the endpoint and the token; 03 the model id; 04 the project date.")
+    print("Widgets 01 and 02 carry the endpoint and the token; 03 the project's name, which names its folder in Projects.")
     print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
     print("at the moment it calls.")
     print("Next: cell 2.")
@@ -6422,7 +6425,7 @@ def check_chat(chat):
               " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
         return
     widgets = NOTEBOOK["dbutils"].widgets
-    project_dir, missing = setup_project(NOTEBOOK["projects"], widgets.get("model_id"), widgets.get("project"))
+    project_dir, missing = setup_project(NOTEBOOK["projects"], widgets.get("project_name"))
     print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
     for _, folder, note in INPUT_FOLDERS:
         print("  %s\n      %s" % (os.path.join(project_dir, "Inputs", folder), note))
@@ -6436,14 +6439,14 @@ def open_current():
     this session worked on already. None, with what to do, while a folder of Inputs is empty or while a new run
     would replace an Output.xlsx a person has changed."""
     widgets = NOTEBOOK["dbutils"].widgets
-    model_id, project = widgets.get("model_id"), widgets.get("project")
-    _, missing = setup_project(NOTEBOOK["projects"], model_id, project)
+    project = widgets.get("project_name")
+    _, missing = setup_project(NOTEBOOK["projects"], project)
     if missing:
         print("\n".join(missing))
         print("Put the files in, then run cell 3.")
         return None
     try:
-        paths = open_run(NOTEBOOK["projects"], model_id, project, settings=notebook_settings())
+        paths = open_run(NOTEBOOK["projects"], project, settings=notebook_settings())
     except OutputsEdited as problem:
         print(problem)
         return None
