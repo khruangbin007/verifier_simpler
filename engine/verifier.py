@@ -4369,22 +4369,202 @@ def walk_nodes(node):
         if child.kind != "function":
             yield from walk_nodes(child)
 
+# Which units of Chunks_Model a unit takes something from - a function it calls, a variable, a stored
+# table or a file another unit defines - and which take something from it. R looks a name up inside the
+# function first, then in the script it runs in, then in the package, and so does this. flowR resolves
+# what it can: inside a function, a parameter or a value set there; across the statements of one script
+# (a test file, a vignette, the top-level code of an R file), the statement that set a variable before it
+# was read. What flowR leaves unresolved is what the unit takes from outside, and the package names it:
+# its functions, the variables its R files set at top level, and its stored data. The package's own name
+# comes before a base function of the same name, as it does in R. Enforces: R2, R4, R7, R14
+SCRIPT_KINDS = (KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST)
+ASSIGNING, ASSIGNING_RIGHT = ("<-", "<<-", "=", ":="), ("->", "->>")
+BY_NAME_CALLS = ("do.call", "match.fun", "get", "get0", "exists", "mget", "data")
+BASE_OPERATORS = ("%%", "%/%", "%in%", "%o%", "%*%", "%x%")
+
+
+def node_id(node):
+    return ((node or {}).get("info") or {}).get("id")
+
+
+def symbol_read(tree, node, package):
+    """The name a flowR syntax node reads or calls, and whether it names this package outright
+    (package::name), or None when the node reads nothing: an assignment's target, a parameter, the name
+    of a named argument, a field after $ or @, a brace, or a name of another package."""
+    if node["type"] in ("RBinaryOp", "RUnaryOp"):     # a %op% of the package's own, used in place
+        operator = node.get("operator") or ""
+        if operator.startswith("%") and operator.endswith("%") and operator not in BASE_OPERATORS:
+            return operator, False
+        return None
+    if node["type"] == "RString":                     # do.call("f"), get("x"), data("x"): a name as text
+        up = tree.get(node.get("up") or "", {})
+        call = tree.get(up.get("up") or "", {})
+        if up.get("type") == "RArgument" and call.get("type") == "RFunctionCall" and \
+                (call.get("functionName") or {}).get("lexeme") in BY_NAME_CALLS:
+            return (node.get("lexeme") or "").strip("\"'`"), False
+        return None
+    if node["type"] != "RSymbol":
+        return None
+    name, me, up = (node.get("lexeme") or "").strip("`"), node_id(node), tree.get(node.get("up") or "", {})
+    if not name or name in ("{", "}", "(", ")"):
+        return None
+    content = node.get("content")
+    if isinstance(content, list) and len(content) > 1 and content[1]:
+        return (name, True) if content[1] == package else None
+    kind = up.get("type")
+    if kind == "RParameter" or (kind == "RArgument" and node_id(up.get("name")) == me):
+        return None
+    if kind == "RBinaryOp" and ((up.get("operator") in ASSIGNING and node_id(up.get("lhs")) == me) or
+                                (up.get("operator") in ASSIGNING_RIGHT and node_id(up.get("rhs")) == me)):
+        return None
+    if kind == "RArgument" and tree.get(up.get("up") or "", {}).get("type") == "RAccess" and \
+            tree[up["up"]].get("operator") in ("$", "@"):
+        return None
+    return name, False
+
+
+def visible(definer, user):
+    """Can code in `user` see what `definer` defines? The package's R files and its stored data are seen
+    everywhere; what a test or vignette sets is seen later in the same file only, and a test helper by
+    every test."""
+    if definer["ref"] == user["ref"]:
+        return False
+    home = definer["file"]
+    if home.startswith("R/") or (definer.get("data") or {}).get("object_name"):
+        return True
+    if home == user["file"]:
+        return (definer.get("lines") or [0])[0] < (user.get("lines") or [0])[0]
+    return home.startswith("tests/") and user["file"].startswith("tests/") and \
+        os.path.basename(home).startswith(("helper", "setup"))
+
+
+def unit_links(units, flow, folder, package):
+    """The immediate upstream and downstream units of every unit, as dataflow records of type unit_links,
+    each with the names that make each link, and the units flowR could not read for their links."""
+    by_ref = {u["ref"]: u for u in units}
+    definers = {}                                          # name -> the units that define it
+    for u in units:
+        names = set()
+        if u["kind"] == KIND_FUNCTION and not u.get("inside"):
+            names.add(u["name"].strip("`"))                # `%||%` is defined in backticks and used without
+        elif u["kind"] in (KIND_FORMULA, KIND_TOPLEVEL):
+            names |= set((u.get("code") or {}).get("symbols_written") or ())
+        if (u.get("data") or {}).get("object_name"):
+            names.add(u["data"]["object_name"])
+        for name in names:
+            definers.setdefault(name, []).append(u["ref"])
+    readings, unread = [], set()                           # (prefix, [(first line, last line, ref)])
+    for prefix, name in flow.unit_of.items():             # every function: flowR read it already, alone
+        unit = flow.functions[name]
+        if name in flow.unread:
+            unread.add(unit["ref"])
+        else:
+            readings.append((prefix, [(1, unit["text"].count("\n") + 1, unit["ref"])]))
+    scripts = {}
+    for u in units:
+        if u["kind"] in SCRIPT_KINDS:
+            scripts.setdefault(u["file"], []).append(u)
+    def read(members, prefix):
+        text, spans, line = "", [], 1
+        for u in members:
+            size = u["text"].count("\n") + 1
+            spans.append((line, line + size - 1, u["ref"]))
+            text, line = text + u["text"] + "\n\n", line + size + 1
+        tree, edges = flowr_read(folder, text, prefix)
+        flow.tree.update(tree)
+        flow.edges.update(edges)
+        readings.append((prefix, spans))
+    for number, (file, members) in enumerate(sorted(scripts.items())):
+        members.sort(key=lambda u: (u.get("lines") or [0])[0])
+        try:                                               # one script, its statements in order: one reading
+            read(members, "s%d:" % number)
+        except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+            for place, u in enumerate(members):            # a statement flowR cannot read stops only itself
+                try:
+                    read([u], "s%d.%d:" % (number, place))
+                except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+                    unread.add(u["ref"])
+    data_files = {}                                       # a data file's name, as code may write it -> its units
+    for u in units:
+        if u["kind"] in (KIND_TABLE, KIND_OBJECT):
+            data_files.setdefault(os.path.basename(u["file"]), []).append(u["ref"])
+    by_prefix = {}
+    for key, node in flow.tree.items():
+        by_prefix.setdefault(key.split(":", 1)[0] + ":", []).append(node)
+    via = {}                                               # (definer, user) -> names
+    def link(definer, user, name):
+        via.setdefault((definer, user), set()).add(name)
+    for prefix, spans in readings:
+        def unit_at(node):
+            while node is not None and not node.get("location"):
+                node = flow.tree.get(node.get("up") or "")
+            line = node["location"][0] if node else 0
+            return next((ref for first, last, ref in spans if first <= line <= last), None)
+        for node in by_prefix.get(prefix, []):
+            if node["type"] == "RString":                  # a data file named in the code: read.csv(system.file(...))
+                written = (node.get("lexeme") or "").strip("\"'")
+                user = unit_at(node)
+                for definer in data_files.get(os.path.basename(written), []) if user else ():
+                    if by_ref[definer]["file"].endswith(written) and definer != user:
+                        link(definer, user, os.path.basename(written))
+            found = symbol_read(flow.tree, node, package)
+            user = unit_at(node) if found else None
+            if user is None:
+                continue
+            name, named_package = found
+            up = flow.tree.get(node.get("up") or "", {})
+            ends = [t for t, bits in flow.edges.get(node_id(node), []) if bits & (CALLS if node["type"] in ("RBinaryOp", "RUnaryOp")
+                                                                                 else READS) and t in flow.tree]
+            if up.get("type") == "RFunctionCall" and node_id(up.get("functionName")) == node_id(node):
+                ends += [t for t, bits in flow.edges.get(node_id(up), []) if bits & CALLS and t in flow.tree]
+            if ends and not named_package:                 # flowR found where it is defined: in this reading
+                for end in ends:
+                    definer = unit_at(flow.tree[end])
+                    if definer and definer != user:
+                        link(definer, user, name)
+                continue
+            for definer in definers.get(name, []):         # not defined here: the package names it
+                if visible(by_ref[definer], by_ref[user]):
+                    link(definer, user, name)
+    for u in units:                                        # stored data the code reads by file or by data()
+        for read_data in (u.get("code") or {}).get("reads_data") or ():
+            name = read_data.get("object") if isinstance(read_data, dict) else read_data
+            for definer in definers.get(name, []):
+                if (by_ref[definer].get("data") or {}).get("object_name") == name and definer != u["ref"]:
+                    link(definer, u["ref"], name)
+    upstream, downstream = {}, {}
+    for definer, user in via:
+        upstream.setdefault(user, set()).add(definer)
+        downstream.setdefault(definer, set()).add(user)
+    return [{"record_type": "unit_links", "ref": u["ref"], "upstream": sorted(upstream.get(u["ref"], ())),
+             "downstream": sorted(downstream.get(u["ref"], ())),
+             "via": {definer: sorted(names) for (definer, user), names in sorted(via.items()) if user == u["ref"]},
+             "not_read_by_flowr": u["ref"] in unread} for u in units]
+
+
 def trace_dataflow(ctx):
     """Step 05a, trace-dataflow: the package's data flow, by code alone - every value each function sets
     and what it is computed from, every call with its arguments matched to their parameters, every column
     a dplyr verb creates, every stored table, file and hard-coded number, and the gaps code cannot follow.
     Proposes the final outputs: exported functions nothing in the package calls, and those its tests and
     vignettes call. Enforces: R2, R4, R7, R14"""
-    flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"], flowr_ready())
+    units = ctx.read("model_units")
+    flow = Dataflow(units, ctx.settings["trivial_numbers"], flowr_ready())
     records = flow.run()
+    package = ((ctx.read("package_info") or [{}])[0] or {}).get("name", "")
+    links = unit_links(units, flow, flowr_ready(), package)
+    records = records[:-1] + links + records[-1:]
     count = lambda kind: sum(1 for r in records if r.get("kind") == kind)
     gaps = [r for r in records if r["record_type"] == "gap"]
     roots = records[-1]
+    unread = [r["ref"] for r in links if r["not_read_by_flowr"]]
+    notes = ["flowR could not read %s, so %s no links of %s own." % (", ".join(unread), "it has" if len(unread) == 1 else "they have",
+                                                                   "its" if len(unread) == 1 else "their")] if unread else []
     return StepResult({"dataflow": records},
                            {"values": count("value"), "calls": count("call"), "columns": count("column"), "gaps": len(gaps),
-                            "proposed final outputs": len(roots["proposed"])},
+                            "proposed final outputs": len(roots["proposed"]), "chunk links": sum(len(r["upstream"]) for r in links)},
                            ["Traced %d functions: %d values, %d calls, %d columns; %d gaps for the agents. Proposed final outputs: %s."
-                            % (len(flow.functions), count("value"), count("call"), count("column"), len(gaps), ", ".join(roots["proposed"]) or "none")])
+                            % (len(flow.functions), count("value"), count("call"), count("column"), len(gaps), ", ".join(roots["proposed"]) or "none")] + notes)
 
 
 def decided_outputs(records, decisions):
@@ -5262,9 +5442,11 @@ def rows_chunks(chunks):
              "source_file": c["source_file"]} for c in chunks]
 
 
-def rows_model_units(units, calls=()):
-    """The rows of Chunks_Model: each a whole piece of code, as written, and what the organisation's model
-    says happens in it (step 04). Enforces: R2, R3"""
+def rows_model_units(units, calls=(), links=None):
+    """The rows of Chunks_Model: each a whole piece of code, as written; the units it takes something
+    from and the units that take something from it (step 03); and what the organisation's model says
+    happens in it (step 04). Enforces: R2, R3, R14"""
+    links = links or {}
     said, unanswered = {}, set()
     for call in calls:
         if call.get("question_type") == CODE_QUESTION:
@@ -5278,14 +5460,18 @@ def rows_model_units(units, calls=()):
         interpretation = said.get(u["ref"]) or (NO_ANSWER if u["ref"] in unanswered else "")
         if not interpretation and asked and not askable(u):
             interpretation = NOT_ASKED
+        linked = links.get(u["ref"]) or {}
         rows.append({"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"], "interpretation": interpretation,
+                     "upstream": "; ".join(linked.get("upstream") or ()), "downstream": "; ".join(linked.get("downstream") or ()),
                      "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""})
     return rows
 
 def sheet_rows(store, paths, settings, progress):
     """The rows of all five sheets, by sheet name."""
     mapped = implementation_map(store, settings)
-    model_rows, doc_rows = rows_model_units(store.read("model_units"), store.read("llm_calls")), rows_chunks(store.read("chunks_doc"))
+    links = {r["ref"]: r for r in store.read("dataflow") if r.get("record_type") == "unit_links"}
+    model_rows = rows_model_units(store.read("model_units"), store.read("llm_calls"), links)
+    doc_rows = rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
             "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": model_rows,
             "Model_Implementation_Map": mapped}
@@ -5305,7 +5491,7 @@ def check_written_totals(rows, store):
 # Every sheet of Output.xlsx in order, and every column of each: its header, its colour group, the
 # field of the row it shows, its width, and whether it is typed by a person (input_text). One line
 # per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
-WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC}
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC, links: D0E0E3}
 sheets:
 - name: Model_Package_Info
   columns:
@@ -5333,6 +5519,8 @@ sheets:
   - {header: File, group: identity, field: file, width: 30}
   - {header: Lines, group: identity, field: lines, width: 10}
   - {header: Text, group: code_text, field: text, width: 80, input_text: true}
+  - {header: Immediate Upstream Model Chunk, group: links, field: upstream, width: 22}
+  - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
   - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
 - name: Model_Implementation_Map
   columns:
