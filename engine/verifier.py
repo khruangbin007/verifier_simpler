@@ -1,5 +1,5 @@
 """
-Verifier 0.0.4 - verifier.py - the whole engine, in one file. For every reviewer.
+Verifier - verifier.py - the whole engine, in one file. For every reviewer.
 
 Reads a model's methodology, its package of code and data, and its documentation; maps how the model
 computes what it returns, from each final output down to its rawest inputs; links what corresponds;
@@ -54,7 +54,6 @@ from xml.sax.saxutils import escape
 # the contracts, the reading floor and the front door
 # ================================================================================================
 # ---------------------------------------------------------------- the contracts: what every record is, and the words the tool may use
-ENGINE_VERSION = "0.0.3"
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
 
@@ -132,8 +131,8 @@ class ModelUnit:
 
 @dataclass(frozen=True)
 class Provenance:
-    """Which run and step produced a record, at which version, and from which AI exchange if any."""
-    run_id: str; step_id: str; step: str; step_version: str; engine_version: str = ENGINE_VERSION
+    """Which run and step produced a record, and from which AI exchange if any."""
+    run_id: str; step_id: str; step: str
     prompt_hash: Optional[str] = None; response_hash: Optional[str] = None
 
 
@@ -336,11 +335,6 @@ def expr_to_text(expr, parent_rank=0):
 
 # ================================================================================================
 
-# ---------------------------------------------------------------- the prompts
-# Every question the tool asks, as the model sees it: a version line, the system half, the main half
-# with [[UNIT]] and similar places the question builder fills. The text is exact - a question's id is
-# the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
-# version and asks new questions. Enforces: R3, R5, R9
 
 
 # ---------------------------------------------------------------- element helpers
@@ -773,9 +767,9 @@ def account(file_name, atoms, chunks, dropped=(), marks=(), file_bytes=0):
     found["what unaccounted"] = sorted(left)[:24]
     found["what injected"] = sorted(added)[:24]
     # A file that is large, yielded no text at all, and was neither refused nor said to be
-    # unreadable has probably not been opened. Until 0.0.2 such a file closed its account, because
-    # an account over nothing balances. That is the one place the identity held while everything
-    # was lost, so it is the one place it now refuses to close. Enforces: R13
+    # unreadable has probably not been opened. Its account would balance, because an account over
+    # nothing balances: the one place the identity holds while everything is lost, so the one
+    # place it refuses to close. Enforces: R13
     found["vacuous"] = (not refused and file_bytes > VACUOUS_BYTES and not sum(source.values())
                         and not any(chunk.get("not_read_reason") for chunk in chunks))
     found["file_bytes"] = file_bytes
@@ -2973,7 +2967,7 @@ def read_documentation(ctx):
 # ================================================================================================
 # ---------------------------------------------------------------- the model package, read into units
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
-PARSER_NAME = "the tool R reader 0.0.1"
+PARSER_NAME = "flowR"
 
 class NotParsed(Exception):
     """One R expression that the tool's reader could not read. The message is a plain reason."""
@@ -3012,7 +3006,7 @@ def unpack_zip(zip_path, max_member_bytes):
 def loose_package(paths, root, max_member_bytes):
     """A package put in the folder unpacked - its source folder rather than a built tarball -
     read file by file, under the same size limit. People very often have the one and not the
-    other, and until 0.0.2 a folder here stopped the run."""
+    other."""
     files, refused = {}, []
     for path in paths:
         name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
@@ -4652,7 +4646,7 @@ class AuditStore:
     """The record of a run, as one workbook a person can open: _audit/Audit_Log.xlsx.
 
         Run            the run's manifest and account, one line per entry
-        Steps          every step that ran, with its version, what it counted and what it said
+        Steps          every step that ran, what it counted and what it said
         Records        every record of every kind, in the order written, each as its own JSON
         Model_Calls    every exchange with the model: the question, the answer and the outcome
 
@@ -4706,10 +4700,9 @@ class AuditStore:
             for line, part in parts_of(canonical_json(self.account[key])):
                 run.append([key if line == 1 else "%s (part %d)" % (key, line), part])
         steps = book.create_sheet("Steps")
-        steps.append(["Step", "Name", "Version", "Seconds", "What it counted", "What it said"])
+        steps.append(["Step", "Name", "Seconds", "What it counted", "What it said"])
         for record in self.read("step_records"):
-            steps.append([record.get("step_id", ""), record.get("step", ""), record.get("step_version", ""),
-                          record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
+            steps.append([record.get("step_id", ""), record.get("step", ""), record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
                           "\n".join(record.get("messages") or [])[:CELL_LIMIT]])
         records = book.create_sheet("Records")
         records.append(["Kind", "Number", "Part", "Record (JSON)"])
@@ -4779,12 +4772,10 @@ def open_store(paths, settings):
 
 
 # ---------------------------------------------------------------- the pipeline runner
-PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. A step's
-    {"id": "01", "name": "prepare-run", "version": "0.0.2", "carried_out_by": "prepare_run"},   # version is part of the
-    {"id": "02", "name": "read-inputs", "version": "0.0.1", "carried_out_by": "read_inputs"},   # provenance of every record
-    {"id": "03", "name": "build-map", "version": "0.0.1", "carried_out_by": "build_map"})       # it writes: a change to how
-                                                                                               # a step works is a change to
-                                                                                               # its version. Enforces: R11
+PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. Enforces: R11
+    {"id": "01", "name": "prepare-run", "carried_out_by": "prepare_run"},
+    {"id": "02", "name": "read-inputs", "carried_out_by": "read_inputs"},
+    {"id": "03", "name": "build-map", "carried_out_by": "build_map"})
 
 def update_manifest(store, changes):
     """Change fields of the run manifest and write it back."""
@@ -4817,7 +4808,7 @@ def run_step(step, store, paths, settings):
     """Build the context, call the step function, write what it returns, record the step,
     rebuild the outputs and sync. Steps never touch the store themselves."""
     notes = []
-    provenance = Provenance(paths.run_id, step["id"], step["name"], step["version"])
+    provenance = Provenance(paths.run_id, step["id"], step["name"])
     options = dict(step.get("with") or {})
     options.update({"inputs": list_input_files(paths.inputs_dir), "paths": paths,
                     "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
@@ -4852,7 +4843,7 @@ def record_step(store, step, result, seconds):
     """Leave the step record that makes a finished step visible and resume possible."""
     produced = {kind: len(records) for kind, records in sorted(result.records.items())}
     store.append("step_records", [{
-        "step_id": step["id"], "name": step["name"], "version": step["version"],
+        "step_id": step["id"], "name": step["name"],
         "carried_out_by": step["carried_out_by"], "produced": produced, "counts": result.counts,
         "messages": result.messages, "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "seconds": round(seconds, 3)}])
@@ -4908,7 +4899,7 @@ def prepare_run(ctx):
         changes = ["%s: changed" % n for n in sorted(now) if n in before and before[n] != now[n]]
         changes += ["%s: new" % n for n in sorted(now) if n not in before]
         changes += ["%s: no longer present" % n for n in sorted(before) if n not in now]
-    manifest = dict(ctx.options["run"], engine_version=ENGINE_VERSION, versions=versions, engine_files=engine_file_hashes(),
+    manifest = dict(ctx.options["run"], versions=versions, engine_files=engine_file_hashes(),
                     settings=ctx.settings, inputs=fingerprints, changes_since_previous_run=changes,
                     previous_run=previous["run_id"] if previous else "",
                     started_at=datetime.datetime.now().isoformat(timespec="seconds"))
@@ -4955,8 +4946,7 @@ def plain_cell(value, input_text, store):
 
 def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
-    return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id,
-            "engine_version": ENGINE_VERSION}
+    return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id}
 
 def rows_package_info(store, paths, settings, progress):
     """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
@@ -4967,7 +4957,6 @@ def rows_package_info(store, paths, settings, progress):
     add("Identity", "Date initiated", identity["date_initiated"])
     add("Identity", "Run", identity["run_id"])
     add("Identity", "Run progress", progress)
-    add("Identity", "Engine version", identity["engine_version"])
     manifest = (store.read("run_manifest") or [{}])[0]
     if manifest.get("engine_files"):
         add("Identity", "Engine files fingerprint", sha256_text(canonical_json(manifest["engine_files"]))[:16] +
@@ -5491,7 +5480,7 @@ def setup(dbutils, home=None, projects=None):
     if missing:
         install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
         return
-    print("Folder:", home, "| Python", sys.version.split()[0], "| engine", ENGINE_VERSION)
+    print("Folder:", home, "| Python", sys.version.split()[0])
     for name in REQUIRED_PACKAGES + ("pdfplumber", "pypdf"):
         found = importlib.util.find_spec(name)
         print("  %-11s %s" % (name, "installed" if found else "not installed" + ("" if name in ("pdfplumber", "pypdf") else " - run this cell again")))

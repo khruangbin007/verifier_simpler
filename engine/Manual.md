@@ -1,6 +1,6 @@
 # Verifier — the manual
 
-**Version 0.0.3, September 2026.** One document for everyone: the person who runs a review, the person who reads its output, the person who reviews the code, and the person who maintains it. Part I is for everyone. Part II is for whoever runs a review. Part III is for whoever reads the code. Part IV is reference.
+One document for everyone: the person who runs a review, the person who reads its output, the person who reviews the code, and the person who maintains it. Part I is for everyone. Part II is for whoever runs a review. Part III is for whoever reads the code. Part IV is reference.
 
 ---
 
@@ -42,7 +42,7 @@ Fourteen rules, each enforced by named code: its docstring says so (`Enforces: R
 | R1 | The tool shows; people decide. No rating of seriousness. The policy terms never appear in anything the tool produces or names. |
 | R2 | Closed accounting. Every unit read is one row of its sheet, and no row is anything else; this identity is checked on every run. A file, a step or a call that fails is written down, and the run goes on. |
 | R3 | The model's opinion is never the last word: a review asks the model nothing, and everything the workbook shows is read and parsed by code. |
-| R4 | Every record carries its provenance - the step, its version and the run - and every unit can be re-verified by hash. |
+| R4 | Every record carries its provenance - the run and the step - and every unit can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
 | R6 | Inputs are never modified. A run writes only inside its own folder. |
 | R7 | Nothing taken from an input or from the model is ever executed or evaluated: no R, no evaluation of text, no unpickling, no string parsing by a symbolic library, safe reading of archives, safe loading of YAML only. |
@@ -188,7 +188,7 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 | Lines | identity |  |
 | Text | code text |  |
 
-**Where the two mapping sheets went.** Until version 0.0.3 two mapping sheets held one row per model unit and one per documentation unit, with what each was linked to. The Model Implementation Map now shows each model unit in its place in the computation, so those two sheets are gone.
+**Where the two mapping sheets went.** Two mapping sheets once held one row per model unit and one per documentation unit, with what each was linked to. The Model Implementation Map now shows each model unit in its place in the computation, so those two sheets are gone.
 
 ## 8. The Model Implementation Map
 
@@ -242,7 +242,7 @@ A called function is entered with the arguments that call gives it, so what it c
 
 ## 15. The pipeline
 
-Three steps, named and versioned in `verifier.PIPELINE`; nothing is loaded by path, and only a function the engine offers may be named.
+Three steps, named in `verifier.PIPELINE`; nothing is loaded by path, and only a function the engine offers may be named.
 
 | Step | Name | What it does |
 |---|---|---|
@@ -264,7 +264,7 @@ Every file read keeps a **content account** (`verifier.account`): the file's sma
 
 ## 18. What ships
 
-The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. `Engine_Map.xlsx` lists every function of the engine as of this version. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
+The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. `Engine_Map.xlsx` lists every function of the engine as the code stands. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
 
 ---
 
