@@ -19,11 +19,11 @@ Its reading and its accounts assume no field: the methodology can be about anyth
 ```
 Projects/<project name>/
   Inputs/                   the methodology, the package and the documentation, as you put them there
-  Output.xlsx               four sheets: what was read, and what the organisation's model says of the code
+  Output.xlsm               four sheets: what was read, and what the organisation's model says of the code
   Audit_Log.xlsx            the record: the run, every step, every record, every exchange with the model
 ```
 
-A project holds one run at a time. Cell 3 carries it on where it stopped - in the same session or a later one - while the input files, the engine and the settings are the ones it started with; when one of them has changed, it starts a new run, replaces both files, and `Model_Package_Info` lists what changed since the run before. An `Output.xlsx` you have edited is never replaced: cell 3 asks you to move it aside first.
+A project holds one run at a time. Cell 3 carries it on where it stopped - in the same session or a later one - while the input files, the engine and the settings are the ones it started with; when one of them has changed, it starts a new run, replaces both files, and `Model_Package_Info` lists what changed since the run before. An `Output.xlsm` you have edited is never replaced: cell 3 asks you to move it aside first.
 
 The record is what makes the run an **evidence pack**: from that workbook alone, anyone can check that the inputs are the ones fingerprinted, that the code that ran is the code released, and that nothing was edited afterwards.
 
@@ -33,7 +33,7 @@ The record is what makes the run an **evidence pack**: from that workbook alone,
 2. **Read.** The tool reads every file into small citable units — a paragraph, a table, a formula, a function — each with its place in the document and a fingerprint of its content. No model is involved yet. You are shown the outline it found and asked to confirm it.
 3. **Link.** The tool links each piece of the package to the pieces it takes something from and gives something to, with flowR reading the R code. No model is involved.
 4. **Ask.** Through your `chat()`, the organisation's model explains each piece of code (step 04), finds the chunks of the methodology that bear on it and flags where the code may depart from them (step 05). Its words fill three columns of Chunks_Model, each headed as the model's own.
-5. **Read.** `Output.xlsx` shows everything that was read, and what the model said.
+5. **Read.** `Output.xlsm` shows everything that was read, and what the model said.
 6. **Keep.** The two files, with the inputs beside them, are the evidence pack.
 
 ## 3. Design rules
@@ -136,7 +136,7 @@ Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.d
 
 **Only R is read as code.** A package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 
-## 7. Reading `Output.xlsx`
+## 7. Reading `Output.xlsm`
 
 Four sheets, always in this order; a sheet whose step has not run yet shows its header only, and *Run progress* on the first sheet says where the run stands.
 
@@ -186,18 +186,22 @@ Four sheets, always in this order; a sheet whose step has not run yet shows its 
 | File | identity |  |
 | Lines | identity |  |
 | Text | code text | The unit exactly as read, whole: a function or statement as written, a stored table with every row, any other file of the package in full. Too long for one row, it continues on the rows below (see Ref). |
-| Immediate Upstream Model Chunk | links | The units this code takes something from, as Refs joined with "; ": a function it calls, a variable set at the top level of an R file or earlier in the same script, a stored table or a data file it reads. Worked out in step 03 from flowR's reading of the code. |
+| Immediate Upstream Model Chunk | links | The units this code takes something from, as Refs joined with "; ": a function it calls, a variable set at the top level of an R file or earlier in the same script, a stored table or a data file it reads. Worked out in step 03 from flowR's reading of the code. A cell that lists references is a link: see Following a reference, below. |
 | Immediate Downstream Model Chunk | links | The units that take something from this one: the same links, seen from the other end. |
 | Code Interpretation (by LLM) | model | What the organisation's model says the code does, in the language of credit, for a CFA-level analyst checking it against the methodology: the credit concept it implements, what its inputs mean, how it computes its result, the floors, caps and constants it fixes, and where it follows or departs from a standard convention. The model saw the code the row takes from and the code that takes from it, and chose how much detail to give. Written in step 04 through your `chat()`. It is the model's reading, not the tool's, and nothing else in the workbook depends on it. "No interpretation" means the model gave no answer - run cell 3 again; "Not asked" means nothing was read from the file. |
-| Relevant Chunks in Methodology (searched by LLM) | model | The chunks of Chunks_Methodology that describe, explain or inform this piece, as Refs joined with "; ", in reading order. Found in step 05: the piece - its code and its interpretation - is put to the model with each batch of the methodology in turn, until every chunk has been searched for it, and the model names the chunks an analyst needs to read to check the piece. Code keeps only chunks that were shown to it. "None found" means every chunk was searched and none bears on the piece; "Not searched in full" says how far the search got and what is still to search. |
+| Relevant Chunks in Methodology (searched by LLM) | model | The chunks of Chunks_Methodology that describe, explain or inform this piece, as Refs joined with "; ", in reading order. Found in step 05: the piece - its code and its interpretation - is put to the model with each batch of the methodology in turn, until every chunk has been searched for it, and the model names the chunks an analyst needs to read to check the piece. Code keeps only chunks that were shown to it. "None found" means every chunk was searched and none bears on the piece; "Not searched in full" says how far the search got and what is still to search. A cell that lists references is a link: see Following a reference, below. |
 | Flagged Items (by LLM, subject to human review) | model | Every way the model found the code to depart from those chunks, one block each, numbered. A block opens with the Refs it rests on, its kind - the code differs, leaves out what the methodology requires, adds what it does not describe, or follows one reading of a chunk that can be read more than one way - and a pointed title saying exactly what differs and where. Then, each on its own line: **Methodology**, what the chunks require, quoted where the wording matters; **Code**, what the code does instead, with its names and line numbers; **Why it potentially deviates**, the mechanism by which the code's result departs from the methodology; and **Effect**, which cases are affected, in which direction, and by how much where the code shows it. The model compares all the chunks found for the piece at once, with the code the piece takes from and gives to, so a requirement met elsewhere is not flagged here. It states, and does not rate: you decide what each one means. "None flagged against ..." means the chunks named were compared and no deviation found. |
 | Count of Flagged Items (by LLM) | model | How many items the cell beside it holds: a whole number, 0 where the chunks were compared and nothing was flagged, or where no chunk of the methodology was found. Empty where that cell holds no result yet - step 05 has not run, or the methodology is not searched in full. While a comparison is missing, it counts the items flagged so far. Filter it above 0 to see every piece with an item to review. |
 
 **How the links are found.** R looks a name up inside the function first, then in the script it runs in, then in the package, and the two link columns follow the same order. flowR reads each function, and each script whole: a test file, a vignette, or the top-level code of an R file. It resolves every name it can to where it is defined, such as a parameter, a value set earlier, or a variable an earlier statement of the same script set, so a link between statements of one script is flowR's own. A name flowR cannot resolve inside a unit is one the unit takes from outside, and the package names it: one of its functions, a variable its R files set at top level, or its stored data. A data file named in the code, as in `read.csv(system.file("extdata", "limits.csv", ...))`, links to that file's row. A package function named like a base function wins, as it does in R. A function or variable set in a test or vignette is seen only later in the same file, and a test helper by every test. What is not a link: a name of another package (`dplyr::filter`), a parameter or local value that shares a name with a package function, the export list in `NAMESPACE`, and documentation naming a dataset.
 
+**Following a reference.** In Chunks_Model, every cell of Relevant Chunks in Methodology (searched by LLM) and of Immediate Upstream Model Chunk that lists references is a link, in blue. A click on a cell of Relevant Chunks in Methodology shows Chunks_Methodology with only the chunks that cell names; a click on a cell of Immediate Upstream Model Chunk shows Chunks_Model with only the chunks that cell names and the row you clicked, so that clicking on up the chain walks the code back to its inputs. A chunk shown in several rows is shown whole. Each click replaces the filter before it; to see every row again, clear the filter (Data > Clear). The filtering is done by one small macro in the workbook, which is why the file is `Output.xlsm`: it reads the references of the cell clicked and filters the sheet's Ref column, and does nothing else - it changes no value and sends nothing anywhere. You can read it in Excel (Alt+F11, then ThisWorkbook) or in the engine (`verifier.WORKBOOK_MACRO`). Without macros, a click still takes you to the first chunk the cell names.
+
+**Letting the macro run.** Excel blocks the macros of a file that came from the internet, which a file downloaded from Databricks is: it shows a red bar saying so, or opens it in Protected View. On Windows, close the file, right-click it, choose Properties, tick Unblock, and open it again; then choose Enable Editing and Enable Content if Excel asks. Where your organisation allows macros only in trusted locations, save the file in one. Excel for the web, LibreOffice and Google Sheets do not run it: there the links only take you to the first chunk.
+
 ## 8. The project's two files as an evidence pack
 
-`Audit_Log.xlsx`, beside `Output.xlsx` and the `Inputs` folder, is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsx` carries this run's ids and fingerprints, and that no access token was written into either file.
+`Audit_Log.xlsx`, beside `Output.xlsm` and the `Inputs` folder, is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsm` carries this run's ids and fingerprints, and that no access token was written into either file.
 
 ## 9. When something goes wrong
 
@@ -208,16 +212,19 @@ Four sheets, always in this order; a sheet whose step has not run yet shows its 
 | "Step 04 (interpret-code) did not finish" | The model gave no answer for some pieces of code - the gateway was busy or down, or the token ran out. Check it with `cell 2`, paste a fresh token if needed, then run `cell 3` again: only those pieces are asked again. |
 | "Step 05 (search-methodology) did not finish" | Some pieces of code are not yet searched and compared in full; their rows say how far each got. Paste a fresh token if needed and run `cell 3` again: only what is open is asked. |
 | "The model stopped answering: the last N questions got no answer" | The message says what the last call returned. An expired token - a 401, say, or an error in place of the answer - wants a fresh one pasted into widget 02; a gateway that is down - a 503, say - wants waiting until it is back. Then run `cell 3` again, or every cell from cell 1: nothing is lost either way (section 13). If it happens again at once with a fresh token and a gateway that is up, the gateway may hold fewer tokens than `chat_token_limit` allows for: lower it (section 16). |
+| A click on a reference only takes you to the first chunk, and nothing is filtered | Excel is not running the workbook's macro: it blocks macros in a file from the internet. Unblock the file and enable its content (section 7, Letting the macro run). Excel for the web, LibreOffice and Google Sheets do not run macros at all. |
 | "No question showing C-0012 has been answered" | Questions showing the rest of the methodology were answered, but none showing that chunk: the gateway may refuse what it holds. The rows of the pieces affected say which chunk is still to search. |
 | A deviation reads "The model's words for this one cannot be shown in plain words" | The model kept using words the workbook may not hold, three times running. Its answer is in the audit log's Model_Calls sheet; the Refs at the start of the line say which chunks it rests on. |
 | The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. Cell 3 carries the project's run on where it stopped: a finished step is not repeated, and no recorded answer is asked for again. |
-| An input changed | Run `cell 3`: it says the input files changed and starts a new run, replacing `Output.xlsx` and `Audit_Log.xlsx`; `Model_Package_Info` lists what changed since the run before. The same happens when the engine or a setting changes. |
-| "Output.xlsx ... has been changed since the tool wrote it" | A new run would replace an `Output.xlsx` you have edited, so cell 3 stopped. Move it to another folder or rename it, then run `cell 3` again. |
+| An input changed | Run `cell 3`: it says the input files changed and starts a new run, replacing `Output.xlsm` and `Audit_Log.xlsx`; `Model_Package_Info` lists what changed since the run before. The same happens when the engine or a setting changes. |
+| "Output.xlsm ... has been changed since the tool wrote it" | A new run would replace an `Output.xlsm` you have edited, so cell 3 stopped. Move it to another folder or rename it, then run `cell 3` again. |
 | A unit of kind *File not read* | That file or expression could not be parsed. `Model_Package_Info` lists it with the reason; the rest of the package was still read. |
 | A cell reads "This text could not be shown in plain words" | The tool withheld a text that contained technical traces; the text is in `run_log.txt`, in the run's scratch folder on the driver. Please report it; it is a defect in the tool. |
 | "This is a defect in the tool, not in the model under review" | The coverage identity did not hold and the run stopped on purpose. Keep the project's two files and report it. |
 
 ## 10. Known limitations
+
+- **Filtering on a click needs desktop Excel with macros enabled.** The links of Chunks_Model filter through a macro in `Output.xlsm`; Excel for the web, LibreOffice and Google Sheets do not run it, and there a click only takes you to the first chunk named. The macro was checked in LibreOffice's Excel mode, which loads and compiles it and runs it to the end, but filters on a list of values only in Excel.
 
 - The content of images is never evidence. A formula given only as a picture is kept as a figure and never read as a formula. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself.
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
@@ -240,7 +247,7 @@ Four sheets, always in this order; a sheet whose step has not run yet shows its 
 
 ## 11. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the links between its units, the organisation's model and the two steps that ask it, the run, and `Output.xlsx`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the links between its units, the organisation's model and the two steps that ask it, the run, and `Output.xlsm`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
 ## 12. The pipeline
 
@@ -308,7 +315,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | You want to add | Where |
 |---|---|
 | a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` |
-| a column or a sheet of `Output.xlsx` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` |
+| a column or a sheet of `Output.xlsm` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` |
 
 After any change, see section 19.
 
@@ -318,7 +325,7 @@ After any change, see section 19.
 
 | Package | Needed | Note |
 |---|---|---|
-| openpyxl>=3.1 | required | Output.xlsx and the record of a run |
+| openpyxl>=3.1 | required | Output.xlsm and the record of a run |
 | PyYAML>=6.0 | required | the pipeline and the tool's own rule files |
 | numpy>=1.24 | required | reading stored data |
 | rdata>=1.0 | required | reads stored R data without running R |
@@ -332,4 +339,4 @@ After any change, see section 19.
 
 ## 19. Maintaining the tool
 
-Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 17). After a change, run a review on a project you know and compare its `Output.xlsx` with the one before: every sheet should differ only where the change meant it to.
+Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 17). After a change, run a review on a project you know and compare its `Output.xlsm` with the one before: every sheet should differ only where the change meant it to.

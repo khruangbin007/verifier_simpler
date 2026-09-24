@@ -10,6 +10,6 @@ engine/
   Manual.md             the one manual, for everyone
 ```
 
-A run writes two files into the project's folder, beside its `Inputs`: `Output.xlsx`, with four sheets - what was read, and what the organisation's model says of the code - and `Audit_Log.xlsx`, the record of the run: every step, every record and every exchange with the model.
+A run writes two files into the project's folder, beside its `Inputs`: `Output.xlsm`, with four sheets - what was read, and what the organisation's model says of the code, where a click on a reference shows only the chunks it names - and `Audit_Log.xlsx`, the record of the run: every step, every record and every exchange with the model.
 
 Everything else is in the manual.

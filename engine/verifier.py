@@ -5,12 +5,12 @@ Reads a model's methodology, its package of code and data, and its documentation
 links each unit of the package to the units it takes something from and gives something to; and asks the
 organisation's language model, through the chat() of cell 2, to explain each unit of code, to find the
 chunks of the methodology that bear on it, and to flag where the code may depart from them. One
-deliverable: Output.xlsx. Everything a run does is recorded in Audit_Log.xlsx, beside it and the Inputs folder.
+deliverable: Output.xlsm. Everything a run does is recorded in Audit_Log.xlsx, beside it and the Inputs folder.
 
 The file is one piece of engineering in three parts, in dependency order:
   the contracts, the reading floor and the front door
   reading the methodology, the documentation and the model package
-  the run: its folder, its record, the organisation's model and Output.xlsx
+  the run: its folder, its record, the organisation's model and Output.xlsm
 """
 import bz2
 import collections
@@ -33,11 +33,13 @@ import os
 import subprocess
 import re
 import shutil
+import struct
 import sys
 import tarfile
 import tempfile
 import threading
 import time
+import uuid
 import traceback
 import unicodedata
 import xml.etree.ElementTree as ElementTree
@@ -4222,12 +4224,14 @@ def make_settings(overrides=None):
 
 # ---------------------------------------------------------------- paths and project setup
 PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
-LONGEST_AUDIT_NAME = "Output.xlsx"
+OUTPUT_FILE = "Output.xlsm"               # the deliverable: a workbook with one macro (the workbook's macro)
+LEGACY_OUTPUT_FILE = "Output.xlsx"        # what the tool wrote before its workbook held the macro
+LONGEST_AUDIT_NAME = OUTPUT_FILE
 PATH_BUDGET = 100
 
 @dataclass
 class RunPaths:
-    """Where a project's run lives: its two files, Output.xlsx and Audit_Log.xlsx, sit in the project folder
+    """Where a project's run lives: its two files, Output.xlsm and Audit_Log.xlsx, sit in the project folder
     beside its Inputs folder - run_dir, outputs_dir and audit_dir are that one folder, each name kept so that
     every reader says which file it means - and local_dir is scratch space on the driver. previous is the
     manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
@@ -4237,7 +4241,7 @@ class RunPaths:
 
 
 class OutputsEdited(Exception):
-    """The project's Output.xlsx was changed after the tool wrote it: a person's work, never replaced."""
+    """The project's Output.xlsm was changed after the tool wrote it: a person's work, never replaced."""
 
 def check_project_name(project):
     """Return "" when the project name - a model id will do - is usable as a folder's name, otherwise a plain
@@ -4335,10 +4339,10 @@ def pick_scratch_root(preferred=""):
         "cluster." % "; ".join(refused))
 
 def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
-    """The project's run, and its local scratch folder. A project holds one run: its two files, Output.xlsx and
+    """The project's run, and its local scratch folder. A project holds one run: its two files, Output.xlsm and
     Audit_Log.xlsx, sit beside its Inputs folder. The run the audit log records is carried on - by this session
     or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
-    run starts, replaces both files, and records what changed since the run before. An Output.xlsx a person has
+    run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
     changed since the tool wrote it is never replaced: OutputsEdited says so. Inputs are never touched.
     Enforces: R6, R12"""
     project_dir, _ = setup_project(projects_dir, project)
@@ -4353,15 +4357,23 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
         run_id = record["run_id"]
         opened = "Carrying on run %s, which Audit_Log.xlsx records: a finished step is not repeated." % run_id
     else:
-        workbook = os.path.join(project_dir, "Output.xlsx")
-        if os.path.exists(workbook) and file_sha256(workbook) != (record or {}).get("last_workbook_sha256"):
-            raise OutputsEdited(
-                "Output.xlsx in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
-                "Move it to another folder or rename it, then run cell 3 again." % (project_dir, why))
+        for name in (OUTPUT_FILE, LEGACY_OUTPUT_FILE):
+            workbook = os.path.join(project_dir, name)
+            if os.path.exists(workbook) and file_sha256(workbook) != (record or {}).get("last_workbook_sha256"):
+                raise OutputsEdited(
+                    "%s in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
+                    "Move it to another folder or rename it, then run cell 3 again." % (name, project_dir, why))
+        legacy = os.path.join(project_dir, LEGACY_OUTPUT_FILE)
+        replaced = os.path.exists(legacy)
+        if replaced:                                      # the tool's own, unchanged: Output.xlsm takes its place
+            os.remove(legacy)
         previous = record if record and record.get("inputs") else None
         run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run)), now)
-        opened = ("A new run, %s: %s since run %s, so Output.xlsx and Audit_Log.xlsx are replaced." % (run_id, why, record["run_id"])
+        opened = ("A new run, %s: %s since run %s, so Output.xlsm and Audit_Log.xlsx are replaced." % (run_id, why, record["run_id"])
                   if record and record.get("run_id") else "A new run, %s." % run_id)
+        if replaced:
+            opened += (" %s, which the tool wrote before, is replaced by %s: the same sheets, and a click on a reference "
+                       "shows only the chunks it names." % (LEGACY_OUTPUT_FILE, OUTPUT_FILE))
     local_dir = local_of(run_id)
     paths = RunPaths(projects_dir, project, project_dir, inputs_dir, run_id, project_dir,
                      project_dir, project_dir, local_dir, previous, opened)
@@ -4414,7 +4426,7 @@ class LiveValues:
 
 # ---------------------------------------------------------------- the audit store
 AUDIT_OBJECTS = ("run_manifest", "package_info", "coverage")
-AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsx and the Inputs folder
+AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsm and the Inputs folder
 CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
 
 def copy_whole(source, target):
@@ -5914,7 +5926,299 @@ def input_fingerprints(inputs_dir, inputs=None):
             found.append(fingerprint_file(inputs[key], key, inputs_dir))
     return found
 
-# ---------------------------------------------------------------- Output.xlsx
+# ---------------------------------------------------------------- the workbook's macro
+# Output.xlsm carries one macro, in the workbook's own module: a reference in Chunks_Model, clicked, shows only the
+# chunks it names. Its source is WORKBOOK_MACRO below, and vba_project() packs it into the part Excel reads macros
+# from, xl/vbaProject.bin, written here from Microsoft's published formats - [MS-OVBA] for the project, [MS-CFB] for
+# the compound file that holds it. The project holds the source alone, no compiled code, as [MS-OVBA] asks of a
+# writer: Excel compiles it when it opens the workbook. It is the same for every run, and nothing in it comes from an
+# input. Without macros, each link still leads to the first chunk it names. Enforces: R5, R7
+
+LINK_COLUMNS = {"methodology_refs": ("Chunks_Methodology", "Click: Chunks_Methodology shows only these chunks"),
+                "upstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one")}
+REF_LIST = re.compile(r"^[CDM]-\d{4,}(?:; [CDM]-\d{4,})*$")      # a cell that is a list of references, and nothing else
+LINK_FONT = "0563C1"                                            # the blue Excel gives a hyperlink
+
+WORKBOOK_MACRO = """Option Explicit
+
+' Verifier: a reference in Chunks_Model, clicked, shows only the chunks it names.
+'   Relevant Chunks in Methodology (searched by LLM): Chunks_Methodology, filtered to the chunks listed.
+'   Immediate Upstream Model Chunk: Chunks_Model, filtered to the chunks listed and the row clicked.
+' A chunk shown in several rows (C-0012-1, C-0012-2 ...) is shown whole. Nothing else is changed:
+' Data > Clear shows every row again. Without macros, a link still leads to the first chunk it names.
+
+Private Sub Workbook_SheetFollowHyperlink(ByVal Sh As Object, ByVal Target As Hyperlink)
+    Dim clicked As Range, heading As String, refs As String
+    On Error GoTo Finish
+    If Sh.Name <> "Chunks_Model" Then Exit Sub
+    Set clicked = Target.Range.Cells(1, 1)
+    heading = CStr(Sh.Cells(1, clicked.Column).Value)
+    refs = RefsIn(CStr(clicked.Value))
+    If heading = "Relevant Chunks in Methodology (searched by LLM)" Then
+        ShowOnly ThisWorkbook.Worksheets("Chunks_Methodology"), refs
+    ElseIf heading = "Immediate Upstream Model Chunk" Then
+        ShowOnly Sh, refs & "|" & UnitOf(CStr(Sh.Cells(clicked.Row, 1).Value))
+    End If
+Finish:
+End Sub
+
+Private Function RefsIn(ByVal cellText As String) As String
+    ' The references a cell names, such as C-0012 or M-0003, joined with |.
+    Dim position As Long, letter As String, word As String, found As String
+    cellText = cellText & " "
+    For position = 1 To Len(cellText)
+        letter = Mid$(cellText, position, 1)
+        If InStr(1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-", letter, vbBinaryCompare) > 0 Then
+            word = word & letter
+        Else
+            If IsRef(word) Then found = found & "|" & word
+            word = ""
+        End If
+    Next position
+    If Len(found) > 0 Then RefsIn = Mid$(found, 2)
+End Function
+
+Private Function IsRef(ByVal word As String) As Boolean
+    ' C-0012, D-0003 or M-0017: C, D or M, a hyphen, then four digits or more.
+    Dim position As Long
+    If Len(word) < 6 Then Exit Function
+    If InStr(1, "CDM", Left$(word, 1), vbBinaryCompare) = 0 Then Exit Function
+    If Mid$(word, 2, 1) <> "-" Then Exit Function
+    For position = 3 To Len(word)
+        If InStr(1, "0123456789", Mid$(word, position, 1), vbBinaryCompare) = 0 Then Exit Function
+    Next position
+    IsRef = True
+End Function
+
+Private Function UnitOf(ByVal rowRef As String) As String
+    ' A row's reference without its part: M-0003-2 is a part of M-0003.
+    Dim cut As Long
+    cut = InStr(3, rowRef, "-")
+    If cut > 0 Then UnitOf = Left$(rowRef, cut - 1) Else UnitOf = rowRef
+End Function
+
+Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String)
+    ' Filter the sheet on its Ref column to the chunks named, each with every row it takes.
+    Dim wanted As Variant, shown As String, cellRef As String, last As Long, rowNumber As Long, i As Long, locked As Boolean
+    If Len(refs) = 0 Then Exit Sub
+    wanted = Split(refs, "|")
+    last = onSheet.UsedRange.Row + onSheet.UsedRange.Rows.Count - 1
+    For rowNumber = 2 To last
+        cellRef = CStr(onSheet.Cells(rowNumber, 1).Value)
+        For i = LBound(wanted) To UBound(wanted)
+            If Len(wanted(i)) > 0 Then
+                If cellRef = wanted(i) Or Left$(cellRef, Len(wanted(i)) + 1) = wanted(i) & "-" Then
+                    shown = shown & "|" & cellRef
+                    Exit For
+                End If
+            End If
+        Next i
+    Next rowNumber
+    If Len(shown) = 0 Then Exit Sub
+    locked = onSheet.ProtectContents
+    On Error GoTo Restore
+    If locked Then onSheet.Unprotect
+    On Error Resume Next
+    onSheet.ShowAllData                                ' clears any filter; with none on, there is nothing to clear
+    On Error GoTo Restore
+    If Not onSheet.AutoFilterMode Then onSheet.Range("A1").CurrentRegion.AutoFilter
+    onSheet.AutoFilter.Range.AutoFilter Field:=1, Criteria1:=Split(Mid$(shown, 2), "|"), Operator:=xlFilterValues
+    onSheet.Activate
+    Application.Goto onSheet.Range("A1"), True
+Restore:
+    If locked Then onSheet.Protect DrawingObjects:=False, Contents:=True, Scenarios:=False, AllowFormattingColumns:=True, AllowFiltering:=True
+End Sub
+"""
+
+VBA_WORKBOOK_CLASS = "0{00020819-0000-0000-C000-000000000046}"   # the classes of a workbook's and a sheet's module
+VBA_SHEET_CLASS = "0{00020820-0000-0000-C000-000000000046}"
+VBA_STDOLE = b"*\\G{00020430-0000-0000-C000-000000000046}#2.0#0#C:\\WINDOWS\\system32\\stdole2.tlb#OLE Automation"
+
+
+def ovba_compress(data):
+    """[MS-OVBA] 2.4.1 compression: chunks of 4,096 bytes, each a run of tokens - a literal byte, or a copy of bytes
+    met earlier in the chunk. A chunk that would not shrink is kept as it is."""
+    out = bytearray(b"\x01")
+    for start in range(0, len(data), 4096):
+        chunk = data[start:start + 4096]
+        body, position, seen = bytearray(), 0, {}
+        while position < len(chunk):
+            flag_at, flags = len(body), 0
+            body.append(0)
+            for bit in range(8):
+                if position >= len(chunk):
+                    break
+                bits = max((position - 1).bit_length(), 4) if position else 16
+                longest, offset = 0, 0
+                most = min((0xFFFF >> bits) + 3, len(chunk) - position) if position else 0
+                for earlier in reversed(seen.get(bytes(chunk[position:position + 3]), [])) if most >= 3 else ():
+                    length = 0
+                    while length < most and chunk[earlier + length] == chunk[position + length]:
+                        length += 1
+                    if length > longest:
+                        longest, offset = length, position - earlier
+                        if length == most:
+                            break
+                step = longest if longest >= 3 else 1
+                if longest >= 3:
+                    body += struct.pack("<H", ((offset - 1) << (16 - bits)) | (longest - 3))
+                    flags |= 1 << bit
+                else:
+                    body.append(chunk[position])
+                for index in range(position, position + step):
+                    seen.setdefault(bytes(chunk[index:index + 3]), []).append(index)
+                position += step
+            body[flag_at] = flags
+        if len(body) > 4096:
+            if len(chunk) < 4096:
+                raise ValueError("a short chunk that does not compress")
+            out += struct.pack("<H", 0x3FFF) + chunk
+        else:
+            out += struct.pack("<H", 0xB000 | (len(body) - 1)) + body
+    return bytes(out)
+
+
+def ovba_encrypt(project_id, data, seed):
+    """[MS-OVBA] 2.4.3.2 data encryption, for the project's protection, password and visibility: a seed, the version,
+    the project's key - the sum of its id's bytes - then the data's length and the data, each byte folded into the
+    ones before it. Returned as the hexadecimal text the PROJECT stream holds."""
+    key = sum(project_id.encode("latin-1")) & 0xFF
+    version_enc, key_enc = seed ^ 2, seed ^ key
+    out = [seed, version_enc, key_enc]
+    plain1, enc1, enc2 = key, key_enc, version_enc
+    for byte in [7] * ((seed & 6) // 2) + list(struct.pack("<I", len(data)) + data):
+        byte_enc = byte ^ ((enc2 + plain1) & 0xFF)
+        out.append(byte_enc)
+        enc2, enc1, plain1 = enc1, byte_enc, byte
+    return bytes(out).hex().upper()
+
+
+def vba_record(record_id, payload=b""):
+    """One record of the project's dir stream: its id, its size, what it holds."""
+    return struct.pack("<HI", record_id, len(payload)) + payload
+
+
+@functools.lru_cache(maxsize=None)
+def vba_project(sheets):
+    """The bytes of xl/vbaProject.bin: the workbook's module holding WORKBOOK_MACRO, and a module for each sheet,
+    `sheets` giving their code names in order. [MS-OVBA] 2.2 and 2.3; the same bytes on every call."""
+    project_id = "{%s}" % str(uuid.UUID(bytes=hashlib.sha256(b"Verifier workbook macro").digest()[:16])).upper()
+    attributes = ('Attribute VB_Name = "%s"\r\nAttribute VB_Base = "%s"\r\nAttribute VB_GlobalNameSpace = False\r\n'
+                  'Attribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = True\r\n'
+                  'Attribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = True\r\n')
+    modules = [("ThisWorkbook", attributes % ("ThisWorkbook", VBA_WORKBOOK_CLASS) + WORKBOOK_MACRO.replace("\n", "\r\n"))]
+    modules += [(name, attributes % (name, VBA_SHEET_CLASS)) for name in sheets]
+    wide = lambda name: name.encode("utf-16-le")
+    directory = (vba_record(0x01, struct.pack("<I", 1)) + vba_record(0x02, struct.pack("<I", 0x409))
+                 + vba_record(0x14, struct.pack("<I", 0x409)) + vba_record(0x03, struct.pack("<H", 1252))
+                 + vba_record(0x04, b"VBAProject") + vba_record(0x05) + vba_record(0x40) + vba_record(0x06)
+                 + vba_record(0x3D) + vba_record(0x07, struct.pack("<I", 0)) + vba_record(0x08, struct.pack("<I", 0))
+                 + struct.pack("<HIIH", 0x09, 4, 1, 0) + vba_record(0x0C) + vba_record(0x3C)
+                 + vba_record(0x16, b"stdole") + vba_record(0x3E, wide("stdole"))
+                 + vba_record(0x0D, struct.pack("<I", len(VBA_STDOLE)) + VBA_STDOLE + b"\0" * 6)
+                 + vba_record(0x0F, struct.pack("<H", len(modules))) + vba_record(0x13, struct.pack("<H", 0xFFFF)))
+    for name, _ in modules:
+        encoded = name.encode("latin-1")
+        directory += (vba_record(0x19, encoded) + vba_record(0x47, wide(name)) + vba_record(0x1A, encoded)
+                      + vba_record(0x32, wide(name)) + vba_record(0x1C) + vba_record(0x48)
+                      + vba_record(0x31, struct.pack("<I", 0)) + vba_record(0x1E, struct.pack("<I", 0))
+                      + vba_record(0x2C, struct.pack("<H", 0xFFFF)) + vba_record(0x22) + vba_record(0x2B))
+    directory += vba_record(0x10)
+    project = ('ID="%s"\r\n' % project_id + "".join("Document=%s/&H00000000\r\n" % name for name, _ in modules)
+               + 'Name="VBAProject"\r\nHelpContextID="0"\r\nVersionCompatible32="393222000"\r\n'
+               + 'CMG="%s"\r\nDPB="%s"\r\nGC="%s"\r\n\r\n' % (ovba_encrypt(project_id, b"\0\0\0\0", 0x3E),
+                                                              ovba_encrypt(project_id, b"\0", 0x9A),
+                                                              ovba_encrypt(project_id, b"\xff", 0x51))
+               + "[Host Extender Info]\r\n&H00000001={3832D640-CF90-11CF-8E43-00A0C911005A};VBE;&H00000000\r\n\r\n"
+               + "[Workspace]\r\n" + "".join("%s=0, 0, 0, 0, C\r\n" % name for name, _ in modules))
+    streams = {"PROJECT": project.encode("latin-1"),
+               "PROJECTwm": b"".join(name.encode("latin-1") + b"\0" + wide(name) + b"\0\0" for name, _ in modules) + b"\0\0",
+               "VBA/_VBA_PROJECT": b"\xcc\x61\xff\xff\x00\x00\x00",
+               "VBA/dir": ovba_compress(directory)}
+    streams.update({"VBA/" + name: ovba_compress(source.encode("latin-1")) for name, source in modules})
+    return cfb_file(streams)
+
+
+def cfb_file(streams):
+    """A compound file, [MS-CFB] version 3, holding `streams` - a path of names, "VBA/dir", to its bytes; the storages
+    are those the paths name. Streams under 4,096 bytes live in the mini stream, in sectors of 64 bytes; the rest,
+    and the file's own tables, in sectors of 512. The entries of each storage form a balanced tree in the order the
+    format sets - shorter names first, then by their capitals - coloured so that it is a red-black tree."""
+    SECTOR, MINI, CUTOFF, FREE, END, FATSECT = 512, 64, 4096, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD
+    nodes = [{"name": "Root Entry", "type": 5, "children": {}, "data": b""}]
+    for path in streams:
+        parent = nodes[0]
+        *storages, name = path.split("/")
+        for storage in storages:
+            if storage not in parent["children"]:
+                nodes.append({"name": storage, "type": 1, "children": {}, "data": b""})
+                parent["children"][storage] = len(nodes) - 1
+            parent = nodes[parent["children"][storage]]
+        nodes.append({"name": name, "type": 2, "children": {}, "data": streams[path]})
+        parent["children"][name] = len(nodes) - 1
+    for node in nodes:
+        node.update(left=FREE, right=FREE, child=FREE, colour=1, start=0, size=len(node["data"]))
+    for node in nodes:                                            # each storage's entries: a balanced tree
+        order = sorted(node["children"].values(), key=lambda i: (len(nodes[i]["name"]), nodes[i]["name"].upper()))
+        depths = {}
+        def grow(members, depth):
+            if not members:
+                return FREE
+            middle = len(members) // 2
+            index = members[middle]
+            depths[index] = depth
+            nodes[index]["left"], nodes[index]["right"] = grow(members[:middle], depth + 1), grow(members[middle + 1:], depth + 1)
+            return index
+        node["child"] = grow(order, 0)
+        if depths and len(depths) != 2 ** (max(depths.values()) + 1) - 1:
+            for index, depth in depths.items():                   # an incomplete last level is red
+                nodes[index]["colour"] = 0 if depth == max(depths.values()) else 1
+    sectors, fat = [], []
+    def allocate(data):
+        if not data:
+            return END
+        count, first = -(-len(data) // SECTOR), len(sectors)
+        for number in range(count):
+            sectors.append(data[number * SECTOR:(number + 1) * SECTOR].ljust(SECTOR, b"\0"))
+            fat.append(first + number + 1 if number < count - 1 else END)
+        return first
+    mini, minifat = bytearray(), []
+    for node in nodes:
+        if node["type"] == 2 and node["size"] < CUTOFF:
+            count = -(-node["size"] // MINI)
+            node["start"] = len(minifat) if count else END
+            minifat += [node["start"] + number + 1 if number < count - 1 else END for number in range(count)]
+            mini += node["data"].ljust(count * MINI, b"\0")
+    for node in nodes:
+        if node["type"] == 2 and node["size"] >= CUTOFF:
+            node["start"] = allocate(node["data"])
+    nodes[0]["start"], nodes[0]["size"] = allocate(bytes(mini)), len(mini)
+    minifat_sectors = -(-len(minifat) // (SECTOR // 4))
+    minifat_start = allocate(struct.pack("<%dI" % (minifat_sectors * SECTOR // 4), *(minifat + [FREE] * (minifat_sectors * SECTOR // 4 - len(minifat)))))
+    entries = b""
+    for node in nodes:
+        name = node["name"].encode("utf-16-le") + b"\0\0"
+        entries += struct.pack("<64sHBBIII16sIQQIQ", name, len(name), node["type"], node["colour"], node["left"],
+                               node["right"], node["child"], b"\0" * 16, 0, 0, 0, node["start"], node["size"])
+    entries += struct.pack("<64sHBBIII16sIQQIQ", b"", 0, 0, 0, FREE, FREE, FREE, b"\0" * 16, 0, 0, 0, 0, 0) * (-len(nodes) % 4)
+    directory_start = allocate(entries)
+    fat_sectors = 1
+    while fat_sectors * (SECTOR // 4) < len(sectors) + fat_sectors:
+        fat_sectors += 1
+    fat_start = len(sectors)
+    table = fat + [FATSECT] * fat_sectors
+    table += [FREE] * (fat_sectors * (SECTOR // 4) - len(table))
+    sectors += [struct.pack("<%dI" % (SECTOR // 4), *table[number * (SECTOR // 4):(number + 1) * (SECTOR // 4)]) for number in range(fat_sectors)]
+    if fat_sectors > 109:
+        raise ValueError("a compound file this large needs more than its header's table of tables")
+    header = struct.pack("<8s16sHHHHH6sIIIIIIIII", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", b"\0" * 16, 0x3E, 3, 0xFFFE, 9, 6,
+                         b"\0" * 6, 0, fat_sectors, directory_start, 0, CUTOFF, minifat_start if minifat else END,
+                         minifat_sectors, END, 0)
+    header += struct.pack("<109I", *([fat_start + number for number in range(fat_sectors)] + [FREE] * (109 - fat_sectors)))
+    return header + b"".join(sectors)
+
+
+# ---------------------------------------------------------------- Output.xlsm
 CELL_WITHHELD = "This text could not be shown in plain words; the technical text is in the audit records."
 CUT_NOTE = " ... (cut here; the full text is in the audit files)"
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
@@ -6103,7 +6407,7 @@ def check_written_totals(rows, store):
                 "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
 
 # ---------------------------------------------------------------- the workbook layout
-# Every sheet of Output.xlsx in order, and every column of each: its header, its colour group, the
+# Every sheet of Output.xlsm in order, and every column of each: its header, its colour group, the
 # field of the row it shows, its width, and whether it is typed by a person (input_text). One line
 # per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
 WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC, links: D0E0E3}
@@ -6143,7 +6447,7 @@ sheets:
 '''
 
 def load_layout():
-    """The workbook layout: every sheet and every column of Output.xlsx."""
+    """The workbook layout: every sheet and every column of Output.xlsm."""
     return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
@@ -6173,7 +6477,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
         sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsx on local disk from the record of the run. All four sheets always
+    """Build Output.xlsm on local disk from the record of the run. All four sheets always
     exist; a sheet whose step has not run shows its header only."""
     import openpyxl
     layout = load_layout()
@@ -6184,10 +6488,47 @@ def build_workbook(store, paths, settings, progress, target):
     for sheet_layout in layout["sheets"]:
         sheet = workbook.create_sheet(sheet_layout["name"])
         write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
+    link_references(workbook, rows)
+    workbook.code_name = "ThisWorkbook"
+    for number, sheet in enumerate(workbook.worksheets, start=1):
+        sheet.sheet_properties.codeName = "Sheet%d" % number
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as parts:                 # openpyxl takes a macro from a workbook it read:
+        parts.writestr("xl/vbaProject.bin", vba_project(tuple(s.sheet_properties.codeName for s in workbook.worksheets)))
+        parts.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        parts.writestr("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+    workbook.vba_archive = zipfile.ZipFile(archive)              # the two empty parts say it declared nothing else
     workbook.properties.title = "the tool Output"
     workbook.properties.description = canonical_json(run_identity(store, paths))
     workbook.save(target)
     return rows
+
+
+def link_references(workbook, rows):
+    """A hyperlink on each cell of Chunks_Model that is a list of references - Relevant Chunks in Methodology and
+    Immediate Upstream Model Chunk (LINK_COLUMNS) - leading to the first chunk it names, where the workbook's macro
+    then shows only the chunks named (WORKBOOK_MACRO). One link to a cell: Excel holds no more. Enforces: R2"""
+    from openpyxl.styles import Font
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    first_row = {}
+    for name in {target for target, _ in LINK_COLUMNS.values()}:
+        at = first_row.setdefault(name, {})
+        for number, row in enumerate(rows[name], start=2):
+            at.setdefault(re.sub(r"^([CDM]-\d+)-\d+$", r"\1", str(row["ref"])), number)
+    layout = next(s for s in load_layout()["sheets"] if s["name"] == "Chunks_Model")
+    column_of = {column["field"]: number for number, column in enumerate(layout["columns"], start=1)}
+    sheet = workbook["Chunks_Model"]
+    for number, row in enumerate(rows["Chunks_Model"], start=2):
+        for field, (target, tip) in LINK_COLUMNS.items():
+            value = row.get(field) or ""
+            if not REF_LIST.match(value):
+                continue
+            first = value.split("; ")[0]
+            if first not in first_row[target]:
+                continue
+            cell = sheet.cell(row=number, column=column_of[field])
+            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, first_row[target][first]), tooltip=tip)
+            cell.font = Font(color=LINK_FONT, underline="single")
 
 # ---------------------------------------------------------------- rebuilding the outputs
 def file_sha256(path):
@@ -6206,7 +6547,7 @@ def progress_text(store, waiting_message):
     return text + (" " + waiting_message if waiting_message else "")
 
 def rebuild_outputs(store, paths, settings, waiting_message):
-    """Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy
+    """Rebuild Output.xlsm (and the report once flagged items exist) on local disk and copy
     them whole into the project folder. The guard: a workbook there that differs from the last
     one the tool wrote is a reviewer's work in progress and is never overwritten before it has
     been read in. Afterwards the project folder holds the two files beside its Inputs. Enforces: R6, R12"""
@@ -6214,13 +6555,13 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     os.makedirs(work, exist_ok=True)
     progress = progress_text(store, waiting_message)
     manifest = (store.read("run_manifest") or [{}])[0]
-    target = os.path.join(paths.outputs_dir, "Output.xlsx")
+    target = os.path.join(paths.outputs_dir, OUTPUT_FILE)
     guarded = (os.path.exists(target) and manifest.get("last_workbook_sha256")
                and file_sha256(target) not in (manifest["last_workbook_sha256"], manifest.get("last_upload_sha256")))
-    local_workbook = os.path.join(work, "Output.xlsx")
+    local_workbook = os.path.join(work, OUTPUT_FILE)
     build_workbook(store, paths, settings, progress, local_workbook)
     if guarded:
-        log_line(store, "Output.xlsx in the project folder was edited and not yet read in: left untouched")
+        log_line(store, "Output.xlsm in the project folder was edited and not yet read in: left untouched")
     else:
         copy_whole(local_workbook, target)
         if manifest:
@@ -6280,17 +6621,17 @@ def verify_evidence_pack(paths, settings, live=None):
     identity = run_identity(store, paths)
     try:
         import openpyxl
-        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, "Output.xlsx"), read_only=True).properties.description)
+        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, OUTPUT_FILE), read_only=True).properties.description)
         line("The workbook carries this run's ids and fingerprints", all(found.get(k) == v for k, v in identity.items()))
     except Exception:
-        line("The workbook carries this run's ids and fingerprints", False, "Output.xlsx could not be opened")
+        line("The workbook carries this run's ids and fingerprints", False, "Output.xlsm could not be opened")
     secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
     leaked = []
-    for name in ("Output.xlsx", AUDIT_FILE):                # the tool's own files; the Inputs are the project's
+    for name in (OUTPUT_FILE, AUDIT_FILE):                # the tool's own files; the Inputs are the project's
         path = os.path.join(paths.outputs_dir, name)
         if os.path.exists(path):
             leaked += [name for data in contents_of(path) for value in secrets if value in data]
-    line("No access token was written into Output.xlsx or Audit_Log.xlsx", not leaked, ", ".join(sorted(set(leaked))))
+    line("No access token was written into Output.xlsm or Audit_Log.xlsx", not leaked, ", ".join(sorted(set(leaked))))
     return rows
 
 def combine(ctx, *parts):
@@ -6417,7 +6758,7 @@ def setup(dbutils, home=None, projects=None):
     print("\nTHE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
-    print("  Cell 4  check the project's Output.xlsx and Audit_Log.xlsx against their own record.")
+    print("  Cell 4  check the project's Output.xlsm and Audit_Log.xlsx against their own record.")
     print("Widgets 01 and 02 carry the endpoint and the token; 03 the project's name, which names its folder in Projects.")
     print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
     print("at the moment it calls.")
@@ -6511,7 +6852,7 @@ def open_current():
     """The run of the project the widgets name, carried on or started anew as open_run decides - asked each time
     cell 3 runs, so that an input changed meanwhile is noticed - and said in plain words when it is not the run
     this session worked on already. None, with what to do, while a folder of Inputs is empty or while a new run
-    would replace an Output.xlsx a person has changed."""
+    would replace an Output.xlsm a person has changed."""
     widgets = NOTEBOOK["dbutils"].widgets
     project = widgets.get("project_name")
     _, missing = setup_project(NOTEBOOK["projects"], project)
@@ -6552,9 +6893,11 @@ def review():
         for message in record["messages"]:
             print("      " + message)
     print("\nProject folder:", paths.project_dir)
-    print("Open Output.xlsx there, beside Inputs: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
-    print("organisation's model says of each piece, the chunks of the methodology it found for it, and the potential")
-    print("deviations it flagged.")
+    print("Open Output.xlsm there, beside Inputs: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
+    print("organisation's model says of each piece, the chunks of the methodology it found for it, and the items it")
+    print("flagged, with their count.")
+    print("In Chunks_Model, a click on a reference shows only the chunks it names, once Excel lets the workbook's macro run;")
+    print("if it blocks it, unblock the file first (the manual, section 7: Letting the macro run).")
     print("Then run cell 4 to check the project's two files against their own record.")
 
 def verify():
@@ -6566,5 +6909,5 @@ def verify():
     print("Verifying the evidence pack:")
     for what, verdict, detail in verify_evidence_pack(paths, notebook_settings(), live=NOTEBOOK["live"] or LiveValues()):
         print("  %-62s %-16s %s" % (what, verdict, detail))
-    print("\nProject folder:", paths.project_dir, "- Output.xlsx is the deliverable; Audit_Log.xlsx beside it is the")
+    print("\nProject folder:", paths.project_dir, "- Output.xlsm is the deliverable; Audit_Log.xlsx beside it is the")
     print("record of the run: every step, every record, and every exchange with the model.")
