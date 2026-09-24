@@ -5580,9 +5580,17 @@ def methodology_account(units, chunks, calls, settings):
 
 
 def methodology_cells(state):
-    """A unit's two cells of step 05: the chunks of the methodology found to bear on it, as refs joined with "; ", and
-    the deviations named, each opening with the refs it rests on. What is not finished says so, and says what to do.
-    Enforces: R2, R10"""
+    """A unit's three cells of step 05: the chunks of the methodology found to bear on it, as refs joined with "; ";
+    the items flagged, each opening with the refs it rests on; and how many items that cell holds - None where it
+    holds no result yet, because the methodology is not searched in full. What is not finished says so, and says what
+    to do. Enforces: R2, R10"""
+    refs, flagged = methodology_texts(state)
+    ready = state["askable"] and not state["open batches"]
+    return refs, flagged, len(state["deviations"]) if ready else None
+
+
+def methodology_texts(state):
+    """The first two cells of methodology_cells."""
     if not state["askable"]:
         return NOT_SEARCHED, NOT_COMPARED
     refs = "; ".join(dict.fromkeys(item["ref"] for item in state["relevant"]))
@@ -6007,7 +6015,8 @@ def spread_rows(ref, parts, columns):
     """The rows a unit takes on Chunks_Model: its code down its parts, and each of its own columns from the first row
     down, continued on the rows below where longer than a cell, never cut. A unit takes as many rows as the longest of
     these needs; with more than one, they are numbered M-0003-1, M-0003-2 and so on. Enforces: R2, R13"""
-    cut = {field: [piece for piece, _ in text_slices(value, float("inf"), SLICE_CHARS)] if value else []
+    cut = {field: ([value] if value is not None else []) if not isinstance(value, str) else
+                  [piece for piece, _ in text_slices(value, float("inf"), SLICE_CHARS)] if value else []
            for field, value in columns.items()}
     count = max([len(parts)] + [len(pieces) for pieces in cut.values()])
     rows = []
@@ -6044,9 +6053,9 @@ def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
         questioned.setdefault(row["unit_ref"], []).append(row)
     for ref, parts in by_unit.items():
         linked = links.get(ref) or {}
-        refs, deviations = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", "")
+        refs, deviations, count = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", "", None)
         rows += spread_rows(ref, parts, {"interpretation": interpretation_of(questioned.get(ref, parts), said, unanswered, was_asked),
-                                         "methodology_refs": refs, "deviations": deviations,
+                                         "methodology_refs": refs, "deviations": deviations, "flagged_count": count,
                                          "upstream": "; ".join(linked.get("upstream") or ()),
                                          "downstream": "; ".join(linked.get("downstream") or ())})
     return rows
@@ -6129,7 +6138,8 @@ sheets:
   - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
   - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
   - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
-  - {header: 'Potential Deviations (flagged by LLM, subject to human review)', group: model, field: deviations, width: 110}
+  - {header: 'Flagged Items (by LLM, subject to human review)', group: model, field: deviations, width: 110}
+  - {header: Count of Flagged Items (by LLM), group: model, field: flagged_count, width: 14}
 '''
 
 def load_layout():
@@ -6483,7 +6493,7 @@ def check_chat(chat):
         print("chat() answered:", str(reply)[:60])
         print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
         print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
-        print("(searched by LLM) and Potential Deviations (flagged by LLM, subject to human review).")
+        print("(searched by LLM) and Flagged Items (by LLM, subject to human review), with their count.")
     except Exception as problem:
         print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
               " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
