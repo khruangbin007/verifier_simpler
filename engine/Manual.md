@@ -41,7 +41,7 @@ Fourteen rules, each enforced by named code: its docstring says so (`Enforces: R
 |---|---|
 | R1 | The tool shows; people decide. No rating of seriousness. The policy terms never appear in anything the tool produces or names. |
 | R2 | Closed accounting. Every unit read is one row of its sheet, and no row is anything else; this identity is checked on every run. A file, a step or a call that fails is written down, and the run goes on. |
-| R3 | The model's opinion is never the last word: a review asks the model nothing, and everything the workbook shows is read and parsed by code. |
+| R3 | The model's opinion is never the last word. What a language model writes is marked as its own - one column headed "(by LLM)" - and recorded, question and answer, in the audit log; everything else the workbook shows is read and parsed by code, and nothing the code reads, maps or checks depends on an answer. |
 | R4 | Every record carries its provenance - the run and the step - and every unit can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
 | R6 | Inputs are never modified. A run writes only inside its own folder. |
@@ -107,14 +107,14 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 |---|---|---|
 | **cell 1** | `verifier.setup(dbutils)`: makes the widgets, installs a package only if one the engine imports is missing, gets flowR ready, and prints what the other three cells do | after a cluster restart, or after pasting a package index |
 | **cell 2** | Your organisation's `chat()`, already filled in; it reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | when the gateway or your id changes |
-| **cell 3** | `verifier.review()`: reads every input file and maps how the model computes what it returns. Prints what each step did | after the cluster restarts, or you add an input: finished steps are never repeated |
+| **cell 3** | `verifier.review()`: reads every input file, maps how the model computes what it returns, then asks your `chat()` to describe each piece of the model's code (step 04). Prints what each step did | after the cluster restarts, or you add an input: finished steps are never repeated |
 | **cell 4** | `verifier.verify()`: checks the finished run folder against its own record | after any run |
 
 **The widgets.** Four: the endpoint and token for the model gateway (01, 02), the model id (03) and the project date (04). Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
 
 **No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Packages come from PyPI, named in the engine (section 22).
 
-**The token.** It is read at the moment `chat()` is called, never stored. Only cell 2 calls `chat()`; a review makes no call, so a token that runs out stops nothing.
+**The token.** It is read at the moment `chat()` is called, never stored. Cell 2 calls `chat()` once; cell 3 calls it once for each piece of the model's code. A token that runs out during cell 3 leaves the pieces it could not ask about unanswered: paste a fresh token into widget 02 and run cell 3 again, and only those are asked again.
 
 **How long a run may take.** Cell 3 works in the cell itself, so you can see it and interrupt it. It may work for 600 minutes before it stops by itself and asks you to run it again - longer than any run we have seen; `verifier.review(foreground_minutes=...)` changes that.
 
@@ -143,7 +143,7 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 | `Model_Package_Info` | what was read and what was not, each file's content account, the coverage identity, the run's progress |
 | `Chunks_Methodology` | every unit of the methodology, with its place in the outline |
 | `Chunks_Documentation` | every unit of the documentation, with its place in the outline |
-| `Chunks_Model` | every unit of the model package: each a whole piece of code, as written |
+| `Chunks_Model` | every unit of the model package: each a whole piece of code, as written, and what the model says happens in it |
 | `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, one row per variable |
 
 **How to read one row of the map.** One row is one variable: where it sits (the Map ID, a column per level, and how deep it is), the variable itself with the code as written, the function that defines it with its unit, and what it is computed from — each of those a row beneath it. Section 8 describes the sheet in full.
@@ -187,6 +187,7 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 | File | identity |  |
 | Lines | identity |  |
 | Text | code text |  |
+| Code Interpretation (by LLM) | model | What the organisation's model says happens in the code, in one to three paragraphs, written in step 04 through your `chat()`. It is the model's reading, not the tool's, and nothing else in the workbook depends on it. "No interpretation" means the model gave no answer - run cell 3 again; "Not asked" means nothing was read from the file. |
 
 **Where the two mapping sheets went.** Two mapping sheets once held one row per model unit and one per documentation unit, with what each was linked to. The Model Implementation Map now shows each model unit in its place in the computation, so those two sheets are gone.
 
@@ -211,7 +212,7 @@ A called function is entered with the arguments that call gives it, so what it c
 |---|---|
 | `cell 1` says "STOPPED BEFORE RESTARTING PYTHON" | The install could not do what it should; the message says what is missing or what changed, and Python was not restarted. If it names a package the runtime itself needs, detach the notebook, attach it again and run `cell 1` once more. |
 | `cell 1` says "flowR IS NOT READY" | The reason follows it. If the download failed, download the archive it names on an approved machine and put it next to the notebook. If flowR "could not run on this cluster", the cluster does not let a notebook start a program: use one in dedicated (single-user) access mode. |
-| "Many calls in a row failed, so the run paused itself" | The gateway is not answering. Check it with `cell 2`, then run `cell 3` again. |
+| "Step 04 (interpret-code) did not finish" | The model gave no answer for some pieces of code - the gateway was busy or down, or the token ran out. Check it with `cell 2`, paste a fresh token if needed, then run `cell 3` again: only those pieces are asked again. |
 | The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. A new session starts a new run; the earlier run folder stays as it was. |
 | An input changed | Start a **new run** in the same project. `Model_Package_Info` lists what changed since the previous run. Never edit inputs of a run that has started. |
 | A unit of kind *File not read* | That file or expression could not be parsed. `Model_Package_Info` lists it with the reason; the rest of the package was still read. |
@@ -242,13 +243,14 @@ A called function is entered with the arguments that call gives it, so what it c
 
 ## 15. The pipeline
 
-Three steps, named in `verifier.PIPELINE`; nothing is loaded by path, and only a function the engine offers may be named.
+Four steps, named in `verifier.PIPELINE`; nothing is loaded by path, and only a function the engine offers may be named.
 
 | Step | Name | What it does |
 |---|---|---|
 | 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
 | 03 | build-map | the data flow of the package, read by flowR |
+| 04 | interpret-code | each unit of Chunks_Model put to the organisation's model through your `chat()`, `parallel_chats` questions at a time, for the Code Interpretation (by LLM) column; a step with questions left unanswered does not finish, and cell 3 run again asks only for those |
 
 **How R code is read.** All of the package's R code is read by flowR, a static dataflow analyser for R (Sihler and Tichy, Ulm University; GPLv3); the tool has no R parser of its own. In step 02 one flowR run reads every R file of the package and its NAMESPACE: the syntax trees give the units of Chunks_Model - functions, statements, tests - and the NAMESPACE says which functions are exported. A package too large for one answer is read a file at a time. In step 03 flowR reads each function's data flow, one function at a time so that memory stays bounded by the largest function. flowR parses the code with tree-sitter and decides, for every name, the definition it reads; for every call, the function it calls; and for every argument, the parameter it becomes there. The tool decides what is particular to a model: a column a dplyr verb creates, a stored table, a file a reader opens, and the places code cannot follow, recorded as gaps. flowR is run on the cluster itself in one-shot mode: it reads the code as text and never runs it, starts no R process, opens no port and needs no network. It is fetched once by cell 1 and refused unless its SHA-256 is the one pinned in `verifier.py`. On a cluster that cannot reach GitHub, download the archive on an approved machine and put it next to the notebook; cell 1 uses it from there.
 
@@ -256,7 +258,7 @@ A step that carries out several parts keeps them in order, and a later part read
 
 ## 16. How the model is used, and held
 
-A review asks the model nothing. Cell 2 asks your `chat()` one question, to check the gateway answers; what the workbook shows - the reading, the map, every row - is made by code alone.
+Cell 2 asks your `chat()` one question, to check the gateway answers. Cell 3 asks it one question for each unit of Chunks_Model - step 04 - and puts each answer in the column Code Interpretation (by LLM). The question is exact and recorded: its id is the hash of what was sent, so an answer already given in this run is never asked for twice, and the audit log's Model_Calls sheet holds every question, answer and outcome. Several questions go out at once (`parallel_chats`), but only one thread writes, in the order of the units, so the record never depends on which answer came back first. An answer that uses words the workbook may not hold is asked for again, naming them. Everything else the workbook shows - the reading, the accounts, the map - is made by code alone, and nothing in it depends on an answer.
 
 ## 17. Reading, and the content account
 
@@ -284,6 +286,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `bm25_b` | 0.75 | Text ranking: how much long passages are scaled down. |
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
 | `reviewer_id` |  | Who runs the notebook, taken from Databricks by cell 1; sent to the gateway by `chat()` and recorded against the run. |
+| `parallel_chats` | 8 | How many questions step 04 has out with the model at once. Lower it if the gateway limits how many calls may run together. |
 | `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 
 `map_granularity` (default `statement`): how fine the map is — `statement` gives a row for every variable; `function` folds a variable into what it rests on, leaving the values that cross a function call and the raw inputs. `map_rows_max` (default 5000): where a map stops; it says so in a row of its own, and names the setting.
@@ -313,7 +316,7 @@ After any change, see section 23.
 
 **Installing.** Every package comes from PyPI (`https://pypi.org/simple/`), named in the engine, so the cluster's network has to let it reach PyPI; a pip index set for the whole cluster is not used. Cell 1 does not install rapidocr-onnxruntime, the optional reader of the words inside pictures: it brings OpenCV, whose newest wheels carry an OpenSSL that a FIPS-mode cluster refuses by stopping the whole Python process. A picture is then kept as a Figure, and says that its words were not read.
 
-**What leaves the cluster.** Only this. In cell 1, pip asks PyPI for packages - their names and versions, nothing of yours - and flowR is downloaded from GitHub unless its archive is staged. In cell 2, one short test question goes to your `chat()`. A review sends nothing: the documents are read on the cluster by the tool itself, and flowR reads the code there in one-shot mode, needing no network.
+**What leaves the cluster.** Only this. In cell 1, pip asks PyPI for packages - their names and versions, nothing of yours - and flowR is downloaded from GitHub unless its archive is staged. In cell 2, one short test question goes to your `chat()`. In cell 3, step 04 sends each piece of the model's code - its text, file and lines, as Chunks_Model shows them - to your `chat()`, and so to your organisation's model gateway. Nothing else of a review leaves: the documents are read on the cluster by the tool itself, and flowR reads the code there in one-shot mode, needing no network.
 
 ## 23. Maintaining the tool
 

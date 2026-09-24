@@ -14,6 +14,7 @@ The file is one piece of engineering in four parts, in dependency order:
   the run: its folder, its record and Output.xlsx
 """
 import bz2
+import concurrent.futures
 import csv
 import dataclasses
 import datetime
@@ -147,7 +148,7 @@ class StepContext:
 class StepResult:
     """What every step function returns: records by kind, counts, and plain notes."""
     records: dict = field(default_factory=dict); counts: dict = field(default_factory=dict)
-    messages: list = field(default_factory=list)
+    messages: list = field(default_factory=list); finished: bool = True
 
 # ---------------------------------------------------------------- canonical JSON and hashes
 def to_plain(value):
@@ -4467,16 +4468,10 @@ ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------- settings (allow-list)
 DEFAULT_SETTINGS = {
-    
-    
-    
-    
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
-    
-    
     "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
-    "map_granularity": "statement", "map_rows_max": 5000}
+    "map_granularity": "statement", "map_rows_max": 5000, "parallel_chats": 8}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -4764,18 +4759,149 @@ def open_store(paths, settings):
     return OPEN_STORES[key]
 
 # ---------------------------------------------------------------- the wrapper around chat()
+# Step 04 puts every unit of Chunks_Model in front of the organisation's model, through the chat() of
+# cell 2, and asks what happens in it. A question is exact - its id is the hash of what was sent - so an
+# answer already recorded in this run is found by that id and never asked for twice. The model's words
+# go to one column, headed "(by LLM)", and to the audit log; nothing the code reads, maps or checks
+# depends on them. Enforces: R3, R5, R8
+
+CODE_QUESTION = "code interpretation"
+CODE_SYSTEM_PROMPT = (
+    "You explain R code to a person who reviews statistical models. You are given one piece of a model's R "
+    "package - a function, a statement, a test, stored data or another file - with its text exactly as written. "
+    "Describe what happens in it in one to three short paragraphs of plain prose: what it takes in, what it "
+    "computes and how, and what it returns or produces. Name the variables, functions and columns as they are "
+    "written in the code. Describe only what the text shows; where it relies on something the text does not "
+    "show, say so briefly, without guessing. Do not judge, rate or recommend anything. Write prose only: no "
+    "bullet points, no headings and no code blocks. Never use the words finding, error, severity, severe, "
+    "critical, major or minor, and do not call anything high, medium or low in risk, priority or impact; where "
+    "the code stops with a message, say that it stops with a message.")
+CHAT_TEXT_MAX = 60000        # characters of one unit's text sent in its question
+CHAT_ATTEMPTS = 3            # tries per question: a failed call, an empty answer or unwelcome words ask again
+CHAT_WORKER = threading.local()
+NO_ANSWER = "No interpretation: the model gave no answer. Run cell 3 again to ask again."
+NOT_ASKED = "Not asked: nothing was read from this file."
 
 
-# Fields of the gateway's reply that are worth keeping in the audit record. The reply also
-# echoes the prompts back (query, defaultprompt, source) and those are dropped: the tool already
-# stores the prompts it sent, and an echo would double the size of every call record.
+def askable(unit):
+    """Does this unit have text worth putting to the model? A file that could not be read has not."""
+    return unit["kind"] != KIND_NOT_READ and bool(unit["text"].strip())
+
+
+def code_question(unit):
+    """The question about one unit, exactly as sent: (system half, main half, question id)."""
+    text = unit["text"]
+    if len(text) > CHAT_TEXT_MAX:
+        text = text[:CHAT_TEXT_MAX] + "\n\n[Only the first %d characters are shown.]" % CHAT_TEXT_MAX
+    lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else "all"
+    main = "Kind: %s\nFile: %s, lines %s\nName: %s\n\n%s" % (unit["kind"], unit["file"], lines, unit.get("name") or "-", text)
+    return CODE_SYSTEM_PROMPT, main, sha256_text(CODE_SYSTEM_PROMPT + "\n\n" + main)
+
+
+def unwelcome_words(text):
+    """The words of an answer that no cell of the workbook may hold, as they were written. Enforces: R1, R10"""
+    found = [match.group(0) for match in PYTHON_TRACES.finditer(text)]
+    found += [match.group(0) for match in _BANNED_RE.finditer(text)]
+    return sorted(set(found), key=str.lower)
+
+
+def ask_model(chat, system, main):
+    """One question, asked on a worker thread: up to CHAT_ATTEMPTS tries. A call that raises waits a little
+    and tries again; an answer holding words the workbook refuses is asked for again, naming them. Returns
+    what happened, in plain words and in technical ones; it never raises and never writes, because only
+    the step's own thread writes. Enforces: R5, R8"""
+    CHAT_WORKER.active = True
+    started, plain, technical, question, answer = time.time(), [], [], main, ""
+    for attempt in range(1, CHAT_ATTEMPTS + 1):
+        try:
+            reply = chat(system, question)
+            answer = str(reply.get("answer") or "").strip() if isinstance(reply, dict) else ""
+        except Exception as problem:
+            answer = ""
+            plain.append("try %d: the call did not return an answer" % attempt)
+            technical.append("try %d: %s: %s" % (attempt, type(problem).__name__, problem))
+            if attempt < CHAT_ATTEMPTS:
+                time.sleep(2 ** attempt)                 # a busy gateway is given a moment
+            continue
+        if not answer:
+            plain.append("try %d: the answer was empty" % attempt)
+            continue
+        unwelcome = unwelcome_words(answer)
+        if not unwelcome or attempt == CHAT_ATTEMPTS:
+            if unwelcome:
+                plain.append("try %d: the answer still used words the workbook cannot hold" % attempt)
+            return {"answer": answer, "attempt": attempt, "plain": plain, "technical": technical,
+                    "seconds": time.time() - started}
+        plain.append("try %d: the answer used words the workbook cannot hold (%s)" % (attempt, ", ".join(unwelcome)))
+        question = main + ("\n\nYour last description used words this workbook cannot hold (%s). Write it again "
+                           "without them." % ", ".join(unwelcome))
+    return {"answer": "", "attempt": CHAT_ATTEMPTS, "plain": plain, "technical": technical, "seconds": time.time() - started}
+
+
+def interpret_code(ctx):
+    """Step 04, interpret-code: every unit of Chunks_Model described by the organisation's model, in one to
+    three paragraphs of prose, through the chat() of cell 2. Questions go out parallel_chats at a time; only
+    this thread writes, and in unit order, so the record never depends on which answer came back first. A
+    question already answered in this run is not asked again, and while any is left unanswered the step
+    does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
+    units = ctx.read("model_units")
+    answered = {call["question_id"] for call in ctx.read("llm_calls")
+                if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
+    wanted, before = [], 0
+    for unit in units:
+        if askable(unit):
+            question = code_question(unit)
+            if question[2] in answered:
+                before += 1
+            else:
+                wanted.append((unit,) + question)
+    counts = {"code blocks": len(units), "interpreted": before, "asked now": len(wanted), "not answered": 0,
+              "not asked": sum(1 for unit in units if not askable(unit))}
+    if not wanted:
+        return StepResult({}, counts, [])
+    chat = NOTEBOOK["chat"]
+    if chat is None:
+        counts["not answered"] = len(wanted)
+        return StepResult({}, counts, ["The code interpretations are written by your chat(): run cell 2, then cell 3 "
+                                       "again."], finished=False)
+    live("llm_token")                                    # the values the workers use, read here, now
+    results, workers = {}, max(1, int(ctx.settings.get("parallel_chats") or 1))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(ask_model, chat, system, main): number
+                   for number, (_, system, main, _) in enumerate(wanted)}
+        for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
+            results[futures[future]] = future.result()
+            live("llm_token")                            # a token pasted meanwhile reaches the next calls
+            if done == len(wanted) or done % max(1, len(wanted) // 10) == 0:
+                print("  code interpretations: %d of %d asked" % (done, len(wanted)))
+    redact = (NOTEBOOK["live"] or LiveValues()).redact
+    records, technical, provenance = [], [], ctx.provenance
+    for number, (unit, system, main, question_id) in enumerate(wanted):
+        got = results[number]
+        answer = redact(got["answer"])
+        technical += ["%s %s, %s" % (unit["ref"], unit["file"], redact(line)) for line in got["technical"]]
+        records.append({"run_id": provenance.run_id, "step_id": provenance.step_id, "step": provenance.step,
+                        "question_id": question_id, "question_type": CODE_QUESTION, "unit_ref": unit["ref"],
+                        "attempt": got["attempt"], "outcome": "answered" if answer else "not answered",
+                        "question": {"system": system, "main": main}, "answer": answer,
+                        "prompt_hash": question_id, "response_hash": sha256_text(answer) if answer else "",
+                        "what happened": got["plain"], "seconds": round(got["seconds"], 3)})
+    if technical:                                        # technical text belongs in run_log.txt only (R10)
+        with open(os.path.join(os.path.dirname(ctx.work_dir), "run_log.txt"), "a", encoding="utf-8") as handle:
+            handle.write("".join("step 04, %s\n" % line for line in technical))
+    missing = sum(1 for record in records if record["outcome"] != "answered")
+    counts.update({"interpreted": before + len(records) - missing, "not answered": missing})
+    messages = ["The model gave no interpretation for %d of %d code blocks. Run cell 3 again to ask for those again; "
+                "what went wrong is in run_log.txt." % (missing, before + len(records))] if missing else []
+    return StepResult({"llm_calls": records}, counts, messages, finished=not missing)
 
 
 # ---------------------------------------------------------------- the pipeline runner
 PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. Enforces: R11
     {"id": "01", "name": "prepare-run", "carried_out_by": "prepare_run"},
     {"id": "02", "name": "read-inputs", "carried_out_by": "read_inputs"},
-    {"id": "03", "name": "build-map", "carried_out_by": "build_map"})
+    {"id": "03", "name": "build-map", "carried_out_by": "build_map"},
+    {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"})
 
 def update_manifest(store, changes):
     """Change fields of the run manifest and write it back."""
@@ -4787,17 +4913,23 @@ def update_manifest(store, changes):
 
 def run_pipeline(paths, settings, stop_after=""):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
-    the run continues at the first step without one. Returns {"state", "message", "steps_run"}."""
+    the run continues at the first step without one. A step that says it did not finish - step 04 with
+    questions still unanswered - stops the run there, and is carried out again when cell 3 runs again.
+    Returns {"state", "message", "steps_run"}."""
     store = open_store(paths, settings)
-    done = {record["step_id"] for record in store.read("step_records")}
+    done = {record["step_id"] for record in store.read("step_records") if record.get("finished", True)}
     steps_run = []
     for step in PIPELINE:
         if stop_after and step["id"] > stop_after:
             break
         if step["id"] in done:
             continue
-        run_step(step, store, paths, settings)
+        finished = run_step(step, store, paths, settings)
         steps_run.append(step["name"])
+        if not finished:
+            message = "Step %s (%s) did not finish. Run cell 3 again to carry on from it." % (step["id"], step["name"])
+            rebuild_outputs(store, paths, settings, message)
+            return {"state": "unfinished", "message": message, "steps_run": steps_run}
         if stop_after and step["id"] == stop_after:
             break
     message = "Every step has run." if not stop_after else "Stopped after step %s as asked." % stop_after
@@ -4822,11 +4954,15 @@ def run_step(step, store, paths, settings):
     except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
         result = StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
     for kind in sorted(result.records):
-        store.append(kind, result.records[kind])
+        if kind == "llm_calls":                      # exchanges with the model: the audit log's Model_Calls sheet
+            store.append_calls(result.records[kind])
+        else:
+            store.append(kind, result.records[kind])
     result.messages = list(result.messages) + notes
     record_step(store, step, result, time.time() - started)
     rebuild_outputs(store, paths, settings, "")
     store.sync()
+    return result.finished
 
 def step_failure(step, problem, work_dir):
     """What the analyst is told when a step could not finish, and where the details are kept for
@@ -4845,7 +4981,8 @@ def record_step(store, step, result, seconds):
     store.append("step_records", [{
         "step_id": step["id"], "name": step["name"],
         "carried_out_by": step["carried_out_by"], "produced": produced, "counts": result.counts,
-        "messages": result.messages, "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "messages": result.messages, "finished": result.finished,
+        "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "seconds": round(seconds, 3)}])
 
 def log_line(store, text):
@@ -5125,16 +5262,30 @@ def rows_chunks(chunks):
              "source_file": c["source_file"]} for c in chunks]
 
 
-def rows_model_units(units):
-    """The rows of Chunks_Model: each a whole piece of code, as written."""
-    return [{"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"],
-             "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""} for u in units]
-
+def rows_model_units(units, calls=()):
+    """The rows of Chunks_Model: each a whole piece of code, as written, and what the organisation's model
+    says happens in it (step 04). Enforces: R2, R3"""
+    said, unanswered = {}, set()
+    for call in calls:
+        if call.get("question_type") == CODE_QUESTION:
+            if call.get("outcome") == "answered":
+                said[call["unit_ref"]] = call["answer"]
+                unanswered.discard(call["unit_ref"])
+            elif call["unit_ref"] not in said:
+                unanswered.add(call["unit_ref"])
+    asked, rows = bool(said or unanswered), []
+    for u in units:
+        interpretation = said.get(u["ref"]) or (NO_ANSWER if u["ref"] in unanswered else "")
+        if not interpretation and asked and not askable(u):
+            interpretation = NOT_ASKED
+        rows.append({"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"], "interpretation": interpretation,
+                     "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""})
+    return rows
 
 def sheet_rows(store, paths, settings, progress):
     """The rows of all five sheets, by sheet name."""
     mapped = implementation_map(store, settings)
-    model_rows, doc_rows = rows_model_units(store.read("model_units")), rows_chunks(store.read("chunks_doc"))
+    model_rows, doc_rows = rows_model_units(store.read("model_units"), store.read("llm_calls")), rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
             "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": model_rows,
             "Model_Implementation_Map": mapped}
@@ -5154,7 +5305,7 @@ def check_written_totals(rows, store):
 # Every sheet of Output.xlsx in order, and every column of each: its header, its colour group, the
 # field of the row it shows, its width, and whether it is typed by a person (input_text). One line
 # per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
-WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7}
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC}
 sheets:
 - name: Model_Package_Info
   columns:
@@ -5182,6 +5333,7 @@ sheets:
   - {header: File, group: identity, field: file, width: 30}
   - {header: Lines, group: identity, field: lines, width: 10}
   - {header: Text, group: code_text, field: text, width: 80, input_text: true}
+  - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
 - name: Model_Implementation_Map
   columns:
   - {header: MapID1, group: identity, field: id1, width: 7}
@@ -5282,7 +5434,7 @@ def file_sha256(path):
 
 def progress_text(store, waiting_message):
     """Where the run stands, in one or two plain sentences."""
-    records = store.read("step_records")
+    records = [record for record in store.read("step_records") if record.get("finished", True)]
     if not records:
         return "The run has been opened; no step has finished yet."
     last = records[-1]
@@ -5409,6 +5561,7 @@ STEP_FUNCTIONS = {        # the function that carries out each step of PIPELINE.
     "read_documentation": read_documentation,
     "read_package": read_package,
     "trace_dataflow": trace_dataflow,
+    "interpret_code": interpret_code,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,
     "build_map": build_map}
@@ -5445,6 +5598,8 @@ def live(name):
     """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
     while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8"""
     session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
+    if getattr(CHAT_WORKER, "active", False):       # a worker of step 04: the values its step last read
+        return session.get(name)
     try:
         widgets = NOTEBOOK["dbutils"].widgets
         session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), NOTEBOOK["user"])
@@ -5562,8 +5717,8 @@ def notebook_settings():
     return make_settings({"reviewer_id": NOTEBOOK["user"]})
 
 def check_chat(chat):
-    """Cell 2: ask the organisation's chat() one question and, once it answers, make the project's three
-    Inputs folders and say what belongs in each."""
+    """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's step 04,
+    make the project's three Inputs folders and say what belongs in each."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
         return
@@ -5571,6 +5726,7 @@ def check_chat(chat):
     try:
         reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
         print("chat() answered:", str(reply)[:60])
+        print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM).")
     except Exception as problem:
         print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
               " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
