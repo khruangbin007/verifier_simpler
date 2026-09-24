@@ -1,6 +1,6 @@
 # Verifier
 
-Reads a model's methodology, its package of code and data, and its documentation; maps how the model computes what it returns, from each final output down to its rawest inputs. It runs no model, rates nothing, decides nothing, and is tied to no sector.
+Reads a model's methodology, its package of code and data, and its documentation; maps how the model computes what it returns, from each final output down to its rawest inputs. It runs no model, rates nothing and decides nothing; the organisation's language model explains each piece of code in the credit concepts it implements, for the analyst who checks it against the methodology.
 
 ```
 Verifier.ipynb          the notebook: four cells, each one call into the engine

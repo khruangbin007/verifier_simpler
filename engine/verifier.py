@@ -420,8 +420,7 @@ def discover_families(root, rules, report):
     exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
     table; an element carrying its own heading in an attribute; one holding other blocks (a
     container); one holding text (a paragraph). Every decision is recorded with its reason in
-    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml.
-    Enforces: R9"""
+    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml."""
     known, found = rules["family_of"], {}
 
     def note(tag, family, reason):
@@ -1426,7 +1425,7 @@ _TOKEN_RE = re.compile(
 # The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
 # schemes. An analyst's Inputs/tag_rules.yaml is laid
 # over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
-# caller that changes the rules it was given changes only its own copy. Enforces: R9
+# caller that changes the rules it was given changes only its own copy.
 TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
 # Reviewer 1 owns this file. A project can override any part of it with Inputs/tag_rules.yaml
 # (same layout; a family given there replaces the family given here).
@@ -4940,23 +4939,37 @@ def open_store(paths, settings):
 
 # ---------------------------------------------------------------- the wrapper around chat()
 # Step 04 puts every unit of Chunks_Model in front of the organisation's model, through the chat() of
-# cell 2, and asks what happens in it. A question is exact - its id is the hash of what was sent - so an
+# cell 2, with the units it takes from and gives to as context, and asks it to explain the credit
+# concepts the code implements, for a CFA-level analyst checking it against the methodology. A question is exact - its id is the hash of what was sent - so an
 # answer already recorded in this run is found by that id and never asked for twice. The model's words
 # go to one column, headed "(by LLM)", and to the audit log; nothing the code reads, maps or checks
 # depends on them. Enforces: R3, R5, R8
 
 CODE_QUESTION = "code interpretation"
 CODE_SYSTEM_PROMPT = (
-    "You explain R code to a person who reviews statistical models. You are given one piece of a model's R "
-    "package - a function, a statement, a test, stored data or another file - with its text exactly as written. "
-    "Describe what happens in it in one to three short paragraphs of plain prose: what it takes in, what it "
-    "computes and how, and what it returns or produces. Name the variables, functions and columns as they are "
-    "written in the code. Describe only what the text shows; where it relies on something the text does not "
-    "show, say so briefly, without guessing. Do not judge, rate or recommend anything. Write prose only: no "
-    "bullet points, no headings and no code blocks. Never use the words finding, error, severity, severe, "
-    "critical, major or minor, and do not call anything high, medium or low in risk, priority or impact; where "
-    "the code stops with a message, say that it stops with a message.")
+    "You help financial analysts review how a credit model is implemented in R. Your reader is a credit analyst at "
+    "CFA level who is checking, piece by piece, whether the model's code implements its intended methodology, and "
+    "whether it is conceptually sound; they read financial concepts fluently, but not R. You are given one piece of "
+    "the model's R package - a function, a statement, a test, stored data or another file - exactly as written, "
+    "followed, for context, by the pieces of the package it takes something from and the pieces that take something "
+    "from it. Explain the one piece in the language of credit: the financial concept it implements (a probability of "
+    "default, a loss given default, an exposure, a correlation, a capital requirement, a rating, a score, and so "
+    "on); the inputs it takes and what each means financially; how it computes its result, as a formula an analyst "
+    "would recognise; the parameters, floors, caps, thresholds and constants it fixes, and what they stand for; and "
+    "what it returns and where that goes in the model. Say which methodological choices and assumptions the code "
+    "makes, and where it follows or departs from a standard credit convention (the Basel formulas, for example), "
+    "stated as fact, so that the analyst can set them against the methodology. Use the context only to understand "
+    "this piece, and describe it only as far as it explains this one. Decide yourself how much detail the analyst "
+    "needs: a sentence or two for a simple piece, as many paragraphs as an involved calculation deserves. Describe "
+    "only what the code shows; where it relies on something the code does not show, say so, and do not guess. Do "
+    "not rate, grade or recommend, and do not say whether the code is right: the analyst decides that. Write prose, "
+    "with formulas in plain text where they help; no bullet points, headings or code blocks. Never use the words "
+    "finding, error, severity, severe, critical, major or minor, and never call anything high, medium or low in "
+    "risk, rating, priority or impact: say riskier or safer, stronger or weaker, near the top or the bottom of the "
+    "scale, or give the number. Where the code stops with a message, say that it stops with a message.")
 CHAT_TEXT_MAX = 60000        # characters of one unit's text sent in its question
+CONTEXT_PIECE_MAX = 8000     # characters of one context piece's text
+CONTEXT_MAX = 40000          # characters of context in one question; the rest is named, not shown
 CHAT_ATTEMPTS = 3            # tries per question: a failed call, an empty answer or unwelcome words ask again
 CHAT_WORKER = threading.local()
 NO_ANSWER = "No interpretation: the model gave no answer. Run cell 3 again to ask again."
@@ -4968,13 +4981,34 @@ def askable(unit):
     return unit["kind"] != KIND_NOT_READ and bool(unit["text"].strip())
 
 
-def code_question(unit):
-    """The question about one unit, exactly as sent: (system half, main half, question id)."""
+def code_question(unit, upstream=(), downstream=()):
+    """The question about one unit, exactly as sent: (system half, main half, question id). The main half
+    is the unit itself, then, for context, the units it takes something from - each with the names it
+    takes - and the units that take something from it (step 03's links), each cut to CONTEXT_PIECE_MAX
+    and all of them to CONTEXT_MAX; a piece past that is named, not shown."""
+    def where(u):
+        return "%s, %s%s" % (u["kind"], u["file"], ", lines %d-%d" % tuple(u["lines"]) if u.get("lines") else "")
     text = unit["text"]
     if len(text) > CHAT_TEXT_MAX:
         text = text[:CHAT_TEXT_MAX] + "\n\n[Only the first %d characters are shown.]" % CHAT_TEXT_MAX
-    lines = "%d-%d" % tuple(unit["lines"]) if unit.get("lines") else "all"
-    main = "Kind: %s\nFile: %s, lines %s\nName: %s\n\n%s" % (unit["kind"], unit["file"], lines, unit.get("name") or "-", text)
+    parts = ["THE PIECE TO EXPLAIN\nKind: %s\nFile: %s%s\nName: %s\n\n%s" % (
+        unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "", unit.get("name") or "-", text)]
+    room = CONTEXT_MAX
+    for title, pieces in (("CONTEXT: THE PIECES IT TAKES SOMETHING FROM", upstream),
+                          ("CONTEXT: THE PIECES THAT TAKE SOMETHING FROM IT", downstream)):
+        shown = [title]
+        for piece, names in pieces:
+            head = "[%s] %s%s" % (piece["ref"], where(piece), " - it takes: %s" % ", ".join(names) if names else "")
+            body = piece["text"]
+            if len(body) > CONTEXT_PIECE_MAX:
+                body = body[:CONTEXT_PIECE_MAX] + "\n[Only the first %d characters are shown.]" % CONTEXT_PIECE_MAX
+            if len(body) > room:
+                shown.append(head + "\n[Not shown: the context is already long.]")
+                continue
+            room -= len(body)
+            shown.append(head + "\n" + body)
+        parts.append("\n\n".join(shown if len(shown) > 1 else shown + ["(none in the package)"]))
+    main = "\n\n\n".join(parts)
     return CODE_SYSTEM_PROMPT, main, sha256_text(CODE_SYSTEM_PROMPT + "\n\n" + main)
 
 
@@ -5019,18 +5053,25 @@ def ask_model(chat, system, main):
 
 
 def interpret_code(ctx):
-    """Step 04, interpret-code: every unit of Chunks_Model described by the organisation's model, in one to
-    three paragraphs of prose, through the chat() of cell 2. Questions go out parallel_chats at a time; only
+    """Step 04, interpret-code: every unit of Chunks_Model explained by the organisation's model in the credit
+    concepts it implements, for a CFA-level analyst, through the chat() of cell 2 - with the units it takes from
+    and the units that take from it (step 03's links) as context, and at the length the model judges it needs. Questions go out parallel_chats at a time; only
     this thread writes, and in unit order, so the record never depends on which answer came back first. A
     question already answered in this run is not asked again, and while any is left unanswered the step
     does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
     units = ctx.read("model_units")
+    by_ref = {u["ref"]: u for u in units}
+    links = {r["ref"]: r for r in ctx.read("dataflow") if r.get("record_type") == "unit_links"}
     answered = {call["question_id"] for call in ctx.read("llm_calls")
                 if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
-    wanted, before = [], 0
+    wanted, before, context = [], 0, {}
     for unit in units:
         if askable(unit):
-            question = code_question(unit)
+            linked = links.get(unit["ref"]) or {}
+            upstream = [(by_ref[ref], (linked.get("via") or {}).get(ref, [])) for ref in linked.get("upstream") or () if ref in by_ref]
+            downstream = [(by_ref[ref], []) for ref in linked.get("downstream") or () if ref in by_ref]
+            context[unit["ref"]] = {"upstream": [u["ref"] for u, _ in upstream], "downstream": [u["ref"] for u, _ in downstream]}
+            question = code_question(unit, upstream, downstream)
             if question[2] in answered:
                 before += 1
             else:
@@ -5062,6 +5103,7 @@ def interpret_code(ctx):
         technical += ["%s %s, %s" % (unit["ref"], unit["file"], redact(line)) for line in got["technical"]]
         records.append({"run_id": provenance.run_id, "step_id": provenance.step_id, "step": provenance.step,
                         "question_id": question_id, "question_type": CODE_QUESTION, "unit_ref": unit["ref"],
+                        "context": context[unit["ref"]],
                         "attempt": got["attempt"], "outcome": "answered" if answer else "not answered",
                         "question": {"system": system, "main": main}, "answer": answer,
                         "prompt_hash": question_id, "response_hash": sha256_text(answer) if answer else "",
