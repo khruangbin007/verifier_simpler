@@ -4659,6 +4659,10 @@ ANSWERS = {}                 # run (its scratch folder) -> {question id: (questi
 ANSWERS_LOCK = threading.Lock()
 
 
+class NoAnswer(Exception):
+    """What chat() returned held no answer: a dictionary without "answer", or with an empty one, or not a dictionary."""
+
+
 def unwelcome_words(text):
     """The words of an answer that no cell of the workbook may hold, as they were written. Enforces: R1, R10"""
     found = [match.group(0) for match in PYTHON_TRACES.finditer(text)]
@@ -4684,28 +4688,34 @@ def check_words(answer, last):
                          "them." % ", ".join(unwelcome)}, ""
 
 
-def ask_model(chat, system, main, check=None):
-    """One question, asked on a worker thread: up to CHAT_ATTEMPTS tries. A call that raises waits a little and tries
-    again; an answer `check` turns down - words the workbook cannot hold, or not the form asked for - is asked for again,
-    saying what was wrong. Returns what happened, in plain words and in technical ones, and what check read from the
-    answer; it never raises and never writes, because only the step's own thread writes. Enforces: R5, R8"""
+def ask_model(chat, system, main, check=None, halt=None):
+    """One question, asked on a worker thread: up to CHAT_ATTEMPTS tries. A failed call - one that raises, or returns
+    anything but a dictionary with an answer under "answer": an error from the gateway, an expired token - waits a
+    little and tries again; an answer `check` turns down - words the workbook cannot hold, or not the form asked for -
+    is asked for again, saying what was wrong. Once `halt` is set - the cell that asked has ended, or was stopped - no
+    further try is made: the question stays open for the next time cell 3 runs. Returns what happened, in plain words
+    and in technical ones, and what check read from the answer; it never raises and never writes, because only the
+    step's own thread writes. Enforces: R5, R8"""
     check = check or check_words
+    halt = halt or threading.Event()
     CHAT_WORKER.active = True
     started, plain, technical, question, failed_calls = time.time(), [], [], main, 0
     for attempt in range(1, CHAT_ATTEMPTS + 1):
+        if halt.is_set():
+            plain.append("try %d: not made, because the cell had ended" % attempt)
+            break
         try:
             reply = chat(system, question)
             answer = str(reply.get("answer") or "").strip() if isinstance(reply, dict) else ""
+            if not answer:
+                raise NoAnswer("chat() returned no \"answer\": %s" % " ".join(repr(reply).split())[:300])
         except Exception as problem:
             failed_calls += 1
             plain.append("try %d: the call did not return an answer" % attempt)
-            technical.append("try %d: %s: %s" % (attempt, type(problem).__name__, problem))
+            technical.append("try %d: %s" % (attempt, problem if isinstance(problem, NoAnswer) else "%s: %s" % (type(problem).__name__, problem)))
             if attempt < CHAT_ATTEMPTS:
-                time.sleep(CHAT_BACKOFF ** attempt * random.uniform(0.5, 1.5))   # a busy gateway is given a moment; the
+                halt.wait(CHAT_BACKOFF ** attempt * random.uniform(0.5, 1.5))   # a busy gateway is given a moment; the
                                                  # jitter keeps many refused calls from coming back all at once
-            continue
-        if not answer:
-            plain.append("try %d: the answer was empty" % attempt)
             continue
         try:
             reading, problem, note = check(answer, attempt == CHAT_ATTEMPTS)
@@ -4748,7 +4758,8 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     waiting, running = collections.deque(work), {}
     window, threshold = float(min(CHAT_START, most)), float(most)      # how many may be out; where doubling gives way to adding
     answered = failed = in_a_row = out_when_failing = completed = calm_after = peak = 0
-    stopped, stopped_at, said, refreshed, failures = "", 0.0, time.time(), time.time(), []
+    stopped, stopped_at, said, refreshed, failures, last_problem = "", 0.0, time.time(), time.time(), [], ""
+    halt = threading.Event()                                  # set when this cell stops asking, however it ends
 
     def keep(question, future):
         if future.cancelled():
@@ -4776,7 +4787,7 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
                 while waiting and len(running) < int(window) and not stopped:
                     question = build(waiting.popleft())
                     kept = {key: value for key, value in question.items() if key not in ("system", "main")}
-                    future = pool.submit(ask_model, chat, question["system"], question["main"], check_of(question))
+                    future = pool.submit(ask_model, chat, question["system"], question["main"], check_of(question), halt)
                     future.add_done_callback(functools.partial(keep, kept))
                     running[future] = kept
                 peak = max(peak, len(running))
@@ -4801,9 +4812,11 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
                         failed, in_a_row = failed + 1, in_a_row + 1
                         out_when_failing = len(running) + 1 if in_a_row == 1 else out_when_failing
                         failures.append(bool(result["failed calls"]))
+                        last_problem = re.sub(r"^try \d+: ", "", result["technical"][-1]) if result["technical"] else last_problem
                     follow = after(question, result) if after else []
                     if not stopped and in_a_row >= out_when_failing + CHAT_STOP_AFTER:
-                        stopped, stopped_at = stop_message(failures[-in_a_row:], answered), time.time()
+                        stopped, stopped_at = stop_message(failures[-in_a_row:], answered,
+                                                           (NOTEBOOK["live"] or LiveValues()).redact(last_problem)), time.time()
                         waiting.clear()
                     if follow and not stopped:
                         waiting.extendleft(reversed(follow))
@@ -4813,20 +4826,24 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
                     progress()
                     said = time.time()
         finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+            halt.set()                                       # no question is tried again once the cell has stopped asking;
+            pool.shutdown(wait=False, cancel_futures=True)   # what is still out is held when it arrives
         progress(final=True)
     with ANSWERS_LOCK:
         taken = [held.pop(key) for key in [key for key, (question, _) in held.items() if question["type"] in types]]
     return taken, stopped, peak
 
 
-def stop_message(failures, answered):
-    """Why a step stopped asking, in plain words: the calls failed - the token may have run out - or the answers came
-    back in a form that could not be read."""
+def stop_message(failures, answered, last_problem=""):
+    """Why a step stopped asking, in plain words: the calls failed - the token may have run out, or the gateway be
+    down - or the answers came back in a form that could not be read. `last_problem` is what the last failed call
+    returned, the token removed."""
     if all(failures):
-        return ("The model stopped answering: the last %d questions got no answer, so no more were sent. If the access token "
-                "has run out, paste a new one into widget 02 and run cell 3 again: the %d answers received in this cell are "
-                "kept, and only the questions still open are asked." % (len(failures), answered))
+        return ("The model stopped answering: the last %d questions got no answer, so no more were sent.%s If the access token "
+                "has run out, paste a new one into widget 02; if the gateway is down, wait until it is back. Then run cell 3 "
+                "again - or every cell, from cell 1: the %d answers received in this cell are kept, with every answer received "
+                "before, and only the questions still open are asked." % (
+                    len(failures), " The last call returned: %s." % last_problem.rstrip(".")[:300] if last_problem else "", answered))
     return ("The last %d answers of the model could not be read in the form asked for, so no more questions were sent. "
             "Run cell 3 again to carry on: the %d answers received in this cell are kept; what the model wrote is in "
             "run_log.txt." % (len(failures), answered))
@@ -6517,7 +6534,10 @@ def review():
     print(result["message"])
     store = open_store(paths, settings)
     print("\nWhat each step did:")
-    for record in store.read("step_records"):
+    latest = {}
+    for record in store.read("step_records"):                 # a step tried again says what its latest attempt did;
+        latest[record["step_id"]] = record                     # the audit log keeps every attempt
+    for record in (latest[step_id] for step_id in sorted(latest)):
         print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
         for message in record["messages"]:
             print("      " + message)
