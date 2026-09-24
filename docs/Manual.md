@@ -141,8 +141,8 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 | Sheet | What it holds |
 |---|---|
 | `Model_Package_Info` | what was read and what was not, each file's content account, the coverage identity, the run's progress |
-| `Chunks_Canon` | every unit of the methodology, with its place in the outline |
-| `Chunks_Doc` | every unit of the documentation, with its place in the outline |
+| `Chunks_Methodology` | every unit of the methodology, with its place in the outline |
+| `Chunks_Documentation` | every unit of the documentation, with its place in the outline |
 | `Chunks_Model` | every unit of the model package: each a whole piece of code, as written |
 | `Model_Implementation_Map` | how the model computes what it returns: each final output down to its rawest inputs, one row per variable |
 
@@ -158,7 +158,7 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 | Item | identity |  |
 | Value | assessments |  |
 
-**Chunks_Canon**
+**Chunks_Methodology**
 
 | Column | Colour group | What it shows |
 |---|---|---|
@@ -168,7 +168,7 @@ Five sheets, always in this order; a sheet whose step has not run yet shows its 
 | Text | methodology |  |
 | Source file | identity |  |
 
-**Chunks_Doc**
+**Chunks_Documentation**
 
 | Column | Colour group | What it shows |
 |---|---|---|

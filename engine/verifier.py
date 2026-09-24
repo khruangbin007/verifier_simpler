@@ -5148,7 +5148,7 @@ def blank_row():
 
 
 def rows_chunks(chunks):
-    """The rows of Chunks_Canon and Chunks_Doc."""
+    """The rows of Chunks_Methodology and Chunks_Documentation."""
     return [{"ref": c["ref"], "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": c["text"],
              "source_file": c["source_file"]} for c in chunks]
 
@@ -5164,13 +5164,13 @@ def sheet_rows(store, paths, settings, progress):
     mapped = implementation_map(store, settings)
     model_rows, doc_rows = rows_model_units(store.read("model_units")), rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Canon": rows_chunks(store.read("chunks_canon")), "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
+            "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": model_rows,
             "Model_Implementation_Map": mapped}
 
 def check_written_totals(rows, store):
     """The identity of the workbook: every unit read is one row of its sheet, and no row is anything
     else. Raised as a fault of the tool, never as a remark about the model. Enforces: R2"""
-    for kind, sheet in (("model_units", "Chunks_Model"), ("chunks_doc", "Chunks_Doc"), ("chunks_canon", "Chunks_Canon")):
+    for kind, sheet in (("model_units", "Chunks_Model"), ("chunks_doc", "Chunks_Documentation"), ("chunks_canon", "Chunks_Methodology")):
         read = [record["ref"] for record in store.read(kind)]
         written = [row["ref"] for row in rows[sheet]]
         if sorted(read) != sorted(written) or len(set(written)) != len(written):
@@ -5189,14 +5189,14 @@ sheets:
   - {header: Group, group: identity, field: group, width: 26}
   - {header: Item, group: identity, field: item, width: 40}
   - {header: Value, group: assessments, field: value, width: 90}
-- name: Chunks_Canon
+- name: Chunks_Methodology
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: methodology, field: text, width: 90, input_text: true}
   - {header: Source file, group: identity, field: source_file, width: 28}
-- name: Chunks_Doc
+- name: Chunks_Documentation
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
@@ -5384,7 +5384,8 @@ def verify_evidence_pack(paths, settings, live=None):
         fresh = {to_plain(r)["ref"]: to_plain(r)["content_hash"] for r in function(context).records.get(kind, [])}
         recorded = {r["ref"]: r["content_hash"] for r in store.read(kind)}
         differing = sorted(ref for ref in set(fresh) | set(recorded) if fresh.get(ref) != recorded.get(ref))
-        line("Re-reading the inputs gives the recorded content hashes (%s)" % kind, not differing, ", ".join(differing[:5]))
+        sheet = {"chunks_canon": "Chunks_Methodology", "chunks_doc": "Chunks_Documentation", "model_units": "Chunks_Model"}.get(kind, kind)
+        line("Re-reading the inputs gives the recorded content hashes (%s)" % sheet, not differing, ", ".join(differing[:5]))
     written = {kind: len(store.read(kind)) for kind in ("chunks_canon", "chunks_doc", "model_units")}
     line("Every unit read is in the record", all(written.values()),
          ", ".join("%s: %d" % pair for pair in sorted(written.items())))
