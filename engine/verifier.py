@@ -14,11 +14,13 @@ The file is one piece of engineering in four parts, in dependency order:
   the run: its folder, its record and Output.xlsx
 """
 import bz2
+import collections
 import concurrent.futures
 import csv
 import dataclasses
 import datetime
 import email
+import functools
 import getpass
 import gzip
 import hashlib
@@ -4650,7 +4652,8 @@ DEFAULT_SETTINGS = {
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
-    "map_granularity": "statement", "map_rows_max": 5000, "parallel_chats": 8}
+    "map_granularity": "statement", "map_rows_max": 5000, "parallel_chats": 16,
+    "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -4937,15 +4940,309 @@ def open_store(paths, settings):
         OPEN_STORES[key] = AuditStore(paths.local_dir, paths.audit_dir)
     return OPEN_STORES[key]
 
-# ---------------------------------------------------------------- the wrapper around chat()
-# Step 04 puts every unit of Chunks_Model in front of the organisation's model, through the chat() of
-# cell 2, with the units it takes from and gives to as context, and asks it to explain the credit
-# concepts the code implements, for a CFA-level analyst checking it against the methodology. A question is exact - its id is the hash of what was sent - so an
-# answer already recorded in this run is found by that id and never asked for twice. The model's words
-# go to one column, headed "(by LLM)", and to the audit log; nothing the code reads, maps or checks
-# depends on them. Enforces: R3, R5, R8
-
+# ---------------------------------------------------------------- the organisation's model: what one question may hold
+# chat() holds a question and its answer together up to chat_token_limit tokens (40,000 by default). The model's own
+# tokenizer is not at hand, so the tool counts tokens its own way, on the high side: measured on prose, R code, tables
+# of numbers, mathematics and JSON against six tokenizers (three of OpenAI's, Llama's, Mistral's and Claude's), its count
+# was never below theirs. Every question is built to fit what is left once its answer's share is set aside.
 CODE_QUESTION = "code interpretation"
+METHODOLOGY_SEARCH = "methodology search"
+METHODOLOGY_COMPARISON = "methodology comparison"
+ANSWER_TOKENS = {CODE_QUESTION: 6000, METHODOLOGY_SEARCH: 4000, METHODOLOGY_COMPARISON: 8000}   # kept for the answer
+QUESTION_MARGIN = 1000       # tokens kept for the gateway's own wrapping of a question
+TOKEN_PIECES = re.compile(r"[A-Za-z]+|[0-9]|\n|[^\S\n]+|[^A-Za-z0-9\s]")
+
+
+def token_costs(text):
+    """Each piece of a text with the tokens it is counted as: a run of letters one for every six letters; a digit, a
+    sign or a line break one; a space one unless it leads into a word; a character outside ASCII one for each of its
+    UTF-8 bytes. Yields (where the piece ends, its tokens)."""
+    size = len(text)
+    for match in TOKEN_PIECES.finditer(text):
+        piece, end = match.group(0), match.end()
+        first = piece[0]
+        if first.isascii() and first.isalpha():
+            yield end, -(-len(piece) // 6)
+        elif first.isspace() and first != "\n":
+            leads = len(piece) == 1 and end < size and text[end].isascii() and text[end].isalpha()
+            yield end, 0 if leads else 1
+        elif first.isascii():
+            yield end, 1
+        else:
+            yield end, len(first.encode("utf-8"))
+
+
+def estimate_tokens(text):
+    """About how many tokens a text takes a model, erring high (see token_costs)."""
+    return sum(cost for _, cost in token_costs(text or ""))
+
+
+def question_room(settings, question_type):
+    """How many tokens a question of this type may take: the limit, less the share kept for its answer and a margin
+    for the gateway's own wrapping. A low limit keeps a quarter of itself for the answer at most."""
+    limit = int((settings or {}).get("chat_token_limit") or DEFAULT_SETTINGS["chat_token_limit"])
+    return limit - min(ANSWER_TOKENS[question_type], limit // 4) - min(QUESTION_MARGIN, limit // 20)
+
+
+def cut_to_tokens(text, tokens):
+    """The longest start of `text` that takes at most `tokens`, ended at a line end when one is near; and whether
+    anything was cut."""
+    total, end = 0, 0
+    for at, cost in token_costs(text):
+        if total + cost > tokens:
+            break
+        total, end = total + cost, at
+    else:
+        return text, False
+    if end == 0:                                         # one piece longer than the room: cut inside it
+        end = max(1, tokens)
+    kept = text[:end]
+    line_end = kept.rfind("\n")
+    if line_end > len(kept) * 0.8:
+        kept = kept[:line_end]
+    return kept, True
+
+
+def split_to_tokens(text, tokens):
+    """A text in consecutive parts of at most `tokens` each, cut at line ends where possible; together they hold
+    every character of it but the line breaks the cuts fall on."""
+    parts, rest = [], text
+    while rest:
+        kept, cut = cut_to_tokens(rest, tokens)
+        parts.append(kept)
+        rest = rest[len(kept):]
+        if rest.startswith("\n"):
+            rest = rest[1:]
+        if not cut:
+            break
+    return parts or [""]
+
+
+def shown_cut(text, tokens):
+    """A text cut to `tokens`, saying so at its end when it was cut."""
+    if estimate_tokens(text) <= tokens:
+        return text
+    kept, _ = cut_to_tokens(text, max(1, tokens - 20))
+    return kept + "\n[Only the first %d characters are shown.]" % len(kept)
+
+
+# ---------------------------------------------------------------- the organisation's model: many questions at once
+# Steps 04 and 05 put their questions to the chat() of cell 2, as many at once as parallel_chats allows. A question is
+# exact - its id is the hash of what was sent - so an answer already recorded in this run is never asked for twice.
+# Every answer is kept, in memory, the moment it arrives, by the thread that received it; only the step's own thread
+# writes records, in an order fixed by the units and never by which answer came back first. A cell interrupted, or a
+# step stopped because the model stopped answering, therefore loses nothing: running cell 3 again finds what arrived
+# and asks only for the rest. How many questions are out at once adapts: a call that fails halves it, an answer
+# without trouble adds one back, so a busy gateway is not flooded. Enforces: R2, R3, R5, R8
+CHAT_ATTEMPTS = 3            # tries per question: a failed call, an empty answer or an answer turned down ask again
+CHAT_BACKOFF = 2             # seconds before the second try of a failed call; before the third, its square
+CHAT_WORKER = threading.local()
+CHAT_STOP_AFTER = 4          # questions in a row without an answer, beyond those already out: the model has stopped answering
+CHAT_STOP_WAIT = 120         # seconds a stopped step waits for the questions still out
+CHAT_PROGRESS_SECONDS = 60   # how often a long step says how far it has got
+ANSWERS = {}                 # run folder -> {question id: (question, what came back)}, until the step writes them
+ANSWERS_LOCK = threading.Lock()
+
+
+def unwelcome_words(text):
+    """The words of an answer that no cell of the workbook may hold, as they were written. Enforces: R1, R10"""
+    found = [match.group(0) for match in PYTHON_TRACES.finditer(text)]
+    found += [match.group(0) for match in _BANNED_RE.finditer(text)]
+    return sorted(set(found), key=str.lower)
+
+
+def own_words(text):
+    """A text without what it quotes inside curly double quotes: the words it says itself."""
+    return re.sub(r"\u201c.*?\u201d", "", text or "", flags=re.S)
+
+
+def check_words(answer, last):
+    """Step 04's check of an answer: words the workbook cannot hold are asked about again, and kept on the last try.
+    Returns (what was read, what to ask again or None, a note)."""
+    unwelcome = unwelcome_words(answer)
+    if not unwelcome:
+        return None, None, ""
+    if last:
+        return None, None, "the answer still used words the workbook cannot hold"
+    return None, {"plain": "the answer used words the workbook cannot hold (%s)" % ", ".join(unwelcome),
+                  "ask": "Your last description used words this workbook cannot hold (%s). Write it again without "
+                         "them." % ", ".join(unwelcome)}, ""
+
+
+def ask_model(chat, system, main, check=None):
+    """One question, asked on a worker thread: up to CHAT_ATTEMPTS tries. A call that raises waits a little and tries
+    again; an answer `check` turns down - words the workbook cannot hold, or not the form asked for - is asked for again,
+    saying what was wrong. Returns what happened, in plain words and in technical ones, and what check read from the
+    answer; it never raises and never writes, because only the step's own thread writes. Enforces: R5, R8"""
+    check = check or check_words
+    CHAT_WORKER.active = True
+    started, plain, technical, question, failed_calls = time.time(), [], [], main, 0
+    for attempt in range(1, CHAT_ATTEMPTS + 1):
+        try:
+            reply = chat(system, question)
+            answer = str(reply.get("answer") or "").strip() if isinstance(reply, dict) else ""
+        except Exception as problem:
+            failed_calls += 1
+            plain.append("try %d: the call did not return an answer" % attempt)
+            technical.append("try %d: %s: %s" % (attempt, type(problem).__name__, problem))
+            if attempt < CHAT_ATTEMPTS:
+                time.sleep(CHAT_BACKOFF ** attempt)      # a busy gateway is given a moment
+            continue
+        if not answer:
+            plain.append("try %d: the answer was empty" % attempt)
+            continue
+        try:
+            reading, problem, note = check(answer, attempt == CHAT_ATTEMPTS)
+        except Exception as fault:                       # a check that fails is the tool's fault: said, never raised
+            reading, problem, note = None, {"plain": "the answer could not be checked", "ask": ""}, ""
+            technical.append("try %d: checking the answer: %s: %s" % (attempt, type(fault).__name__, fault))
+        if problem is None:
+            if note:
+                plain.append("try %d: %s" % (attempt, note))
+            return {"answer": answer, "reading": reading, "attempt": attempt, "plain": plain, "technical": technical,
+                    "failed calls": failed_calls, "seconds": time.time() - started}
+        plain.append("try %d: %s" % (attempt, problem["plain"]))
+        technical.append("try %d: the answer turned down began: %s" % (attempt, " ".join(answer.split())[:600]))
+        question = main + ("\n\n" + problem["ask"] if problem["ask"] else "")
+    return {"answer": "", "reading": None, "attempt": CHAT_ATTEMPTS, "plain": plain, "technical": technical,
+            "failed calls": failed_calls, "seconds": time.time() - started}
+
+
+def held_answers(ctx, types):
+    """The answers of this run that arrived but are not yet written, as call records without their provenance: those
+    of a cell that was interrupted, for instance. Read, not taken: ask_all takes them when it hands them over."""
+    held = ANSWERS.get(ctx.options["paths"].run_dir) or {}
+    with ANSWERS_LOCK:
+        entries = list(held.values())
+    return [dict(question, question_id=question["id"], question_type=question["type"], reading=result["reading"],
+                 outcome="answered" if result["answer"] else "not answered")
+            for question, result in entries if question["type"] in types]
+
+
+def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", types=()):
+    """Ask what `work` holds - and what `after` adds as answers come back - through chat(), as many at once as
+    parallel_chats allows. build(item) makes the question, on this thread, when it is sent; check_of(question) is the
+    check its answers pass; after(question, result) returns the next items, which go before the rest. Every answer is
+    held in ANSWERS by the thread that received it, so an interrupted cell loses none. When the questions already out,
+    and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
+    Returns (every held result of these types, taken, as (question, result)), and why it stopped, or "". Enforces: R2, R5, R8"""
+    held = ANSWERS.setdefault(ctx.options["paths"].run_dir, {})
+    most = max(1, int(ctx.settings.get("parallel_chats") or 1))
+    waiting, running, window = collections.deque(work), {}, most
+    answered = failed = in_a_row = out_when_failing = 0
+    stopped, stopped_at, said, failures = "", 0.0, time.time(), []
+
+    def keep(question, future):
+        if future.cancelled():
+            return
+        try:
+            result = future.result()
+        except BaseException:
+            return
+        with ANSWERS_LOCK:
+            held[question["id"]] = (question, result)
+
+    def progress(final=False):
+        parts = ["%d answered" % answered] + (["%d not answered" % failed] if failed else [])
+        if not final:
+            parts.append("%d still to ask" % (len(waiting) + len(running)))
+        print("  %s: %s" % (label, ", ".join(parts)))
+
+    if waiting:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=most)
+        live("llm_token")                                    # the values the workers use, read here, now
+        try:
+            while waiting or running:
+                while waiting and len(running) < window and not stopped:
+                    question = build(waiting.popleft())
+                    kept = {key: value for key, value in question.items() if key not in ("system", "main")}
+                    future = pool.submit(ask_model, chat, question["system"], question["main"], check_of(question))
+                    future.add_done_callback(functools.partial(keep, kept))
+                    running[future] = kept
+                if not running:
+                    break
+                done, _ = concurrent.futures.wait(list(running), timeout=5, return_when=concurrent.futures.FIRST_COMPLETED)
+                live("llm_token")                            # a token pasted meanwhile reaches the next calls
+                for future in done:
+                    question, result = running.pop(future), future.result()
+                    if result["answer"]:
+                        answered, in_a_row = answered + 1, 0
+                        window = min(most, window + 1) if not result["failed calls"] else max(1, window // 2)
+                    else:
+                        failed, in_a_row = failed + 1, in_a_row + 1
+                        out_when_failing = len(running) + 1 if in_a_row == 1 else out_when_failing
+                        window = max(1, window // 2)
+                        failures.append(bool(result["failed calls"]))
+                    follow = after(question, result) if after else []
+                    if not stopped and in_a_row >= out_when_failing + CHAT_STOP_AFTER:
+                        stopped, stopped_at = stop_message(failures[-in_a_row:], answered), time.time()
+                        waiting.clear()
+                    if follow and not stopped:
+                        waiting.extendleft(reversed(follow))
+                if stopped and running and time.time() - stopped_at > CHAT_STOP_WAIT:
+                    break                                    # what is still out is held when it arrives
+                if time.time() - said >= CHAT_PROGRESS_SECONDS:
+                    progress()
+                    said = time.time()
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        progress(final=True)
+    with ANSWERS_LOCK:
+        taken = [held.pop(key) for key in [key for key, (question, _) in held.items() if question["type"] in types]]
+    return taken, stopped
+
+
+def stop_message(failures, answered):
+    """Why a step stopped asking, in plain words: the calls failed - the token may have run out - or the answers came
+    back in a form that could not be read."""
+    if all(failures):
+        return ("The model stopped answering: the last %d questions got no answer, so no more were sent. If the access token "
+                "has run out, paste a new one into widget 02 and run cell 3 again: the %d answers received in this cell are "
+                "kept, and only the questions still open are asked." % (len(failures), answered))
+    return ("The last %d answers of the model could not be read in the form asked for, so no more questions were sent. "
+            "Run cell 3 again to carry on: the %d answers received in this cell are kept; what the model wrote is in "
+            "run_log.txt." % (len(failures), answered))
+
+
+def call_record(ctx, asked, result, redact, **extra):
+    """The record of one exchange with the model, as the audit log's Model_Calls sheet holds it: the token removed
+    from everything the model wrote, the technical account of what went wrong left to run_log.txt. `extra` may hold
+    the question itself, as step 04 keeps it. Enforces: R4, R8, R10"""
+    answer = redact(result["answer"])
+    record = {"run_id": ctx.provenance.run_id, "step_id": ctx.provenance.step_id, "step": ctx.provenance.step,
+              "question_id": asked["id"], "question_type": asked["type"], "unit_ref": asked["unit_ref"]}
+    record.update(extra)
+    record.update({"attempt": result["attempt"], "outcome": "answered" if answer else "not answered",
+                   "tokens": asked.get("tokens", 0), "answer": answer,
+                   "reading": redacted(result["reading"], redact),
+                   "prompt_hash": asked["id"], "response_hash": sha256_text(answer) if answer else "",
+                   "what happened": [redact(line) for line in result["plain"]], "seconds": round(result["seconds"], 3)})
+    return record
+
+
+def redacted(value, redact):
+    """Every text inside a value, the token removed. Enforces: R8"""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [redacted(item, redact) for item in value]
+    if isinstance(value, dict):
+        return {key: redacted(item, redact) for key, item in value.items()}
+    return value
+
+
+def log_technical(ctx, step_id, lines):
+    """Technical text of a step - what a failed call said - goes to run_log.txt only. Enforces: R10"""
+    if lines:
+        with open(os.path.join(os.path.dirname(ctx.work_dir), "run_log.txt"), "a", encoding="utf-8") as handle:
+            handle.write("".join("step %s, %s\n" % (step_id, line) for line in lines))
+
+
+# ---------------------------------------------------------------- step 04: interpret-code
+# Step 04 puts every unit of Chunks_Model in front of the organisation's model, with the units it takes from and gives
+# to as context, and asks it to explain the credit concepts the code implements, for a CFA-level analyst checking it
+# against the methodology. The model's words go to one column, headed "(by LLM)", and to the audit log; nothing the
+# code reads, maps or checks depends on them. Enforces: R3, R5, R8
 CODE_SYSTEM_PROMPT = (
     "You help financial analysts review how a credit model is implemented in R. Your reader is a credit analyst at "
     "CFA level who is checking, piece by piece, whether the model's code implements its intended methodology, and "
@@ -4967,11 +5264,8 @@ CODE_SYSTEM_PROMPT = (
     "finding, error, severity, severe, critical, major or minor, and never call anything high, medium or low in "
     "risk, rating, priority or impact: say riskier or safer, stronger or weaker, near the top or the bottom of the "
     "scale, or give the number. Where the code stops with a message, say that it stops with a message.")
-CHAT_TEXT_MAX = 60000        # characters of one unit's text sent in its question
-CONTEXT_PIECE_MAX = 8000     # characters of one context piece's text
-CONTEXT_MAX = 40000          # characters of context in one question; the rest is named, not shown
-CHAT_ATTEMPTS = 3            # tries per question: a failed call, an empty answer or unwelcome words ask again
-CHAT_WORKER = threading.local()
+CODE_TOKENS_MAX = 16000      # tokens of one unit's text in its question; a longer text is cut, and the cut is said
+CONTEXT_PIECE_TOKENS = 2000  # tokens of one context piece's text
 NO_ANSWER = "No interpretation: the model gave no answer. Run cell 3 again to ask again."
 NOT_ASKED = "Not asked: nothing was read from this file."
 
@@ -4981,141 +5275,627 @@ def askable(unit):
     return unit["kind"] != KIND_NOT_READ and bool(unit["text"].strip())
 
 
-def code_question(unit, upstream=(), downstream=()):
-    """The question about one unit, exactly as sent: (system half, main half, question id). The main half
-    is the unit itself, then, for context, the units it takes something from - each with the names it
-    takes - and the units that take something from it (step 03's links), each cut to CONTEXT_PIECE_MAX
-    and all of them to CONTEXT_MAX; a piece past that is named, not shown."""
-    def where(u):
-        return "%s, %s%s" % (u["kind"], u["file"], ", lines %d-%d" % tuple(u["lines"]) if u.get("lines") else "")
-    text = unit["text"]
-    if len(text) > CHAT_TEXT_MAX:
-        text = text[:CHAT_TEXT_MAX] + "\n\n[Only the first %d characters are shown.]" % CHAT_TEXT_MAX
-    parts = ["THE PIECE TO EXPLAIN\nKind: %s\nFile: %s%s\nName: %s\n\n%s" % (
-        unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "", unit.get("name") or "-", text)]
-    room = CONTEXT_MAX
+def unit_place(unit):
+    """Where a unit is: its kind, its file and its lines."""
+    return "%s, %s%s" % (unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "")
+
+
+def linked_units(unit, links, by_ref):
+    """The units a unit takes something from, each with the names it takes, and the units that take something from it:
+    step 03's links, as [(unit, names)] twice."""
+    linked = links.get(unit["ref"]) or {}
+    upstream = [(by_ref[ref], (linked.get("via") or {}).get(ref, [])) for ref in linked.get("upstream") or () if ref in by_ref]
+    downstream = [(by_ref[ref], []) for ref in linked.get("downstream") or () if ref in by_ref]
+    return upstream, downstream
+
+
+def context_block(upstream, downstream, room):
+    """For context, the units a unit takes something from - each with the names it takes - and the units that take
+    something from it, each cut to CONTEXT_PIECE_TOKENS and all of them to `room` tokens. A piece past that is named,
+    not shown; once even the names do not fit, how many more there are is said instead. Returns the two blocks."""
+    blocks = []
     for title, pieces in (("CONTEXT: THE PIECES IT TAKES SOMETHING FROM", upstream),
                           ("CONTEXT: THE PIECES THAT TAKE SOMETHING FROM IT", downstream)):
-        shown = [title]
+        shown, unnamed = [title], 0
         for piece, names in pieces:
-            head = "[%s] %s%s" % (piece["ref"], where(piece), " - it takes: %s" % ", ".join(names) if names else "")
-            body = piece["text"]
-            if len(body) > CONTEXT_PIECE_MAX:
-                body = body[:CONTEXT_PIECE_MAX] + "\n[Only the first %d characters are shown.]" % CONTEXT_PIECE_MAX
-            if len(body) > room:
-                shown.append(head + "\n[Not shown: the context is already long.]")
+            head = "[%s] %s%s" % (piece["ref"], unit_place(piece), " - it takes: %s" % ", ".join(names) if names else "")
+            body = shown_cut(piece["text"], CONTEXT_PIECE_TOKENS)
+            cost = estimate_tokens(head) + estimate_tokens(body) + 3
+            if cost <= room:
+                room -= cost
+                shown.append(head + "\n" + body)
                 continue
-            room -= len(body)
-            shown.append(head + "\n" + body)
-        parts.append("\n\n".join(shown if len(shown) > 1 else shown + ["(none in the package)"]))
-    main = "\n\n\n".join(parts)
+            named = head + "\n[Not shown: the context is already long.]"
+            if estimate_tokens(named) + 3 <= room - 40:
+                room -= estimate_tokens(named) + 3
+                shown.append(named)
+            else:
+                unnamed += 1
+        if unnamed:
+            shown.append("[%d more are not shown or named: the context is already long.]" % unnamed)
+        blocks.append("\n\n".join(shown if len(shown) > 1 else shown + ["(none in the package)"]))
+    return blocks
+
+
+def code_question(unit, upstream=(), downstream=(), room=None):
+    """The question about one unit, exactly as sent: (system half, main half, question id). The main half is the
+    unit itself, cut to CODE_TOKENS_MAX, then, for context, the units it takes something from - each with the names
+    it takes - and the units that take something from it (step 03's links), in whatever room the question has left."""
+    room = room or question_room(DEFAULT_SETTINGS, CODE_QUESTION)
+    text = shown_cut(unit["text"], min(CODE_TOKENS_MAX, room // 2))
+    first = "THE PIECE TO EXPLAIN\nKind: %s\nFile: %s%s\nName: %s\n\n%s" % (
+        unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "", unit.get("name") or "-", text)
+    left = room - estimate_tokens(CODE_SYSTEM_PROMPT) - estimate_tokens(first) - 200
+    main = "\n\n\n".join([first] + context_block(upstream, downstream, left))
     return CODE_SYSTEM_PROMPT, main, sha256_text(CODE_SYSTEM_PROMPT + "\n\n" + main)
-
-
-def unwelcome_words(text):
-    """The words of an answer that no cell of the workbook may hold, as they were written. Enforces: R1, R10"""
-    found = [match.group(0) for match in PYTHON_TRACES.finditer(text)]
-    found += [match.group(0) for match in _BANNED_RE.finditer(text)]
-    return sorted(set(found), key=str.lower)
-
-
-def ask_model(chat, system, main):
-    """One question, asked on a worker thread: up to CHAT_ATTEMPTS tries. A call that raises waits a little
-    and tries again; an answer holding words the workbook refuses is asked for again, naming them. Returns
-    what happened, in plain words and in technical ones; it never raises and never writes, because only
-    the step's own thread writes. Enforces: R5, R8"""
-    CHAT_WORKER.active = True
-    started, plain, technical, question, answer = time.time(), [], [], main, ""
-    for attempt in range(1, CHAT_ATTEMPTS + 1):
-        try:
-            reply = chat(system, question)
-            answer = str(reply.get("answer") or "").strip() if isinstance(reply, dict) else ""
-        except Exception as problem:
-            answer = ""
-            plain.append("try %d: the call did not return an answer" % attempt)
-            technical.append("try %d: %s: %s" % (attempt, type(problem).__name__, problem))
-            if attempt < CHAT_ATTEMPTS:
-                time.sleep(2 ** attempt)                 # a busy gateway is given a moment
-            continue
-        if not answer:
-            plain.append("try %d: the answer was empty" % attempt)
-            continue
-        unwelcome = unwelcome_words(answer)
-        if not unwelcome or attempt == CHAT_ATTEMPTS:
-            if unwelcome:
-                plain.append("try %d: the answer still used words the workbook cannot hold" % attempt)
-            return {"answer": answer, "attempt": attempt, "plain": plain, "technical": technical,
-                    "seconds": time.time() - started}
-        plain.append("try %d: the answer used words the workbook cannot hold (%s)" % (attempt, ", ".join(unwelcome)))
-        question = main + ("\n\nYour last description used words this workbook cannot hold (%s). Write it again "
-                           "without them." % ", ".join(unwelcome))
-    return {"answer": "", "attempt": CHAT_ATTEMPTS, "plain": plain, "technical": technical, "seconds": time.time() - started}
 
 
 def interpret_code(ctx):
     """Step 04, interpret-code: every unit of Chunks_Model explained by the organisation's model in the credit
-    concepts it implements, for a CFA-level analyst, through the chat() of cell 2 - with the units it takes from
-    and the units that take from it (step 03's links) as context, and at the length the model judges it needs. Questions go out parallel_chats at a time; only
-    this thread writes, and in unit order, so the record never depends on which answer came back first. A
-    question already answered in this run is not asked again, and while any is left unanswered the step
-    does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
+    concepts it implements, for a CFA-level analyst, through the chat() of cell 2 - with the units it takes from and
+    the units that take from it (step 03's links) as context, and at the length the model judges it needs. Questions
+    go out parallel_chats at a time (ask_all); a question already answered in this run is not asked again, and while
+    any is left unanswered the step does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
     units = ctx.read("model_units")
     by_ref = {u["ref"]: u for u in units}
     links = {r["ref"]: r for r in ctx.read("dataflow") if r.get("record_type") == "unit_links"}
-    answered = {call["question_id"] for call in ctx.read("llm_calls")
+    recorded = {call["question_id"] for call in ctx.read("llm_calls")
                 if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
-    wanted, before, context = [], 0, {}
+    arrived = {call["question_id"] for call in held_answers(ctx, (CODE_QUESTION,)) if call["outcome"] == "answered"}
+    room = question_room(ctx.settings, CODE_QUESTION)
+    questions, wanted = {}, []
     for unit in units:
         if askable(unit):
-            linked = links.get(unit["ref"]) or {}
-            upstream = [(by_ref[ref], (linked.get("via") or {}).get(ref, [])) for ref in linked.get("upstream") or () if ref in by_ref]
-            downstream = [(by_ref[ref], []) for ref in linked.get("downstream") or () if ref in by_ref]
-            context[unit["ref"]] = {"upstream": [u["ref"] for u, _ in upstream], "downstream": [u["ref"] for u, _ in downstream]}
-            question = code_question(unit, upstream, downstream)
-            if question[2] in answered:
-                before += 1
-            else:
-                wanted.append((unit,) + question)
-    counts = {"code blocks": len(units), "interpreted": before, "asked now": len(wanted), "not answered": 0,
-              "not asked": sum(1 for unit in units if not askable(unit))}
-    if not wanted:
-        return StepResult({}, counts, [])
+            upstream, downstream = linked_units(unit, links, by_ref)
+            system, main, question_id = code_question(unit, upstream, downstream, room)
+            question = questions[question_id] = {
+                "id": question_id, "type": CODE_QUESTION, "unit_ref": unit["ref"], "system": system, "main": main,
+                "tokens": estimate_tokens(system) + estimate_tokens(main),
+                "context": {"upstream": [u["ref"] for u, _ in upstream], "downstream": [u["ref"] for u, _ in downstream]}}
+            if question_id not in recorded and question_id not in arrived:
+                wanted.append(question)
+    counts = {"code blocks": len(units), "interpreted": len(recorded & set(questions)), "asked now": len(wanted),
+              "not answered": 0, "not asked": sum(1 for unit in units if not askable(unit))}
     chat = NOTEBOOK["chat"]
-    if chat is None:
+    if wanted and chat is None:
         counts["not answered"] = len(wanted)
         return StepResult({}, counts, ["The code interpretations are written by your chat(): run cell 2, then cell 3 "
                                        "again."], finished=False)
-    live("llm_token")                                    # the values the workers use, read here, now
-    results, workers = {}, max(1, int(ctx.settings.get("parallel_chats") or 1))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(ask_model, chat, system, main): number
-                   for number, (_, system, main, _) in enumerate(wanted)}
-        for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
-            results[futures[future]] = future.result()
-            live("llm_token")                            # a token pasted meanwhile reaches the next calls
-            if done == len(wanted) or done % max(1, len(wanted) // 10) == 0:
-                print("  code interpretations: %d of %d asked" % (done, len(wanted)))
+    taken, stopped = ask_all(ctx, chat, wanted, lambda question: question, lambda question: None,
+                             label="code interpretations", types=(CODE_QUESTION,))
     redact = (NOTEBOOK["live"] or LiveValues()).redact
-    records, technical, provenance = [], [], ctx.provenance
-    for number, (unit, system, main, question_id) in enumerate(wanted):
-        got = results[number]
-        answer = redact(got["answer"])
-        technical += ["%s %s, %s" % (unit["ref"], unit["file"], redact(line)) for line in got["technical"]]
-        records.append({"run_id": provenance.run_id, "step_id": provenance.step_id, "step": provenance.step,
-                        "question_id": question_id, "question_type": CODE_QUESTION, "unit_ref": unit["ref"],
-                        "context": context[unit["ref"]],
-                        "attempt": got["attempt"], "outcome": "answered" if answer else "not answered",
-                        "question": {"system": system, "main": main}, "answer": answer,
-                        "prompt_hash": question_id, "response_hash": sha256_text(answer) if answer else "",
-                        "what happened": got["plain"], "seconds": round(got["seconds"], 3)})
-    if technical:                                        # technical text belongs in run_log.txt only (R10)
-        with open(os.path.join(os.path.dirname(ctx.work_dir), "run_log.txt"), "a", encoding="utf-8") as handle:
-            handle.write("".join("step 04, %s\n" % line for line in technical))
-    missing = sum(1 for record in records if record["outcome"] != "answered")
-    counts.update({"interpreted": before + len(records) - missing, "not answered": missing})
-    messages = ["The model gave no interpretation for %d of %d code blocks. Run cell 3 again to ask for those again; "
-                "what went wrong is in run_log.txt." % (missing, before + len(records))] if missing else []
+    order = {u["ref"]: number for number, u in enumerate(units)}
+    records, technical = [], []
+    for question, result in sorted(taken, key=lambda pair: (order.get(pair[0]["unit_ref"], 0), pair[0]["id"])):
+        if question["id"] in recorded:
+            continue                                     # written already, by an earlier cell
+        whole = questions.get(question["id"]) or {"system": "", "main": ""}
+        records.append(call_record(ctx, question, result, redact, context=question.get("context"),
+                                   question={"system": whole["system"], "main": whole["main"]}))
+        technical += ["%s, %s" % (question["unit_ref"], redact(line)) for line in result["technical"]]
+    log_technical(ctx, "04", technical)
+    answered = recorded | {record["question_id"] for record in records if record["outcome"] == "answered"}
+    missing = sum(1 for question_id in questions if question_id not in answered)
+    counts.update({"interpreted": len(questions) - missing, "not answered": missing})
+    messages = [stopped] if stopped else []
+    if missing and not stopped:
+        messages.append("The model gave no interpretation for %d of %d code blocks. Run cell 3 again to ask for those "
+                        "again; what went wrong is in run_log.txt." % (missing, len(questions)))
     return StepResult({"llm_calls": records}, counts, messages, finished=not missing)
+
+
+# ---------------------------------------------------------------- step 05: search-methodology
+# Step 05 finds, for every unit of Chunks_Model, the chunks of the methodology that describe, explain or inform it, and
+# then asks where the code departs from them. The methodology is the canonical description of the code. Two rounds:
+#   search      every unit is put to the model once for each batch of the methodology, until every chunk has been
+#               searched for it - the question shows the batch, then the unit's code and its interpretation (step 04);
+#   comparison  once a unit's search is complete, the chunks found are put to the model together, with the unit, the
+#               units it takes from and gives to, and its interpretation, for every potential deviation.
+# Comparing in a round of its own lets the model see every chunk that bears on the unit at once: a floor stated in one
+# batch and the formula it applies to in another are compared together, not flagged apart. The model's words go to two
+# columns headed "(... by LLM ...)" and to the audit log; code checks that every chunk it names was shown to it.
+# Enforces: R2, R3, R5, R8
+UNIT_TOKENS_MAX = 12000         # tokens of one unit's code and interpretation in a question of step 05
+COMPARE_CONTEXT_TOKENS = 5000   # tokens of context code in a comparison; a context piece past that is named, not shown
+NEIGHBOURS_NAMED = 20           # units named on the line of what a unit takes from, and on the line of what it gives to
+DEVIATION_KINDS = {"differs": "The code differs.", "omits": "Not done in the code.",
+                   "adds": "Not described in the methodology.", "ambiguous": "The methodology can be read more than one way."}
+NOT_SEARCHED = "Not searched: nothing was read from this file."
+NOT_COMPARED = "Not compared: nothing was read from this file."
+SEARCH_SYSTEM_PROMPT = (
+    "You help credit analysts check whether an R package implements the methodology it was built from. The methodology "
+    "is the canonical description of what the code should do. You are given part of the methodology, cut into chunks in "
+    "reading order, each headed by its reference in square brackets (such as [C-0012]), the headings it sits under and "
+    "its type; then one piece of the model's R package - a function, a statement, a test, stored data or another file - "
+    "exactly as written, with an explanation of it that a language model wrote. The rest of the methodology is put to "
+    "you in other questions: judge only the chunks shown. Pick out every chunk the analyst needs to read to check this "
+    "piece against the methodology: a chunk that describes what the piece computes or does - its formula, its steps, its "
+    "rules and conditions; a chunk that explains it - what a quantity means, why a step is taken, what an assumption "
+    "stands for; and a chunk that informs it - a definition, a parameter value, a floor, a cap, a threshold, a table of "
+    "values, a data source, a segment, a unit or a convention that the piece uses, or that the methodology says it "
+    "should use. Judge by meaning, not by shared words: the methodology may name a quantity in words or by a symbol "
+    "where the code uses a variable name or an abbreviation - the probability of default, PD and pd_1y can be one "
+    "quantity - and a chunk that only shares a word with the piece, or speaks of the same concept at a point of the "
+    "model the piece does not touch, does not count. For a test, pick the chunks that state what the test checks; for "
+    "stored data, the chunks that define its values or give them. The explanation can be wrong: where it and the code "
+    "disagree, the code counts. Go through the chunks from the first to the last; a part of the methodology often holds "
+    "only a few chunks that count, and often none. Answer with one JSON object and nothing else, in this form: "
+    "{\"relevant\": [{\"ref\": \"C-0012\", \"relation\": \"describes\", \"why\": \"gives the formula this function "
+    "computes\"}]}. The relation is describes, explains or informs, and why says in fifteen words at most, without "
+    "quotation marks, what the chunk gives the piece. Name only chunks shown, each once. If no chunk counts, answer "
+    "{\"relevant\": []}.")
+COMPARE_SYSTEM_PROMPT = (
+    "You help credit analysts check whether an R package implements the methodology it was built from. The methodology "
+    "is the canonical description of what the code should do, and the code may deviate from it. You are given the "
+    "chunks of the methodology found to bear on one piece of the model's R package, each headed by its reference in "
+    "square brackets (such as [C-0012]), the headings it sits under and its type; then, for context, the pieces of the "
+    "package this piece takes something from and the pieces that take something from it; then the piece itself, exactly "
+    "as written, with an explanation of it that a language model wrote. List every potential deviation between what "
+    "these chunks say and what this piece of code does, for a CFA-level credit analyst to review. Compare everything the "
+    "chunks say that bears on the piece: formulas and the order of their steps; constants and parameter values; floors, "
+    "caps and thresholds, and whether a boundary value is included; the treatment of missing, zero, negative or "
+    "out-of-range values; units, scales and conventions - a percentage or a fraction, basis points, annual or monthly "
+    "figures, signs; rounding and precision; the inputs used, their sources, filters, segments and level of "
+    "aggregation; defaults and fallbacks; what the chunks require that the piece does not do; and what the piece does to "
+    "its result that the chunks do not describe. Where a chunk can be read in more than one way and the code follows "
+    "one reading, say so. A requirement met by a piece shown as context is not a deviation of this piece; where it is "
+    "met in neither, or you cannot tell, list it. Compare only with the chunks shown, and give for each deviation the "
+    "reference of every chunk it rests on. Quote the methodology and the code word for word where it helps, inside "
+    "curly double quotes \u201clike this\u201d - never straight ones, which would break the JSON - and name the lines of "
+    "the code. State what differs as fact: do not rate how much it matters, recommend a change, or say which of the two "
+    "is right - the analyst decides that. The explanation can be wrong: where it and the code disagree, the code counts. "
+    "Answer with one JSON object and nothing else, in this form: {\"deviations\": [{\"refs\": [\"C-0012\"], \"kind\": "
+    "\"differs\", \"methodology\": \"what the chunks say\", \"code\": \"what the piece does\"}]}. The kind is differs "
+    "(the piece does what the chunks describe, differently), omits (the chunks require something the piece does not "
+    "do), adds (the piece does something to its result that the chunks do not describe) or ambiguous (the chunks can be "
+    "read in more than one way, and the code follows one reading); methodology and code take one or two plain "
+    "sentences each. If the piece does what the chunks say, answer {\"deviations\": []}. Outside quotations, never use "
+    "the words finding, error, severity, severe, critical, major or minor, and never call anything high, medium or low "
+    "in risk, rating, priority or impact.")
+
+
+def search_shares(settings):
+    """(tokens of the methodology, tokens of the unit) in one search question: methodology_batch_tokens, or less
+    when the question would not otherwise leave the unit its room."""
+    room = question_room(settings, METHODOLOGY_SEARCH) - estimate_tokens(SEARCH_SYSTEM_PROMPT) - 300
+    unit = min(UNIT_TOKENS_MAX, room // 2)
+    wanted = int(settings.get("methodology_batch_tokens") or DEFAULT_SETTINGS["methodology_batch_tokens"])
+    return max(200, min(wanted, room - unit)), unit
+
+
+def compare_shares(settings):
+    """(tokens of the methodology's chunks, of the unit, of the context) in one comparison question."""
+    room = question_room(settings, METHODOLOGY_COMPARISON) - estimate_tokens(COMPARE_SYSTEM_PROMPT) - 300
+    unit, context = min(UNIT_TOKENS_MAX, room // 2), min(COMPARE_CONTEXT_TOKENS, room // 6)
+    return max(200, room - unit - context), unit, context
+
+
+def methodology_pieces(chunks, cap):
+    """Every chunk of the methodology as the model is shown it: its ref, the headings it sits under, its type and its
+    text. A chunk longer than cap tokens is shown in parts cut at line ends, each small enough for a batch of its own,
+    so that nothing of a long chunk goes unsearched. Enforces: R2"""
+    pieces = []
+    for chunk in chunks:
+        where = "%s | %s" % (" > ".join(chunk.get("heading_chain") or ()) or "(no heading)", chunk["kind"])
+        whole = "[%s] %s\n%s" % (chunk["ref"], where, chunk["text"] or "")
+        if estimate_tokens(whole) <= cap:
+            pieces.append({"ref": chunk["ref"], "part": 1, "parts": 1, "text": whole})
+            continue
+        parts = split_to_tokens(chunk["text"], max(100, cap - estimate_tokens(where) - 30))
+        pieces += [{"ref": chunk["ref"], "part": number, "parts": len(parts),
+                    "text": "[%s, part %d of %d] %s\n%s" % (chunk["ref"], number, len(parts), where, part)}
+                   for number, part in enumerate(parts, start=1)]
+    for piece in pieces:
+        piece["tokens"] = estimate_tokens(piece["text"])
+    return pieces
+
+
+def methodology_batches(pieces, cap):
+    """The pieces in reading order, packed into batches of at most cap tokens: every piece in exactly one batch, and
+    the batches the same for every unit, so a batch comes to the model as the same words each time."""
+    batches, current, used = [], [], 0
+    for piece in pieces:
+        if current and used + piece["tokens"] + 2 > cap:
+            batches.append(current)
+            current, used = [], 0
+        current.append(piece)
+        used += piece["tokens"] + 2
+    return batches + ([current] if current else [])
+
+
+def methodology_plan(chunks, settings):
+    """The methodology as step 05 puts it to the model: (its pieces, the batches they go in)."""
+    batch, _ = search_shares(settings)
+    chunk_room, _, _ = compare_shares(settings)
+    pieces = methodology_pieces(chunks, min(batch, chunk_room))
+    return pieces, methodology_batches(pieces, batch)
+
+
+def unit_label(unit):
+    """A unit named on one line: its ref and its name, or its kind when it has none."""
+    return "%s %s" % (unit["ref"], unit["name"]) if unit.get("name") else "%s (%s)" % (unit["ref"], unit["kind"])
+
+
+def neighbours_line(upstream, downstream):
+    """The units a unit takes something from and gives something to, named: what orients a search."""
+    lines = []
+    for title, pieces in (("It takes something from", upstream), ("It gives something to", downstream)):
+        if pieces:
+            named = "; ".join(unit_label(unit) for unit, _ in pieces[:NEIGHBOURS_NAMED])
+            more = " and %d more" % (len(pieces) - NEIGHBOURS_NAMED) if len(pieces) > NEIGHBOURS_NAMED else ""
+            lines.append("%s: %s%s" % (title, named, more))
+    return "\n".join(lines)
+
+
+def unit_part(unit, said, neighbours, room):
+    """One unit as a question of step 05 shows it: what and where it is, what it takes from and gives to, its text as
+    written, and what step 04's model wrote about it - cut to `room` tokens, the code keeping two thirds of it or more."""
+    head = "THE PIECE: %s, %s%s" % (unit["ref"], unit_place(unit), " - %s" % unit["name"] if unit.get("name") else "")
+    head += "\n" + neighbours if neighbours else ""
+    said, code = said or "(none)", unit["text"]
+    left = room - estimate_tokens(head) - 40
+    code_tokens, said_tokens = estimate_tokens(code), estimate_tokens(said)
+    if code_tokens + said_tokens > left:
+        said_share = min(said_tokens, max(left // 3, left - code_tokens))
+        code, said = shown_cut(code, left - said_share), shown_cut(said, said_share)
+    return head + "\n\n" + code + "\n\n\nWHAT A LANGUAGE MODEL WROTE ABOUT THIS PIECE\n" + said
+
+
+def question_of(kind, unit, pieces, system, parts, **extra):
+    """A question of step 05 as sent - its two halves, its id, the pieces of the methodology it shows - and the
+    tokens it takes, counted part by part, each join counted too. A question over its room is a fault of the tool."""
+    main = "\n\n\n".join(text for text, _ in parts)
+    tokens = estimate_tokens(system) + sum(count for _, count in parts) + 3 * len(parts)
+    question = {"type": kind, "unit_ref": unit["ref"], "pieces": [[p["ref"], p["part"], p["parts"]] for p in pieces],
+                "system": system, "main": main, "id": sha256_text(system + "\n\n" + main), "tokens": tokens}
+    question.update(extra)
+    return question
+
+
+def search_question(unit, said, neighbours, batch, room):
+    """The search question about one unit and one batch of the methodology: the batch first, then the unit."""
+    title = "THE METHODOLOGY: A PART OF IT, IN READING ORDER\n\n"
+    chunks = title + "\n\n".join(piece["text"] for piece in batch)
+    piece = unit_part(unit, said, neighbours, room)
+    ask = ("Which chunks of the methodology above does the analyst need to read to check this piece? Answer with the "
+           "JSON object only.")
+    return question_of(METHODOLOGY_SEARCH, unit, batch, SEARCH_SYSTEM_PROMPT, [
+        (chunks, estimate_tokens(title) + sum(p["tokens"] + 2 for p in batch)), (piece, estimate_tokens(piece)),
+        (ask, estimate_tokens(ask))])
+
+
+def compare_question(unit, said, upstream, downstream, chosen, room, context_room):
+    """The comparison question about one unit: the chunks found to bear on it, the units it takes from and gives to,
+    then the unit and what step 04's model wrote about it."""
+    title = "THE METHODOLOGY: THE CHUNKS FOUND TO BEAR ON THIS PIECE\n\n"
+    chunks = title + "\n\n".join(piece["text"] for piece in chosen)
+    blocks = context_block(upstream, downstream, context_room)
+    piece = unit_part(unit, said, "", room)
+    ask = ("List every potential deviation between the chunks of the methodology above and this piece. Answer with the "
+           "JSON object only.")
+    return question_of(METHODOLOGY_COMPARISON, unit, chosen, COMPARE_SYSTEM_PROMPT,
+                       [(chunks, estimate_tokens(title) + sum(p["tokens"] + 2 for p in chosen))] +
+                       [(block, estimate_tokens(block)) for block in blocks] +
+                       [(piece, estimate_tokens(piece)), (ask, estimate_tokens(ask))],
+                       context={"upstream": [u["ref"] for u, _ in upstream], "downstream": [u["ref"] for u, _ in downstream]})
+
+
+UNREADABLE = {"plain": "the answer was not the JSON object asked for",
+              "ask": "Your last answer could not be read as the JSON object the instructions ask for. Answer again with "
+                     "that JSON object alone, with no other words around it."}
+
+
+def json_object(answer):
+    """The one JSON object an answer holds, whatever fences or words stand around it; None when it holds none. Parsed,
+    never evaluated. Enforces: R7"""
+    decoder, start = json.JSONDecoder(), answer.find("{")
+    for _ in range(20):                                  # the first brace may open words, not the object
+        if start < 0:
+            return None
+        try:
+            found, _ = decoder.raw_decode(answer, start)
+            if isinstance(found, dict):
+                return found
+        except ValueError:
+            pass
+        start = answer.find("{", start + 1)
+    return None
+
+
+def chunk_ref(value):
+    """A chunk's reference as the model wrote it, made regular: [C-0012], c-12 and C-0012 are all C-0012."""
+    found = re.search(r"\bC\s*-?\s*(\d{1,6})\b", str(value or ""), re.I)
+    return "C-%04d" % int(found.group(1)) if found else str(value or "").strip()
+
+
+def plain_text(value):
+    """A text field of an answer, on one line."""
+    return " ".join(str(value or "").split()) if isinstance(value, (str, int, float)) else ""
+
+
+def search_check(question):
+    """The check a search answer passes: the JSON object asked for, naming only chunks the question showed. On the last
+    try, chunks it named that were not shown are left out, and said so. Enforces: R3"""
+    shown = [ref for ref, _, _ in question["pieces"]]
+
+    def check(answer, last):
+        found = json_object(answer)
+        items = found.get("relevant") if found else None
+        if not isinstance(items, list):
+            return None, UNREADABLE, ""
+        relevant, unknown = {}, []
+        for item in items:
+            ref = chunk_ref(item.get("ref") if isinstance(item, dict) else item)
+            if ref not in shown:
+                unknown.append(ref or "(empty)")
+            elif ref not in relevant:
+                detail = item if isinstance(item, dict) else {}
+                relevant[ref] = {"ref": ref, "relation": plain_text(detail.get("relation")).lower(), "why": plain_text(detail.get("why"))}
+        if unknown and not last:
+            return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
+                          "ask": "Your last answer named chunks that are not in this part of the methodology (%s). Name only "
+                                 "chunks shown above, and answer with the JSON object alone." % ", ".join(unknown)}, ""
+        reading = {"relevant": [relevant[ref] for ref in dict.fromkeys(shown) if ref in relevant]}
+        return reading, None, "the chunks it named that were not shown were left out (%s)" % ", ".join(unknown) if unknown else ""
+    return check
+
+
+def compare_check(question):
+    """The check a comparison answer passes: the JSON object asked for, every deviation resting on chunks the question
+    showed, and no words outside quotations that the workbook cannot hold. On the last try, chunks it named that were
+    not shown are left out, and said so. Enforces: R1, R3, R10"""
+    order = {ref: number for number, (ref, _, _) in enumerate(question["pieces"])}
+
+    def check(answer, last):
+        found = json_object(answer)
+        items = found.get("deviations") if found else None
+        if not isinstance(items, list):
+            return None, UNREADABLE, ""
+        deviations, unknown = [], []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            named = item.get("refs", item.get("ref", []))
+            named = [chunk_ref(ref) for ref in (named if isinstance(named, list) else [named])]
+            unknown += [ref or "(empty)" for ref in named if ref not in order]
+            kind = plain_text(item.get("kind")).lower()
+            entry = {"refs": sorted(set(ref for ref in named if ref in order), key=order.get),
+                     "kind": kind if kind in DEVIATION_KINDS else "",
+                     "methodology": plain_text(item.get("methodology")), "code": plain_text(item.get("code"))}
+            if (entry["methodology"] or entry["code"]) and entry not in deviations:
+                deviations.append(entry)
+        if unknown and not last:
+            return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
+                          "ask": "Your last answer named chunks that are not among those shown (%s). Rest every deviation "
+                                 "on chunks shown above, and answer with the JSON object alone." % ", ".join(unknown)}, ""
+        unwelcome = unwelcome_words(own_words(deviation_lines(deviations)))
+        if unwelcome and not last:
+            return None, {"plain": "the answer used words the workbook cannot hold (%s)" % ", ".join(unwelcome),
+                          "ask": "Your last answer used words this workbook cannot hold outside quotations (%s). Write it "
+                                 "again without them; inside curly quotes \u201c \u201d they may stay." % ", ".join(unwelcome)}, ""
+        notes = (["the chunks it named that were not shown were left out (%s)" % ", ".join(unknown)] if unknown else []) + \
+                (["the answer still used words the workbook cannot hold"] if unwelcome else [])
+        return {"deviations": deviations}, None, "; ".join(notes)
+    return check
+
+
+def sentence(text):
+    """A field of an answer as one sentence of a cell: closed with a full stop, and never opening with a bare None."""
+    text = "none" + text[4:] if text.startswith("None ") else text
+    return text if not text or text[-1] in ".!?" or text[-2:] in (".\u201d", "!\u201d", "?\u201d", ".)") else text + "."
+
+
+DEVIATION_WITHHELD = "The model's words for this one cannot be shown in plain words; they are in the audit log (Model_Calls)."
+
+
+def deviation_lines(deviations, gated=False):
+    """Deviations as the workbook shows them: numbered, each opening with the chunks of the methodology it rests on.
+    Gated, a deviation whose own words - outside quotations - the workbook cannot hold is replaced by a notice that
+    keeps its chunks, so that one such answer never hides the others of its cell. Enforces: R1, R2, R10"""
+    lines = []
+    for number, item in enumerate(deviations, start=1):
+        said = [DEVIATION_KINDS.get(item["kind"], "")]
+        said += ["Methodology: " + sentence(item["methodology"])] if item["methodology"] else []
+        said += ["Code: " + sentence(item["code"])] if item["code"] else []
+        refs = ", ".join(item["refs"]) or "No chunk named"
+        line = "%d. %s - %s" % (number, refs, " ".join(s for s in said if s))
+        lines.append("%d. %s - %s" % (number, refs, DEVIATION_WITHHELD) if gated and unwelcome_words(own_words(line)) else line)
+    return "\n".join(lines)
+
+
+def methodology_account(units, chunks, calls, settings):
+    """How far step 05 has got with each unit, worked out from the recorded answers alone - and those arrived but not
+    yet written - so that the step and the workbook always agree: the batches of the methodology not yet searched for
+    it, the chunks found to bear on it, those not yet compared with it, and the deviations the model named, in reading
+    order. A question answered twice counts once. Enforces: R2, R3"""
+    pieces, batches = methodology_plan(chunks, settings)
+    position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
+    searched, relevant, compared, named, seen = {}, {}, {}, {}, set()
+    for call in calls:
+        kind = call.get("question_type")
+        if kind not in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) or call.get("outcome") != "answered" \
+                or call["question_id"] in seen:
+            continue
+        seen.add(call["question_id"])
+        unit, keys = call["unit_ref"], [(ref, part) for ref, part, _ in call.get("pieces") or ()]
+        reading = call.get("reading") or {}
+        if kind == METHODOLOGY_SEARCH:
+            searched.setdefault(unit, set()).update(keys)
+            part_of = dict(keys)
+            for item in reading.get("relevant") or ():
+                if item["ref"] in part_of:
+                    relevant.setdefault(unit, {})[(item["ref"], part_of[item["ref"]])] = item
+        else:
+            compared.setdefault(unit, set()).update(keys)
+            first = min([position.get(key, len(pieces)) for key in keys] or [len(pieces)])
+            named.setdefault(unit, []).append((first, call["question_id"], reading.get("deviations") or []))
+    account = {}
+    for unit in units:
+        ref, done = unit["ref"], searched.get(unit["ref"], set())
+        keys = sorted(relevant.get(ref, {}), key=lambda key: position.get(key, len(pieces)))
+        deviations = []
+        for _, _, items in sorted(named.get(ref, [])):
+            deviations += [item for item in items if item not in deviations]
+        account[ref] = {"askable": askable(unit), "batches": len(batches), "chunks": len({p["ref"] for p in pieces}),
+                        "unsearched": sorted({p["ref"] for p in pieces if (p["ref"], p["part"]) not in done}),
+                        "unsearched keys": [(p["ref"], p["part"]) for p in pieces if (p["ref"], p["part"]) not in done],
+                        "open batches": [n for n, batch in enumerate(batches)
+                                         if any((p["ref"], p["part"]) not in done for p in batch)],
+                        "relevant keys": keys, "relevant": [relevant[ref][key] for key in keys],
+                        "to compare": [key for key in keys if key not in compared.get(ref, set())],
+                        "deviations": deviations}
+    return {"pieces": pieces, "batches": batches, "units": account}
+
+
+def methodology_cells(state):
+    """A unit's two cells of step 05: the chunks found to bear on it, as refs joined with "; ", and the deviations
+    named, each opening with the refs it rests on. What is not finished says so, and says what to do. Enforces: R2, R10"""
+    if not state["askable"]:
+        return NOT_SEARCHED, NOT_COMPARED
+    refs = "; ".join(dict.fromkeys(item["ref"] for item in state["relevant"]))
+    if state["open batches"]:
+        left = state["unsearched"]
+        return ("Not searched in full: %d of %d chunks of the methodology searched so far%s.%s Run cell 3 again for the rest."
+                % (state["chunks"] - len(left), state["chunks"], "; still to search: %s" % ", ".join(left) if len(left) <= 5 else "",
+                   " Found so far: %s." % refs if refs else ""),
+                "Not compared yet: the methodology has not been searched in full.")
+    if not refs:
+        return "None found", "Nothing to compare: no chunk of the methodology was found to bear on this piece."
+    lines = deviation_lines(state["deviations"], gated=True)
+    if state["to compare"]:
+        open_refs = "; ".join(dict.fromkeys(ref for ref, _ in state["to compare"]))
+        return refs, (lines + "\n" if lines else "") + ("Not compared in full: %s not yet compared with this piece. "
+                                                         "Run cell 3 again." % open_refs)
+    return refs, lines or "None flagged against %s." % refs
+
+
+def search_methodology(ctx):
+    """Step 05, search-methodology: for every unit of Chunks_Model, the chunks of the methodology that describe, explain
+    or inform it - searched batch by batch until every chunk has been searched for it - and then the potential
+    deviations of the code from those chunks, all through the chat() of cell 2, parallel_chats questions at a time
+    (ask_all). A unit's comparison is asked as soon as its search is complete. A question the model does not answer
+    is asked again split in two, when it shows more than one piece of the methodology; a batch taken up again asks
+    only for its pieces not yet searched. A question already answered in this run is not
+    asked again, and while any unit is not searched and compared in full the step does not finish:
+    running cell 3 again asks only for what is open. Enforces: R2, R3, R5, R8"""
+    units, chunks, calls = ctx.read("model_units"), ctx.read("chunks_canon"), ctx.read("llm_calls")
+    types = (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON)
+    recorded = {call["question_id"] for call in calls if call.get("question_type") in types and call.get("outcome") == "answered"}
+    start = methodology_account(units, chunks, calls + held_answers(ctx, types), ctx.settings)
+    pieces, batches, states = start["pieces"], start["batches"], start["units"]
+    position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
+    by_key = {(piece["ref"], piece["part"]): piece for piece in pieces}
+    by_ref = {unit["ref"]: unit for unit in units}
+    links = {r["ref"]: r for r in ctx.read("dataflow") if r.get("record_type") == "unit_links"}
+    said = {call["unit_ref"]: call["answer"] for call in calls
+            if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
+    _, unit_room = search_shares(ctx.settings)
+    chunk_room, compare_room, context_room = compare_shares(ctx.settings)
+    to_search = {ref: set(state["unsearched keys"]) for ref, state in states.items() if state["askable"]}
+    found = {ref: dict(zip(state["relevant keys"], state["relevant"])) for ref, state in states.items()}
+
+    def comparisons(ref, keys):
+        """The comparison questions still to ask for a unit: its chunks in reading order, as many to a question as fit."""
+        groups, used = [[]], 0
+        for key in sorted(keys, key=position.get):
+            if groups[-1] and used + by_key[key]["tokens"] + 2 > chunk_room:
+                groups.append([])
+                used = 0
+            groups[-1].append(key)
+            used += by_key[key]["tokens"] + 2
+        return [(METHODOLOGY_COMPARISON, ref, group) for group in groups if group]
+
+    work = [item for ref, state in states.items() if state["askable"] and not state["open batches"]
+            for item in comparisons(ref, state["to compare"])]
+    work += [(METHODOLOGY_SEARCH, unit["ref"], [(p["ref"], p["part"]) for p in batch if (p["ref"], p["part"]) in to_search[unit["ref"]]])
+             for number, batch in enumerate(batches) for unit in units
+             if unit["ref"] in to_search and number in states[unit["ref"]]["open batches"]]
+    neighbours, unit_parts = {}, {}
+
+    def build(item):
+        kind, ref, keys = item
+        unit = by_ref[ref]
+        upstream, downstream = linked_units(unit, links, by_ref)
+        if kind == METHODOLOGY_SEARCH:
+            if ref not in neighbours:
+                neighbours[ref] = neighbours_line(upstream, downstream)
+            question = search_question(unit, said.get(ref, ""), neighbours[ref], [by_key[key] for key in keys], unit_room)
+        else:
+            question = compare_question(unit, said.get(ref, ""), upstream, downstream, [by_key[key] for key in keys],
+                                        compare_room, context_room)
+        if question["tokens"] > question_room(ctx.settings, kind):
+            raise EngineFault("A question of step 05 would take %d tokens where chat() holds %d with its answer. This is a "
+                              "defect in the tool, not in the model under review." % (question["tokens"], question_room(ctx.settings, kind)))
+        return question
+
+    def after(question, result):
+        """What an answer leads to: a unit whose search is now complete is compared, and a question left without an
+        answer that shows more than one piece of the methodology is asked again in two halves - one piece may be what
+        the gateway refuses, or the question too long for it. Splitting costs nothing when the model answers nothing at
+        all, as when the token has run out: ask_all stops after the same number of questions either way."""
+        ref, keys = question["unit_ref"], [(p[0], p[1]) for p in question["pieces"]]
+        if not result["answer"]:
+            half = len(keys) // 2
+            return [(question["type"], ref, keys[:half]), (question["type"], ref, keys[half:])] if half else []
+        if question["type"] != METHODOLOGY_SEARCH:
+            return []
+        part_of = dict(keys)
+        for item in result["reading"]["relevant"]:
+            found[ref][(item["ref"], part_of[item["ref"]])] = item
+        was_open = bool(to_search[ref])
+        to_search[ref] -= set(keys)
+        return comparisons(ref, found[ref]) if was_open and not to_search[ref] else []
+
+    chat = NOTEBOOK["chat"]
+    if work and chat is None:
+        return StepResult({}, {"questions to ask": len(work)}, ["The methodology is searched by your chat(): run cell 2, "
+                                                                 "then cell 3 again."], finished=False)
+    taken, stopped = ask_all(ctx, chat, work, build, lambda question: (search_check if question["type"] == METHODOLOGY_SEARCH
+                                                                       else compare_check)(question),
+                             after, label="methodology search and comparison", types=types)
+    redact = (NOTEBOOK["live"] or LiveValues()).redact
+    order = {unit["ref"]: number for number, unit in enumerate(units)}
+    records, technical = [], []
+    for question, result in sorted(taken, key=lambda pair: (order.get(pair[0]["unit_ref"], 0), types.index(pair[0]["type"]),
+                                                            min([position.get((p[0], p[1]), 0) for p in pair[0]["pieces"]] or [0]),
+                                                            pair[0]["id"])):
+        if question["id"] in recorded:
+            continue                                     # written already, by an earlier cell
+        records.append(call_record(ctx, question, result, redact, pieces=question["pieces"], context=question.get("context")))
+        technical += ["%s, %s" % (question["unit_ref"], redact(line)) for line in result["technical"]]
+    log_technical(ctx, "05", technical)
+    every = calls + records
+    final = [state for state in methodology_account(units, chunks, every, ctx.settings)["units"].values() if state["askable"]]
+    open_units = sum(1 for state in final if state["open batches"] or state["to compare"])
+    counts = {"pieces of code": len(final), "chunks of the methodology": len(chunks), "batches": len(batches),
+              "searches answered": sum(1 for c in every if c.get("question_type") == METHODOLOGY_SEARCH and c.get("outcome") == "answered"),
+              "comparisons answered": sum(1 for c in every if c.get("question_type") == METHODOLOGY_COMPARISON and c.get("outcome") == "answered"),
+              "chunks found relevant": sum(len({item["ref"] for item in state["relevant"]}) for state in final),
+              "deviations flagged": sum(len(state["deviations"]) for state in final),
+              "not answered now": sum(1 for record in records if record["outcome"] != "answered"),
+              "pieces not finished": open_units}
+    messages = [stopped] if stopped else []
+    unexplained = sum(1 for unit in units if askable(unit) and unit["ref"] not in said)
+    if unexplained:
+        messages.append("%d pieces of code had no interpretation from step 04, so the model searched and compared them on "
+                        "their code alone." % unexplained)
+    if not chunks:
+        messages.append("The methodology gave no chunks, so there was nothing to search.")
+    elif open_units and not stopped:
+        messages.append("%d pieces of code are not yet searched and compared in full: the model gave no answer to %d "
+                        "questions. Run cell 3 again to ask them again; what went wrong is in run_log.txt."
+                        % (open_units, counts["not answered now"]))
+    unsearched = sorted({ref for state in final for ref in state["unsearched"]})
+    if unsearched and len(unsearched) <= 5 and counts["searches answered"]:
+        messages.append("No question showing %s has been answered, though questions showing the rest of the methodology "
+                        "were: the gateway may refuse what %s. The rows of Chunks_Model say which pieces of code "
+                        "are affected." % (", ".join(unsearched), "that chunk holds" if len(unsearched) == 1 else "those chunks hold"))
+    elif not open_units:
+        messages.append("Each of the %d pieces of code was searched against all %d chunks of the methodology, in %d "
+                        "batches of up to %d tokens; %d chunks were found to bear on them, and %d potential deviations "
+                        "flagged." % (len(final), len(chunks), len(batches), search_shares(ctx.settings)[0],
+                                      counts["chunks found relevant"], counts["deviations flagged"]))
+    return StepResult({"llm_calls": records}, counts, messages, finished=not open_units)
 
 
 # ---------------------------------------------------------------- the pipeline runner
@@ -5123,7 +5903,8 @@ PIPELINE = (                       # the steps, in order, each carried out by on
     {"id": "01", "name": "prepare-run", "carried_out_by": "prepare_run"},
     {"id": "02", "name": "read-inputs", "carried_out_by": "read_inputs"},
     {"id": "03", "name": "build-map", "carried_out_by": "build_map"},
-    {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"})
+    {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"},
+    {"id": "05", "name": "search-methodology", "carried_out_by": "search_methodology"})
 
 def update_manifest(store, changes):
     """Change fields of the run manifest and write it back."""
@@ -5135,7 +5916,7 @@ def update_manifest(store, changes):
 
 def run_pipeline(paths, settings, stop_after=""):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
-    the run continues at the first step without one. A step that says it did not finish - step 04 with
+    the run continues at the first step without one. A step that says it did not finish - step 04 or 05 with
     questions still unanswered - stops the run there, and is carried out again when cell 3 runs again.
     Returns {"state", "message", "steps_run"}."""
     store = open_store(paths, settings)
@@ -5296,8 +6077,8 @@ def plain_cell(value, input_text, store):
         return int(value) if value == int(value) else plain_number(value)
     text = str(value)
     if not input_text:
-        own_words = re.sub(r"\u201c.*?\u201d", "", text, flags=re.S)
-        if PYTHON_TRACES.search(own_words) or has_banned_wording(own_words):
+        said = own_words(text)
+        if PYTHON_TRACES.search(said) or has_banned_wording(said):
             log_line(store, "cell text withheld: " + text)
             text = CELL_WITHHELD
     return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
@@ -5484,11 +6265,12 @@ def rows_chunks(chunks):
              "source_file": c["source_file"]} for c in chunks]
 
 
-def rows_model_units(units, calls=(), links=None):
+def rows_model_units(units, calls=(), links=None, methodology=None):
     """The rows of Chunks_Model: each a whole piece of code, as written; the units it takes something
-    from and the units that take something from it (step 03); and what the organisation's model says
-    happens in it (step 04). Enforces: R2, R3, R14"""
-    links = links or {}
+    from and the units that take something from it (step 03); what the organisation's model says
+    happens in it (step 04); and the chunks of the methodology it found to bear on it, with the potential
+    deviations it flagged (step 05, from `methodology`, the account of that step). Enforces: R2, R3, R14"""
+    links, methodology = links or {}, (methodology or {}).get("units")
     said, unanswered = {}, set()
     for call in calls:
         if call.get("question_type") == CODE_QUESTION:
@@ -5503,7 +6285,9 @@ def rows_model_units(units, calls=(), links=None):
         if not interpretation and asked and not askable(u):
             interpretation = NOT_ASKED
         linked = links.get(u["ref"]) or {}
+        refs, deviations = methodology_cells(methodology[u["ref"]]) if methodology and u["ref"] in methodology else ("", "")
         rows.append({"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"], "interpretation": interpretation,
+                     "methodology_refs": refs, "deviations": deviations,
                      "upstream": "; ".join(linked.get("upstream") or ()), "downstream": "; ".join(linked.get("downstream") or ()),
                      "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""})
     return rows
@@ -5512,7 +6296,11 @@ def sheet_rows(store, paths, settings, progress):
     """The rows of all five sheets, by sheet name."""
     mapped = implementation_map(store, settings)
     links = {r["ref"]: r for r in store.read("dataflow") if r.get("record_type") == "unit_links"}
-    model_rows = rows_model_units(store.read("model_units"), store.read("llm_calls"), links)
+    units, calls = store.read("model_units"), store.read("llm_calls")
+    searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
+        call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
+    methodology = methodology_account(units, store.read("chunks_canon"), calls, settings) if searched else None
+    model_rows = rows_model_units(units, calls, links, methodology)
     doc_rows = rows_chunks(store.read("chunks_doc"))
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
             "Chunks_Methodology": rows_chunks(store.read("chunks_canon")), "Chunks_Documentation": doc_rows, "Chunks_Model": model_rows,
@@ -5564,6 +6352,8 @@ sheets:
   - {header: Immediate Upstream Model Chunk, group: links, field: upstream, width: 22}
   - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
   - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
+  - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
+  - {header: 'Potential Deviations (flagged by LLM, subject to human review)', group: model, field: deviations, width: 90}
 - name: Model_Implementation_Map
   columns:
   - {header: MapID1, group: identity, field: id1, width: 7}
@@ -5792,6 +6582,7 @@ STEP_FUNCTIONS = {        # the function that carries out each step of PIPELINE.
     "read_package": read_package,
     "trace_dataflow": trace_dataflow,
     "interpret_code": interpret_code,
+    "search_methodology": search_methodology,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,
     "build_map": build_map}
@@ -5947,7 +6738,7 @@ def notebook_settings():
     return make_settings({"reviewer_id": NOTEBOOK["user"]})
 
 def check_chat(chat):
-    """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's step 04,
+    """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's steps 04 and 05,
     make the project's three Inputs folders and say what belongs in each."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
@@ -5956,7 +6747,9 @@ def check_chat(chat):
     try:
         reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
         print("chat() answered:", str(reply)[:60])
-        print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM).")
+        print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
+        print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
+        print("(searched by LLM) and Potential Deviations (flagged by LLM, subject to human review).")
     except Exception as problem:
         print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
               " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
@@ -6004,8 +6797,9 @@ def review():
         for message in record["messages"]:
             print("      " + message)
     print("\nRun folder:", paths.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, and Model_Implementation_Map")
-    print("how the model computes what it returns.")
+    print("Open Output.xlsx there: the three Chunks sheets show everything that was read - Chunks_Model with what the")
+    print("organisation's model says of each piece, the chunks of the methodology it found for it, and the potential")
+    print("deviations it flagged - and Model_Implementation_Map how the model computes what it returns.")
     print("Then run cell 4 to check the run folder against its own record.")
 
 def verify():
