@@ -238,11 +238,11 @@ A called function is entered with the arguments that call gives it, so what it c
 
 ## 14. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the run, and `Output.xlsx`. Beside it are only `pipeline.yaml`, which names the steps, and `requirements.txt`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the data flow it traces through that package, the run, and `Output.xlsx`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
 ## 15. The pipeline
 
-Three steps, named and versioned in `pipeline.yaml`; nothing is loaded by path, and only a function the engine offers may be named.
+Three steps, named and versioned in `verifier.PIPELINE`; nothing is loaded by path, and only a function the engine offers may be named.
 
 | Step | Name | What it does |
 |---|---|---|
@@ -264,7 +264,7 @@ Every file read keeps a **content account** (`verifier.account`): the file's sma
 
 ## 18. What ships
 
-The tool is `Verifier.ipynb` and three files in `engine/`: `verifier.py`, `pipeline.yaml` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. `Engine_Map.xlsx` lists every function of the engine as of this version. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
+The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. `Engine_Map.xlsx` lists every function of the engine as of this version. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
 
 ---
 

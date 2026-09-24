@@ -4779,26 +4779,12 @@ def open_store(paths, settings):
 
 
 # ---------------------------------------------------------------- the pipeline runner
-def load_pipeline(engine_dir=ENGINE_DIR):
-    """Read pipeline.yaml and refuse anything that is not a known step carried out by a known
-    function. A step is named, versioned and mapped to its function in the one file; only
-    functions listed in STEP_FUNCTIONS can be named, and there is no loading of scripts by path.
-    Enforces: R11"""
-    with open(os.path.join(engine_dir, "pipeline.yaml"), encoding="utf-8") as handle:
-        pipeline = yaml.safe_load(handle)
-    seen = set()
-    for step in pipeline["steps"]:
-        for key in ("id", "name", "version", "carried_out_by"):
-            if key not in step:
-                raise ValueError("Step %s of pipeline.yaml has no '%s'." % (step.get("id", "?"), key))
-        if step["id"] in seen:
-            raise ValueError("Step id %s appears twice in pipeline.yaml." % step["id"])
-        seen.add(step["id"])
-        step["version"] = str(step["version"])
-        if step["carried_out_by"] != "a person" and step["carried_out_by"] not in STEP_FUNCTIONS:
-            raise ValueError("pipeline.yaml names '%s', which is not a function this engine offers. "
-                             "Only the functions in STEP_FUNCTIONS may be named." % step["carried_out_by"])
-    return pipeline
+PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. A step's
+    {"id": "01", "name": "prepare-run", "version": "0.0.2", "carried_out_by": "prepare_run"},   # version is part of the
+    {"id": "02", "name": "read-inputs", "version": "0.0.1", "carried_out_by": "read_inputs"},   # provenance of every record
+    {"id": "03", "name": "build-map", "version": "0.0.1", "carried_out_by": "build_map"})       # it writes: a change to how
+                                                                                               # a step works is a change to
+                                                                                               # its version. Enforces: R11
 
 def update_manifest(store, changes):
     """Change fields of the run manifest and write it back."""
@@ -4810,13 +4796,11 @@ def update_manifest(store, changes):
 
 def run_pipeline(paths, settings, stop_after=""):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
-    the run continues at the first step without one. A human step stops the run and says
-    what the person should do. Returns {"state", "message", "steps_run"}."""
+    the run continues at the first step without one. Returns {"state", "message", "steps_run"}."""
     store = open_store(paths, settings)
-    pipeline = load_pipeline()
     done = {record["step_id"] for record in store.read("step_records")}
     steps_run = []
-    for step in pipeline["steps"]:
+    for step in PIPELINE:
         if stop_after and step["id"] > stop_after:
             break
         if step["id"] in done:
@@ -4890,12 +4874,11 @@ def fingerprint_file(path, corner, inputs_dir):
             "bytes": len(data), "sha256": sha256_bytes(data), "swhid": swhid_content(data)}
 
 def engine_file_hashes():
-    """SHA-256 of every file that makes up the engine (its code, which now holds its prompts and
-    reference data, the pipeline and the requirements), so that an evidence pack names exactly the
-    code that produced it."""
+    """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts and reference
+    data, and its requirements - so that an evidence pack names exactly the code that produced it."""
     import glob
     found = {}
-    for pattern in ("*.py", "pipeline.yaml", "requirements.txt"):
+    for pattern in ("*.py", "requirements.txt"):
         for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
             if os.path.isfile(path):
                 found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
@@ -5432,7 +5415,7 @@ def build_map(ctx):
     return trace_dataflow(ctx)
 
 
-STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
+STEP_FUNCTIONS = {        # the function that carries out each step of PIPELINE. Enforces: R11
     "read_methodology": read_methodology,
     "read_documentation": read_documentation,
     "read_package": read_package,

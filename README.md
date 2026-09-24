@@ -6,8 +6,7 @@ Reads a model's methodology, its package of code and data, and its documentation
 Verifier.ipynb          the notebook: four cells, each one call into the engine
 Engine_Map.xlsx         every function of the engine and what calls what, as of this version
 engine/
-  verifier.py           the whole tool: reading, parsing, chunking, the map, the workbook
-  pipeline.yaml         three steps, in order, each versioned
+  verifier.py           the whole tool: its steps, reading, parsing, chunking, the map, the workbook
   requirements.txt      what the tool needs installed
   Manual.md             the one manual, for everyone
 ```
