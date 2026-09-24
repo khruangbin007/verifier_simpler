@@ -4504,7 +4504,7 @@ def open_store(paths, settings):
 CODE_QUESTION = "code interpretation"
 METHODOLOGY_SEARCH = "methodology search"
 METHODOLOGY_COMPARISON = "methodology comparison"
-ANSWER_TOKENS = {CODE_QUESTION: 6000, METHODOLOGY_SEARCH: 4000, METHODOLOGY_COMPARISON: 8000}   # kept for the answer
+ANSWER_TOKENS = {CODE_QUESTION: 6000, METHODOLOGY_SEARCH: 4000, METHODOLOGY_COMPARISON: 10000}   # kept for the answer
 QUESTION_MARGIN = 1000       # tokens kept for the gateway's own wrapping of a question
 TOKEN_PIECES = re.compile(r"[A-Za-z]+|[0-9]|\n|[^\S\n]+|[^A-Za-z0-9\s]")
 
@@ -4971,8 +4971,9 @@ def interpret_code(ctx):
 UNIT_TOKENS_MAX = 12000         # tokens of one unit's code and interpretation in a question of step 05
 COMPARE_CONTEXT_TOKENS = 5000   # tokens of context code in a comparison; a context piece past that is named, not shown
 NEIGHBOURS_NAMED = 20           # units named on the line of what a unit takes from, and on the line of what it gives to
-DEVIATION_KINDS = {"differs": "The code differs.", "omits": "Not done in the code.",
-                   "adds": "Not described in the methodology.", "ambiguous": "The methodology can be read more than one way."}
+DEVIATION_KINDS = {"differs": "The code differs", "omits": "Not done in the code",
+                   "adds": "Not described in the methodology", "ambiguous": "The methodology can be read more than one way"}
+DEVIATION_PARTS = (("methodology", "Methodology"), ("code", "Code"), ("why", "Why it deviates"), ("effect", "Effect"))
 NOT_SEARCHED = "Not searched: nothing was read from this file."
 NOT_COMPARED = "Not compared: nothing was read from this file."
 SEARCH_SYSTEM_PROMPT = (
@@ -5003,28 +5004,46 @@ COMPARE_SYSTEM_PROMPT = (
     "chunks of the methodology found to bear on one piece of the model's R package, each headed by its reference in "
     "square brackets (such as [C-0012]), the headings it sits under and its type; then, for context, the pieces of the "
     "package this piece takes something from and the pieces that take something from it; then the piece itself, exactly "
-    "as written, with an explanation of it that a language model wrote. List every potential deviation between what "
-    "these chunks say and what this piece of code does, for a CFA-level credit analyst to review. Compare everything the "
-    "chunks say that bears on the piece: formulas and the order of their steps; constants and parameter values; floors, "
-    "caps and thresholds, and whether a boundary value is included; the treatment of missing, zero, negative or "
-    "out-of-range values; units, scales and conventions - a percentage or a fraction, basis points, annual or monthly "
-    "figures, signs; rounding and precision; the inputs used, their sources, filters, segments and level of "
-    "aggregation; defaults and fallbacks; what the chunks require that the piece does not do; and what the piece does to "
-    "its result that the chunks do not describe. Where a chunk can be read in more than one way and the code follows "
-    "one reading, say so. A requirement met by a piece shown as context is not a deviation of this piece; where it is "
-    "met in neither, or you cannot tell, list it. Compare only with the chunks shown, and give for each deviation the "
-    "reference of every chunk it rests on. Quote the methodology and the code word for word where it helps, inside "
-    "curly double quotes \u201clike this\u201d - never straight ones, which would break the JSON - and name the lines of "
-    "the code. State what differs as fact: do not rate how much it matters, recommend a change, or say which of the two "
-    "is right - the analyst decides that. The explanation can be wrong: where it and the code disagree, the code counts. "
-    "Answer with one JSON object and nothing else, in this form: {\"deviations\": [{\"refs\": [\"C-0012\"], \"kind\": "
-    "\"differs\", \"methodology\": \"what the chunks say\", \"code\": \"what the piece does\"}]}. The kind is differs "
-    "(the piece does what the chunks describe, differently), omits (the chunks require something the piece does not "
-    "do), adds (the piece does something to its result that the chunks do not describe) or ambiguous (the chunks can be "
-    "read in more than one way, and the code follows one reading); methodology and code take one or two plain "
-    "sentences each. If the piece does what the chunks say, answer {\"deviations\": []}. Outside quotations, never use "
-    "the words finding, error, severity, severe, critical, major or minor, and never call anything high, medium or low "
-    "in risk, rating, priority or impact.")
+    "as written, with an explanation of it that a language model wrote. Find every potential deviation between what "
+    "these chunks say and what this piece of code does, and explain each one so that a CFA-level credit analyst "
+    "understands, without reading the code, exactly what differs, why it is a deviation, and what it changes in the "
+    "results. Compare everything the chunks say that bears on the piece: formulas and the order of their steps; "
+    "constants and parameter values; floors, caps and thresholds, and whether a boundary value is included; the "
+    "treatment of missing, zero, negative or out-of-range values; units, scales and conventions - a percentage or a "
+    "fraction, basis points, annual or monthly figures, signs; rounding and precision; the inputs used, their sources, "
+    "filters, segments and level of aggregation; defaults and fallbacks; what the chunks require that the piece does "
+    "not do; and what the piece does to its result that the chunks do not describe. Where a chunk can be read in more "
+    "than one way and the code follows one reading, explain both readings. A requirement met by a piece shown as "
+    "context is not a deviation of this piece; where it is met in neither, or you cannot tell, list it and say which. "
+    "For each deviation give: a title - one pointed sentence naming exactly what differs and where, with the values or "
+    "steps on both sides, such as \u201cThe monthly PD is the annual PD divided by 12, where the methodology converts it "
+    "by compounding\u201d; the methodology - what the chunks require, quoting them word for word where the wording "
+    "matters; the code - what the piece does instead, naming its variables, functions and line numbers and quoting it "
+    "where that helps; why - the precise mechanism by which the code's result departs from what the methodology "
+    "prescribes, step by step where it takes several; and the effect - which inputs or cases are affected, in which "
+    "direction the result moves, by how much where the code shows it, with a short worked example in numbers where "
+    "that makes it clearer. Be specific and direct: name the quantities, give the numbers, say which cases are "
+    "affected. Write nothing that would fit any code, such as \u201cthis may affect the results\u201d or \u201cthis "
+    "should be reviewed\u201d, and do not repeat yourself. State what the code does and what follows from it as fact; "
+    "where the code leaves something undetermined, say exactly what. Do not rate how important a deviation is, "
+    "recommend a change, or say which of the two is right: the analyst decides that. Compare only with the chunks "
+    "shown, and rest every deviation on the references of the chunks it concerns. Quote inside curly double quotes "
+    "\u201clike this\u201d - never straight ones, which would break the JSON. The explanation of the piece can be wrong: "
+    "where it and the code disagree, the code counts. Answer with one JSON object and nothing else, in this form: "
+    "{\"deviations\": [{\"refs\": [\"C-0012\"], \"kind\": \"differs\", \"title\": \"...\", \"methodology\": \"...\", "
+    "\"code\": \"...\", \"why\": \"...\", \"effect\": \"...\"}]}. The kind is differs (the piece does what the chunks "
+    "describe, differently), omits (the chunks require something the piece does not do), adds (the piece does something "
+    "to its result that the chunks do not describe) or ambiguous (the chunks can be read in more than one way, and the "
+    "code follows one reading). The depth wanted, shown on another model: {\"refs\": [\"C-0047\"], \"kind\": "
+    "\"differs\", \"title\": \"The monthly PD is the annual PD divided by 12, where the methodology converts it by "
+    "compounding\", \"methodology\": \"C-0047 derives the monthly PD from the annual one as \u201c1 - (1 - PD)^(1/12)"
+    "\u201d.\", \"code\": \"monthly_pd() returns \u201cpd_annual / 12\u201d (line 4).\", \"why\": \"Dividing by 12 "
+    "spreads defaults evenly over the year; the methodology compounds survival month by month, which gives a higher "
+    "monthly PD for the same annual PD.\", \"effect\": \"Every monthly PD is lower than the methodology's, and more so "
+    "as the annual PD rises: at an annual PD of 20% the code gives 1.667% a month, the methodology 1.842%.\"}. If the "
+    "piece does what the chunks say, answer {\"deviations\": []}. Outside quotations, never use the words finding, "
+    "error, severity, severe, critical, major or minor, and never call anything high, medium or low in risk, rating, "
+    "priority or impact.")
 
 
 def search_shares(settings):
@@ -5233,9 +5252,9 @@ def compare_check(question):
             unknown += [ref or "(empty)" for ref in named if ref not in order]
             kind = plain_text(item.get("kind")).lower()
             entry = {"refs": sorted(set(ref for ref in named if ref in order), key=order.get),
-                     "kind": kind if kind in DEVIATION_KINDS else "",
-                     "methodology": plain_text(item.get("methodology")), "code": plain_text(item.get("code"))}
-            if (entry["methodology"] or entry["code"]) and entry not in deviations:
+                     "kind": kind if kind in DEVIATION_KINDS else "", "title": plain_text(item.get("title"))}
+            entry.update({part: plain_text(item.get(part)) for part, _ in DEVIATION_PARTS})
+            if any(entry[part] for part in ("title",) + tuple(part for part, _ in DEVIATION_PARTS)) and entry not in deviations:
                 deviations.append(entry)
         if unknown and not last:
             return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
@@ -5262,18 +5281,21 @@ DEVIATION_WITHHELD = "The model's words for this one cannot be shown in plain wo
 
 
 def deviation_lines(deviations, gated=False):
-    """Deviations as the workbook shows them: numbered, each opening with the chunks of the methodology it rests on.
-    Gated, a deviation whose own words - outside quotations - the workbook cannot hold is replaced by a notice that
-    keeps its chunks, so that one such answer never hides the others of its cell. Enforces: R1, R2, R10"""
-    lines = []
+    """Deviations as the workbook shows them: one block each, numbered, blocks apart by a blank line. The first line
+    names the chunks of the methodology the deviation rests on, its kind and its title; then what the methodology
+    requires, what the code does, why that is a deviation and what it changes, each on a line of its own. Gated, a
+    deviation whose own words - outside quotations - the workbook cannot hold is replaced by a notice that keeps its
+    chunks, so that one such answer never hides the others of its cell. Enforces: R1, R2, R10"""
+    blocks = []
     for number, item in enumerate(deviations, start=1):
-        said = [DEVIATION_KINDS.get(item["kind"], "")]
-        said += ["Methodology: " + sentence(item["methodology"])] if item["methodology"] else []
-        said += ["Code: " + sentence(item["code"])] if item["code"] else []
         refs = ", ".join(item["refs"]) or "No chunk named"
-        line = "%d. %s - %s" % (number, refs, " ".join(s for s in said if s))
-        lines.append("%d. %s - %s" % (number, refs, DEVIATION_WITHHELD) if gated and unwelcome_words(own_words(line)) else line)
-    return "\n".join(lines)
+        head = " ".join(s for s in (DEVIATION_KINDS.get(item.get("kind"), "") + "." if item.get("kind") in DEVIATION_KINDS else "",
+                                    sentence(item.get("title", ""))) if s)
+        lines = ["%d. %s - %s" % (number, refs, head or "A deviation.")]
+        lines += ["%s: %s" % (label, sentence(item[part])) for part, label in DEVIATION_PARTS if item.get(part)]
+        block = "\n".join(lines)
+        blocks.append("%d. %s - %s" % (number, refs, DEVIATION_WITHHELD) if gated and unwelcome_words(own_words(block)) else block)
+    return "\n\n".join(blocks)
 
 
 def methodology_account(units, chunks, calls, settings):
@@ -5337,7 +5359,7 @@ def methodology_cells(state):
     lines = deviation_lines(state["deviations"], gated=True)
     if state["to compare"]:
         open_refs = "; ".join(dict.fromkeys(ref for ref, _ in state["to compare"]))
-        return refs, (lines + "\n" if lines else "") + ("Not compared in full: %s not yet compared with this piece. "
+        return refs, (lines + "\n\n" if lines else "") + ("Not compared in full: %s not yet compared with this piece. "
                                                          "Run cell 3 again." % open_refs)
     return refs, lines or "None flagged against %s." % refs
 
@@ -5784,7 +5806,7 @@ sheets:
   - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
   - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
   - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
-  - {header: 'Potential Deviations (flagged by LLM, subject to human review)', group: model, field: deviations, width: 90}
+  - {header: 'Potential Deviations (flagged by LLM, subject to human review)', group: model, field: deviations, width: 110}
 '''
 
 def load_layout():
