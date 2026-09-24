@@ -62,10 +62,10 @@ UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read
 
 KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL = "Function", "Formula statement", "Top-level statement"
 KIND_TEST, KIND_TABLE, KIND_OBJECT = "Test block", "Parameter table", "Parameter object"
-KIND_ROXYGEN, KIND_HELP, KIND_VIGNETTE = "Roxygen block", "Help page", "Vignette text"
+KIND_ROXYGEN, KIND_VIGNETTE = "Roxygen block", "Vignette text"
 KIND_COMPILED, KIND_NOT_READ, KIND_OTHER = "Compiled code", "File not read", "Other file"
 UNIT_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST, KIND_TABLE, KIND_OBJECT,
-              KIND_ROXYGEN, KIND_HELP, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
+              KIND_ROXYGEN, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
 CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
 
 # This one assignment has to name the words the tool may never use; nothing else in the engine may.
@@ -120,11 +120,6 @@ class RoxygenDetail:
     """A roxygen block: what it documents, and its tags with their lines."""
     documents_ref: Optional[str] = None; documents_name: str = ""; tags: tuple = ()
 
-@dataclass(frozen=True)
-class HelpPageDetail:
-    """A help page as read from its macro format."""
-    rd_name: str = ""; aliases: tuple = (); title: str = ""; usage: str = ""; arguments: tuple = ()
-    generated_from_ref: Optional[str] = None; in_step_with_source: Optional[bool] = None
 
 @dataclass(frozen=True)
 class ModelUnit:
@@ -132,7 +127,7 @@ class ModelUnit:
     ref: str; kind: str; file: str; lines: Optional[tuple]; name: str; inside: str; text: str
     parent_ref: Optional[str]; file_sha256: str; content_hash: str
     code: Optional[CodeDetail] = None; data: Optional[ParameterDataDetail] = None
-    roxygen: Optional[RoxygenDetail] = None; helppage: Optional[HelpPageDetail] = None
+    roxygen: Optional[RoxygenDetail] = None
     read_problem: Optional[str] = None
 
 @dataclass(frozen=True)
@@ -812,20 +807,26 @@ def account_lines(found):
     return lines
 
 
-def account_of_package(files, units, refused, is_text_file):
+def account_of_package(files, units, refused, is_text_file, dropped=()):
     """The content account of a package tarball. The atom of a package is a line: every
     non-blank line of every member that holds text has to lie inside a unit, be refused with a
     reason, or be named as not read. A member the tool cannot read as text (a compiled object, a
     picture, stored data in a binary form) is counted as one atom of its own, because its lines
     cannot be counted without reading it. Extends the line coverage that read-package already
-    kept for parsed R files to every member of the tarball. Enforces: R13"""
-    inside, not_read, atoms, unaccounted, fenced, text_only = 0, 0, 0, [], 0, 0
+    kept for parsed R files to every member of the tarball. A member left out on purpose (dropped: a help
+    page, generated from the roxygen comments in the R files, which are read) is a declared drop, every
+    line of it. Enforces: R13"""
+    inside, not_read, atoms, unaccounted, fenced, text_only, declared = 0, 0, 0, [], 0, 0, 0
     covered = {}
     for unit in units:
         lines = unit.get("lines")
         if unit.get("file") and lines:
             covered.setdefault(unit["file"], set()).update(range(int(lines[0]), int(lines[1]) + 1))
     for path in sorted(files):
+        if path in dropped:                           # not read on purpose, under a named rule
+            lines = sum(1 for line in files[path].decode("utf-8", "replace").split("\n") if line.strip())
+            atoms, declared = atoms + lines, declared + lines
+            continue
         if not is_text_file(path):
             atoms += 1
             if any(unit.get("file") == path for unit in units):
@@ -859,7 +860,7 @@ def account_of_package(files, units, refused, is_text_file):
             else:
                 unaccounted.append("%s line %d" % (path, number))
     found = {"file": "the package", "atoms": atoms + len(refused), "in unit text": inside, "relocated": 0,
-             "rewritten": 0, "declared drop": len(refused) + fenced, "not read": not_read,
+             "rewritten": 0, "declared drop": len(refused) + fenced + declared, "not read": not_read,
              "unaccounted": len(unaccounted), "injected": 0, "where unaccounted": sorted(unaccounted)[:12],
              "what unaccounted": [], "what injected": [], "held as text only": text_only}
     found["closed"] = found["unaccounted"] == 0
@@ -3388,7 +3389,7 @@ def draft(kind, path, lines, name, text, **more):
     """A unit before it has its reference. References are given at the end, in reading order."""
     unit = {"kind": kind, "file": path, "lines": lines, "name": name, "inside": "", "text": text,
             "parent_key": None, "key": "%s:%s:%s:%s" % (path, lines[0] if lines else 0, kind, name),
-            "code": None, "data": None, "roxygen": None, "helppage": None, "read_problem": None, "node": None}
+            "code": None, "data": None, "roxygen": None, "read_problem": None, "node": None}
     unit.update(more)
     return unit
 
@@ -3482,19 +3483,6 @@ def self_contained(units):
     return kept
 
 # ---------------------------------------------------------------- roxygen blocks and help pages
-def braces_content(text, position):
-    """The content of the {...} that starts at `position` (nested braces allowed), and the
-    position after it. Used for \\eqn{}, \\deqn{} and the help-page format."""
-    depth, start = 0, position
-    while position < len(text):
-        if text[position] == "\\":
-            position += 2
-            continue
-        depth += {"{": 1, "}": -1}.get(text[position], 0)
-        position += 1
-        if depth == 0:
-            return text[start + 1:position - 1], position
-    return text[start + 1:], len(text)
 
 def roxygen_units(path, source_lines, parsed, context):
     """Consecutive #' lines form one block. It documents the object that follows: a function,
@@ -3535,30 +3523,6 @@ def roxygen_units(path, source_lines, parsed, context):
                            roxygen=detail))
     return units
 
-def help_page_unit(path, text):
-    """A help page (.Rd): name, aliases, title, usage and arguments, read from the macro format
-    with nested braces; % starts a comment."""
-    generated_from = re.search(r"%\s*Please edit documentation in\s+(\S+)", text)
-    body = re.sub(r"(?<!\\)%[^\n]*", "", text)
-    sections, position = [], 0
-    for found in re.finditer(r"\\([A-Za-z]+)\s*(?=\{)", body):
-        if found.start() < position:
-            continue
-        content, position = braces_content(body, found.end())
-        sections.append((found.group(1), content))
-    first = lambda macro: next((normalise_text(content) for name, content in sections if name == macro), "")
-    arguments = []
-    for name, content in sections:
-        if name == "arguments":
-            for item in re.finditer(r"\\item\s*(?=\{)", content):
-                argument, after = braces_content(content, item.end())
-                description, _ = braces_content(content, after) if content[after:after + 1] == "{" else ("", after)
-                arguments.append((normalise_text(argument), normalise_text(description)))
-    detail = {"rd_name": first("name"), "aliases": tuple(normalise_text(c) for n, c in sections if n == "alias"),
-              "title": first("title"), "usage": first("usage"), "arguments": tuple(arguments),
-              "generated_from_ref": None, "in_step_with_source": None,
-              "generated_from_file": generated_from.group(1) if generated_from else ""}
-    return draft(KIND_HELP, path, (1, text.count("\n") + 1), detail["rd_name"] or os.path.basename(path), text, helppage=detail)
 
 def vignette_units(path, text, context):
     """A vignette: prose becomes "Vignette text" units, one per stretch between code chunks;
@@ -3797,8 +3761,9 @@ def file_units(path, data, context, facts, reader=""):
         if text is not None:
             if reader == "r-source":
                 return units_from_r_source(path, text, context)
-            if reader == "help-page":
-                return [help_page_unit(path, text)]
+            if reader == "help-page":                 # generated from the roxygen comments, which are read
+                facts["help pages"].append(path)
+                return []
             if reader == "vignette":
                 return vignette_units(path, text, context)
             if reader in ("r-data", "table-file"):
@@ -3818,46 +3783,31 @@ def file_units(path, data, context, facts, reader=""):
                       read_problem="A binary file of a kind the tool does not know; it needs a manual review.")]
     if is_parsed_r_file(path):
         return units_from_r_source(path, text, context)
-    if lowered.endswith(".rd") and lowered.startswith("man/"):
-        return [help_page_unit(path, text)]
+    if lowered.endswith(".rd") and lowered.startswith("man/"):   # a help page repeats the roxygen comments in the R files
+        facts["help pages"].append(path)
+        return []
     if lowered.endswith((".rmd", ".rnw", ".qmd")):
         return vignette_units(path, text, context)
     return [draft(KIND_OTHER, path, (1, text.count("\n") + 1), os.path.basename(path), text[:2000])]
 
 def link_documentation_units(units):
-    """Tie each roxygen block to the object it documents and each help page to the block that
-    generated it (by name and aliases), and say whether the page is still in step with it."""
+    """Tie each roxygen block to the object it documents."""
     by_name = {}
     for unit in units:
         if unit["kind"] in (KIND_FUNCTION, KIND_TABLE, KIND_OBJECT) and not unit["inside"]:
             by_name.setdefault(unit["name"], unit)
-    blocks = {}
     for unit in units:
         if unit["roxygen"]:                               # a block, or the object it is one row with
             target = by_name.get(unit["roxygen"]["documents_name"])
             unit["roxygen"]["documents_ref"] = target["key"] if target else None
-            blocks.setdefault(unit["roxygen"]["documents_name"], unit)
-    for unit in units:
-        if unit["kind"] == KIND_HELP:
-            page = unit["helppage"]
-            block = next((blocks[name] for name in (page["rd_name"],) + tuple(page["aliases"]) if name in blocks), None)
-            if block is not None:
-                page["generated_from_ref"] = block["key"]
-                parameters = [tag["name"] for tag in block["roxygen"]["tags"] if tag["tag"] == "param"]
-                documented = [name for names in parameters for name in names.split(",")]
-                page["in_step_with_source"] = sorted(documented) == sorted(name for a, _ in page["arguments"] for name in a.split(", "))
 
 def finalise_units(drafts, file_hashes):
     """Give every draft its reference, in reading order, and turn keys into references."""
     refs = {unit["key"]: make_ref("M", number) for number, unit in enumerate(drafts, start=1)}
     units = []
     for unit in drafts:
-        for part, field_name in (("roxygen", "documents_ref"), ("helppage", "generated_from_ref")):
-            if unit[part] and unit[part][field_name]:
-                unit[part][field_name] = refs.get(unit[part][field_name])
-        helppage = dict(unit["helppage"]) if unit["helppage"] else None
-        if helppage:
-            helppage.pop("generated_from_file", None)
+        if unit["roxygen"] and unit["roxygen"]["documents_ref"]:
+            unit["roxygen"]["documents_ref"] = refs.get(unit["roxygen"]["documents_ref"])
         units.append(ModelUnit(
             ref=refs[unit["key"]], kind=unit["kind"], file=unit["file"], lines=unit["lines"], name=unit["name"],
             inside=unit["inside"], text=unit["text"], parent_ref=refs.get(unit["parent_key"]),
@@ -3865,7 +3815,7 @@ def finalise_units(drafts, file_hashes):
             code=CodeDetail(**unit["code"]) if unit["code"] else None,
             data=ParameterDataDetail(**unit["data"]) if unit["data"] else None,
             roxygen=RoxygenDetail(**unit["roxygen"]) if unit["roxygen"] else None,
-            helppage=HelpPageDetail(**helppage) if helppage else None, read_problem=unit["read_problem"]))
+            read_problem=unit["read_problem"]))
     return units, refs
 
 def package_rows(description, namespace, units, facts, refused):
@@ -3879,6 +3829,9 @@ def package_rows(description, namespace, units, facts, refused):
     rows.extend(("Package", "Units of kind %s" % kind, counts[kind]) for kind in UNIT_KINDS if kind in counts)
     exported = sorted(u.name for u in units if u.kind == KIND_FUNCTION and u.code and u.code.exported)
     rows.append(("Package", "Exported functions", ", ".join(exported) or "none found"))
+    if facts["help pages"]:
+        rows.append(("Package", "Help pages not read", "%d in man/: generated from the roxygen comments in the R files, which are read"
+                     % len(facts["help pages"])))
     rows.extend(("Package data", "Data file", fact) for fact in facts["data"])
     rows.extend(("Package data", "Not assessed", "%s (%s): %s" % (u.ref, u.name, u.data.not_assessable_reason))
                 for u in units if u.data and not u.data.assessable)
@@ -3913,7 +3866,7 @@ def read_package(ctx):
         top = path.split("/")[0].lower()
         return (order.index(top) if top in order else len(order), path)
     chosen, plan_notes = {}, []
-    drafts, facts = [], {"data": []}
+    drafts, facts = [], {"data": [], "help pages": []}
     for path in sorted(files, key=rank):
         drafts.extend(file_units(path, files[path], context, facts, chosen.get(path, "")))
     data_names = {unit["name"] for unit in drafts if unit["data"]}
@@ -3955,7 +3908,8 @@ def read_package(ctx):
     if len(tarballs) > 1:
         messages.append("More than one tarball was found; only %s was read." % os.path.basename(tarballs[0]))
     plain_units = [to_plain(unit) for unit in units]
-    account = account_of_package(files, plain_units, refused, lambda path: is_parsed_r_file(path) or os.path.splitext(path)[1].lower() in TEXT_MEMBERS or "/" not in path)
+    account = account_of_package(files, plain_units, refused, lambda path: is_parsed_r_file(path) or os.path.splitext(path)[1].lower() in TEXT_MEMBERS or "/" not in path,
+                                 dropped=set(facts["help pages"]))
     info["rows"].extend({"group": "The package", "item": "content account", "value": line}
                         for line in account_lines(account))
     if not account["closed"]:
