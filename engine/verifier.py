@@ -3327,10 +3327,11 @@ def unparse(node):
         return "function(%s) ..." % ", ".join(node.names)
     return "{ ... }" if kind == "block" else kind
 
-def has_arithmetic(node, function_map, trivial):
+def has_arithmetic(node, function_map):
     """Does this code compute something: arithmetic, a mathematical function, a comparison with
-    a number, or a number that is not on the list of trivial ones? Numbers used as positions
-    inside [ ] do not count."""
+    a number, or a number? Every number counts, whatever its value; only a position inside [ ]
+    does not. What this decides is a label - Formula statement or Top-level statement - and both
+    are read, shown, linked and asked about alike."""
     positions = set()
     for inner in walk(node):
         if inner.kind == "index":
@@ -3346,7 +3347,7 @@ def has_arithmetic(node, function_map, trivial):
             return True
         if inner.kind == "binary" and inner.value in COMPARISON_SIGNS and "num" in (inner.args[0].kind, inner.args[1].kind):
             return True
-        if inner.kind == "num" and id(inner) not in positions and number_token(inner)["value"] not in trivial:
+        if inner.kind == "num" and id(inner) not in positions:
             return True
     return False
 
@@ -3414,7 +3415,7 @@ def statement_units(node, path, source_lines, context, in_tests):
         label = node.args[1].value if node.args[1].kind == "str" else "test"
         return [draft(KIND_TEST, path, lines, label, text, code=code_detail(node, function_map, context["settings"]), node=node)]
     detail = code_detail(node, function_map, context["settings"])
-    if parts and parts[0].kind == "name" and has_arithmetic(parts[1], function_map, context["trivial"]):
+    if parts and parts[0].kind == "name" and has_arithmetic(parts[1], function_map):
         return [draft(KIND_FORMULA, path, lines, parts[0].value, text, code=detail, node=node)]
     kind = KIND_TEST if in_tests and node.kind == "call" and callee_name(node).startswith("expect_") else KIND_TOPLEVEL
     name = parts[0].value if parts and parts[0].kind in ("name", "str") else (callee_name(node) if node.kind == "call" else "")
@@ -3852,7 +3853,7 @@ def read_package(ctx):
     description = read_description(decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
     namespace = flowr_package(files)
     context = {"function_map": function_map, "notation": function_map["notation"], "namespace": namespace,
-               "trivial": set(ctx.settings["trivial_numbers"]), "settings": ctx.settings}
+               "settings": ctx.settings}
     order = ("description", "namespace", "r", "data", "inst", "man", "tests", "vignettes")
     def rank(path):
         top = path.split("/")[0].lower()
@@ -4204,7 +4205,6 @@ ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ---------------------------------------------------------------- settings (allow-list)
 DEFAULT_SETTINGS = {
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
-    "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
     "parallel_chats": 256,
     "chat_token_limit": 40000, "methodology_batch_tokens": 12000}

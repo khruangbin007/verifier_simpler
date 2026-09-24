@@ -294,7 +294,6 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `max_parameter_cells` | 5000 | A stored table with more cells is a dataset rather than a parameter table: Chunks_Model still shows it whole, steps 04 and 05 ask about it once, from a view of its columns and first 50 rows, and Model_Package_Info lists it as not assessed. |
 | `max_parameter_columns` | 50 | A stored table with more columns is a dataset, as for `max_parameter_cells`. |
 | `protect_sheets` | True | Lock every cell except the yellow ones (filtering stays allowed; no password). |
-| `trivial_numbers` | ['0', '1', '2', '-1', '10', '100'] | Hard-coded numbers that do not, on their own, make a top-level assignment a Formula statement. |
 | `max_file_mb` | 200.0 | A larger input file is not read and becomes a not-read unit. |
 | `reviewer_id` |  | Who runs the notebook, taken from Databricks by cell 1; sent to the gateway by `chat()` and recorded against the run. |
 | `parallel_chats` | 256 | The most questions steps 04 and 05 have out with the model at once. Asking starts at 32 and doubles while no call fails, then settles just under what the gateway takes (section 13); lower this only if the gateway must never see more than so many calls at once. |
