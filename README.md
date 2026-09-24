@@ -10,7 +10,6 @@ engine/
   verifier.py           the whole tool: reading, parsing, chunking, the map, the workbook
   pipeline.yaml         three steps, in order, each versioned
   requirements.txt      what the tool needs installed
-  requirements-docling.txt  Docling and what it brings, installed by cell 1 into a folder of its own
 ```
 
 A run leaves one folder: `Output.xlsx` with five sheets - what was read, and how the model computes what it returns - and `_audit/Audit_Log.xlsx`, the record of the run: every step, every record and every exchange with the model.

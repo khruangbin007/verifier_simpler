@@ -1,8 +1,15 @@
-# What the engine itself imports. Cell 1 installs these, and only if one of them is missing.
+# What the engine imports. Cell 1 installs these from PyPI, and only if one of them is missing.
 # Lower bounds, not pins: a managed runtime usually has openpyxl and PyYAML already, and
 # forcing an exact version would replace the runtime's own copy for no gain.
 openpyxl>=3.1
 PyYAML>=6.0
 numpy>=1.24
 rdata>=1.0
-# Docling is not here: it runs in a process of its own, from its own folder - see requirements-docling.txt.
+
+# --- optional ---
+# Installed in a second step that is allowed to fail: each one missing degrades a named capability
+# into a plain note, and nothing else changes.
+pdfplumber>=0.10          # text and tables from PDF; the manual recommends .docx where there is a choice
+pypdf>=4.0                # a second PDF reader, used where pdfplumber cannot read a page
+# Not installed: rapidocr-onnxruntime, which would read the words inside pictures. It brings OpenCV, whose
+# newest wheels carry an OpenSSL that a FIPS-mode cluster refuses by stopping the whole Python process.

@@ -1,9 +1,11 @@
 """
 Verifier 0.0.4 - verifier.py - the whole engine, in one file. For every reviewer.
 
-Reads a model's methodology, its package of code and data, and its documentation, and maps how the model
-computes what it returns, from each final output down to its rawest inputs. The documents are read by
-Docling, the R code by flowR. One deliverable: Output.xlsx. Everything a run does is recorded.
+Reads a model's methodology, its package of code and data, and its documentation; maps how the model
+computes what it returns, from each final output down to its rawest inputs; links what corresponds;
+checks by code whether linked formulas, values and stated rules agree; and raises what it could not line
+up as questions for a person. One deliverable: Output.xlsx. Everything a run does is recorded, and a run
+replays from its record without a model.
 
 The file is one piece of engineering in four parts, in dependency order:
   the contracts, the reading floor and the front door
@@ -45,7 +47,7 @@ import zlib
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
-from email import policy
+from xml.sax.saxutils import escape
 
 
 # ================================================================================================
@@ -56,6 +58,7 @@ ENGINE_VERSION = "0.0.3"
 
 # ---------------------------------------------------------------- vocabulary (Appendix B)
 
+UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
 
 KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL = "Function", "Formula statement", "Top-level statement"
 KIND_TEST, KIND_TABLE, KIND_OBJECT = "Test block", "Parameter table", "Parameter object"
@@ -63,6 +66,7 @@ KIND_ROXYGEN, KIND_HELP, KIND_VIGNETTE = "Roxygen block", "Help page", "Vignette
 KIND_COMPILED, KIND_NOT_READ, KIND_OTHER = "Compiled code", "File not read", "Other file"
 UNIT_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST, KIND_TABLE, KIND_OBJECT,
               KIND_ROXYGEN, KIND_HELP, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
+CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
 
 # This one assignment has to name the words the tool may never use; nothing else in the engine may.
 # These terminologies CAN BE USED ONLY by HUMAN reviewers/validators. Machines cannot make these determinations.
@@ -79,12 +83,25 @@ def has_banned_wording(text):
     return found.group(0) if found else ""
 
 # ---------------------------------------------------------------- data contracts (plan 2.3)
+@dataclass(frozen=True)
+class TableData:
+    """A table kept whole: header cells, body rows, and which column identifies a row."""
+    header: tuple = (); rows: tuple = (); row_key: str = ""
 
+@dataclass(frozen=True)
+class EquationData:
+    """An equation as found: its source form, whether the tool could read it, and its tree."""
+    source_form: str = ""; linear: str = ""; readable: bool = False
+    not_readable_reason: str = ""; image_sha256: str = ""
 
 @dataclass(frozen=True)
 class Chunk:
-    """One citable unit of a document: a paragraph, a table, a figure or an equation, under its headings."""
-    ref: str; corner: str; source_file: str; kind: str; heading_chain: tuple; text: str; content_hash: str
+    """One citable unit of a document: a paragraph, a table, a figure or an equation."""
+    ref: str; corner: str; source_file: str; kind: str; level: int; heading_chain: tuple
+    numbering: str; text: str; locator: str; content_hash: str
+    table: Optional[TableData] = None; equation: Optional[EquationData] = None
+    numbering_reconstructed: bool = False
+    caption: str = ""; not_read_reason: str = ""; para_label: str = ""   # para_label: the number the document itself gives ("36.")
 
 @dataclass(frozen=True)
 class CodeDetail:
@@ -186,6 +203,12 @@ def make_ref(prefix, number):
 # between other digit counts ("1,5") is not a grouping and stays two numbers, because in some
 # writing it is a decimal comma and guessing which would be guessing. Space grouping ("1 000") is
 # not read either, since "section 3 100 samples" would fuse. Enforces: R3
+_NUMBER_RE = re.compile(
+    r"(?<![\w.])(?P<num>[-\u2212]?(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?)"
+    r"(?P<unit>\s?%|\s?(?:basis points?|bps?)\b|(?:st|nd|rd|th)\s+percentile\b)?")
+_LABEL_BEFORE_RE = re.compile(
+    r"(?:table|section|sections|equation|eq\.|figure|fig\.|annex|appendix|chapter|paragraph|"
+    r"page|step|version|level)\s*\(?$", re.IGNORECASE)
 
 def parse_number(as_written, unit=""):
     """Bring one written number to a decimal value and keep how it was written.
@@ -216,6 +239,24 @@ def plain_decimal(value):
     text = format(value.normalize(), "f")
     return "0" if text in ("-0", "") else text
 
+def find_numbers(text):
+    """All numbers written in a piece of prose, with their position. Numbers that only
+    label something ("Table 3", "section 4.2"), years and list numbering are left out."""
+    found = []
+    for match in _NUMBER_RE.finditer(text or ""):
+        before = text[:match.start()]
+        number = match.group("num")
+        if _LABEL_BEFORE_RE.search(before[-24:]):
+            continue
+        if re.fullmatch(r"(19|20)\d\d", number) and not match.group("unit"):
+            continue
+        if not before.strip() and re.match(r"\)|\.?\s+[A-Z]", text[match.end():match.end() + 4]):
+            continue                      # "3.1 Floors" or "2) ..." at the start: numbering
+        parsed = parse_number(number, match.group("unit") or "")
+        if parsed is not None:
+            parsed["position"] = match.start()
+            found.append(parsed)
+    return found
 
 def plain_number(value, digits=6):
     """How a computed value is shown to an analyst: whole numbers stay whole, other
@@ -230,12 +271,72 @@ def plain_number(value, digits=6):
     return plain_decimal(Decimal(text)) if "e" in text else text
 
 # ---------------------------------------------------------------- symbols
+GREEK = {"alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3", "delta": "\u03b4",
+         "epsilon": "\u03b5", "theta": "\u03b8", "kappa": "\u03ba", "lambda": "\u03bb",
+         "mu": "\u03bc", "nu": "\u03bd", "pi": "\u03c0", "rho": "\u03c1", "sigma": "\u03c3",
+         "tau": "\u03c4", "phi": "\u03c6", "omega": "\u03c9", "Phi": "\u03a6", "Sigma": "\u03a3",
+         "Delta": "\u0394", "Omega": "\u03a9"}
+_GREEK_BY_CHAR = {char: name for name, char in GREEK.items()}
+_SUBSCRIPT_CHARS = str.maketrans("\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089"
+                                 "\u1d62\u2c7c\u2096\u2099\u209c", "0123456789ijknt")
 
+def normalise_symbol(symbol):
+    """One form for a symbol however it was written: the Greek letter by name, by
+    character or in LaTeX form; a subscript written PD_i, PD[i], PD_{i} or with a
+    subscript character. Case is kept for single letters and folded for words."""
+    text = unicodedata.normalize("NFC", symbol or "").strip().strip("$`")
+    text = re.sub(r"\\([A-Za-z]+)", r"\1", text)
+    subscript = ""
+    match = re.fullmatch(r"(.+?)(?:_\{?([^{}]+)\}?|\[([^\]]+)\])", text)
+    if match:
+        text, subscript = match.group(1), match.group(2) or match.group(3)
+    else:
+        tail = re.search(r"[\u2080-\u2089\u1d62\u2c7c\u2096\u2099\u209c]+$", text)
+        if tail and tail.start() > 0:
+            text, subscript = text[:tail.start()], tail.group(0).translate(_SUBSCRIPT_CHARS)
+    parts = []
+    for part in (text, subscript):
+        part = "".join(_GREEK_BY_CHAR.get(char, char) for char in part)
+        if len(part) > 1 and part not in GREEK:
+            part = part.lower()
+        parts.append(part)
+    return parts[0] + ("_" + parts[1] if parts[1] else "")
 
 # ---------------------------------------------------------------- the expression tree
+@dataclass(frozen=True)
+class Expr:
+    """the tool's neutral tree for a formula. op is one of: num, sym, add, sub, mul, div,
+    pow, neg, call, cmp, piecewise, eq. `name` is a symbol, a neutral function name
+    (call) or a comparison sign (cmp); `value` is a decimal text (num)."""
+    op: str; name: Optional[str] = None; value: Optional[str] = None; args: tuple = ()
+    span: Optional[tuple] = None
 
 
+_INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
 
+def expr_to_text(expr, parent_rank=0):
+    """The tree in the tool's linear notation, the form shown to analysts and to the AI."""
+    if expr.op == "num":
+        return expr.value
+    if expr.op == "sym":
+        return expr.name
+    if expr.op == "neg":
+        text, rank = "-" + expr_to_text(expr.args[0], 3), 3
+    elif expr.op in _INFIX:
+        sign, rank = _INFIX[expr.op]
+        left = expr_to_text(expr.args[0], rank + (1 if expr.op == "pow" else 0))
+        text = left + sign + expr_to_text(expr.args[1], rank + (0 if expr.op == "pow" else 1))
+    elif expr.op == "call":
+        return "%s(%s)" % (expr.name, ", ".join(expr_to_text(arg) for arg in expr.args))
+    elif expr.op == "cmp":
+        text, rank = (" %s " % expr.name).join(expr_to_text(arg, 1) for arg in expr.args), 0
+    elif expr.op == "eq":
+        return "%s = %s" % (expr_to_text(expr.args[0]), expr_to_text(expr.args[1]))
+    elif expr.op == "piecewise":
+        return "piecewise(%s)" % ", ".join(expr_to_text(arg) for arg in expr.args)
+    else:
+        return "?"
+    return "(%s)" % text if rank < parent_rank else text
 
 
 # ================================================================================================
@@ -248,18 +349,214 @@ def plain_number(value, digits=6):
 
 
 # ---------------------------------------------------------------- element helpers
+def local_name(tag):
+    """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
+    if not isinstance(tag, str):
+        return ""
+    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
 
+def attribute(element, name):
+    """The value of an attribute, whatever namespace prefix it carries."""
+    for key, value in element.attrib.items():
+        if local_name(key) == name:
+            return value
+    return ""
 
+def child_named(element, name):
+    """The first child with this local tag name, or None."""
+    for child in element:
+        if local_name(child.tag) == name:
+            return child
+    return None
 
 # ---------------------------------------------------------------- baseline slicing: what a document's shape says
+def attribute_text(element, names, digits_too=False):
+    """The first of the named attributes that holds text worth reading, with its name. A bare
+    number is no heading, so it is passed over unless digits_too."""
+    for name in names:
+        value = (element.get(name) or "").strip()
+        if value and (digits_too or not value.isdigit()):
+            return value, name
+    return "", ""
 
+BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_item", "table")
 
+def written_numbering(element, rules):
+    """The numbering an element carries in an attribute, exactly as the document wrote it
+    (num="36." gives "36."): more faithful than any count the tool could make, skipped numbers included."""
+    return attribute_text(element, rules["numbering_attributes"], digits_too=True)[0]
 
+def table_rows(element, rules):
+    """The rows of a table: the children that hold cells, looked for directly below the table
+    and below the wrappers the rules know (thead, tbody, tgroup)."""
+    known = rules["family_of"]
+    holders = [element] + [part for part in element if known.get(local_name(part.tag)) == "table_part"]
+    return [row for holder in holders for row in holder
+            if local_name(row.tag) and len(row) and known.get(local_name(row.tag)) in (None, "row")]
 
+def discover_table_shape(element, rules, is_table):
+    """Give a family to every tag used inside a table, whatever the tags are called. Everything
+    in a row is a cell. Two kinds are told apart by name, since only the name says what they are
+    for: a tag holding the table's number or title (<tablenumber>, <tabletitle>) is the caption,
+    one holding a column heading (<tablecolhead>) a header cell. A tag nobody anticipated
+    (<tablesub>, <tabletext>) is simply a cell and keeps its text.
+    An element the rules already name as a table (is_table) needs no more than that: real tables
+    have rows of differing width (a note below, a heading that spans). An element NOT known to be
+    a table has to make the case by its shape, and two guards keep the skeleton of a document,
+    which repeats twice over as a table does, from being read as one: a cell holds words and
+    never a block, and most rows are the same width. Returns (row tags, {tag: family}) or None."""
+    known, rows = rules["family_of"], table_rows(element, rules)
+    cells = [cell for row in rows for cell in row if local_name(cell.tag)]
+    if not cells:
+        return None
+    if not is_table:
+        widths = [sum(1 for cell in row if local_name(cell.tag)) for row in rows]
+        usual = max(set(widths), key=widths.count)
+        if (len(rows) < 2 or len({local_name(row.tag) for row in rows}) > 1 or usual < 2 or widths.count(usual) * 2 <= len(rows)
+                or any(known.get(local_name(cell.tag)) for cell in cells)
+                or any(known.get(local_name(below.tag)) in BLOCK_FAMILIES for cell in cells for below in cell)):
+            return None
+    families = {}
+    for name in {local_name(cell.tag) for cell in cells}:
+        if any(word in name for word in rules["caption_tag_words"]):
+            families[name] = "caption"
+        else:
+            families[name] = "header_cell" if any(word in name for word in rules["header_tag_words"]) else "cell"
+    return {local_name(row.tag) for row in rows}, families
 
+def discover_families(root, rules, report):
+    """Work out a family for each tag this document uses that the rules do not name, from the
+    way the tag behaves here. The rules always win, so a schema the tool already knows is read
+    exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
+    table; an element carrying its own heading in an attribute; one holding other blocks (a
+    container); one holding text (a paragraph). Every decision is recorded with its reason in
+    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml.
+    Enforces: R9"""
+    known, found = rules["family_of"], {}
 
+    def note(tag, family, reason):
+        if tag not in known and tag not in found:
+            found[tag] = family
+            report[tag] = {"family": family, "reason": reason, "count": 1 if tag == name else 0}
 
+    # A tag that sits in running text, never holding a block of its own, is read inline: its
+    # words belong to the sentence around it, not to a paragraph of their own.
+    def readable_elements(element):
+        """Every element the walker will actually read. Discovery stops where the walker
+        stops: the inside of an equation or a figure is read by its own reader, and what the
+        rules ignore is never read at all, so neither is catalogued here."""
+        yield element
+        if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
+            return
+        for child in element:
+            if local_name(child.tag):
+                yield from readable_elements(child)
 
+    elements = list(readable_elements(root))
+    inline_looking = set()
+    for element in elements:
+        for child in element:
+            if (child.tail or "").strip() or (element.text or "").strip():
+                inline_looking.add(local_name(child.tag))
+
+    for element in elements:
+        name = local_name(element.tag)
+        if not name:
+            continue
+        if name in report:
+            report[name]["count"] += 1
+        # Table shape is looked for under a known table too: the element may be named in the
+        # rules while the row and cell tags inside it are not.
+        if known.get(name) == "table" or name not in known:
+            shape = discover_table_shape(element, rules, known.get(name) == "table")
+            if shape:
+                row_tags, families = shape
+                note(name, "table", "holds rows of cells")
+                for row_tag in sorted(row_tags):
+                    note(row_tag, "row", "holds the cells of <%s>" % name)
+                reasons = {"caption": "holds the number or the title of <%s>" % name,
+                           "header_cell": "holds a column heading of <%s>" % name,
+                           "cell": "sits in a row of <%s>" % name}
+                for tag in sorted(families):
+                    note(tag, families[tag], reasons[families[tag]])
+                continue
+        if name in known or name in found:
+            continue
+        blocks_below = any(local_name(child.tag) and known.get(local_name(child.tag)) not in ("inline", "ignore")
+                           for child in element)
+        heading, attribute = attribute_text(element, rules["heading_attributes"])
+        if heading and blocks_below:
+            note(name, "container", "carries its own heading in the %s attribute" % attribute)
+        elif blocks_below:
+            note(name, "container", "holds other blocks")
+        elif name in inline_looking and not len(element):
+            note(name, "inline", "appears inside running text")
+        elif (element.text or "").strip() or len(element):
+            note(name, "paragraph", "holds text")
+        else:
+            note(name, "paragraph", "empty")
+    return found
+
+def first_numbering(text, rules):
+    """The numbering at the start of a heading as written, and the name of its scheme."""
+    for scheme in rules["numbering_schemes"]:
+        match = re.match(scheme["pattern"], text)
+        if match:
+            return match.group(0).strip(), scheme["name"]
+    return "", ""
+
+def infer_levels(blocks, rules):
+    """Give every heading its level. When the file nests its sections, the nesting decides.
+    When nesting is flat, numbering decides: a dotted number gives its depth directly
+    (relative to the level of plain numbers); any other scheme seen for the first time is one
+    level deeper than the heading before it, and a scheme seen before returns to its level."""
+    headings = [b for b in blocks if b["type"] == "heading"]
+    hints = sorted({b["level_hint"] for b in headings if b["level_hint"] is not None})
+    nested = len(hints) > 1
+    scheme_level, current, run_hint, run_schemes = {}, 0, None, {}
+    for block in headings:
+        written, scheme = first_numbering(block["text"], rules)
+        if block["numbering"] and not scheme:
+            written, scheme = first_numbering(block["numbering"] + " ", rules)
+        block["numbering"] = block["numbering"] or written
+        if nested:                                       # a flat-numbered stretch inside a nested file (an annex)
+            if block["level_hint"] != run_hint:
+                run_hint, run_schemes = block["level_hint"], {}
+            if scheme and scheme != "dotted":
+                run_schemes.setdefault(scheme, len(run_schemes))
+            block["level"] = hints.index(block["level_hint"]) + 1 + run_schemes.get(scheme, 0)
+        elif scheme == "dotted":
+            depth = block["numbering"].strip(".").count(".") + 1
+            block["level"] = scheme_level.get("number", 1) + depth - 1
+        elif scheme:
+            if scheme not in scheme_level:
+                scheme_level[scheme] = current + 1
+            block["level"] = scheme_level[scheme]
+        else:
+            block["level"] = max(1, current) if current else 1
+        current = block["level"]
+    return blocks
+
+def without_page_furniture(lines, pages, state, file_name):
+    """Leave out what a page carries only because it is a page: the running title, the footer
+    with its date and page number, the logo. Such a line sits in the top or bottom margin and
+    comes back on most pages, the same but for its digits. It is not part of what the document
+    says, and left in it cuts a list or a sentence in two wherever a page ends. What was left
+    out is reported, so nothing goes missing unseen: this is the "declared drop" class of the
+    content account, and the note is what declares it. Enforces: R2, R13"""
+    same = lambda entry: (entry["edge"], re.sub(r"\d+", "#", entry["text"]))
+    on_pages = {}
+    for entry in lines:
+        if entry["edge"] and "text" in entry:
+            on_pages.setdefault(same(entry), set()).add(entry["page"])
+    furniture = {key for key, found in on_pages.items() if pages >= 3 and len(found) >= max(3, pages // 2)}
+    for entry in lines:                              # a declared drop: named, counted, and shown in the account
+        if entry.get("edge") and "text" in entry and same(entry) in furniture:
+            state.dropped.append(entry["text"])
+    for edge, text in sorted(furniture):
+        state.notes.append("%s: left out as a page header or footer, because it repeats in the %s margin of %d of %d pages: '%s'"
+                           % (file_name, edge, len(on_pages[(edge, text)]), pages, text))
+    return [entry for entry in lines if not (entry["edge"] and "text" in entry and same(entry) in furniture)]
 
 # ---------------------------------------------------------------- the fidelity ledger
 # Enforces: R13. A reader may decide HOW a file is sliced. It may not add a word the file does
@@ -316,12 +613,84 @@ def minus(left, right):
             rest[piece] = keep
     return rest
 
+def atom(place, locator, text):
+    """One countable piece of an input: where in the file it came from, and what it says."""
+    return {"place": place, "locator": locator, "text": text}
 
+MARKUP_METADATA = ("style", "script")
 
+def atoms_of_markup(root, file_name, rules=None):
+    """Every text node and every tail under every element, and every attribute value, each with
+    the place it was found in. Place matters to the account: text inside an equation is read
+    into the tool's linear notation rather than kept word for word, an attribute the rules do not
+    read is metadata about the document rather than something the document says, and the
+    content of a style or script element is not prose at all. Naming the place is what lets
+    each of those be explained by a rule instead of counted as a loss."""
+    families = (rules or {}).get("family_of", {})
+    carriers = set((rules or {}).get("heading_attributes", ())) | set((rules or {}).get("numbering_attributes", ()))
+    found, position = [], 0
+    def walk(element, inside):
+        nonlocal position
+        position += 1
+        name = local_name(element.tag)
+        family = families.get(name) or inside
+        where = "%s element %d <%s>" % (file_name, position, name)
+        place = "equation" if family == "equation" else "style or script" if name in MARKUP_METADATA else "body"
+        if (element.text or "").strip():
+            found.append(atom(place, where, element.text))
+        for child in element:
+            walk(child, family if family in ("equation", "figure") else "")
+            if (child.tail or "").strip():
+                found.append(atom(place, where + " (tail)", child.tail))
+        for attribute_name, value in sorted(element.attrib.items()):
+            if value.strip():
+                found.append(atom("attribute" if local_name(attribute_name) not in carriers else "body",
+                                  "%s @%s" % (where, local_name(attribute_name)), value))
+    walk(root, "")
+    return found
 
+DOCX_PARTS = (("word/document.xml", "body"), ("word/footnotes.xml", "footnote"), ("word/endnotes.xml", "endnote"),
+              ("word/comments.xml", "comment"))
+WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+WORD_DELETED = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}delText"
 
+def atoms_of_docx(archive, parse, file_name):
+    """Every run of text in a Word file, wherever Word put it. Text boxes sit inside the body
+    part and are counted with it; footnotes, endnotes, comments, headers and footers are parts
+    of their own and are counted here even where the reader does not yet read them, so that
+    they show as unaccounted rather than vanishing without a word."""
+    found = []
+    named = list(DOCX_PARTS) + [(name, "header" if "header" in name else "footer")
+                                for name in sorted(archive.namelist())
+                                if name.startswith("word/header") or name.startswith("word/footer")]
+    for part, place in named:
+        if part not in archive.namelist():
+            continue
+        try:
+            root = parse(archive.read(part))
+        except Exception:                                # a part that will not parse is counted and named here
+            found.append(atom(place, "%s %s" % (file_name, part), ""))
+            continue
+        for position, node in enumerate(root.iter(), start=1):
+            if node.tag in (WORD_TEXT, WORD_DELETED) and (node.text or "").strip():
+                kind = "tracked change" if node.tag == WORD_DELETED else place
+                found.append(atom(kind, "%s %s run %d" % (file_name, part, position), node.text))
+    return found
 
+def atoms_of_pdf(document, file_name):
+    """Every word the text layer of every page yields. A page with no text layer is counted as
+    one atom with no text, so that a scanned page is visible in the account as a page that
+    carries something the tool cannot count rather than as a page that carries nothing."""
+    found = []
+    for number, page in enumerate(document.pages, start=1):
+        text = page.extract_text() or ""
+        found.append(atom("body" if text.strip() else "page without a text layer", "%s p.%d" % (file_name, number), text))
+    return found
 
+def atoms_of_plain_text(text, file_name):
+    """Every non-blank line of a plain text file."""
+    return [atom("body", "%s line %d" % (file_name, number), line)
+            for number, line in enumerate(text.split("\n"), start=1) if line.strip()]
 
 # Transforms that put a word into a unit without taking it from an atom, or move it out of a
 # unit's text into another of its fields. Each is named here, once. The account closes BECAUSE
@@ -352,6 +721,24 @@ def kept_and_relocated(chunks):
     return bag_of(kept), bag_of(moved + sorted(carried))
 
 
+def marks_of_rendering(chunks):
+    """Marks every reader makes, whatever the format: the form the tool renders a table, a figure or
+    an equation in; the markup an equation was read from, whose tags are not words the document
+    says; a number a document did not write that the tool counted back; and the place label the tool
+    gives a paragraph of a PDF ("p.4 2") so that a person can find it again. Enforces: R13"""
+    found = []
+    for chunk in chunks:
+        if chunk.get("kind") in ("Table", "Figure", "Equation"):
+            found.append(chunk.get("text") or "")
+        equation = chunk.get("equation")
+        if equation:
+            found.append(equation.get("source_form") or "")
+            found.append(equation.get("linear") or "")
+        found.append(chunk.get("numbering") or "")
+        found.append(chunk.get("para_label") or "")
+        if chunk.get("numbering_reconstructed"):
+            found.extend(chunk.get("heading_chain") or ())
+    return found
 
 def account(file_name, atoms, chunks, dropped=(), marks=(), file_bytes=0):
     """The content account of one file. Every atom ends in exactly one class, and every token a
@@ -519,13 +906,94 @@ def account_of_package(files, units, refused, is_text_file):
 # ---------------------------------------------------------------- the front door: what a file is, and how it becomes markup
 
 # ---------------------------------------------------------------- what a file is
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")
+MARKDOWN_NAMES = (".md", ".markdown", ".mdown", ".mkd")
+DELIMITED_NAMES = (".csv", ".tsv", ".tab")
+LATEX_NAMES = (".tex", ".ltx")
 
 # A format the tool does not read, what it is in plain words, and what to do about it.
+NOT_READ = {
+    "pptx": "a slide deck, which the tool does not read; save it as PDF and put the PDF in its place",
+    "odf": "an OpenDocument file, which the tool does not read; save it as .docx and put that in its place",
+    "epub": "an e-book, which the tool does not read; save it as PDF and put the PDF in its place",
+    "zip": "an archive of other files; unpack it into the folder so that each file is read on its own",
+    "gzip": "a compressed file; unpack it into the folder so that the file inside it is read",
+    "ole": "in an old Microsoft Office format (.doc, .xls or .ppt), which the tool does not read; "
+           "save it as .docx, .xlsx or PDF and put that in its place",
+    "image": "a picture, and the tool does not read words from a picture on its own; if it holds text, "
+             "save it as a PDF with a text layer",
+    "binary": "binary data rather than a document"}
 
 # The name a format goes by in what the analyst reads.
+FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "svg": "SVG picture", "mhtml": "web archive", "html": "web page",
+                "xml": "XML", "markdown": "Markdown", "delimited": "delimited rows", "rtf": "RTF",
+                "latex": "LaTeX", "text": "plain text"}
 
+def looks_binary(data):
+    """Bytes that are not text: a NUL byte, or more than one in ten bytes a control character."""
+    head = data[:4096]
+    if b"\x00" in head:
+        return True
+    control = sum(1 for byte in head if byte < 32 and byte not in (9, 10, 12, 13))
+    return bool(head) and control * 10 > len(head)
 
+def sniff_zip(data):
+    """What a ZIP archive holds, which is what it is. Enforces: R6"""
+    try:
+        names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
+    except (zipfile.BadZipFile, OSError):
+        return "binary"
+    if "word/document.xml" in names:
+        return "docx"
+    if "xl/workbook.xml" in names:
+        return "xlsx"
+    if "ppt/presentation.xml" in names:
+        return "pptx"
+    if "content.xml" in names:
+        return "odf"
+    if "META-INF/container.xml" in names:
+        return "epub"
+    return "zip"
 
+def detect_format(data, file_name=""):
+    """The format of a file from its content, whatever its name says. For the three text formats
+    whose content cannot be told apart for certain - Markdown, delimited rows and LaTeX - the name
+    is taken as a hint and the content has to agree with it. Enforces: R6"""
+    head = data[:4096].lstrip(b"\xef\xbb\xbf \t\r\n")
+    if head.startswith(b"%PDF"):
+        return "pdf"
+    if data.startswith(b"PK\x03\x04"):
+        return sniff_zip(data)
+    if data.startswith(OLE_MAGIC):
+        return "ole"
+    if head.startswith(b"{\\rtf"):
+        return "rtf"
+    if data.startswith(b"\x1f\x8b"):
+        return "gzip"
+    if data.startswith(IMAGE_MAGIC):
+        return "image"
+    if looks_binary(data):
+        return "binary"
+    lowered, name = head.lower(), file_name.lower()
+    if name.endswith(MARKDOWN_NAMES):
+        return "markdown"                            # Markdown may open with an HTML comment or table; the name decides
+    if lowered.startswith((b"mime-version:", b"from:", b"content-type:")) or b"multipart/related" in lowered[:1024]:
+        return "mhtml"
+    if lowered.startswith(b"<"):
+        if re.match(rb"<(!doctype\s+html|html)\b", lowered):
+            return "html"
+        if re.search(rb"<svg[\s>]", lowered[:4096]) and not re.search(rb"<(body|para|section|document|p)\b", lowered[:4096]):
+            return "svg"
+        return "xml"
+    sample = decode_text(data[:16384])
+    if name.endswith(LATEX_NAMES) and re.search(r"\\[a-zA-Z]+", sample) or re.search(r"\\documentclass|\\begin\{document\}", sample):
+        return "latex"
+    if len(re.findall(r"(?m)^#{1,6} \S", sample)) >= 2:
+        return "markdown"
+    if name.endswith(DELIMITED_NAMES) and delimiter_of(sample):
+        return "delimited"
+    return "text"
 
 def decode_text(data):
     """Bytes to text: a byte-order mark or a declared encoding decides, then UTF-8, then Latin-1."""
@@ -575,29 +1043,337 @@ def input_files(folder):
 # removing syntax - so that the account still sees the walker lose or add a word. It does trust
 # the syntax rule, and says so. Enforces: R13
 
+def element(tag, text):
+    """One element of markup, its text escaped so that a < in a document is never a tag."""
+    return "<%s>%s</%s>" % (tag, escape(text), tag)
+
+def markdown_inline(text):
+    """A line of Markdown without its inline marks: emphasis, code marks, and the target of a link
+    or a picture, whose words are kept and whose address is not what the document says."""
+    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", r"\2", text)
+    text = re.sub(r"(?<![\w*])\*(?=\S)(.+?)(?<=\S)\*(?![\w*])", r"\1", text)
+    return text.replace("`", "")
+
+TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+LIST_MARK = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
+
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+
+def markdown_to_markup(text):
+    """Markdown as markup: # headings, paragraphs, lists, tables, fenced code and quotations. An
+    HTML comment is left out by the same rule in the markup and in the words: it is a note to
+    whoever edits the file, not what the document says."""
+    text = HTML_COMMENT.sub("", text)
+    out, paragraph, rows, fenced, items = [], [], [], None, []
+    def flush():
+        if paragraph:
+            out.append(element("p", " ".join(paragraph)))
+            paragraph.clear()
+        if items:
+            out.append("<ul>%s</ul>" % "".join(element("li", item) for item in items))
+            items.clear()
+        if rows:
+            cells = [[markdown_inline(cell.strip()) for cell in row.strip().strip("|").split("|")] for row in rows]
+            out.append("<table>%s</table>" % "".join(
+                "<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
+                for number, row in enumerate(cells)))
+            rows.clear()
+    lines = text.split("\n")
+    for position, line in enumerate(lines):
+        if fenced is not None:
+            if line.strip().startswith("```") or line.strip().startswith("~~~"):
+                out.append(element("pre", "\n".join(fenced)))
+                fenced = None
+            else:
+                fenced.append(line)
+            continue
+        if line.strip().startswith(("```", "~~~")):
+            flush()
+            fenced = []
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
+        underline = position + 1 < len(lines) and re.match(r"^(=+|-+)\s*$", lines[position + 1]) and line.strip() and not rows
+        if heading or underline:
+            flush()
+            level = len(heading.group(1)) if heading else (1 if lines[position + 1].strip()[0] == "=" else 2)
+            out.append(element("h%d" % min(level, 4), markdown_inline((heading.group(2) if heading else line).strip())))
+            continue
+        if re.match(r"^(=+|-+)\s*$", line) and position and out and out[-1].startswith("<h"):
+            continue                                 # the underline of a heading already read
+        if "|" in line and (rows or position + 1 < len(lines) and TABLE_RULE.match(lines[position + 1])):
+            if not rows:
+                flush()
+            if not TABLE_RULE.match(line):
+                rows.append(line)
+            continue
+        if LIST_MARK.match(line):
+            if paragraph or rows:
+                flush()
+            items.append(markdown_inline(LIST_MARK.sub("", line).strip()))
+            continue
+        if not line.strip():
+            flush()
+            continue
+        if items and line.startswith((" ", "\t")):
+            items[-1] += " " + markdown_inline(line.strip())
+            continue
+        if rows or items:
+            flush()
+        paragraph.append(markdown_inline(re.sub(r"^\s*>\s?", "", line).strip()))
+    if fenced is not None:
+        out.append(element("pre", "\n".join(fenced)))
+    flush()
+    return "<document>%s</document>" % "".join(out)
+
+def markdown_words(text):
+    """The words of a Markdown file, with its syntax taken away by rule rather than by reading its
+    structure: heading marks, list marks, table rules and bars, fence lines, quotation marks."""
+    kept = []
+    for line in HTML_COMMENT.sub("", text).split("\n"):
+        if TABLE_RULE.match(line) or line.strip().startswith(("```", "~~~")) or re.match(r"^(=+|-+)\s*$", line):
+            continue
+        line = re.sub(r"^\s*#{1,6}\s+|\s+#+\s*$", " ", line)
+        line = LIST_MARK.sub(" ", line)
+        line = re.sub(r"^\s*>\s?", " ", line)
+        kept.append(markdown_inline(line.replace("|", " ")))
+    return "\n".join(kept)
+
+def delimiter_of(text):
+    """The separator of a file of delimited rows, where the first rows agree on one."""
+    rows = [line for line in text.split("\n") if line.strip()][:6]
+    if len(rows) < 2:
+        return ""
+    for separator in ("\t", ",", ";", "|"):
+        counts = {row.count(separator) for row in rows}
+        if len(counts) == 1 and counts.pop() >= 1:
+            return separator
+    return ""
+
+def delimited_rows(text):
+    """The rows of a file of delimited values, read by the rules of that format."""
+    separator = delimiter_of(text) or ","
+    return [row for row in csv.reader(io.StringIO(text), delimiter=separator) if any(cell.strip() for cell in row)]
+
+def delimited_to_markup(text, file_name):
+    """Rows of values as a table, the first row naming the columns."""
+    rows = delimited_rows(text)
+    body = "".join("<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell.strip()) for cell in row)
+                   for number, row in enumerate(rows))
+    return "<document><table><caption>%s</caption>%s</table></document>" % (escape(os.path.basename(file_name)), body)
+
+def delimited_words(text, file_name):
+    """The words of a file of delimited values: its name, which heads its table, and its cells."""
+    return os.path.basename(file_name) + "\n" + "\n".join(" ".join(cell.strip() for cell in row) for row in delimited_rows(text))
+
+def spreadsheet_to_markup(data):
+    """A spreadsheet as one heading and one table for every sheet that holds anything. What a cell
+    shows is its stored value: a formula is never worked out, only the value the spreadsheet saved
+    with it is read. Enforces: R7"""
+    import openpyxl
+    book = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    parts, words = [], []
+    for sheet in book.worksheets:
+        rows = [[("" if value is None else str(value)).strip() for value in row] for row in sheet.iter_rows(values_only=True)]
+        rows = [row for row in rows if any(row)]
+        if not rows:
+            continue
+        width = max(len(row) for row in rows)
+        rows = [row + [""] * (width - len(row)) for row in rows]
+        parts.append(element("h1", sheet.title))
+        parts.append("<table>%s</table>" % "".join(
+            "<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
+            for number, row in enumerate(rows)))
+        words.append(sheet.title)
+        words.extend(" ".join(row) for row in rows)
+    return "<document>%s</document>" % "".join(parts), "\n".join(words)
+
+def rtf_to_text(text):
+    """The words of an RTF file: its tables of fonts, colours and styles, its pictures and its
+    control words taken away, a paragraph mark read as a new paragraph and an escaped character as
+    that character."""
+    text = re.sub(r"\{\\\*[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", "", text)
+    for group in ("fonttbl", "colortbl", "stylesheet", "info", "pict", "listtable", "listoverridetable"):
+        text = re.sub(r"\{\\%s[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*\}" % group, "", text)
+    text = re.sub(r"\\'([0-9a-fA-F]{2})", lambda found: bytes([int(found.group(1), 16)]).decode("cp1252", "replace"), text)
+    text = re.sub(r"\\u(-?\d+)\??", lambda found: chr(int(found.group(1)) % 65536), text)
+    text = re.sub(r"\\(par|line|sect|page)\b ?", "\n\n", text)
+    text = re.sub(r"\\tab\b ?", " ", text)
+    text = re.sub(r"\\([{}\\])", lambda found: "\x00" + found.group(1), text)
+    text = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", text)
+    text = text.replace("{", "").replace("}", "").replace("\x00", "")
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+LATEX_HEADINGS = (("part", 1), ("chapter", 1), ("section", 1), ("subsection", 2), ("subsubsection", 3), ("paragraph", 4))
+
+def latex_body(text):
+    """A LaTeX file without its comments and its preamble. What comes before \\begin{document} -
+    the class of the document and the packages it loads - sets the document up and is not what it
+    says, so it is left out by this rule, the same rule for the markup and for the words."""
+    text = re.sub(r"(?<!\\)%.*", "", text)
+    body = re.search(r"\\begin\{document\}(.*?)(\\end\{document\}|$)", text, re.S)
+    return body.group(1) if body else text
+
+def latex_words(text, whole=True):
+    """The words of a LaTeX file: comments, environments and the names of commands taken away,
+    the arguments of a command kept. Mathematics is kept as its words and symbols; it is not read
+    as an equation here."""
+    text = latex_body(text) if whole else text
+    text = re.sub(r"\\(begin|end)\{[^}]*\}", " ", text)
+    text = re.sub(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?", " ", text)
+    return re.sub(r"[{}$]", " ", text).replace("\\\\", " ")
+
+def latex_to_markup(text):
+    """LaTeX as markup: its sectioning commands as headings, its items as a list, and everything
+    between as paragraphs of its words."""
+    text = latex_body(text)
+    pattern = r"\\(%s)\*?\{([^}]*)\}" % "|".join(name for name, _ in LATEX_HEADINGS)
+    levels, out, cursor = dict(LATEX_HEADINGS), [], 0
+    for found in list(re.finditer(pattern, text)) + [None]:
+        chunk = text[cursor:found.start() if found else len(text)]
+        for part in re.split(r"\n\s*\n", chunk):
+            items = re.split(r"\\item\b", part)
+            lead = latex_words(items[0], whole=False).strip()
+            if lead:
+                out.append(element("p", re.sub(r"\s+", " ", lead)))
+            if len(items) > 1:
+                out.append("<ul>%s</ul>" % "".join(element("li", re.sub(r"\s+", " ", latex_words(item, whole=False)).strip())
+                                                  for item in items[1:] if latex_words(item, whole=False).strip()))
+        if found:
+            out.append(element("h%d" % levels[found.group(1)], re.sub(r"\s+", " ", latex_words(found.group(2), whole=False)).strip()))
+            cursor = found.end()
+    return "<document>%s</document>" % "".join(out)
 
 
+def svg_texts(root):
+    """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
+    a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
+    <a> inside it is read with it); and a <foreignObject>, where drawing tools put HTML - divs and
+    paragraphs - instead of SVG text. A transform is not applied, so a moved group keeps the order
+    it was written in."""
+    found = []
+    def number(value, fallback=0.0):
+        try:
+            return float(re.split(r"[ ,]", (value or "").strip())[0])
+        except (ValueError, IndexError):
+            return fallback
+    for node in root.iter():
+        name = local_name(node.tag)
+        if name == "text":
+            x, y = number(node.get("x")), number(node.get("y"))
+            placed = [span for span in node.iter() if local_name(span.tag) == "tspan" and (span.get("x") or span.get("y") or span.get("dy"))]
+            if not placed:
+                words = normalise_text("".join(node.itertext()))
+                if words:
+                    found.append((x, y, words))
+                continue
+            lead = normalise_text(node.text or "")
+            if lead:
+                found.append((x, y, lead))
+            line_y = y
+            for span in placed:
+                line_y = number(span.get("y"), line_y + number(span.get("dy"), 0.0))
+                words = normalise_text("".join(span.itertext()))
+                if words:
+                    found.append((number(span.get("x"), x), line_y, words))
+        elif name == "foreignobject":                    # local_name lower-cases: foreignObject
+            words = normalise_text(" ".join(part for part in node.itertext() if part.strip()))
+            if words:
+                found.append((number(node.get("x")), number(node.get("y")), words))
+    return found
 
+def svg_embedded_pictures(root):
+    """The raster pictures an SVG carries inside itself as data: URIs - what a chart exported as an
+    image and wrapped in SVG looks like. Their words can only be read by OCR."""
+    import base64
+    pictures = []
+    for node in root.iter():
+        if local_name(node.tag) != "image":
+            continue
+        link = next((value for key, value in node.attrib.items() if local_name(key) == "href"), "")
+        found = re.match(r"data:image/(png|jpe?g|gif|bmp|webp);base64,(.*)", link.strip(), re.S)
+        if found:
+            try:
+                pictures.append(base64.b64decode(re.sub(r"\s", "", found.group(2))))
+            except (ValueError, TypeError):
+                continue
+    return pictures
 
+def svg_why_no_text(root):
+    """Why an SVG gave no text, in words an analyst can act on. Enforces: R2"""
+    if svg_embedded_pictures(root):
+        return "the chart is a picture stored inside the SVG, so its words can only be read by OCR"
+    glyphs = sum(1 for node in root.iter() if local_name(node.tag) == "use"
+                 and any("glyph" in (value or "").lower() for key, value in node.attrib.items() if local_name(key) == "href"))
+    shapes = sum(1 for node in root.iter() if local_name(node.tag) in ("path", "use"))
+    if glyphs or shapes > 40:
+        return ("its letters are drawn as shapes rather than stored as text, so they cannot be read as text; "
+                "export the chart with its text kept as text, or add its data as a table in the methodology")
+    return "it holds no text"
 
+def svg_rows(texts, tolerance=None):
+    """Texts grouped into rows by their y position, each row sorted by x. The tolerance is a
+    share of the median line height, so a chart's labels and a table's cells both group."""
+    if not texts:
+        return []
+    ys = sorted({round(y, 1) for _, y, _ in texts})
+    gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0.5]
+    tolerance = tolerance or (max(2.0, sorted(gaps)[len(gaps) // 2] * 0.4) if gaps else 2.0)
+    rows, current, last_y = [], [], None
+    for x, y, words in sorted(texts, key=lambda t: (t[1], t[0])):
+        if last_y is not None and y - last_y > tolerance:
+            rows.append(sorted(current))
+            current = []
+        current.append((x, y, words))
+        last_y = y
+    if current:
+        rows.append(sorted(current))
+    return [[words for _, _, words in row] for row in rows]
 
+def svg_to_markup(data, file_name):
+    """An SVG as markup the walker reads: its <title> and <desc> as the caption; its text, where
+    it stands in a grid of at least two rows of the same width, as a table with the first row
+    as the header; otherwise as a figure whose words are the labels of the picture in reading
+    order. An SVG holds text as text, so nothing is read from a picture by guesswork: every
+    word comes from a <text> element. Enforces: R7, R13"""
+    import xml.etree.ElementTree as ElementTree
+    root = ElementTree.fromstring(data)
+    caption = " ".join(normalise_text("".join(node.itertext())) for node in root
+                       if local_name(node.tag) in ("title", "desc") and normalise_text("".join(node.itertext())))
+    rows = svg_rows(svg_texts(root))
+    widths = {len(row) for row in rows}
+    words = [caption] + [" ".join(row) for row in rows]
+    if len(rows) >= 2 and len(widths) == 1 and widths.pop() >= 2:
+        body = "".join("<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
+                       for number, row in enumerate(rows))
+        markup = "<document><table><caption>%s</caption>%s</table></document>" % (escape(caption or os.path.basename(file_name)), body)
+        return markup, "\n".join(words), "a picture whose text stands in a grid, read as a table"
+    labels = " ".join(" ".join(row) for row in rows)
+    # no src: this markup IS the picture, so it must not send the reader looking for itself beside itself
+    markup = "<document><figure alt=\"%s\"><caption>%s</caption></figure></document>" % (escape(labels), escape(caption))
+    return markup, "\n".join(words), "a picture, read by its own text: %d label(s)" % sum(len(row) for row in rows)
 
+def converted(found, data, file_name):
+    """A file in a format read by converting it: (markup, words, what was done, in plain words)."""
+    if found == "svg":
+        return svg_to_markup(data, file_name)
+    if found == "xlsx":
+        markup, words = spreadsheet_to_markup(data)
+        return markup, words, "read sheet by sheet, each sheet a heading over a table of its stored values"
+    text = decode_text(data)
+    if found == "markdown":
+        return markdown_to_markup(text), markdown_words(text), "read as Markdown: its headings, lists and tables kept as such"
+    if found == "delimited":
+        return (delimited_to_markup(text, file_name), delimited_words(text, file_name),
+                "read as a table of values, one row per line, the first line naming the columns")
+    if found == "latex":
+        return latex_to_markup(text), latex_words(text), "read as LaTeX: its sections as headings; its mathematics kept as words, not read as equations"
+    plain = rtf_to_text(text)
+    return ("<document>%s</document>" % "".join(element("p", part.strip()) for part in re.split(r"\n\s*\n", plain) if part.strip()),
+            plain, "read as RTF: its control words, font tables and pictures left out")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+CONVERTED = ("xlsx", "markdown", "delimited", "latex", "rtf", "svg")
 
 def reason_for(problem):
     """Why a reader failed on a file, in words an analyst can act on. Enforces: R2"""
@@ -638,14 +1414,62 @@ def list_input_files(inputs_dir):
 # reading the methodology, the documentation and the model package
 # ================================================================================================
 # ---------------------------------------------------------------- the methodology and the documentation, read into units
+class NotReadable(Exception):
+    """A formula or a file that the tool cannot read. The message is a plain reason for the analyst."""
 
 # ---------------------------------------------------------------- the linear-notation parser
+SUPERSCRIPTS = {"\u207b\u00b9": "^-1", "\u00b2": "^2", "\u00b3": "^3", "\u00b9": "^1"}
+SIGNS = {"\u2212": "-", "\u00d7": "*", "\u00b7": "*", "\u22c5": "*", "\u2217": "*", "\u00f7": "/",
+         "\u2264": "<=", "\u2265": ">=", "**": "^", "\u2061": "", "\u2062": "*", "\u2009": " "}
+_TOKEN_RE = re.compile(
+    r"\s*(?:(?P<number>\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?P<percent>\s?%)?"
+    r"|(?P<name>[^\W\d_][\w]*(?:\.[^\W\d_]\w*)*(?:_\{[^{}]+\}|\[[^\[\]]+\])?)"
+    r"|(?P<sign><=|>=|[-+*/^(),=<>\u221a]))")
 
 # ---------------------------------------------------------------- reference data of the reader
 # The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
 # schemes. An analyst's Inputs/tag_rules.yaml is laid
 # over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
 # caller that changes the rules it was given changes only its own copy. Enforces: R9
+TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
+# Reviewer 1 owns this file. A project can override any part of it with Inputs/tag_rules.yaml
+# (same layout; a family given there replaces the family given here).
+# Tag names are compared in lower case and without their namespace prefix.
+# A tag that is in no family is read as a paragraph (or, when it only wraps other blocks,
+# as a container) and is reported on Model_Package_Info, so that it can be added here.
+families:
+  heading:        [h1, h2, h3, h4, h5, h6, title, heading, head-line, sectiontitle]
+  container:      [html, body, div, section, sect, sect1, sect2, sect3, sect4, sect5, chapter, part,
+                   article, document, doc, annex, appendix, subsection, subsubsection, main, document-root]
+  paragraph:      [p, para, paragraph, text, blockquote, pre, dd, dt]
+  list_container: [ul, ol, list, itemizedlist, orderedlist, dl]
+  list_item:      [li, item, listitem]
+  table:          [table, informaltable, tbl]
+  table_part:     [thead, tbody, tfoot, tgroup, colgroup, col]
+  row:            [tr, row]
+  header_cell:    [th]
+  cell:           [td, entry, cell]
+  figure:         [img, image, figure, graphic, mediaobject, svg, object, chart, imagedata]
+  equation:       [math, equation, omath, omathpara, formula, informalequation]
+  caption:        [caption, figcaption, legend]
+  inline:         [a, b, i, u, em, strong, span, font, sub, sup, br, code, tt, small, big, emphasis, xref, o:p]
+  ignore:         [head, script, style, meta, link, toc, index, nav, xml]
+# Attributes that hold the numbering of a heading as written ("3.1").
+numbering_attributes: [number, num, label, n]
+# Numbering schemes, tried in this order. The first one that matches the start of a heading
+# names its scheme. "dotted" numbers give their depth directly; every other scheme gets the
+# level at which it first appeared (one deeper than the heading before it).
+numbering_schemes:
+  - {name: annex,          pattern: '^(?:Annex|Appendix|Annexe|Anhang)\s+([A-Z0-9]+)[.:]?(?=\s|$)'}
+  - {name: dotted,         pattern: '^(\d+(?:\.\d+)+)\.?(?=\s|$)'}
+  - {name: number,         pattern: '^(\d+)[.)]?(?=\s|$)'}
+  - {name: upper_roman,    pattern: '^([IVXLC]+)\.(?=\s|$)'}
+  - {name: upper_letter,   pattern: '^([A-Z])[.)](?=\s|$)'}
+  - {name: bracket_roman,  pattern: '^\(([ivxlc]+)\)(?=\s|$)'}
+  - {name: bracket_letter, pattern: '^\(([a-z])\)(?=\s|$)'}
+# Words that start a cross-reference as written ("see Table 3", "section 4.2").
+cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
+'''
 
 # The notation of R's mathematical functions: how each is written in the tool's linear notation and
 # which of its arguments are the operands. Shared with review.py, which reads it for its word lists.
@@ -701,388 +1525,1440 @@ domains:
   exp:            {argument: [null, 50]}
 '''
 
+def load_notation():
+    """The names the tool reads as functions in a written formula."""
+    return yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]
 
+def tokenize_formula(text):
+    """Cut a written formula into numbers, names and signs. Anything else makes it unreadable."""
+    for written, plain in list(SUPERSCRIPTS.items()) + list(SIGNS.items()):
+        text = text.replace(written, plain)
+    text = re.sub(r"_\{([^{}]*)\}", lambda found: "_" + re.sub(r"\W", "", found.group(1)), text)   # x_{i,j} -> x_ij
+    tokens, position = [], 0
+    text = text.strip()
+    while position < len(text):
+        match = _TOKEN_RE.match(text, position)
+        if not match or match.end() == position:
+            raise NotReadable("it contains '%s', which the tool does not read in a formula" % text[position:position + 12].strip())
+        if match.group("number"):
+            value = Decimal(match.group("number"))
+            tokens.append(("number", plain_decimal(value / 100 if match.group("percent") else value)))
+        elif match.group("name"):
+            tokens.append(("name", match.group("name")))
+        else:
+            tokens.append(("sign", match.group("sign")))
+        position = match.end()
+    return tokens
 
+class FormulaReader:
+    """A small recursive-descent reader over the tokens of one formula. Order of strength, from
+    weakest: equals, comparison, plus and minus, times and divide, a leading minus, power.
+    Two terms side by side are read as a product only when `implicit_product` is set, which
+    is done for equation markup (its extent is exact) and never for running text."""
+    def __init__(self, tokens, notation, implicit_product=False):
+        self.tokens, self.position, self.notation = tokens, 0, notation
+        self.functions, self.implicit_product = notation.get("functions", {}), implicit_product
 
+    def peek(self, offset=0):
+        """The token at the reading position (or further on), without taking it."""
+        index = self.position + offset
+        return self.tokens[index] if index < len(self.tokens) else ("end", "")
 
+    def take(self, sign=None):
+        """Take the next token; with `sign`, insist that it is that sign."""
+        token = self.peek()
+        if sign is not None and token != ("sign", sign):
+            raise NotReadable("a '%s' was expected where '%s' stands" % (sign, token[1] or "the end"))
+        self.position += 1
+        return token
 
+    def statement(self):
+        """A whole formula: an expression, or `left = right`."""
+        left = self.comparison()
+        if self.peek() == ("sign", "="):
+            self.take()
+            left = Expr("eq", args=(left, self.comparison()))
+            if self.peek() == ("sign", "="):
+                raise NotReadable("it has more than one equals sign")
+        return left
 
+    def comparison(self):
+        """An expression, optionally compared with another one."""
+        left = self.sum()
+        if self.peek()[0] == "sign" and self.peek()[1] in ("<", ">", "<=", ">="):
+            sign = self.take()[1]
+            left = Expr("cmp", name=sign, args=(left, self.sum()))
+        return left
+
+    def sum(self):
+        """Terms joined by + and -, from left to right."""
+        left = self.product()
+        while self.peek() in (("sign", "+"), ("sign", "-")):
+            op = "add" if self.take()[1] == "+" else "sub"
+            left = Expr(op, args=(left, self.product()))
+        return left
+
+    def product(self):
+        """Factors joined by * and /, from left to right; juxtaposition only where the source allows it."""
+        left = self.unary()
+        while True:
+            if self.peek() in (("sign", "*"), ("sign", "/")):
+                op = "mul" if self.take()[1] == "*" else "div"
+                left = Expr(op, args=(left, self.unary()))
+            elif self.implicit_product and self.term_follows():
+                left = Expr("mul", args=(left, self.power()))
+            else:
+                return left
+
+    def term_follows(self):
+        """Does another factor start here without a sign in between?"""
+        kind, text = self.peek()
+        return kind in ("number", "name") or (kind == "sign" and text in ("(", "\u221a"))
+
+    def unary(self):
+        """A leading minus or plus. It binds less tightly than a power, as in mathematics and in R."""
+        if self.peek() == ("sign", "-"):
+            self.take()
+            return Expr("neg", args=(self.unary(),))
+        if self.peek() == ("sign", "+"):
+            self.take()
+            return self.unary()
+        return self.power()
+
+    def power(self):
+        """A base with an optional power (right-associative), an inverse-function mark or a percent sign."""
+        base = self.atom()
+        if self.peek() == ("sign", "^"):
+            self.take()
+            base = Expr("pow", args=(base, self.unary()))
+        if self.term_follows() and not self.implicit_product:
+            raise NotReadable("two terms stand side by side without a sign between them, which could "
+                              "mean a product or something else; the tool does not guess")
+        return base
+
+    def minus_one_follows(self):
+        """Is the next thing ^-1 or ^(-1) followed by an opening bracket? Returns tokens to skip."""
+        shapes = ([("sign", "^"), ("sign", "-"), ("number", "1"), ("sign", "(")],
+                  [("sign", "^"), ("sign", "("), ("sign", "-"), ("number", "1"), ("sign", ")"), ("sign", "(")])
+        for shape in shapes:
+            if [self.peek(i) for i in range(len(shape))] == shape:
+                return len(shape) - 1
+        return 0
+
+    def atom(self):
+        """A number, a symbol, a function call or a bracketed expression."""
+        kind, text = self.take()
+        if kind == "number":
+            return Expr("num", value=text)
+        if kind == "sign" and text == "(":
+            inner = self.statement()
+            self.take(")")
+            return inner
+        if kind == "sign" and text == "\u221a":
+            return Expr("call", name="sqrt", args=(self.atom(),))
+        if kind != "name":
+            raise NotReadable("'%s' stands where a number or a symbol was expected" % (text or "the end"))
+        function = self.functions.get(text) or self.functions.get(normalise_symbol(text))
+        skip = self.minus_one_follows() if function else 0
+        if skip:
+            inverse = self.notation.get("inverse", {}).get(function)
+            if not inverse:
+                raise NotReadable("the inverse of '%s' is not a function the tool knows" % text)
+            self.position += skip
+            function = inverse
+        if self.peek() == ("sign", "("):
+            if not function:
+                raise NotReadable("'%s(' could be a product or a function; the tool does not guess" % text)
+            self.take()
+            arguments = [self.statement()]
+            while self.peek() == ("sign", ","):
+                self.take()
+                arguments.append(self.statement())
+            self.take(")")
+            return Expr("call", name=function, args=tuple(arguments))
+        return Expr("sym", name=normalise_symbol(text))
+
+def parse_formula(text, notation, implicit_product=False):
+    """Read a formula written in linear notation into the tool's expression tree. Raises NotReadable
+    with a plain reason; it never guesses and never executes anything. Enforces: R7"""
+    tokens = tokenize_formula(text)
+    if not tokens:
+        raise NotReadable("it is empty")
+    reader = FormulaReader(tokens, notation, implicit_product)
+    tree = reader.statement()
+    if reader.peek()[0] != "end":
+        raise NotReadable("'%s' stands where the formula should have ended" % reader.peek()[1])
+    return tree
+
+def read_equation(source_form, linear, notation, image_sha256=""):
+    """Build the EquationData of a chunk: readable with its tree, or not readable with the reason."""
+    linear = normalise_text(linear)
+    if not linear:
+        reason = UNDECIDED_REASONS[0] if image_sha256 or source_form == "image" else "no formula text was found"
+        return EquationData(source_form, "", False, reason, image_sha256)
+    try:
+        tree = parse_formula(linear, notation, implicit_product=source_form in ("omml", "mathml", "latex"))
+    except NotReadable as problem:
+        return EquationData(source_form, linear, False, str(problem), image_sha256)
+    return EquationData(source_form, expr_to_text(tree), True, "", image_sha256)
+
+_INLINE_FORMULA_RE = re.compile(r"(?<![\w.])([^\W\d_][\w.\[\]{}]*)\s*=\s*([^=;]+)")
+
+def inline_formula(text, notation):
+    """A formula written inside running text, such as "K = LGD * N(x)". The right-hand side ends
+    at a semicolon, at ", where", or at the end of the sentence. When the notation is ambiguous
+    the paragraph simply stays a paragraph (plan 2.8). Returns EquationData or None."""
+    for match in _INLINE_FORMULA_RE.finditer(text or ""):
+        right = re.split(r",?\s+(?:where|with|and where|for)\b|\.\s+[A-Z]|\.$|:\s", match.group(2))[0]
+        right = right.strip().rstrip(".,")
+        if not re.search(r"[-+*/^(\u00d7\u00b7\u2212]", right):
+            continue                                  # "x = 5" or "a = b": a value, not a formula
+        try:
+            tree = parse_formula("%s = %s" % (match.group(1), right), notation)
+        except NotReadable:
+            continue
+        return EquationData("inline", expr_to_text(tree), True, "", "")
+    return None
 
 # ---------------------------------------------------------------- equation markup -> linear notation
+def bracketed(text):
+    """Put brackets around a part unless it is one number, one symbol or one call."""
+    text = text.strip()
+    if re.fullmatch(r"[\w.]+|[\w.]+\([^()]*\)", text) or (text.startswith("(") and text.endswith(")") and
+                                                         text.count("(") == 1):
+        return text
+    return "(%s)" % text
 
+NARY_NAMES = {"\u2211": "sum_over", "\u220f": "product_over", "\u222b": "integral_over"}
+MATH_PROPERTIES = ("rpr", "ctrlpr", "fpr", "dpr", "narypr", "radpr", "ssuppr", "ssubpr", "ssubsuppr", "funcpr",
+                   "annotation", "omathparapr", "begchr", "endchr")
 
+def math_to_linear(element):
+    """Office Math (OMML) and MathML to linear notation, by the local names of the elements:
+    fractions, powers, subscripts, roots, brackets and function application. A sum is marked
+    as sum_over(...) and never expanded. Unknown elements contribute their text."""
+    name = local_name(element.tag)
+    def part(child_name):
+        child = child_named(element, child_name)
+        return math_children(child) if child is not None else ""
+    if name in ("t", "mi", "mn", "mtext"):
+        return (element.text or "").strip()
+    if name == "mo":
+        return " %s " % (element.text or "").strip()
+    if name == "f":                                               # OMML fraction
+        return "%s/%s" % (bracketed(part("num")), bracketed(part("den")))
+    if name == "ssup":
+        return "%s^%s" % (bracketed(part("e")), bracketed(part("sup")))
+    if name == "ssub":
+        return "%s_{%s}" % (part("e").strip(), part("sub").strip())
+    if name == "ssubsup":
+        return "%s_{%s}^%s" % (part("e").strip(), part("sub").strip(), bracketed(part("sup")))
+    if name == "rad":
+        degree = part("deg").strip()
+        return "sqrt(%s)" % part("e") if degree in ("", "2") else "%s^(1/%s)" % (bracketed(part("e")), bracketed(degree))
+    if name == "d":                                               # OMML brackets
+        return "(%s)" % ", ".join(math_children(child) for child in element if local_name(child.tag) == "e")
+    if name == "func":
+        return "%s(%s)" % (part("fname").strip(), strip_outer_brackets(part("e")))
+    if name == "nary":
+        properties = child_named(element, "narypr")
+        sign = child_named(properties, "chr") if properties is not None else None
+        kind = NARY_NAMES.get(attribute(sign, "val"), "sum_over") if sign is not None else "integral_over"
+        return "%s(%s, %s, %s)" % (kind, part("sub").strip() or "0", part("sup").strip() or "0", part("e"))
+    children = list(element)
+    if name == "mfrac" and len(children) == 2:
+        return "%s/%s" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
+    if name == "msup" and len(children) == 2:
+        return "%s^%s" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
+    if name == "msub" and len(children) == 2:
+        return "%s_{%s}" % (math_to_linear(children[0]).strip(), math_to_linear(children[1]).strip())
+    if name == "msubsup" and len(children) == 3:
+        return "%s_{%s}^%s" % (math_to_linear(children[0]).strip(), math_to_linear(children[1]).strip(),
+                               bracketed(math_to_linear(children[2])))
+    if name == "msqrt":
+        return "sqrt(%s)" % math_children(element)
+    if name == "mroot" and len(children) == 2:
+        return "%s^(1/%s)" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
+    if name == "mfenced":
+        return "(%s)" % ", ".join(math_to_linear(child) for child in children)
+    if name == "munderover" and len(children) == 3 and (children[0].text or "").strip() in NARY_NAMES:
+        return "%s(%s, %s, " % (NARY_NAMES[children[0].text.strip()], math_to_linear(children[1]).strip(),
+                                math_to_linear(children[2]).strip())
+    if name in MATH_PROPERTIES:
+        return ""                                                 # properties, not content
+    return math_children(element)
 
+def math_children(element):
+    """The linear text of all children, in order. An open "sum_over(a, b, " from MathML takes
+    the part that follows it as its body and is then closed."""
+    pieces = [(element.text or "").strip() if not len(element) else ""]
+    for child in element:
+        piece = math_to_linear(child)
+        if pieces[-1].endswith(", ") and pieces[-1].startswith(tuple(NARY_NAMES.values())):
+            pieces[-1] = pieces[-1] + piece.strip() + ")"
+        else:
+            pieces.append(piece)
+    return re.sub(r"\s+", " ", "".join(pieces)).strip()
 
+def strip_outer_brackets(text):
+    """Remove one pair of brackets that encloses the whole text."""
+    text = text.strip()
+    return text[1:-1] if text.startswith("(") and text.endswith(")") and text.count("(") == 1 else text
 
+LATEX_WORDS = {"cdot": "*", "times": "*", "div": "/", "le": "<=", "leq": "<=", "ge": ">=", "geq": ">=",
+               "ln": "ln", "log": "log", "exp": "exp", "max": "max", "min": "min", "left": "", "right": "",
+               "quad": " ", "qquad": " ", ",": " ", ";": " ", "!": "", " ": " ", "displaystyle": ""}
+LATEX_WRAPPERS = ("text", "mathrm", "mathit", "mathbf", "operatorname", "mbox", "textit", "textbf", "code")
 
+def latex_group(source, position):
+    """The content of the {...} group that starts at `position`, and the position after it."""
+    if position >= len(source):
+        raise NotReadable("a LaTeX command lacks its argument")
+    if source[position] != "{":
+        return source[position], position + 1
+    depth, start = 0, position
+    while position < len(source):
+        depth += {"{": 1, "}": -1}.get(source[position], 0)
+        position += 1
+        if depth == 0:
+            return source[start + 1:position - 1], position
+    raise NotReadable("a LaTeX group is never closed")
 
+def latex_to_linear(source):
+    """The LaTeX subset found in roxygen \\eqn{} and \\deqn{} and in some XML, to linear notation:
+    \\frac, \\sqrt, ^{}, _{}, Greek letters, \\cdot, \\times, \\left, \\right, text wrappers.
+    An unknown command makes the formula unreadable; it is never skipped silently."""
+    source, output, position = source.strip().strip("$"), [], 0
+    while position < len(source):
+        char = source[position]
+        if char == "\\":
+            match = re.match(r"\\([A-Za-z]+|.)", source[position:])
+            word, position = match.group(1), position + match.end()
+            if word == "frac":
+                top, position = latex_group(source, position)
+                bottom, position = latex_group(source, position)
+                output.append("(%s)/(%s)" % (latex_to_linear(top), latex_to_linear(bottom)))
+            elif word == "sqrt":
+                degree = ""
+                if source[position:position + 1] == "[":
+                    end = source.index("]", position)
+                    degree, position = source[position + 1:end], end + 1
+                inner, position = latex_group(source, position)
+                inner = latex_to_linear(inner)
+                output.append("sqrt(%s)" % inner if degree in ("", "2") else "(%s)^(1/(%s))" % (inner, degree))
+            elif word in LATEX_WRAPPERS:
+                inner, position = latex_group(source, position)
+                output.append(re.sub(r"\s+", "_", inner.strip()))
+            elif word in GREEK:
+                output.append(GREEK[word])
+            elif word in LATEX_WORDS:
+                output.append(LATEX_WORDS[word])
+            else:
+                raise NotReadable("it uses the LaTeX command '\\%s', which the tool does not read" % word)
+        elif char == "^":
+            inner, position = latex_group(source, position + 1)
+            output.append("^(%s)" % latex_to_linear(inner))
+        elif char == "_":
+            inner, position = latex_group(source, position + 1)
+            output.append("_{%s}" % latex_to_linear(inner).replace(" ", ""))
+        elif char in "{}":
+            output.append("(" if char == "{" else ")")
+            position += 1
+        else:
+            output.append(char)
+            position += 1
+    return re.sub(r"\s+", " ", "".join(output)).strip()
 
 # ---------------------------------------------------------------- format from content, and repairs
+XML_ENTITIES = ("amp", "lt", "gt", "quot", "apos")
 
+def repair_markup(text, file_name, repairs):
+    """The repairs the tool makes before strict parsing. Each one is recorded with its position, its
+    kind, and the text before and after, so that a reviewer can see exactly what was changed."""
+    def record(kind, position, before, after):
+        repairs.append({"file": file_name, "position": position, "kind": kind,
+                        "before": before[:200], "after": after[:200]})
+    def fix(pattern, kind, replacement, flags=0):
+        nonlocal text
+        def change(found):
+            after = replacement(found) if callable(replacement) else replacement
+            record(kind, found.start(), found.group(0), after)
+            return after
+        text = re.sub(pattern, change, text, flags=flags)
+    fix(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "control character removed", "")
+    fix(r"<!DOCTYPE[^>\[]*(\[.*?\])?\s*>", "document-type declaration removed", "", re.S | re.I)
+    def entity(found):
+        name = found.group(1)
+        if name in XML_ENTITIES or name not in html.entities.name2codepoint:
+            return found.group(0)
+        return "&#%d;" % html.entities.name2codepoint[name]
+    before_entities = text
+    text = re.sub(r"&([A-Za-z][A-Za-z0-9]*);", entity, text)
+    if text != before_entities:
+        named = sorted(set(re.findall(r"&([A-Za-z][A-Za-z0-9]*);", before_entities)) - set(XML_ENTITIES))
+        record("named characters replaced by their numbers", 0, ", ".join("&%s;" % n for n in named), "")
+    fix(r'=""([^"<>=]*)""', "doubled quotes in an attribute", lambda found: '="%s"' % found.group(1))
+    body = re.sub(r"<\?xml[^>]*\?>|<!--.*?-->", "", text, flags=re.S)
+    roots, depth = 0, 0
+    for tag in re.finditer(r"<(/?)([^\s<>/!?][^<>]*?)(/?)>", body):
+        if tag.group(1):
+            depth -= 1
+        elif not tag.group(3):
+            roots += 1 if depth == 0 else 0
+            depth += 1
+        else:
+            roots += 1 if depth == 0 else 0
+    if roots > 1:
+        declaration = re.match(r"\s*<\?xml[^>]*\?>", text)
+        start = declaration.end() if declaration else 0
+        text = text[:start] + "<document-root>" + text[start:] + "</document-root>"
+        record("several top elements wrapped in one", start, "%d top elements" % roots, "<document-root>")
+    return text
 
+VOID_TAGS = ("img", "br", "hr", "meta", "link", "input", "col", "area", "base", "wbr")
+BLOCK_STARTS = ("p", "h1", "h2", "h3", "h4", "h5", "h6", "table", "ul", "ol", "div", "li", "tr")
+IMPLIED_END = dict({tag: ("p",) for tag in BLOCK_STARTS}, li=("li", "p"), tr=("tr", "td", "th", "p"), td=("td", "th", "p"), th=("td", "th", "p"))
 
+class TolerantReader(html.parser.HTMLParser):
+    """Builds the same kind of element tree as the strict XML parser, from start, end and text
+    events of the standard library's HTML parser. It forgives what real exports contain: tags
+    never closed, tags closed in the wrong order, attributes without quotes. Equation markup
+    that Word's web export hides inside conditional comments is read too. (This is the one
+    place where the tool subclasses: the standard parser offers no other way to receive events.)"""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.builder, self.open_tags = ElementTree.TreeBuilder(), []
+        self.builder.start("document-root", {})
 
+    def handle_starttag(self, tag, attrs):
+        """Open an element, first closing what HTML closes implicitly."""
+        while self.open_tags and self.open_tags[-1] in IMPLIED_END.get(tag, ()):       # <p> ends an open <p>, as browsers read it
+            self.builder.end(self.open_tags.pop())
+        self.builder.start(tag, {name: value or "" for name, value in attrs})
+        if tag in VOID_TAGS:
+            self.builder.end(tag)
+        else:
+            self.open_tags.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        """An element written as empty: opened and closed at once."""
+        self.builder.start(tag, {name: value or "" for name, value in attrs})
+        self.builder.end(tag)
+
+    def handle_endtag(self, tag):
+        """Close the nearest open element of this name; a stray end tag is recorded as a repair."""
+        if tag not in self.open_tags:
+            return                                       # an end tag that closes nothing is ignored
+        while self.open_tags:
+            closing = self.open_tags.pop()
+            self.builder.end(closing)
+            if closing == tag:
+                return
+
+    def handle_data(self, data):
+        """Text between tags."""
+        self.builder.data(data)
+
+    def handle_comment(self, data):
+        """Keep equation markup that Word's web export hides in conditional comments; drop other comments."""
+        preserved = re.match(r"\[if[^\]]*msEquation[^\]]*\]>(.*)<!\[endif\]", data, re.S)
+        if preserved and "omath" in preserved.group(1).lower():
+            self.builder.start("verifier-preserved-equation", {})
+            self.feed_inner(preserved.group(1))
+            self.builder.end("verifier-preserved-equation")
+
+    def feed_inner(self, markup):
+        """Read preserved equation markup found inside a comment into the tree being built."""
+        inner = TolerantReader()
+        inner.feed(markup)
+        for child in inner.finish():
+            self.builder.start(child.tag, child.attrib)
+            self.copy_children(child)
+            self.builder.end(child.tag)
+
+    def copy_children(self, element):
+        """Copy an element read elsewhere into the tree being built."""
+        if element.text:
+            self.builder.data(element.text)
+        for child in element:
+            self.builder.start(child.tag, child.attrib)
+            self.copy_children(child)
+            self.builder.end(child.tag)
+            if child.tail:
+                self.builder.data(child.tail)
+
+    def finish(self):
+        """Close whatever is still open and return the root element."""
+        self.close()
+        while self.open_tags:
+            self.builder.end(self.open_tags.pop())
+        self.builder.end("document-root")
+        return self.builder.close()
+
+def parse_markup(text, file_name, repairs, tolerant_only=False):
+    """Strict XML parsing first; when that still fails after the repairs, the tolerant reader.
+    The path taken is recorded. Returns the root element."""
+    repaired = repair_markup(text, file_name, repairs)
+    if not tolerant_only:
+        try:
+            return ElementTree.fromstring(repaired.encode("utf-8"))
+        except ElementTree.ParseError as problem:
+            repairs.append({"file": file_name, "position": 0, "kind": "read with the tolerant reader",
+                            "before": "strict reading stopped: %s" % problem, "after": ""})
+    reader = TolerantReader()
+    reader.feed(repaired)
+    return reader.finish()
 
 # ---------------------------------------------------------------- tag rules and the block walker
+def load_tag_rules(override_path=None):
+    """The shipped tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml."""
+    rules = yaml.safe_load(TAG_RULES_YAML)
+    rules["shipped_tags"] = sorted(str(tag).lower() for tags in rules["families"].values() for tag in tags)
+    analyst_families = {}
+    if override_path:
+        with open(override_path, encoding="utf-8") as handle:
+            override = yaml.safe_load(handle) or {}
+        analyst_families = override.get("families") or {}
+        for key, value in override.items():
+            if key == "families":
+                rules["families"].update(value or {})
+            else:
+                rules[key] = value
+    rules["analyst_tags"] = sorted(str(tag).lower() for tags in analyst_families.values() for tag in tags)
+    rules["family_of"] = {}
+    for family, tags in rules["families"].items():
+        for tag in tags:
+            rules["family_of"][str(tag).lower()] = family
+    rules.setdefault("heading_attributes", ["name", "title", "heading", "label", "caption"])
+    rules.setdefault("caption_tag_words", ["title", "number", "caption", "legend"])
+    rules.setdefault("header_tag_words", ["head", "header"])
+    return rules
 
 # ---------------------------------------------------------------- discovering an unfamiliar schema
+BLOCKS_INSIDE = ("paragraph", "list_item", "list_container", "heading", "container", "row", "cell", "header_cell")
+
+def element_text(element, rules, skip=("figure", "equation", "ignore", "caption")):
+    """The running text of an element without the text of figures, equations and captions in it.
+
+    A child that is a block of its own - a list item inside a table cell, say - is separated by
+    a space rather than run straight onto what came before it. Without that, two items of a
+    list in one cell arrive as one word that the document does not contain ("renewable twice" +
+    "no fine" giving "twiceno"), which is text the tool made up. Enforces: R13"""
+    pieces = [element.text or ""]
+    for child in element:
+        if rules["family_of"].get(local_name(child.tag)) not in skip:
+            if rules["family_of"].get(local_name(child.tag)) in BLOCKS_INSIDE and "".join(pieces).strip():
+                pieces.append(" ")
+            pieces.append(element_text(child, rules, skip))
+        pieces.append(child.tail or "")
+    return "".join(pieces)
+
+def new_block(kind, text="", locator="", **more):
+    """One block of a document before numbering: kind, text, where it was found, and what its kind needs."""
+    block = {"type": kind, "text": normalise_text(text), "locator": locator, "level_hint": None,
+             "numbering": "", "caption": "", "table": None, "equation": None, "reconstructed": False,
+             "not_read_reason": ""}
+    block.update(more)
+    return block
+
+def not_read_block(file_name, reason):
+    """A whole file, or a part, that could not be read still becomes one block: the "not read"
+    class of the content account, never a silent gap. Enforces: R2, R13"""
+    return new_block("paragraph", "", file_name, not_read_reason=reason)
+
+@dataclass
+class WalkState:
+    """What the walker carries along: the rules, the notation, images by name, the report of
+    tags it met that are in no family, and what discovery made of those tags in this document."""
+    rules: dict; notation: dict; images: dict; unknown_tags: dict; blocks: list
+    skip_next_image: bool = False
+    notes: list = field(default_factory=list)      # what was left out or read in a fallback way, in plain words
+    atoms: list = field(default_factory=list)      # the smallest pieces of text the file holds, counted from the file itself
+    dropped: list = field(default_factory=list)    # text left out under a named rule, kept so the account can show it
+    lent_numbering: str = ""                       # a number a container carries for the heading inside it
+    settings: dict = field(default_factory=dict)
+    guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
+    folder: str = ""                               # where the file being read stands, so a picture beside it can be found
+    svgs: dict = field(default_factory=dict)       # the corner's SVG files, by lower-case name and by name without .svg
+    consumed: set = field(default_factory=set)     # SVGs already read in place by a document of the corner (shared by the corner)
+    file_name: str = ""
+    lists: list = field(default_factory=list)      # the lists the walker is inside of: [numbered?, items so far]
+
+    def __post_init__(self):
+        """Each file reads with its own view of the rules, so a tag discovered in one file
+        never changes how the next file is read."""
+        self.rules = dict(self.rules)
+        self.rules["family_of"] = dict(self.rules["family_of"])
+
+    def family(self, tag):
+        """The family of a tag: what the rules say, else what discovery made of it here."""
+        return self.rules["family_of"].get(tag)
+
+def walk_element(element, path, depth, state):
+    """Turn one element and everything below it into blocks, in reading order."""
+    name = local_name(element.tag)
+    family = state.family(name)
+    here = "%s/%s" % (path, name)
+    if name == "verifier-preserved-equation":
+        state.blocks.append(equation_block(element, here, state))
+        state.skip_next_image = True                     # the picture that follows shows the same equation
+        return
+    if family == "ignore" or not name:
+        return
+    linked, named_by = (svg_reference(element, state), element) if state.svgs else (None, None)
+    if not linked and state.svgs and state.family(name) == "figure":
+        # a figure may name its picture one level down: <chart><file>Chart2.svg</file></chart>
+        linked, named_by = next(((found, below) for below in element.iter() if below is not element
+                                 for found in [svg_reference(below, state)] if found), (None, None))
+    if linked:                                           # a chart or table drawn as an SVG beside the document: read it here, in place
+        if named_by is not None and len(named_by) == 0 and (named_by.text or "").strip():
+            state.dropped.append(named_by.text)          # the file name written as text is a reference, not what the document says
+        caption = next((normalise_text(element_text(n, state.rules, skip=())) for n in element.iter()
+                        if state.rules["family_of"].get(local_name(n.tag)) == "caption"), "") or element.get("alt") or element.get("title") or ""
+        with open(linked, "rb") as handle:
+            state.blocks.extend(svg_blocks(handle.read(), os.path.basename(linked), here, state, caption))
+        state.consumed.add(linked)
+        state.notes.append("%s: read in place, where %s refers to it." % (os.path.basename(linked), state.file_name or "the document"))
+        return
+    if family is None:                                   # discovery names every tag it reaches; this is the net under it
+        family = "container" if len(element) else "paragraph"
+    numbering = written_numbering(element, state.rules)
+    if family == "heading":
+        text = element_text(element, state.rules)
+        digit = re.fullmatch(r"h([1-6])", name)
+        state.blocks.append(new_block("heading", text, here, numbering=numbering or state.lent_numbering,
+                                      level_hint=int(digit.group(1)) if digit else depth))
+        state.lent_numbering = ""
+    elif family in ("container", "list_container", "inline"):
+        # A container that carries its own heading in an attribute (<section name="4. Market">)
+        # gives that heading a block of its own, so the chain below it is not lost.
+        heading, _ = attribute_text(element, state.rules["heading_attributes"]) if family == "container" else ("", "")
+        if heading:
+            state.blocks.append(new_block("heading", heading, here, numbering=numbering, level_hint=depth))
+        if family == "list_container":                   # <ol>, or <list type="numbered">: its items are counted
+            kind = " ".join([name] + [element.get(a) or "" for a in ("type", "style", "numeration", "class")]).lower()
+            state.lists.append([bool(re.search(r"\bol\b|order|num|decimal|arabic|alpha|roman", kind)), 0])
+        # A container often carries the number of the section (<section num="2.">) while the
+        # heading it labels is a child of it (<title>). The number is lent to the first heading
+        # the container produces, so that "2." belongs to "2. Volume per bed" and not to
+        # nothing at all. Enforces: R13
+        lent, state.lent_numbering = state.lent_numbering, numbering if family == "container" and numbering and not heading else ""
+        walk_mixed(element, here, depth + (1 if family == "container" else 0), state)
+        state.lent_numbering = lent
+        if family == "list_container":
+            state.lists.pop()
+    elif family in ("paragraph", "list_item"):
+        marker = ""
+        if family == "list_item":
+            inside = state.lists[-1] if state.lists else [False, 0]
+            inside[1] += 1
+            marker = "  " * max(0, len(state.lists) - 1) + ("%d. " % inside[1] if inside[0] else LIST_MARKER)
+        walk_mixed(element, here, depth, state, own_kind="list_item" if family == "list_item" else "paragraph",
+                   numbering=numbering, marker=marker)
+    elif family == "table":
+        state.blocks.append(table_block(element, here, state))
+    elif family == "figure":
+        if state.skip_next_image:
+            state.skip_next_image = False
+            return
+        found = figure_block(element, here, state)
+        state.blocks.extend(found if isinstance(found, list) else [found])   # an SVG beside the document may give a table
+    elif family == "equation":
+        state.blocks.append(equation_block(element, here, state))
+    elif family == "caption" and state.blocks and state.blocks[-1]["type"] in ("figure", "table", "equation"):
+        state.blocks[-1]["caption"] = normalise_text(element_text(element, state.rules, skip=()))
+
+def walk_mixed(element, here, depth, state, own_kind=None, numbering="", marker=""):
+    """An element that may hold both running text and blocks. Its own text becomes one
+    paragraph; a formula that fills the paragraph alone becomes an Equation block instead."""
+    block_families = ("heading", "container", "list_container", "paragraph", "list_item", "table",
+                      "figure", "equation", "caption", None)
+    children = [c for c in element if local_name(c.tag) and
+                (state.family(local_name(c.tag)) in block_families or local_name(c.tag) == "verifier-preserved-equation")]
+    inline_only = [c for c in children if state.family(local_name(c.tag)) is None and not len(c)
+                   and own_kind]
+    children = [c for c in children if c not in inline_only]
+    text = normalise_text(element_text(element, state.rules, skip=("figure", "equation", "ignore", "caption",
+                                 "table", "list_container")) if own_kind or not children else (element.text or ""))
+    equations = [c for c in children if state.family(local_name(c.tag)) == "equation"]
+    if own_kind and text and equations:                  # text around a formula: show the formula in place
+        text = normalise_text(text + " " + " ".join(math_to_linear(c) for c in equations))
+        children = [c for c in children if c not in equations]
+    if text and (own_kind or not children):
+        state.blocks.append(new_block(own_kind or "paragraph", text, here, numbering=numbering, marker=marker))
+    for position, child in enumerate(children, start=1):
+        if own_kind and state.family(local_name(child.tag)) in ("paragraph", "inline"):
+            continue                                     # already part of the paragraph's own text
+        walk_element(child, "%s[%d]" % (here, position), depth, state)
+        if not own_kind and child.tail and child.tail.strip():
+            state.blocks.append(new_block("paragraph", child.tail, here))
+
+def table_block(element, here, state):
+    """A table is always one block: header cells, body rows and its caption stay together.
+    Whatever sits in a row is a cell unless it is the caption or is ignored, so a kind of cell
+    that first turns up in the fortieth row still keeps its words. Tags holding the table's
+    number and title beside empty cells are the caption, kept in the order written; the rows
+    they leave empty are dropped, so the first row with content is the header. A table whose
+    rows cannot be found keeps its words as running text and says so: a table that is present
+    and empty misleads more than none."""
+    family = lambda node: state.family(local_name(node.tag))
+    found = [node for node in element.iter() if family(node) == "row"] or table_rows(element, state.rules)
+    rows, captions = [], []
+    in_a_row = {id(node) for row in found for node in row.iter()}
+    for node in element.iter():
+        # A caption may be named as one, or may simply sit beside the rows rather than in them
+        # (<gridcaption> under <gridholder>). Either way its words belong to the table and are
+        # kept: a table whose title is lost cannot be cited by its number. Enforces: R13
+        beside = (node is not element and id(node) not in in_a_row and family(node) not in ("row", "table_part", "ignore")
+                  and not any(child is not None and family(child) == "row" for child in node))
+        part = normalise_text(element_text(node, state.rules, skip=())) if family(node) == "caption" or beside else ""
+        if part and part not in captions:
+            captions.append(part)
+    for row in found:
+        cells = [normalise_text(element_text(cell, state.rules, skip=())) for cell in row
+                 if local_name(cell.tag) and family(cell) not in ("caption", "ignore")]
+        if any(cells):
+            rows.append(cells)
+    block = table_from_rows(rows, here, ". ".join(captions))
+    words = "" if rows else normalise_text(element_text(element, state.rules, skip=("ignore", "caption")))
+    if words:
+        block["display"] = words
+        state.notes.append("The rows of the table at %s could not be told apart, so its words are shown as running text." % here)
+    return block
+
+def table_from_rows(rows, locator, caption=""):
+    """The one-cell display form of a table. Short values are shown as a grid: cells joined by
+    "; ", one row per line, header first. Sentences would be unreadable that way, so each cell
+    goes on its own line under the heading of its column ("Very Strong: Airport that ..."); a row
+    with one filled cell (a sub-heading, a note) is shown as it stands. The grid is kept either way."""
+    width = max((len(row) for row in rows), default=0)
+    rows = [list(row) + [""] * (width - len(row)) for row in rows]
+    header, body = (rows[0], rows[1:]) if rows else ([], [])
+    filled = [cell for row in body if sum(1 for cell in row if cell) > 1 for cell in row if cell]   # sub-headings and notes do not vote
+    if filled and sum(len(cell) for cell in filled) > 60 * len(filled):
+        lines = ["; ".join(cell for cell in header if cell)]
+        for row in body:
+            cells = [(header[i], cell) for i, cell in enumerate(row) if cell]
+            lines.extend(("%s: %s" % pair if pair[0] and len(cells) > 1 else pair[1]) for pair in cells)
+        display = "\n".join(lines)
+    else:
+        display = "\n".join("; ".join(row[:max((i for i, cell in enumerate(row) if cell), default=0) + 1]) for row in rows)
+    first = [row[0] for row in body if row[0]] if width else []     # a first column of words keys the rows
+    numeric = first and all(find_numbers(v) and len(find_numbers(v)) == 1 and
+                            len(re.sub(r"[\d.,%\s+-]|bps?|basis points?", "", v)) == 0 for v in first)
+    row_key = header[0] if header and width and not numeric else ""
+    table = TableData(tuple(header), tuple(tuple(row) for row in body), row_key)
+    return new_block("table", "", locator, table=table, caption=caption, display=display)
+
+PICTURE_READER = []                     # the OCR engine, looked for once: [engine] or [None]
+OCR_NOTE = "Words read from the picture by OCR (a machine reading: check it against the picture itself):"
+
+def read_picture(data, state):
+    """The words in a picture, read by OCR, as lines to show under the Figure; "" when there are
+    none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside
+    the package, so nothing is fetched when it runs). The words help a person find the
+    picture. They are never evidence: a machine misreads digits, so a Figure still ends
+    "for manual review" whatever was read. A missing reader is said once per file. Enforces: R2"""
+    if not PICTURE_READER:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            PICTURE_READER.append(RapidOCR())
+        except Exception:                                # not installed, or its models cannot be loaded
+            PICTURE_READER.append(None)
+    missing = "The words inside pictures were not read: the optional OCR package rapidocr-onnxruntime is not installed."
+    if PICTURE_READER[0] is None and missing not in state.notes:
+        state.notes.append(missing)
+    if PICTURE_READER[0] is None or len(data) < 2048 or not state.rules.get("read_pictures", True):
+        return ""                                        # under 2 kB is an icon or a rule, not a picture with words
+    try:
+        found = sorted(PICTURE_READER[0](data)[0] or [], key=lambda item: (round(item[0][0][1] / 14), item[0][0][0]))
+    except Exception:                                    # a form the reader cannot open (.emf, .wmf)
+        unread = "The words inside one or more pictures were not read: the picture is in a form the reader cannot open."
+        if unread not in state.notes:
+            state.notes.append(unread)                   # the picture is still a unit; only its words are missing (R2)
+        return ""
+    rows = {}
+    for box, words, _ in found:                          # what stands on one line of the picture stays on one line
+        rows.setdefault(round(box[0][1] / 14), []).append(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", words))
+    return "\n%s\n%s" % (OCR_NOTE, "\n".join("  ".join(row) for row in rows.values())) if rows else ""
+
+def picture_words(page, box, state):
+    """PDF: the part of the page that a picture covers, drawn at 150 dpi and read by OCR."""
+    if box[2] - box[0] < 40 or box[3] - box[1] < 40:
+        return ""
+    try:
+        drawn = io.BytesIO()
+        area = (max(box[0], 0), max(box[1], 0), min(box[2], page.width), min(box[3], page.height))
+        page.crop(area).to_image(resolution=150).original.save(drawn, "PNG")
+    except Exception:
+        return ""
+    return read_picture(drawn.getvalue(), state)
+
+def figure_block(element, here, state):
+    """A figure: never read, kept with its caption or alternative text and the fingerprint of the image."""
+    source = element.get("src") or element.get("href") or element.get("fileref") or ""
+    inner = next((n for n in element.iter() if n is not element and (n.get("src") or n.get("fileref"))), None)
+    if not source and inner is not None:
+        source = inner.get("src") or inner.get("fileref") or ""
+    label = element.get("alt") or element.get("title") or (inner.get("alt") if inner is not None else "") or ""
+    caption = next((normalise_text(element_text(n, state.rules, skip=())) for n in element.iter()
+                    if state.rules["family_of"].get(local_name(n.tag)) == "caption"), "")
+    fingerprint = state.images.get(source) or state.images.get(source.replace("cid:", "")) or ""
+    return new_block("figure", label or caption or source, here, caption=caption, image_sha256=fingerprint,
+                     source=source)
+
+LINK_ATTRIBUTE = re.compile(r"src|href|ref|file|data|path|url|image|graphic", re.I)
+
+def svg_reference(element, state):
+    """The SVG of this corner an element refers to, or None. A reference is either an attribute
+    whose name says it links (src, href, xlink:href, fileref, data, a tool's own graphic= or
+    image=), or an element's whole text when it names a file ending in .svg. A plain name is
+    matched to a file of the corner in any case, and without .svg only when it came from a link
+    attribute; a path is followed only if it stays inside the document's folder. Found on review:
+    matching any short text without .svg took the heading <title>Floors</title> for floors.svg and
+    replaced the heading with the chart. Enforces: R6"""
+    values = [value for key, value in element.attrib.items() if LINK_ATTRIBUTE.search(local_name(key))]
+    text = (element.text or "").strip() if len(element) == 0 else ""
+    if text.lower().endswith(".svg") and len(text) < 200:
+        values.append(text)
+    for value in values:
+        written = (value or "").strip().replace("\\", "/").split("?")[0].split("#")[0]
+        if not written or ".." in written.split("/") or "://" in written or written.startswith("/"):
+            continue
+        if "/" in written and state.folder:
+            resolved = os.path.normpath(os.path.join(state.folder, written)).lower()
+            found = next((path for path in state.svgs.values() if os.path.normpath(path).lower() == resolved), None)
+            if found:
+                return found
+        name = os.path.basename(written).lower()
+        for key in ((name,) if name.endswith(".svg") else (name, name + ".svg")):
+            if key in state.svgs:
+                return state.svgs[key]
+    return None
+
+def svg_blocks(data, name, here, state, caption=""):
+    """The units of one SVG, read by the text it holds: a table where its text stands in a grid, a
+    figure of its labels otherwise. Where it holds no text, a picture stored inside it is read by
+    OCR when that is installed; and a figure that still gives no words says why, instead of standing
+    empty. The words counted are the SVG's own, so the content account closes. Enforces: R2, R13"""
+    import xml.etree.ElementTree as ElementTree
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return [not_read_block(name, "the SVG file is damaged and could not be opened")]
+    markup, words, _ = svg_to_markup(data, name)
+    own_caption, labels = (words.split("\n", 1) + [""])[:2]
+    state.atoms.extend(atoms_of_plain_text(labels if caption else words, name))
+    blocks = walk_svg_markup(parse_markup(markup, name, [], False), here, state)
+    for block in blocks:
+        block["caption"] = caption or own_caption
+        block["source"], block["image_sha256"] = name, sha256_bytes(data)
+        if block["type"] == "figure" and not block["text"].strip():
+            seen = "".join(read_picture(picture, state) for picture in svg_embedded_pictures(root)).strip()
+            if seen:
+                block["text"] = seen                     # words read from a picture: shown, never evidence
+            else:
+                block["not_read_reason"] = "the picture gave no words: %s" % svg_why_no_text(root)
+    return blocks
+
+def walk_svg_markup(root, here, state):
+    """The blocks the SVG's markup gives: a table block, or one figure block carrying the
+    picture's labels as its text."""
+    blocks = []
+    for node in root:
+        family = state.rules["family_of"].get(local_name(node.tag))
+        if family == "table":
+            block = table_block(node, here, state)
+            if block is not None:
+                blocks.append(block)
+        elif family == "figure":
+            blocks.append(new_block("figure", node.get("alt") or "", here,
+                                    caption=next((normalise_text("".join(c.itertext())) for c in node if local_name(c.tag) == "caption"), "")))
+    return blocks
 
 
+def equation_block(element, here, state):
+    """An equation element: MathML or Office Math is converted; LaTeX or linear text is read as
+    written; an equation that is only a picture stays an Equation chunk that could not be read."""
+    markup = next((n for n in element.iter() if local_name(n.tag) in ("math", "omath")), None)
+    picture = next((n for n in element.iter() if local_name(n.tag) in ("img", "image", "graphic", "imagedata")), None)
+    if markup is not None:
+        form = "mathml" if local_name(markup.tag) == "math" else "omml"
+        equation = read_equation(form, math_to_linear(markup), state.notation)
+    elif picture is not None and not normalise_text(element_text(element, state.rules)):
+        source = picture.get("src") or picture.get("fileref") or ""
+        equation = read_equation("image", "", state.notation, state.images.get(source, "") or sha256_text(source))
+    else:
+        written = normalise_text(element_text(element, state.rules, skip=("caption", "ignore")))
+        try:
+            linear = latex_to_linear(written) if "\\" in written else written
+            equation = read_equation("latex" if "\\" in written else "inline", linear, state.notation)
+        except NotReadable as problem:
+            equation = EquationData("latex", written, False, str(problem), "")
+    label = picture.get("alt") if picture is not None and picture.get("alt") else ""
+    text = equation.linear or label or "Equation shown as a picture"
+    return new_block("equation", text, here, equation=equation)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
+    """XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules."""
+    root = parse_markup(text, file_name, repairs, tolerant_only)
+    discovered = discover_families(root, state.rules, state.unknown_tags)
+    state.rules["family_of"].update(discovered)
+    walk_element(root, "", 0, state)
+    return state.blocks
 
 # ---------------------------------------------------------------- MHTML (a web page saved as one file)
+def blocks_from_mhtml(data, file_name, state, repairs):
+    """Parts are read with the standard `email` package. The HTML part goes through the tolerant
+    reader; every image part is fingerprinted so that a Figure chunk can name its content."""
+    message = email.message_from_bytes(data)
+    page = None
+    for part in message.walk():
+        content_type = part.get_content_type()
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        if content_type == "text/html" and page is None:
+            page = payload.decode(part.get_content_charset() or "utf-8", "replace")
+        elif content_type.startswith("image/"):
+            fingerprint = sha256_bytes(payload)
+            for key in (part.get("Content-Location", ""), (part.get("Content-ID", "") or "").strip("<>")):
+                if key:
+                    state.images[key] = fingerprint
+                    state.images[key.rsplit("/", 1)[-1]] = fingerprint
+    if page is None:
+        return [not_read_block(file_name, "the file holds no web page part")]
+    blocks = blocks_from_markup(page, file_name, state, repairs, tolerant_only=True)
+    return [block for block in title_block(page, file_name) + blocks]
 
+def title_block(page, file_name):
+    """The <title> of a web page, as a heading above everything in it. In a Word file exported
+    to the web it is often the only place the document's own name survives, because the visible
+    heading may be a styled paragraph carrying no heading level. Without this the title reaches
+    no unit and can be cited by nothing. Enforces: R13"""
+    found = re.search(r"<title[^>]*>(.*?)</title>", page, re.IGNORECASE | re.DOTALL)
+    text = normalise_text(re.sub(r"<[^>]+>", " ", found.group(1))) if found else ""
+    return [new_block("heading", text, "%s title" % file_name, level_hint=1)] if text else []
 
 # ---------------------------------------------------------------- .docx
+WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+           "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
+           "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+           "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+           "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
 
+def word_value(element, path, attribute_name="val"):
+    """The value of a Word property such as a style id or an outline level, or None."""
+    found = element.find(path, WORD_NS)
+    return found.get("{%s}%s" % (WORD_NS["w"], attribute_name)) if found is not None else None
 
+def docx_paragraph_facts(paragraph, styles):
+    """Heading level (from the style name or the outline level, following based-on styles) and
+    whether Word numbers this paragraph automatically."""
+    style_id = word_value(paragraph, "w:pPr/w:pStyle") or ""
+    level = word_value(paragraph, "w:pPr/w:outlineLvl")
+    numbering = paragraph.find("w:pPr/w:numPr", WORD_NS)
+    name, hops = "", 0
+    while style_id in styles and hops < 5:
+        style = styles[style_id]
+        name = name or (word_value(style, "w:name") or "")
+        level = level if level is not None else word_value(style, "w:pPr/w:outlineLvl")
+        numbering = numbering if numbering is not None else style.find("w:pPr/w:numPr", WORD_NS)
+        style_id, hops = word_value(style, "w:basedOn") or "", hops + 1
+    numbered = (word_value(numbering, "w:numId") or "", word_value(numbering, "w:ilvl") or "0") if numbering is not None else None
+    if numbered and numbered[0] == "0":                  # Word writes numId 0 to switch numbering off
+        numbered = None
+    heading = re.fullmatch(r"[Hh]eading\s*(\d)", name)
+    if heading:
+        return int(heading.group(1)), numbered, name
+    if level is not None and level.isdigit() and int(level) < 9:
+        return int(level) + 1, numbered, name
+    return None, numbered, name
 
+def docx_number_formats(archive):
+    """How each numbering of a Word file shows its items, by numbering id and level: "bullet",
+    "decimal", "lowerLetter" ... Word keeps this apart from the text, in word/numbering.xml."""
+    if "word/numbering.xml" not in archive.namelist():
+        return {}
+    root, key = safe_xml(archive.read("word/numbering.xml")), "{%s}" % WORD_NS["w"]
+    shapes = {a.get(key + "abstractNumId"): {lvl.get(key + "ilvl"): word_value(lvl, "w:numFmt") for lvl in a.findall("w:lvl", WORD_NS)}
+              for a in root.findall("w:abstractNum", WORD_NS)}
+    return {n.get(key + "numId"): shapes.get(word_value(n, "w:abstractNumId"), {}) for n in root.findall("w:num", WORD_NS)}
 
+def docx_paragraph_parts(paragraph):
+    """The text of a paragraph with its formulas in place, its formulas, and its pictures."""
+    pieces, formulas, pictures = [], [], []
+    for node in paragraph.iter():
+        name = local_name(node.tag)
+        if name == "t" and node.tag.startswith("{%s}" % WORD_NS["w"]):
+            pieces.append(node.text or "")
+        elif name in ("tab", "br") and node.tag.startswith("{%s}" % WORD_NS["w"]):
+            pieces.append(" ")
+        elif name == "omath":
+            formulas.append(node)
+            pieces.append(" %s " % math_to_linear(node))
+        elif name in ("drawing", "pict"):
+            pictures.append(node)
+    return "".join(pieces), formulas, pictures
 
+def docx_figure(picture, related, locator, state):
+    """A picture in a Word file as a figure block with the fingerprint of the embedded image,
+    and the words in it where OCR is installed."""
+    description = next((n.get("descr") or n.get("title") or n.get("name") or "" for n in picture.iter()
+                        if local_name(n.tag) == "docpr"), "")
+    fingerprint, words = "", ""
+    for node in picture.iter():
+        for key, value in node.attrib.items():
+            if key.startswith("{%s}" % WORD_NS["r"]) and value in related:
+                fingerprint, words = sha256_bytes(related[value]), read_picture(related[value], state)
+    fingerprint = fingerprint or sha256_bytes(ElementTree.tostring(picture))
+    said = (description or "Picture without a description") + words
+    return new_block("figure", said, locator, image_sha256=fingerprint, display=said)
 
+def safe_xml(data):
+    """Parse one XML part of an Office file. Any document-type declaration is removed first,
+    so no entity can be defined inside the file (no entity expansion, no outside fetch)."""
+    text = re.sub(rb"<!DOCTYPE[^>\[]*(\[.*?\])?\s*>", b"", data, flags=re.S | re.I)
+    return ElementTree.fromstring(text)
 
+def note_blocks(archive, file_name):
+    """The footnotes and endnotes of a Word file, which are parts of their own and are not in
+    the run of paragraphs a plain reader walks. Real documentation puts definitions, caveats and
+    parameter values in a footnote routinely, and a reader that takes the body and not the notes
+    reports a statement as undocumented when its documentation is two lines below the text.
+    They are read after the body, each saying which note it is. Enforces: R13"""
+    found = []
+    for part, kind in (("word/footnotes.xml", "footnote"), ("word/endnotes.xml", "endnote")):
+        if part not in archive.namelist():
+            continue
+        try:
+            root = safe_xml(archive.read(part))
+        except ElementTree.ParseError:
+            continue
+        for note in root:
+            if (note.get("{%s}type" % WORD_NS["w"]) or "") in ("separator", "continuationSeparator", "continuationNotice"):
+                continue                                 # the rule Word draws above a footnote, not a note
+            number = note.get("{%s}id" % WORD_NS["w"]) or "?"
+            for position, paragraph in enumerate(note.findall("w:p", WORD_NS), start=1):
+                text = normalise_text("".join(run.text or "" for run in paragraph.iter("{%s}t" % WORD_NS["w"])))
+                if text:
+                    found.append(new_block("paragraph", text, "%s %s %s paragraph %d" % (file_name, kind, number, position)))
+    return found
 
+def blocks_from_docx(data, file_name, state):
+    """Body elements in document order, so that tables stay where they are. Heading numbers that
+    Word produces automatically are not stored in the file; they are reconstructed by counting
+    and marked as reconstructed."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        body = safe_xml(archive.read("word/document.xml")).find("w:body", WORD_NS)
+    except (zipfile.BadZipFile, KeyError, ElementTree.ParseError):
+        return [not_read_block(file_name, "the file is not a Word document that can be opened")]
+    styles, related = {}, {}
+    if "word/styles.xml" in archive.namelist():
+        for style in safe_xml(archive.read("word/styles.xml")).findall("w:style", WORD_NS):
+            styles[style.get("{%s}styleId" % WORD_NS["w"])] = style
+    if "word/_rels/document.xml.rels" in archive.namelist():
+        for relation in safe_xml(archive.read("word/_rels/document.xml.rels")):
+            target = "word/" + relation.get("Target", "").lstrip("/")
+            if relation.get("TargetMode") != "External" and target in archive.namelist():
+                related[relation.get("Id")] = archive.read(target)
+    blocks, counters, pending_caption = [], [0] * 9, ""
+    notes = note_blocks(archive, file_name)
+    formats, counts, page, on_page = docx_number_formats(archive), {}, 1, {}
+    paged = b"lastRenderedPageBreak" in archive.read("word/document.xml")     # Word noted where its pages ended
+    for position, element in enumerate(body, start=1):
+        locator, name = "body element %d" % position, local_name(element.tag)
+        if name == "tbl":
+            rows = []
+            for row in element.findall("w:tr", WORD_NS):
+                rows.append([normalise_text(docx_paragraph_parts(cell)[0]) for cell in row.findall("w:tc", WORD_NS)])
+            blocks.append(table_from_rows(rows, locator, pending_caption))
+            pending_caption = ""
+            continue
+        if name != "p":
+            continue
+        level, numbered, style_name = docx_paragraph_facts(element, styles)
+        text, formulas, pictures = docx_paragraph_parts(element)
+        text = normalise_text(text)
+        if style_name.lower() == "caption":
+            if blocks and blocks[-1]["type"] in ("figure", "table", "equation") and not blocks[-1]["caption"]:
+                blocks[-1]["caption"] = text
+            else:
+                pending_caption = text
+            continue
+        for picture in pictures:
+            blocks.append(docx_figure(picture, related, locator, state))
+        if level is not None and text:
+            block = new_block("heading", text, locator, level_hint=level)
+            if numbered and not first_numbering(text, state.rules)[0]:
+                counters[level - 1] += 1
+                counters[level:] = [0] * (9 - level)
+                block["numbering"] = ".".join(str(c) for c in counters[:level] if c)
+                block["reconstructed"] = True
+            blocks.append(block)
+        elif formulas and not normalise_text(re.sub(r"\s+", " ", text.replace(math_to_linear(formulas[0]), ""))):
+            equation = read_equation("omml", math_to_linear(formulas[0]), state.notation)
+            blocks.append(new_block("equation", equation.linear or text, locator, equation=equation))
+        elif text:
+            page += sum(1 for node in element.iter() if local_name(node.tag) == "lastrenderedpagebreak")
+            shape = formats.get(numbered[0], {}).get(numbered[1], "") if numbered else ""
+            if numbered and shape != "bullet" and "bullet" not in style_name.lower():
+                counts[numbered] = counts.get(numbered, 0) + 1            # Word counts the items; the file does not hold the numbers
+                counts.update({key: 0 for key in counts if key[0] == numbered[0] and key[1] > numbered[1]})
+                written = chr(96 + counts[numbered]) if shape == "lowerLetter" and counts[numbered] < 27 else str(counts[numbered])
+            if numbered and (shape == "bullet" or "list" in style_name.lower() or "bullet" in style_name.lower()):
+                marker = "  " * int(numbered[1]) + (LIST_MARKER if shape == "bullet" or "bullet" in style_name.lower() else written + ". ")
+                blocks.append(new_block("list_item", text, locator, marker=marker))
+                continue
+            on_page[page] = on_page.get(page, 0) + 1
+            label = written + "." if numbered else "p.%d \u00b6%d" % (page, on_page[page]) if paged else ""
+            blocks.append(new_block("paragraph", text, locator, numbering=label, reconstructed=bool(numbered)))
+    if notes:
+        blocks.append(new_block("heading", NOTES_HEADING, "%s notes" % file_name, level_hint=1))
+        blocks.extend(notes)
+    return blocks
 
 # ---------------------------------------------------------------- .pdf
+MATH_CHARACTERS = set("=+\u2212\u00d7\u00f7\u2211\u221a\u222b^/\u2264\u2265\u2248()") | set(GREEK.values())
 
+BULLET = re.compile(r"^(?:[\u2022\u25aa\u25cf\u25e6\u2023\u2043\u2013\u2014*o-]|\(cid:\d+\))\s+(?=\S)")
 
+def pdf_lines(document, file_name):
+    """Every line, table and picture of a PDF in reading order, each with its page, its place on
+    the page, and whether it sits in the top or bottom margin ("edge")."""
+    lines = []
+    for number, page in enumerate(document.pages, start=1):
+        edge = lambda top, bottom: "top" if bottom < 0.12 * page.height else "bottom" if top > 0.88 * page.height else ""
+        tables = page.find_tables()
+        for table in tables:
+            rows = [[normalise_text(cell or "") for cell in row] for row in table.extract()]
+            lines.append({"page": number, "top": table.bbox[1], "table": rows, "edge": ""})
+        for count, image in enumerate(page.images, start=1):
+            mark = "%s page %d picture %d %s" % (file_name, number, count, image.get("srcsize"))
+            lines.append({"page": number, "top": image["top"], "figure": sha256_text(mark), "text": "picture %s" % (image.get("srcsize"),),
+                          "edge": edge(image["top"], image["bottom"]), "box": (image["x0"], image["top"], image["x1"], image["bottom"])})
+        for line in page.extract_text_lines():
+            inside = any(t.bbox[0] <= line["x0"] and line["top"] >= t.bbox[1] and line["bottom"] <= t.bbox[3] for t in tables)
+            if inside or not line["text"].strip():
+                continue
+            sizes = sorted(char["size"] for char in line["chars"])
+            bold = sum(1 for char in line["chars"] if "bold" in char.get("fontname", "").lower()) > len(line["chars"]) / 2
+            lines.append({"page": number, "top": line["top"], "bottom": line["bottom"], "text": line["text"].strip(),
+                          "size": sizes[len(sizes) // 2], "bold": bold, "edge": edge(line["top"], line["bottom"])})
+    return sorted(lines, key=lambda entry: (entry["page"], entry["top"]))
 
+def blocks_from_pdf(data, file_name, state):
+    """PDF keeps no structure, so this reader is the weakest (the manual recommends .docx where
+    both exist). With pdfplumber it works from where each line sits and how it is set: page
+    headers and footers are left out; a heading is a short line set larger or bolder than the
+    body, numbered or not; a line opening with a bullet is a list item; a sentence running over a
+    page break is joined again; tables are single blocks; pictures are Figure blocks, read by OCR
+    where installed; lines dense in mathematical characters are unread Equation blocks. A paragraph
+    is labelled with its page and place ("p.4 \u00b62"), which is how a person finds it in a PDF.
+    With only pypdf: text and numbering alone. With neither: one block that could not be read."""
+    try:
+        import pdfplumber
+    except ImportError:
+        return blocks_from_pdf_text_only(data, file_name, state)
+    blocks, open_block, on_page = [], None, {}
+    with pdfplumber.open(io.BytesIO(data)) as document:
+        lines = without_page_furniture(pdf_lines(document, file_name), len(document.pages), state, file_name)
+        sizes = sorted(entry["size"] for entry in lines if "size" in entry)
+        body_size = sizes[len(sizes) // 2] if sizes else 10.0
+        numbered = any("size" in entry and first_numbering(entry["text"], state.rules)[0] for entry in lines)
+        for entry in lines:
+            locator = "page %d" % entry["page"]
+            if "table" in entry:
+                blocks.append(table_from_rows(entry["table"], locator))
+            elif "figure" in entry:
+                words = picture_words(document.pages[entry["page"] - 1], entry["box"], state)
+                said = "Picture on page %d" % entry["page"]
+                blocks.append(new_block("figure", said + words, locator, image_sha256=entry["figure"], display=said + words))
+            if "size" not in entry:
+                open_block = None
+                continue
+            text, bullet = entry["text"], BULLET.match(entry["text"])
+            dense = sum(1 for char in text if char in MATH_CHARACTERS) / max(1, len(text.replace(" ", "")))
+            stands_out = entry["size"] > body_size * 1.08 or (entry["bold"] and entry["size"] >= body_size * 0.97)
+            title = stands_out and not bullet and len(text) < 160 and (
+                first_numbering(text, state.rules)[0] or (len(text.split()) <= 14 and text[-1] not in ".,;:"))
+            near = open_block and entry["page"] == open_block["page"] and entry["top"] - open_block["bottom"] < 0.7 * entry["size"]
+            over_the_page = open_block and entry["page"] == open_block["page"] + 1 and not title and not bullet \
+                and open_block["block"]["type"] != "heading" and open_block["block"]["text"][-1:] not in ".:;?!" and text[:1].islower()
+            if title and near and open_block["block"]["type"] == "heading":       # a heading set over two lines
+                kind = None
+            elif title:
+                kind, more = "heading", {"level_hint": None if numbered else -int(round(entry["size"] * 2)) + (0 if entry["size"] > body_size * 1.08 else 1)}
+            elif dense > 0.25 and len(text.split()) <= 12:
+                kind, more = "equation", {"equation": EquationData("pdf", text, False, UNDECIDED_REASONS[1], "")}
+            elif bullet:
+                kind, more, text = "list_item", {"marker": LIST_MARKER}, text[bullet.end():]
+            elif (near and open_block["block"]["type"] in ("paragraph", "list_item")) or over_the_page:
+                kind = None
+            else:
+                on_page[entry["page"]] = on_page.get(entry["page"], 0) + 1
+                kind, more = "paragraph", {"numbering": "p.%d \u00b6%d" % (entry["page"], on_page[entry["page"]])}
+            if kind is None:
+                open_block["block"]["text"] += " " + text
+            else:
+                blocks.append(new_block(kind, text, locator, **more))
+                open_block = {"block": blocks[-1]} if kind != "equation" else None
+            if open_block:
+                open_block.update(page=entry["page"], bottom=entry["bottom"])
+    return blocks
 
+def blocks_from_pdf_text_only(data, file_name, state):
+    """The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file."""
+    try:
+        import pypdf
+    except ImportError:
+        return [not_read_block(file_name, "no PDF reader is installed, so this file was not read")]
+    blocks = []
+    for page_number, page in enumerate(pypdf.PdfReader(io.BytesIO(data)).pages, start=1):
+        for paragraph in re.split(r"\n\s*\n", page.extract_text() or ""):
+            text = normalise_text(paragraph)
+            if text:
+                kind = "heading" if first_numbering(text, state.rules)[0] and len(text) < 100 else "paragraph"
+                blocks.append(new_block(kind, text, "page %d" % page_number))
+    return blocks
 
 # ---------------------------------------------------------------- levels, references, chunks
 
 
 
+KIND_OF_BLOCK = {"paragraph": "Paragraph", "list_item": "Paragraph", "table": "Table", "figure": "Figure",
+                 "equation": "Equation"}
+NOTES_HEADING = "Notes"                 # the heading the tool puts above a Word file's footnotes and endnotes
+LIST_MARKER = "- "                      # how an item of a bulleted list is shown; a numbered one shows its number
 
+def fold_lists(blocks):
+    """A list belongs to the paragraph that introduces it: "We apply the following principles:"
+    and its three bullets are one thought, and a bullet alone cannot be traced to anything. So
+    the items of a list that follows a paragraph are folded into it, each on its own line behind
+    its marker, and are not units. Done here, where blocks become chunks, so that it holds alike
+    for XML, Word and PDF. A list that follows anything else (a heading, a table) has no
+    paragraph to belong to; its items are whole statements and stay units of their own."""
+    folded = []
+    for block in blocks:
+        into = folded[-1] if folded else None
+        if block["type"] != "list_item" or into is None or into["type"] != "paragraph" or into["not_read_reason"]:
+            folded.append(block)
+        elif block["text"]:
+            into["display"] = "%s\n%s%s" % (into.get("display") or into["text"], block.get("marker") or LIST_MARKER, block["text"])
+            into["text"] = "%s %s" % (into["text"], block["text"])
+    return folded
 
+def blocks_to_chunks(blocks, corner, source_file, first_number, state):
+    """Blocks to chunks. A heading is not a chunk of its own: it becomes part of the heading
+    chain of everything below it. Paragraph numbers restart under every heading. Enforces: R2, R4"""
+    prefix = "C" if corner == "canon" else "D"
+    chunks, chain, levels, section_numbering = [], [], [], ""
+    carried, empty = [], []                          # (heading block, anything under it yet), and those with nothing
+    for block in fold_lists(infer_levels(blocks, state.rules)):
+        if block["type"] == "heading":
+            while levels and levels[-1] >= block["level"]:
+                levels.pop()
+                chain.pop()
+                # A heading carries its words to the units below it. Where one is popped off the
+                # chain with no unit ever placed under it, those words reach nothing at all, and
+                # a file read as headings alone would say nothing. Such a heading becomes a unit
+                # of its own, so that what it says is still there to be cited. Enforces: R13
+                was, under = carried.pop()
+                if not under:
+                    empty.append(was)
+            levels.append(block["level"])
+            chain.append(block["text"])
+            carried.append((block, False))
+            section_numbering = block["numbering"]
+            # The number belongs to the heading whether the document wrote it (num="1.") or Word
+            # left it to be counted back. Without it a citation to "section 2" can be resolved
+            # against nothing, and the number itself reaches no unit at all. Enforces: R13
+            if block["numbering"] and not block["text"].startswith(block["numbering"]):
+                chain[-1] = "%s %s" % (block["numbering"], block["text"])
+            continue
+        carried = [(was, True) for was, _ in carried]
+        kind = KIND_OF_BLOCK[block["type"]]
+        text = block.get("display") or block["text"]
+        equation = block["equation"]
+        if kind == "Paragraph" and equation is None:
+            equation = inline_formula(text, state.notation)
+        chunks.append(Chunk(
+            ref=make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
+            kind=kind, level=levels[-1] if levels else 0, heading_chain=tuple(chain), numbering=section_numbering,
+            text=text, locator=block["locator"], content_hash=content_hash(text + block.get("image_sha256", "")),
+            table=block["table"], equation=equation,
+            numbering_reconstructed=bool(chain) and block_is_under_reconstructed(blocks, block),
+            caption=block["caption"], not_read_reason=block["not_read_reason"],
+            para_label=block["numbering"] if kind == "Paragraph" else ""))
+    while carried:                                   # whatever is still on the chain when the file ends
+        was, under = carried.pop()
+        if not under:
+            empty.append(was)
+    for block in empty:
+        chunks.append(Chunk(
+            ref=make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
+            kind="Paragraph", level=block["level"], heading_chain=(), numbering=block["numbering"],
+            text=block["text"], locator=block["locator"],
+            content_hash=content_hash(block["text"]), table=None, equation=None,
+            numbering_reconstructed=False, caption="", not_read_reason="",
+            para_label=block["numbering"]))
+    return chunks
 
+def block_is_under_reconstructed(blocks, block):
+    """Was the numbering of the heading directly above this block reconstructed by counting?"""
+    above = None
+    for candidate in blocks:
+        if candidate is block:
+            break
+        if candidate["type"] == "heading":
+            above = candidate
+    return bool(above and above["reconstructed"])
 
 
 # ---------------------------------------------------------------- the two steps
-
-
-# ---------------------------------------------------------------- the methodology and the documentation, read by Docling
-# Docling reads every document into its parts - headings, paragraphs, tables, figures, equations - and its
-# hierarchical chunker makes one unit of each part, with the headings above it. It runs in a process of its own,
-# from a folder of its own: it needs pandas 2 and PyTorch, which a managed runtime may not carry, and the
-# runtime's own packages are never changed for it. What Docling does not read itself (XML, saved web archives,
-# plain text) is first turned here into a page it does read.
-DOCLING_MODELS = ""                       # Docling's model folder, when one is staged next to the notebook
-DOCLING_HOME = {}                         # where Docling runs from, once found: {"path": its folder, or "" for the runtime}
-UNIT_KIND_OF_LABEL = (("table", "Table"), ("picture", "Figure"), ("formula", "Equation"))
-DOCLING_WORKER = r'''
-"""Docling, in a process of its own: reads each file of a request into units - [heading chain, kind, text] -
-and writes them back as JSON. Started by verifier.docling_read; it never imports the engine. It makes no network
-connection: the documents never leave this machine, and Docling's models come from the staged folder."""
-import io, json, sys, importlib.metadata
-
-def no_network(event, args):                     # before anything is imported: no host looked up, no connection made
-    local = (None, "", "localhost", "127.0.0.1", "::1")
-    if event == "socket.getaddrinfo" and args and args[0] not in local:
-        raise OSError("the Docling process makes no network connection (%s was asked for)" % (args[0],))
-    if event == "socket.connect" and isinstance(args[1], tuple) and args[1] and args[1][0] not in local:
-        raise OSError("the Docling process makes no network connection (%s was asked for)" % (args[1][0],))
-sys.addaudithook(no_network)
-
-def refused_opencv():
-    """On a FIPS-mode machine, the OpenCV about to be loaded when it carries an OpenSSL with Red Hat's FIPS self-test
-    (OpenCV 4.13 on): that self-test fails for a copy inside a wheel and stops the whole process. OpenCV 4.12 carries
-    a plain OpenSSL and is loaded. Returns the refused library, or ""."""
-    import glob, importlib.util, os
+def atoms_of_file(data, found, file_name, state, repairs):
+    """The smallest pieces of text the file holds, counted straight from the file and NOT from
+    the blocks the reader made of it. That independence is the whole point: an account drawn
+    from the reader's own output could never show what the reader missed. Enforces: R13"""
     try:
-        fips = open("/proc/sys/crypto/fips_enabled").read().strip() == "1"
-    except OSError:
-        fips = False
-    if not (fips or os.environ.get("OPENSSL_FORCE_FIPS_MODE")):
-        return ""
-    spec = importlib.util.find_spec("cv2")
-    folder = os.path.dirname(os.path.dirname(spec.origin)) if spec and spec.origin else ""
-    for library in glob.glob(os.path.join(folder, "opencv*.libs", "libcrypto*")) if folder else []:
-        with open(library, "rb") as handle:
-            if b"crypto/fips/fips.c" in handle.read():
-                return library
-    return ""
+        if found == "docx":
+            return atoms_of_docx(zipfile.ZipFile(io.BytesIO(data)), safe_xml, file_name)
+        if found == "pdf":
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(data)) as document:
+                return atoms_of_pdf(document, file_name)
+        if found == "mhtml":
+            message = email.message_from_bytes(data)
+            for part in message.walk():
+                payload = part.get_payload(decode=True)
+                if part.get_content_type() == "text/html" and payload is not None:
+                    text = payload.decode(part.get_content_charset() or "utf-8", "replace")
+                    return atoms_of_markup(parse_markup(repair_markup(text, file_name, []), file_name, [], tolerant_only=True), file_name, state.rules)
+            return []
+        if found in ("xml", "html"):
+            text = repair_markup(decode_text(data), file_name, [])
+            return atoms_of_markup(parse_markup(text, file_name, [], tolerant_only=found == "html"), file_name, state.rules)
+        return atoms_of_plain_text(decode_text(data), file_name)
+    except Exception:                          # an account that cannot be drawn is written down, never a stopped run
+        state.notes.append("%s: the content account could not be drawn for this file." % file_name)
+        return []
 
-class NoOpenCV:                                  # a refused OpenCV: its import fails - PDF tables need it, and say so - instead of
-    def __init__(self, library):                 # its OpenSSL stopping the process and every file with it
-        self.library = library
-    def find_spec(self, name, path=None, target=None):
-        if name == "cv2" or name.startswith("cv2."):
-            raise ImportError("this OpenCV carries an OpenSSL whose FIPS self-test fails on this machine (%s): Docling's folder "
-                              "needs opencv-python-headless below 4.13 - run cell 1" % self.library.rsplit("/", 1)[-1])
-        return None
-if refused_opencv():
-    sys.meta_path.insert(0, NoOpenCV(refused_opencv()))
-request = json.load(open(sys.argv[1], encoding="utf-8"))
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.base_models import InputFormat, DocumentStream
-from docling.datamodel.pipeline_options import HeadingHierarchyOptions, PdfPipelineOptions
-from docling_core.transforms.chunker import HierarchicalChunker
-options = PdfPipelineOptions(do_ocr=False, artifacts_path=request["models"] or None, generate_parsed_pages=True)
-options.heading_hierarchy_options = HeadingHierarchyOptions(enabled=True)   # a PDF's heading levels: outline, numbering, type
-convert = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}).convert
-chunk, kinds = HierarchicalChunker().chunk, request["kinds"]
-label = lambda item: str(getattr(item.label, "value", item.label))
-def version_of(*names):
-    for name in names:
-        try:
-            return importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            pass
-    return ""
-answer = {"version": version_of("docling-slim", "docling"), "files": []}
-for name, path in request["files"]:
-    try:
-        with open(path, "rb") as handle:
-            document = convert(DocumentStream(name=name, stream=io.BytesIO(handle.read()))).document
-        title = next((item.text.strip() for item in document.texts if label(item) == "title"), "")
-        units = []
-        for piece in chunk(document):
-            chain = list(piece.meta.headings or [])
-            chain = [title] + chain if title and chain[:1] != [title] else chain     # the document's title heads every chain
-            found = {label(item) for item in piece.meta.doc_items}
-            if piece.text.strip():
-                units.append([chain, next((kind for part, kind in kinds if part in found), "Paragraph"), piece.text])
-        answer["files"].append({"units": units})
-    except Exception as problem:                     # one file that cannot be read never stops the others
-        answer["files"].append({"error": ("%s: %s" % (type(problem).__name__, problem))[:300]})
-with open(sys.argv[2], "w", encoding="utf-8") as handle:
-    json.dump(answer, handle)
-'''
-
-def docling_folder():
-    """Docling's own folder: on the machine's local disk, and this system user's own - a shared cluster runs each
-    notebook session as a user of its own."""
-    base = "/local_disk0/tmp" if os.path.isdir("/local_disk0/tmp") else tempfile.gettempdir()
-    return os.path.join(base, "docling-%d" % os.getuid())
-
-def docling_environment(folder):
-    """The environment a Docling process runs in: its folder first on the path, ahead of the runtime's packages, and
-    Hugging Face offline - Docling's models are read from the staged folder, never fetched."""
-    environment = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1", DO_NOT_TRACK="1")
-    if folder:
-        environment["PYTHONPATH"] = folder + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else "")
-    return environment
-
-def docling_requirements():
-    """engine/requirements-docling.txt, and the fingerprint of what it asks for."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements-docling.txt")
-    return path, file_sha256(path)
-
-def docling_ready():
-    """Where Docling runs from: its own folder, or "" when the runtime itself carries it; None when it is nowhere yet.
-    A folder installed from other requirements than today's is out of date: it counts as nowhere, and is made again."""
-    if "path" not in DOCLING_HOME:
-        for folder in (docling_folder(), ""):         # its own folder first: the runtime's copy, if any, may not fit
-            if folder and not os.path.isdir(folder):
-                continue
-            if folder:
-                try:
-                    with open(os.path.join(folder, ".requirements-sha256")) as handle:
-                        current = handle.read().strip() == docling_requirements()[1]
-                except OSError:
-                    current = False
-                if not current:
-                    continue
-            probe = subprocess.run([sys.executable, "-s", "-c", "import docling, docling_core"], env=docling_environment(folder),
-                                   capture_output=True, text=True, timeout=600)
-            if probe.returncode == 0:
-                DOCLING_HOME["path"] = folder
-                break
-    return DOCLING_HOME.get("path")
-
-def docling_install():
-    """Install Docling from PyPI into its own folder - never into the runtime's packages - made anew: pip adds to a
-    folder but never takes out what the requirements no longer ask for. Returns what pip said when it failed, else ""."""
-    requirements, fingerprint = docling_requirements()
-    folder = docling_folder()
-    shutil.rmtree(folder, ignore_errors=True)
-    done = subprocess.run([sys.executable, "-m", "pip", "install", "--target", folder, "-r", requirements, "--index-url", PYPI],
-                          capture_output=True, text=True)
-    DOCLING_HOME.clear()
-    if done.returncode:
-        return done.stderr
-    with open(os.path.join(folder, ".requirements-sha256"), "w") as handle:
-        handle.write(fingerprint)
-    return ""
-
-def docling_read(pages):
-    """Every page of a corner read by ONE Docling process - its models are loaded once - into
-    {"version", "files": one {"units"} or {"error"} per page, in order}."""
-    folder = docling_ready()
-    if folder is None:
-        return {"version": "", "files": [{"error": "Docling is not installed here - run cell 1"} for _ in pages]}
-    with tempfile.TemporaryDirectory(prefix="docling-") as work:
-        request = {"models": DOCLING_MODELS, "kinds": UNIT_KIND_OF_LABEL, "files": []}
-        for number, (name, data) in enumerate(pages):
-            request["files"].append([name, os.path.join(work, "%04d" % number)])
-            with open(request["files"][-1][1], "wb") as handle:
-                handle.write(data)
-        for file_name, text in (("worker.py", DOCLING_WORKER), ("request.json", json.dumps(request))):
-            with open(os.path.join(work, file_name), "w", encoding="utf-8") as handle:
-                handle.write(text)
-        answer = os.path.join(work, "answer.json")
-        done = subprocess.run([sys.executable, "-s", os.path.join(work, "worker.py"), os.path.join(work, "request.json"), answer],
-                              env=docling_environment(folder), capture_output=True, text=True, cwd=work, timeout=3600)
-        if done.returncode or not os.path.exists(answer):
-            reason = ((done.stderr or "").strip().splitlines() or ["it gave no answer"])[-1]
-            return {"version": "", "files": [{"error": "Docling stopped: %s" % reason[:300]} for _ in pages]}
-        with open(answer, encoding="utf-8") as handle:
-            return json.load(handle)
+def read_file_blocks(path, file_name, state, repairs, max_bytes):
+    """One input file to blocks, by the format found in its content. Enforces: R6"""
+    if os.path.getsize(path) > max_bytes:
+        return "too large", [not_read_block(file_name, "the file is larger than the size limit for one input file")]
+    with open(path, "rb") as handle:
+        data = handle.read()
+    state.folder = os.path.dirname(os.path.abspath(path))
+    found = detect_format(data, file_name)
+    if found in NOT_READ:                    # said in plain words, with a next step; never decoded as text
+        state.atoms = [atom("whole file not read", file_name, "")]
+        return found, [not_read_block(file_name, "the file is " + NOT_READ[found])]
+    if found == "svg":                               # read by the text it holds, as a table or a figure
+        state.atoms = []
+        return found, svg_blocks(data, file_name, file_name, state)
+    if found in CONVERTED:                   # read through markup the walker already reads
+        markup, words, how = converted(found, data, file_name)
+        state.atoms = atoms_of_plain_text(words, file_name)
+        state.notes.append("%s: %s." % (file_name, how))
+        return found, blocks_from_markup(markup, file_name, state, repairs)
+    state.atoms = atoms_of_file(data, found, file_name, state, repairs)
+    if found == "pdf":
+        return found, blocks_from_pdf(data, file_name, state)
+    if found == "docx":
+        return found, blocks_from_docx(data, file_name, state)
+    if found == "mhtml":
+        return found, blocks_from_mhtml(data, file_name, state, repairs)
+    if found in ("xml", "html"):
+        return found, blocks_from_markup(decode_text(data), file_name, state, repairs, tolerant_only=found == "html")
+    blocks = [new_block("paragraph", part, "paragraph %d" % number)
+              for number, part in enumerate(re.split(r"\n\s*\n", decode_text(data)), start=1) if part.strip()]
+    return "plain text", blocks
 
 def read_corner(ctx, corner, input_key, label):
-    """Read every file of one corner, in file-name order, into units numbered in reading order. A file that
-    cannot be read is said so, and the others are still read. Enforces: R2"""
-    inputs, chunks, info_rows, pages, not_read = ctx.options["inputs"], [], [], [], {}
-    for left_out, why in (inputs.get("skipped") or {}).get(input_key, []):
+    """Read every file of one corner, in file-name order, into chunks numbered in reading order."""
+    options = ctx.options
+    rules = load_tag_rules(options["inputs"].get("tag_rules"))
+    notation = load_notation()
+    chunks, repairs, info_rows, accounts, read_as_what = [], [], [], [], []
+    root = (options["inputs"].get("roots") or {}).get(input_key)
+    for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
         info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
-    for path in inputs[input_key]:
-        try:
-            with open(path, "rb") as handle:
-                pages.append((path,) + page_of(os.path.basename(path), handle.read()))
-        except Exception as problem:                 # one file that cannot be read never stops the others (R2)
-            not_read[path] = str(problem)[:300] or type(problem).__name__
-    read = docling_read([(name, data) for _, name, data in pages]) if pages else {"version": "", "files": []}
-    results = dict(zip([path for path, _, _ in pages], read["files"]))
-    for path in inputs[input_key]:
-        name, found = os.path.basename(path), results.get(path) or {"error": not_read.get(path, "not read")}
-        if "error" in found:
-            info_rows.append({"group": label, "item": name, "value": "Not read: %s" % found["error"]})
+    paths = options["inputs"][input_key]
+    svgs = {}                                        # every SVG of the corner, by name and by name without .svg
+    for path in paths:
+        if path.lower().endswith(".svg"):
+            svgs.setdefault(os.path.basename(path).lower(), path)
+            svgs.setdefault(os.path.splitext(os.path.basename(path))[0].lower(), path)
+    consumed = set()
+    # documents first, pictures last: a chart an XML refers to is read in place, where the XML puts it,
+    # and is not read a second time on its own; one nothing refers to is still read, on its own
+    for path in [p for p in paths if not p.lower().endswith(".svg")] + [p for p in paths if p.lower().endswith(".svg")]:
+        file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
+        if path in consumed:
+            info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
             continue
-        for chain, kind, text in found["units"]:
-            chunks.append(dataclasses.asdict(Chunk("%s-%04d" % ("C" if corner == "canon" else "D", len(chunks) + 1),
-                                                   corner, name, kind, tuple(chain), text, content_hash(text))))
-        info_rows.append({"group": label, "item": name, "value": "Read by Docling %s: %d units" % (read["version"], len(found["units"]))})
-    return StepResult({"chunks_canon" if corner == "canon" else "chunks_doc": chunks, "info_rows": info_rows},
-                      {"files": len(inputs[input_key]), "units": len(chunks)}, [])
-
-def docx_for_docling(data):
-    """Word may leave out <m:dPr> in an equation's brackets (the format makes it optional); Docling's
-    equation reader expects it, so an empty one - meaning ordinary parentheses - is put in."""
-    source, out = zipfile.ZipFile(io.BytesIO(data)), io.BytesIO()
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
-        for item in source.infolist():
-            content = source.read(item.filename)
-            if item.filename.startswith("word/") and item.filename.endswith(".xml"):
-                content = re.sub(rb"<m:d>(?!\s*<m:dPr)", b"<m:d><m:dPr/>", content)
-            target.writestr(item, content)
-    return out.getvalue()
-
-def html_of_mhtml(data):
-    """The page inside a saved web archive."""
-    for part in email.message_from_bytes(data, policy=policy.default).walk():
-        if part.get_content_type() == "text/html":
-            return part.get_content()
-    raise ValueError("the archive holds no HTML page")
-
-NUMBERED = re.compile(r"^(?:(?P<letter>[A-Z])\.|(?P<roman>[IVX]+)\.|(?P<dotted>\d+(?:\.\d+)+)\.?|(?P<number>\d+)\.?)\s+\S")
-
-def html_of_text(text):
-    """Plain text as a page. A block of one short line, not ending as a sentence does, is a heading when it is
-    numbered (A., I., 1., 1.2) or opens the file; each numbering style takes the next level down, in the
-    order the styles first appear."""
-    blocks = [b.strip() for b in re.split(r"\n\s*\n", text.replace("\r\n", "\n")) if b.strip()]
-    styles, out = [], []
-    for number, block in enumerate(blocks):
-        level = None
-        if "\n" not in block and len(block.split()) <= 12 and not block.endswith((".", ":", ";", ",")):
-            found = NUMBERED.match(block)
-            if found:
-                style = next(k for k in ("letter", "roman", "dotted", "number") if found.group(k))
-                style += str(found.group("dotted").count(".")) if style == "dotted" else ""
-                styles += [style] if style not in styles else []
-                level = 2 + styles.index(style)
-            elif number == 0:
-                level = 1
-        tag = "h%d" % min(level, 6) if level else "p"
-        out.append("<%s>%s</%s>" % (tag, html.escape(" ".join(block.split())), tag))
-    return "<html><body>%s</body></html>" % "".join(out)
-
-def local(tag):
-    return tag.rsplit("}", 1)[-1].lower() if isinstance(tag, str) else ""
-
-def html_of_xml(data):
-    """Any XML as a page, by its structure alone: a short first child standing apart from its siblings is the
-    heading of what holds it; children that are rows of cells are a table; children all alike and item-like
-    are a list; an element with text of its own is a paragraph; MathML stays as written."""
-    xml_names = (b"lt", b"gt", b"amp", b"quot", b"apos")
-    data = re.sub(rb"&([A-Za-z][A-Za-z0-9]*);", lambda m: m.group(0) if m.group(1) in xml_names else "".join(
-        "&#%d;" % ord(ch) for ch in html.unescape("&%s;" % m.group(1).decode())).encode("ascii"), data)   # &nbsp; and its kind
-    try:
-        root, out = ElementTree.fromstring(data), []
-    except ElementTree.ParseError:                  # broken XML: its words, as plain text
-        return html_of_text(re.sub(r"<[^>]+>", "\n", data.decode("utf-8", "replace")))
-    words = lambda e: " ".join("".join(e.itertext()).split())
-    own_text = lambda e: bool((e.text or "").strip()) or any((c.tail or "").strip() for c in e)
-    def visit(e, depth):
-        children = [c for c in e if isinstance(c.tag, str)]
-        if local(e.tag) == "math" or not children or own_text(e):
-            if words(e):
-                out.append("<p>%s</p>" % html.escape(words(e)))
-            return
-        rows = [c for c in children if len(c) >= 2 and all(len(cell) == 0 for cell in c)]
-        cells = [words(cell) for r in rows for cell in r]
-        if len(rows) >= 2 and len(rows) >= len(children) - 1 and len({local(r.tag) for r in rows}) == 1 and \
-                sum(len(c.split()) for c in cells) <= 8 * len(cells):     # rows of short cells, not sections of sentences
-            caption = " ".join(words(c) for c in children if c not in rows)
-            out.append("%s<table>%s</table>" % ("<p>%s</p>" % html.escape(caption) if caption else "",
-                        "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % html.escape(words(cell)) for cell in r) for r in rows)))
-            return
-        tags = {local(c.tag) for c in children}
-        if len(children) >= 2 and len(tags) == 1 and all(len(c) == 0 for c in children) and (
-                tags & {"item", "li", "point", "entry", "bullet"} or re.search("list|bullet|items|points", local(e.tag))):
-            out.append("<ul>%s</ul>" % "".join("<li>%s</li>" % html.escape(words(c)) for c in children))
-            return
-        first = children[0]
-        if len(children) > 1 and len(first) == 0 and local(first.tag) != local(children[1].tag) and \
-                0 < len(words(first).split()) <= 12 and not words(first).endswith("."):
-            number = next((v.strip() for k, v in e.attrib.items() if local(k) in ("num", "number", "no", "idx", "n", "label")
-                           and re.fullmatch(r"[0-9A-Za-z]{1,4}(\.[0-9]+)*\.?", v.strip())), "")
-            heading = words(first) if not number or words(first).startswith(number) else number + " " + words(first)
-            out.append("<h%d>%s</h%d>" % (min(depth, 6), html.escape(heading), min(depth, 6)))
-            children = children[1:]
-        for c in children:
-            visit(c, depth + 1)
-    visit(root, 1)
-    return "<html><body>%s</body></html>" % "".join(out)
-
-
-def captions_out(page):
-    """A table's <caption> as a paragraph just before the table: some Docling versions drop a caption."""
-    return re.sub(r"(<table\b[^>]*>)\s*<caption\b[^>]*>(.*?)</caption>", r"<p>\2</p>\1", page, flags=re.I | re.S)
-
-def page_of(name, data):
-    """(name, bytes) Docling reads: a format told by its content, not its name - an .xml, .txt or any file may
-    hold XML, a page or plain text."""
-    low, head = name.lower(), data[:4096].lstrip().lower()
-    if low.endswith(".docx"):
-        return name, docx_for_docling(data)
-    if low.endswith((".mhtml", ".mht")) or head.startswith(b"mime-version") or b"content-type: multipart/related" in head:
-        return name + ".html", captions_out(html_of_mhtml(data)).encode("utf-8")
-    if low.endswith((".pdf", ".pptx", ".xlsx", ".csv", ".md")):
-        return name, data
-    if head.startswith((b"<!doctype html", b"<html")) or low.endswith((".html", ".htm")):
-        return name + ("" if low.endswith((".html", ".htm")) else ".html"), captions_out(decode_text(data)).encode("utf-8")
-    if head.startswith(b"<"):
-        return name + ".html", html_of_xml(data).encode("utf-8")
-    return name + ".html", html_of_text(data.decode("utf-8", "replace")).encode("utf-8")
-
+        state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
+        state.settings = ctx.settings
+        state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
+        try:
+            found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
+        except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
+            found, blocks = "unreadable", [not_read_block(file_name, reason_for(problem))]
+            state.atoms, state.blocks = [atom("whole file not read", file_name, "")], []
+        read_as_what.append((file_name, found, blocks[0].get("not_read_reason", "") if len(blocks) == 1 else ""))
+        new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
+        chunks.extend(new_chunks)
+        plain = [to_plain(chunk) for chunk in new_chunks]
+        for tag in sorted(state.guided):
+            info_rows.append({"group": label, "item": "%s: how it was read" % file_name,
+                              "value": "<%s> was read as %s on the model's proposal." % (tag, state.guided[tag])})
+        found_account = account(file_name, state.atoms, plain, state.dropped,
+                                        marks_of_rendering(plain)
+                                        + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING],
+                                        os.path.getsize(path) if os.path.isfile(path) else 0)
+        accounts.append(found_account)
+        info_rows.extend({"group": label, "item": "%s: content account" % file_name, "value": line}
+                         for line in account_lines(found_account))
+        counts = {}
+        for chunk in new_chunks:
+            counts[chunk.kind] = counts.get(chunk.kind, 0) + 1
+        summary = ", ".join("%d %s" % (counts[kind], kind.lower() + ("s" if counts[kind] != 1 else ""))
+                            for kind in CHUNK_KINDS if kind in counts) or "nothing could be read"
+        info_rows.append({"group": label, "item": file_name, "value": "Read as %s: %d units (%s)"
+                          % (FORMAT_NAMES.get(found, found), len(new_chunks), summary)})
+        info_rows.extend({"group": label, "item": "%s: reading note" % file_name, "value": note} for note in state.notes)
+        for tag in sorted(state.unknown_tags):
+            seen = state.unknown_tags[tag]
+            because = ", because it %s" % seen["reason"] if seen.get("reason") else ""
+            info_rows.append({"group": label, "item": "%s: unrecognised tag" % file_name, "value":
+                              "Unrecognised tag '%s', %d times, read as %s%s. "
+                              "It can be added to Inputs/tag_rules.yaml."
+                              % (tag, seen["count"], seen.get("family") or seen.get("read_as"), because)})
+    kind = "chunks_canon" if corner == "canon" else "chunks_doc"
+    unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)
+    messages = ["%d units read from %d file(s)." % (len(chunks), len(options["inputs"][input_key]))]
+    read_as = {}
+    for _, found, _ in read_as_what:
+        if found in FORMAT_NAMES:
+            read_as[FORMAT_NAMES[found]] = read_as.get(FORMAT_NAMES[found], 0) + 1
+    if read_as:                                      # what each file was read as, and what was not read and why
+        messages.append("Read as: %s." % ", ".join("%d %s" % (count, name) for name, count in sorted(read_as.items())))
+    messages.extend("Not read: %s - %s." % (name, why) for name, found, why in read_as_what
+                    if why and (found in NOT_READ or found == "unreadable"))
+    skipped = (options["inputs"].get("skipped") or {}).get(input_key, [])
+    if skipped:
+        messages.append("%d file(s) in the folder were left out; Model_Package_Info lists them." % len(skipped))
+    if unreadable:
+        messages.append("%d equation(s) could not be read." % unreadable)
+    open_accounts = [one for one in accounts if not one["closed"]]
+    if open_accounts:
+        messages.append("The content account is open on %d file(s); Model_Package_Info says what could not be placed."
+                        % len(open_accounts))
+    return StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows},
+                             {"units": len(chunks), "repairs": len(repairs),
+                              "content account open on": len(open_accounts)}, messages)
 
 def read_methodology(ctx):
     """Step 02, read-methodology: the canonical methodology into chunks C-0001, C-0002, ..."""
@@ -2651,7 +4527,7 @@ DEFAULT_SETTINGS = {
     "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     
     
-    "max_file_mb": 200.0, "reviewer_id": "", 
+    "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
     "map_granularity": "statement", "map_rows_max": 5000}
 
 def make_settings(overrides=None):
@@ -3168,6 +5044,12 @@ def rows_package_info(store, paths, settings, progress):
             add(row["group"], row["item"], row["value"])
     for row in store.read("info_rows"):
         add(row["group"], row["item"], row["value"])
+    repairs = {}
+    for repair in store.read("read_repairs"):
+        repairs.setdefault(repair["file"], []).append(repair["kind"])
+    for name in sorted(repairs):
+        kinds = sorted(set(repairs[name]))
+        add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
     return rows
 
 
@@ -3672,8 +5554,9 @@ def setup(dbutils, home=None, projects=None):
         install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
         return
     print("Folder:", home, "| Python", sys.version.split()[0], "| engine", ENGINE_VERSION)
-    for name in REQUIRED_PACKAGES:
-        print("  %-11s %s" % (name, "installed" if importlib.util.find_spec(name) else "not installed - run this cell again"))
+    for name in REQUIRED_PACKAGES + ("pdfplumber", "pypdf"):
+        found = importlib.util.find_spec(name)
+        print("  %-11s %s" % (name, "installed" if found else "not installed" + ("" if name in ("pdfplumber", "pypdf") else " - run this cell again")))
     token = live("llm_token")
     print("Endpoint set:", bool(live("llm_endpoint")), "| token:", ("%d characters" % len(token)) if token else "not set")
     staged = os.path.join(home, FLOWR_URL.format(FLOWR_VERSION).rsplit("/", 1)[-1])
@@ -3684,18 +5567,6 @@ def setup(dbutils, home=None, projects=None):
         if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by putting it here
             print("The cluster could not download it. Download %s on an approved machine and put it in %s, next to this"
                   " notebook." % (FLOWR_URL.format(FLOWR_VERSION), home))
-    models = os.path.join(home, "docling-models")      # Docling's models, staged for a cluster that cannot reach Hugging Face
-    globals()["DOCLING_MODELS"] = models if os.path.isdir(models) else ""
-    print("Docling models:", models if os.path.isdir(models) else "NOT STAGED in %s - a PDF is read only if they are already cached on "
-          "this machine (the manual says how to stage them). Docling never fetches them: it makes no network connection." % models)
-    if docling_ready() is None:                      # Docling in a folder of its own: the runtime's packages are never changed for it
-        print("Installing Docling into its own folder, %s - the first time on a cluster this takes several minutes." % docling_folder())
-        said = docling_install()
-        if said:
-            print("DOCLING IS NOT READY. What pip said:\n" + pip_said(said))
-            print("Documents cannot be read until it is; the runtime's own packages were not changed.")
-    if docling_ready() is not None:
-        print("Docling ready, from", docling_ready() or "the runtime's own packages")
     print("\nTHE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
@@ -3704,7 +5575,6 @@ def setup(dbutils, home=None, projects=None):
     print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
     print("at the moment it calls.")
     print("Next: cell 2.")
-
 
 def pip_said(stderr):
     """What pip said, without any credentials of an index URL, and what its most common failure means."""
@@ -3745,7 +5615,7 @@ def install(missing, dbutils, requirements):
         with open(spare, "w", encoding="utf-8") as handle:
             handle.write(wanted[1])
         extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
-        print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures of text will say so.")
+        print("Optional packages (the PDF readers):", "installed." if not extra.returncode else "not installed; a PDF will say it could not be read.")
     probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
     if probe.returncode:
         print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip())[-300:])
