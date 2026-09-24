@@ -21,6 +21,7 @@ import datetime
 import email
 import functools
 import getpass
+import random
 import gzip
 import hashlib
 import html.entities
@@ -4207,7 +4208,7 @@ DEFAULT_SETTINGS = {
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
     "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
     "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
-    "parallel_chats": 16,
+    "parallel_chats": 256,
     "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
 
 def make_settings(overrides=None):
@@ -4587,10 +4588,14 @@ def shown_cut(text, tokens):
 # Every answer is kept, in memory, the moment it arrives, by the thread that received it; only the step's own thread
 # writes records, in an order fixed by the units and never by which answer came back first. A cell interrupted, or a
 # step stopped because the model stopped answering, therefore loses nothing: running cell 3 again finds what arrived
-# and asks only for the rest. How many questions are out at once adapts: a call that fails halves it, an answer
-# without trouble adds one back, so a busy gateway is not flooded. Enforces: R2, R3, R5, R8
+# and asks only for the rest. As many questions are out at once as the gateway takes, up to parallel_chats: the
+# number starts at CHAT_START and doubles every round while no call fails; a failed call halves it, once a round,
+# and it then grows by one a round, so that it settles just under what the gateway takes - the congestion control
+# of TCP. Enforces: R2, R3, R5, R8
 CHAT_ATTEMPTS = 3            # tries per question: a failed call, an empty answer or an answer turned down ask again
-CHAT_BACKOFF = 2             # seconds before the second try of a failed call; before the third, its square
+CHAT_BACKOFF = 2             # seconds before the second try of a failed call; before the third, its square; each with jitter
+CHAT_START = 32              # questions out at once when asking starts, doubled every round while no call fails
+CHAT_REFRESH_SECONDS = 1     # how often the step's own thread reads the widgets again while it asks
 CHAT_WORKER = threading.local()
 CHAT_STOP_AFTER = 4          # questions in a row without an answer, beyond those already out: the model has stopped answering
 CHAT_STOP_WAIT = 120         # seconds a stopped step waits for the questions still out
@@ -4641,7 +4646,8 @@ def ask_model(chat, system, main, check=None):
             plain.append("try %d: the call did not return an answer" % attempt)
             technical.append("try %d: %s: %s" % (attempt, type(problem).__name__, problem))
             if attempt < CHAT_ATTEMPTS:
-                time.sleep(CHAT_BACKOFF ** attempt)      # a busy gateway is given a moment
+                time.sleep(CHAT_BACKOFF ** attempt * random.uniform(0.5, 1.5))   # a busy gateway is given a moment; the
+                                                 # jitter keeps many refused calls from coming back all at once
             continue
         if not answer:
             plain.append("try %d: the answer was empty" % attempt)
@@ -4676,16 +4682,18 @@ def held_answers(ctx, types):
 
 def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", types=()):
     """Ask what `work` holds - and what `after` adds as answers come back - through chat(), as many at once as
-    parallel_chats allows. build(item) makes the question, on this thread, when it is sent; check_of(question) is the
+    the gateway takes, up to parallel_chats (see the section's comment). build(item) makes the question, on this thread, when it is sent; check_of(question) is the
     check its answers pass; after(question, result) returns the next items, which go before the rest. Every answer is
     held in ANSWERS by the thread that received it, so an interrupted cell loses none. When the questions already out,
     and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
-    Returns (every held result of these types, taken, as (question, result)), and why it stopped, or "". Enforces: R2, R5, R8"""
+    Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
+    questions that were out at once. Enforces: R2, R5, R8"""
     held = ANSWERS.setdefault(ctx.options["paths"].run_dir, {})
     most = max(1, int(ctx.settings.get("parallel_chats") or 1))
-    waiting, running, window = collections.deque(work), {}, most
-    answered = failed = in_a_row = out_when_failing = 0
-    stopped, stopped_at, said, failures = "", 0.0, time.time(), []
+    waiting, running = collections.deque(work), {}
+    window, threshold = float(min(CHAT_START, most)), float(most)      # how many may be out; where doubling gives way to adding
+    answered = failed = in_a_row = out_when_failing = completed = calm_after = peak = 0
+    stopped, stopped_at, said, refreshed, failures = "", 0.0, time.time(), time.time(), []
 
     def keep(question, future):
         if future.cancelled():
@@ -4700,7 +4708,9 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     def progress(final=False):
         parts = ["%d answered" % answered] + (["%d not answered" % failed] if failed else [])
         if not final:
-            parts.append("%d still to ask" % (len(waiting) + len(running)))
+            parts.append("%d still to ask, %d out at once" % (len(waiting) + len(running), len(running)))
+        else:
+            parts.append("at most %d out at once" % peak)
         print("  %s: %s" % (label, ", ".join(parts)))
 
     if waiting:
@@ -4708,25 +4718,33 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
         live("llm_token")                                    # the values the workers use, read here, now
         try:
             while waiting or running:
-                while waiting and len(running) < window and not stopped:
+                while waiting and len(running) < int(window) and not stopped:
                     question = build(waiting.popleft())
                     kept = {key: value for key, value in question.items() if key not in ("system", "main")}
                     future = pool.submit(ask_model, chat, question["system"], question["main"], check_of(question))
                     future.add_done_callback(functools.partial(keep, kept))
                     running[future] = kept
+                peak = max(peak, len(running))
                 if not running:
                     break
                 done, _ = concurrent.futures.wait(list(running), timeout=5, return_when=concurrent.futures.FIRST_COMPLETED)
-                live("llm_token")                            # a token pasted meanwhile reaches the next calls
+                if time.time() - refreshed >= CHAT_REFRESH_SECONDS:
+                    live("llm_token")                        # a token pasted meanwhile reaches the next calls
+                    refreshed = time.time()
                 for future in done:
                     question, result = running.pop(future), future.result()
+                    completed += 1
+                    if result["failed calls"]:                   # the gateway refused or failed a call: slow down,
+                        if completed >= calm_after:              # once a round - those out were sent at the old pace
+                            threshold = max(1.0, window / 2)
+                            window, calm_after = threshold, completed + len(running)
+                    elif result["answer"]:                       # doubling each round up to the threshold, then one a round
+                        window = min(float(most), window + (1.0 if window < threshold else 1.0 / window))
                     if result["answer"]:
                         answered, in_a_row = answered + 1, 0
-                        window = min(most, window + 1) if not result["failed calls"] else max(1, window // 2)
                     else:
                         failed, in_a_row = failed + 1, in_a_row + 1
                         out_when_failing = len(running) + 1 if in_a_row == 1 else out_when_failing
-                        window = max(1, window // 2)
                         failures.append(bool(result["failed calls"]))
                     follow = after(question, result) if after else []
                     if not stopped and in_a_row >= out_when_failing + CHAT_STOP_AFTER:
@@ -4744,7 +4762,7 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
         progress(final=True)
     with ANSWERS_LOCK:
         taken = [held.pop(key) for key in [key for key, (question, _) in held.items() if question["type"] in types]]
-    return taken, stopped
+    return taken, stopped, peak
 
 
 def stop_message(failures, answered):
@@ -4916,8 +4934,8 @@ def interpret_code(ctx):
         counts["not answered"] = len(wanted)
         return StepResult({}, counts, ["The code interpretations are written by your chat(): run cell 2, then cell 3 "
                                        "again."], finished=False)
-    taken, stopped = ask_all(ctx, chat, wanted, lambda question: question, lambda question: None,
-                             label="code interpretations", types=(CODE_QUESTION,))
+    taken, stopped, peak = ask_all(ctx, chat, wanted, lambda question: question, lambda question: None,
+                                   label="code interpretations", types=(CODE_QUESTION,))
     redact = (NOTEBOOK["live"] or LiveValues()).redact
     order = {u["ref"]: number for number, u in enumerate(units)}
     records, technical = [], []
@@ -4931,7 +4949,7 @@ def interpret_code(ctx):
     log_technical(ctx, "04", technical)
     answered = recorded | {record["question_id"] for record in records if record["outcome"] == "answered"}
     missing = sum(1 for question_id in questions if question_id not in answered)
-    counts.update({"interpreted": len(questions) - missing, "not answered": missing})
+    counts.update({"interpreted": len(questions) - missing, "not answered": missing, "most at once": peak})
     messages = [stopped] if stopped else []
     if missing and not stopped:
         messages.append("The model gave no interpretation for %d of %d code blocks. Run cell 3 again to ask for those "
@@ -5405,7 +5423,7 @@ def search_methodology(ctx):
     if work and chat is None:
         return StepResult({}, {"questions to ask": len(work)}, ["The methodology is searched by your chat(): run cell 2, "
                                                                  "then cell 3 again."], finished=False)
-    taken, stopped = ask_all(ctx, chat, work, build, lambda question: (search_check if question["type"] == METHODOLOGY_SEARCH
+    taken, stopped, peak = ask_all(ctx, chat, work, build, lambda question: (search_check if question["type"] == METHODOLOGY_SEARCH
                                                                        else compare_check)(question),
                              after, label="methodology search and comparison", types=types)
     redact = (NOTEBOOK["live"] or LiveValues()).redact
@@ -5428,7 +5446,7 @@ def search_methodology(ctx):
               "chunks found relevant": sum(len({item["ref"] for item in state["relevant"]}) for state in final),
               "deviations flagged": sum(len(state["deviations"]) for state in final),
               "not answered now": sum(1 for record in records if record["outcome"] != "answered"),
-              "pieces not finished": open_units}
+              "pieces not finished": open_units, "most at once": peak}
     messages = [stopped] if stopped else []
     unexplained = sum(1 for unit in units if askable(unit) and unit["ref"] not in said)
     if unexplained:
