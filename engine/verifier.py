@@ -5,7 +5,7 @@ Reads a model's methodology, its package of code and data, and its documentation
 links each unit of the package to the units it takes something from and gives something to; and asks the
 organisation's language model, through the chat() of cell 2, to explain each unit of code, to find the
 chunks of the methodology that bear on it, and to flag where the code may depart from them. One
-deliverable: Output.xlsx. Everything a run does is recorded in _audit/Audit_Log.xlsx.
+deliverable: Output.xlsx. Everything a run does is recorded in Audit_Log.xlsx, beside it and the Inputs folder.
 
 The file is one piece of engineering in three parts, in dependency order:
   the contracts, the reading floor and the front door
@@ -4229,12 +4229,17 @@ PATH_BUDGET = 100
 
 @dataclass
 class RunPaths:
-    """Where one run lives. Output.xlsx sits in run_dir itself; _audit/
-    beside them holds the three files of the record; local_dir is scratch space on the driver.
-    outputs_dir is the same folder as run_dir, kept as a name so that every reader of the two
-    deliverables says which folder it means."""
+    """Where a project's run lives: its two files, Output.xlsx and Audit_Log.xlsx, sit in the project folder
+    beside its Inputs folder - run_dir, outputs_dir and audit_dir are that one folder, each name kept so that
+    every reader says which file it means - and local_dir is scratch space on the driver. previous is the
+    manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
     projects_dir: str; model_id: str; project_date: str; project_dir: str; inputs_dir: str
     run_id: str; run_dir: str; outputs_dir: str; audit_dir: str; local_dir: str
+    previous: Optional[dict] = None; opened: str = ""
+
+
+class OutputsEdited(Exception):
+    """The project's Output.xlsx was changed after the tool wrote it: a person's work, never replaced."""
 
 def check_model_id(model_id):
     """Return "" when the model ID is usable, otherwise a plain sentence saying why not."""
@@ -4262,14 +4267,46 @@ def setup_project(projects_dir, model_id, project_date=""):
             missing.append("Inputs/%s is still empty. %s" % (folder, readme))
     return project_dir, missing
 
-def new_run_id(project_dir, now=None):
-    """Run_<date>_<HHMM>, with a letter added when that folder already exists."""
-    now = now or datetime.datetime.now()
-    base = now.strftime("Run_%Y-%m-%d_%H%M")
+def new_run_id(taken, now=None):
+    """A run is named by the minute it started, <date>_<HHMM>, with a letter added while that name is taken:
+    the run it replaces, or a run this driver has opened already."""
+    base = (now or datetime.datetime.now()).strftime("%Y-%m-%d_%H%M")
     for suffix in [""] + list("bcdefghijklmnopqrstuvwxyz"):
-        if not os.path.exists(os.path.join(project_dir, base + suffix)):
+        if not taken(base + suffix):
             return base + suffix
     raise ValueError("Too many runs were started in the same minute; please wait a minute.")
+
+def recorded_manifest(project_dir):
+    """The manifest of the run the project's Audit_Log.xlsx records, read from its Run sheet alone; None when
+    there is none, or the workbook cannot be read."""
+    target = os.path.join(project_dir, AUDIT_FILE)
+    if not os.path.exists(target):
+        return None
+    import openpyxl
+    try:
+        book = openpyxl.load_workbook(target, read_only=True)
+        parts = [row[1] or "" for row in book["Run"].iter_rows(min_row=2, values_only=True)
+                 if re.sub(r" \(part \d+\)$", "", str(row[0] or "")) == "run_manifest"]
+        book.close()
+        return json.loads("".join(parts)) if parts else None
+    except Exception:
+        return None
+
+def run_changes(record, inputs_dir, settings):
+    """Why the run a project records cannot be carried on, in plain words, or "" when it can: it is carried on
+    while its input files, the engine and the settings are the ones it started with. Who runs it does not count."""
+    if not record or not record.get("run_id") or "inputs" not in record:
+        return "no earlier run"
+    before = {f["file"]: f["sha256"] for f in record.get("inputs", [])}
+    now = {f["file"]: f["sha256"] for f in input_fingerprints(inputs_dir)}
+    if before != now:
+        return "the input files changed"
+    if record.get("engine_files") != engine_file_hashes():
+        return "the engine changed"
+    ignore = lambda values: {k: v for k, v in (values or {}).items() if k != "reviewer_id"}
+    if ignore(record.get("settings")) != ignore(json.loads(json.dumps(settings))):
+        return "the settings changed"
+    return ""
 
 def pick_scratch_root(preferred=""):
     """The first folder on the driver the tool can actually write in, tried in order.
@@ -4299,26 +4336,47 @@ def pick_scratch_root(preferred=""):
         "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
         "cluster." % "; ".join(refused))
 
-def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root="", now=None):
-    """Create or re-open a run folder and its local scratch folder. Enforces: R6"""
+def open_run(projects_dir, model_id, project_date="", scratch_root="", now=None, settings=None):
+    """The project's run, and its local scratch folder. A project holds one run: its two files, Output.xlsx and
+    Audit_Log.xlsx, sit beside its Inputs folder. The run the audit log records is carried on - by this session
+    or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
+    run starts, replaces both files, and records what changed since the run before. An Output.xlsx a person has
+    changed since the tool wrote it is never replaced: OutputsEdited says so. Inputs are never touched.
+    Enforces: R6, R12"""
     project_dir, _ = setup_project(projects_dir, model_id, project_date)
     project_date = os.path.basename(project_dir)
-    run_id = run_id or new_run_id(project_dir, now)
-    run_dir = os.path.join(project_dir, run_id)
+    inputs_dir = os.path.join(project_dir, "Inputs")
+    record = recorded_manifest(project_dir)
+    why = run_changes(record, inputs_dir, settings or make_settings({}))
     scratch_root = pick_scratch_root(scratch_root)
-    place = sha256_text(os.path.abspath(run_dir))[:8]       # two Projects folders never share scratch space
-    local_dir = os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run_id, place))
-    paths = RunPaths(projects_dir, model_id, project_date, project_dir,
-                     os.path.join(project_dir, "Inputs"), run_id, run_dir,
-                     run_dir, os.path.join(run_dir, "_audit"), local_dir)
-    longest = os.path.join(paths.run_dir, LONGEST_AUDIT_NAME)
+    place = sha256_text(os.path.abspath(project_dir))[:8]   # two Projects folders never share scratch space
+    local_of = lambda run: os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run, place))
+    previous = None
+    if not why:
+        run_id = record["run_id"]
+        opened = "Carrying on run %s, which Audit_Log.xlsx records: a finished step is not repeated." % run_id
+    else:
+        workbook = os.path.join(project_dir, "Output.xlsx")
+        if os.path.exists(workbook) and file_sha256(workbook) != (record or {}).get("last_workbook_sha256"):
+            raise OutputsEdited(
+                "Output.xlsx in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
+                "Move it to another folder or rename it, then run cell 3 again." % (project_dir, why))
+        previous = record if record and record.get("inputs") else None
+        run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run)), now)
+        opened = ("A new run, %s: %s since run %s, so Output.xlsx and Audit_Log.xlsx are replaced." % (run_id, why, record["run_id"])
+                  if record and record.get("run_id") else "A new run, %s." % run_id)
+    local_dir = local_of(run_id)
+    paths = RunPaths(projects_dir, model_id, project_date, project_dir, inputs_dir, run_id, project_dir,
+                     project_dir, project_dir, local_dir, previous, opened)
+    longest = os.path.join(paths.project_dir, LONGEST_AUDIT_NAME)
     relative = os.path.relpath(longest, os.path.dirname(os.path.abspath(projects_dir)))
     if len(relative) > PATH_BUDGET:
         raise ValueError("The folder path is %d characters long and the limit is %d, so that "
                          "Excel can still open downloaded files. Please use a shorter model ID "
                          "or Projects folder." % (len(relative), PATH_BUDGET))
-    for folder in (paths.outputs_dir, paths.audit_dir, paths.local_dir):
-        os.makedirs(folder, exist_ok=True)
+    os.makedirs(paths.local_dir, exist_ok=True)
+    if why:                                                 # a new run: the record of the one it replaces is not read back
+        OPEN_STORES[(paths.local_dir, paths.audit_dir)] = AuditStore(paths.local_dir, paths.audit_dir, loaded=True)
     return paths
 
 # ---------------------------------------------------------------- live values (the token)
@@ -4359,7 +4417,7 @@ class LiveValues:
 
 # ---------------------------------------------------------------- the audit store
 AUDIT_OBJECTS = ("run_manifest", "package_info", "coverage")
-AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, in the run folder's _audit
+AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsx and the Inputs folder
 CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
 
 def copy_whole(source, target):
@@ -4376,7 +4434,7 @@ def copy_whole(source, target):
 
 @dataclass
 class AuditStore:
-    """The record of a run, as one workbook a person can open: _audit/Audit_Log.xlsx.
+    """The record of a run, as one workbook a person can open: Audit_Log.xlsx, in the project folder.
 
         Run            the run's manifest and account, one line per entry
         Steps          every step that ran, what it counted and what it said
@@ -4458,7 +4516,7 @@ class AuditStore:
         return [AUDIT_FILE]
 
     def restore(self):
-        """On resume: read the workbook of the run folder back, once."""
+        """On resume: read the project's Audit_Log.xlsx back, once."""
         if self.loaded:
             return
         self.loaded = True
@@ -4486,11 +4544,11 @@ def parts_of(text):
     """One long text as numbered parts, each short enough for a cell."""
     return [(number + 1, text[at:at + CELL_LIMIT]) for number, at in enumerate(range(0, max(len(text), 1), CELL_LIMIT))]
 
-OPEN_STORES = {}                         # one store per run folder: two of them would overwrite each other's records
+OPEN_STORES = {}                         # one store per run: two of them would overwrite each other's records
 
 def open_store(paths, settings):
-    """The audit store of a run, read back from the run folder's workbook when there is one. The same
-    store is returned for the same run folder, so everything a run records goes into one account."""
+    """The audit store of a run, read back from the project's Audit_Log.xlsx when there is one and the run is
+    carried on. The same store is returned for the same run, so everything a run records goes into one account."""
     key = (paths.local_dir, paths.audit_dir)
     if key not in OPEN_STORES:
         OPEN_STORES[key] = AuditStore(paths.local_dir, paths.audit_dir)
@@ -4600,7 +4658,7 @@ CHAT_WORKER = threading.local()
 CHAT_STOP_AFTER = 4          # questions in a row without an answer, beyond those already out: the model has stopped answering
 CHAT_STOP_WAIT = 120         # seconds a stopped step waits for the questions still out
 CHAT_PROGRESS_SECONDS = 60   # how often a long step says how far it has got
-ANSWERS = {}                 # run folder -> {question id: (question, what came back)}, until the step writes them
+ANSWERS = {}                 # run (its scratch folder) -> {question id: (question, what came back)}, until written
 ANSWERS_LOCK = threading.Lock()
 
 
@@ -4672,7 +4730,7 @@ def ask_model(chat, system, main, check=None):
 def held_answers(ctx, types):
     """The answers of this run that arrived but are not yet written, as call records without their provenance: those
     of a cell that was interrupted, for instance. Read, not taken: ask_all takes them when it hands them over."""
-    held = ANSWERS.get(ctx.options["paths"].run_dir) or {}
+    held = ANSWERS.get(ctx.options["paths"].local_dir) or {}
     with ANSWERS_LOCK:
         entries = list(held.values())
     return [dict(question, question_id=question["id"], question_type=question["type"], reading=result["reading"],
@@ -4688,7 +4746,7 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
     Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
     questions that were out at once. Enforces: R2, R5, R8"""
-    held = ANSWERS.setdefault(ctx.options["paths"].run_dir, {})
+    held = ANSWERS.setdefault(ctx.options["paths"].local_dir, {})
     most = max(1, int(ctx.settings.get("parallel_chats") or 1))
     waiting, running = collections.deque(work), {}
     window, threshold = float(min(CHAT_START, most)), float(most)      # how many may be out; where doubling gives way to adding
@@ -5612,22 +5670,17 @@ def engine_file_hashes():
 
 def prepare_run(ctx):
     """Step 01. Fingerprint every input, record the environment and the allow-listed
-    settings, and say what changed since the previous run of the same project."""
+    settings, and say what changed since the run of the project this one replaced."""
     import importlib.metadata
     paths, inputs = ctx.options["paths"], ctx.options["inputs"]
-    fingerprints = []
-    for corner, _, _ in INPUT_FOLDERS:
-        fingerprints.extend(fingerprint_file(path, corner, paths.inputs_dir) for path in inputs[corner])
-    for key in ("glossary", "tag_rules"):
-        if inputs[key]:
-            fingerprints.append(fingerprint_file(inputs[key], key, paths.inputs_dir))
+    fingerprints = input_fingerprints(paths.inputs_dir, inputs)
     versions = {"python": sys.version.split()[0]}
     for name in PACKAGES_RECORDED:
         try:
             versions[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             versions[name] = "not installed"
-    previous, changes = previous_run_inputs(paths), []
+    previous, changes = paths.previous, []
     if previous is not None:
         before = {f["file"]: f["sha256"] for f in previous["inputs"]}
         now = {f["file"]: f["sha256"] for f in fingerprints}
@@ -5641,15 +5694,16 @@ def prepare_run(ctx):
     return StepResult({"run_manifest": [manifest]}, {"input files": len(fingerprints)},
                              ["%d input files fingerprinted." % len(fingerprints)])
 
-def previous_run_inputs(paths):
-    """The manifest of the latest earlier run of this project, or None."""
-    runs = sorted(n for n in os.listdir(paths.project_dir) if n.startswith("Run_") and n < paths.run_id)
-    for run in reversed(runs):
-        manifest_path = os.path.join(paths.project_dir, run, "_audit", "run_manifest.json")
-        if os.path.exists(manifest_path):
-            with open(manifest_path, encoding="utf-8") as handle:
-                return json.load(handle)
-    return None
+def input_fingerprints(inputs_dir, inputs=None):
+    """The fingerprint of every input file of a project, corner by corner, in the order they are read."""
+    inputs = inputs or list_input_files(inputs_dir)
+    found = []
+    for corner, _, _ in INPUT_FOLDERS:
+        found.extend(fingerprint_file(path, corner, inputs_dir) for path in inputs[corner])
+    for key in ("glossary", "tag_rules"):
+        if inputs[key]:
+            found.append(fingerprint_file(inputs[key], key, inputs_dir))
+    return found
 
 # ---------------------------------------------------------------- Output.xlsx
 CELL_WITHHELD = "This text could not be shown in plain words; the technical text is in the audit records."
@@ -5874,9 +5928,9 @@ def progress_text(store, waiting_message):
 
 def rebuild_outputs(store, paths, settings, waiting_message):
     """Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy
-    them whole into the run folder. The guard: a workbook in the run folder that differs from the last
+    them whole into the project folder. The guard: a workbook there that differs from the last
     one the tool wrote is a reviewer's work in progress and is never overwritten before it has
-    been read in. Afterwards the run folder holds exactly the two files. Enforces: R6, R12"""
+    been read in. Afterwards the project folder holds the two files beside its Inputs. Enforces: R6, R12"""
     work = os.path.join(store.local_dir, "work")
     os.makedirs(work, exist_ok=True)
     progress = progress_text(store, waiting_message)
@@ -5887,7 +5941,7 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     local_workbook = os.path.join(work, "Output.xlsx")
     build_workbook(store, paths, settings, progress, local_workbook)
     if guarded:
-        log_line(store, "Output.xlsx in the run folder was edited and not yet read in: left untouched")
+        log_line(store, "Output.xlsx in the project folder was edited and not yet read in: left untouched")
     else:
         copy_whole(local_workbook, target)
         if manifest:
@@ -5916,7 +5970,7 @@ def contents_of(path):
         return                                       # a damaged archive is caught by the other lines of the verification
 
 def verify_evidence_pack(paths, settings, live=None):
-    """Works from a run folder and the Inputs folder alone. Returns rows (what was checked,
+    """Works from the project's two files and its Inputs folder alone. Returns rows (what was checked,
     "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
     content hash is computed again from the input files and compared with the record."""
     store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
@@ -5953,10 +6007,11 @@ def verify_evidence_pack(paths, settings, live=None):
         line("The workbook carries this run's ids and fingerprints", False, "Output.xlsx could not be opened")
     secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
     leaked = []
-    for folder, _, names in os.walk(paths.run_dir):
-        for name in names:
-            leaked += [name for data in contents_of(os.path.join(folder, name)) for value in secrets if value in data]
-    line("No access token was written into the run folder", not leaked, ", ".join(sorted(set(leaked))))
+    for name in ("Output.xlsx", AUDIT_FILE):                # the tool's own files; the Inputs are the project's
+        path = os.path.join(paths.outputs_dir, name)
+        if os.path.exists(path):
+            leaked += [name for data in contents_of(path) for value in secrets if value in data]
+    line("No access token was written into Output.xlsx or Audit_Log.xlsx", not leaked, ", ".join(sorted(set(leaked))))
     return rows
 
 def combine(ctx, *parts):
@@ -6078,7 +6133,7 @@ def setup(dbutils, home=None, projects=None):
     print("\nTHE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
-    print("  Cell 4  check the finished run folder against its own record.")
+    print("  Cell 4  check the project's Output.xlsx and Audit_Log.xlsx against their own record.")
     print("Widgets 01 and 02 carry the endpoint and the token; 03 the model id; 04 the project date.")
     print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
     print("at the moment it calls.")
@@ -6169,8 +6224,10 @@ def check_chat(chat):
     print("\nStill empty: " + "; ".join(missing) if missing else "\nAll three folders have files in them. Next: cell 3.")
 
 def open_current():
-    """The run the widgets name: the one this session opened, or a new one; None, with what to do, while the
-    project's folders are still empty."""
+    """The run of the project the widgets name, carried on or started anew as open_run decides - asked each time
+    cell 3 runs, so that an input changed meanwhile is noticed - and said in plain words when it is not the run
+    this session worked on already. None, with what to do, while a folder of Inputs is empty or while a new run
+    would replace an Output.xlsx a person has changed."""
     widgets = NOTEBOOK["dbutils"].widgets
     model_id, project = widgets.get("model_id"), widgets.get("project")
     _, missing = setup_project(NOTEBOOK["projects"], model_id, project)
@@ -6178,9 +6235,15 @@ def open_current():
         print("\n".join(missing))
         print("Put the files in, then run cell 3.")
         return None
-    paths = NOTEBOOK["paths"]
-    if paths is None or paths.model_id != model_id or (project and paths.project_date != project):
-        paths = NOTEBOOK["paths"] = open_run(NOTEBOOK["projects"], model_id, project)   # a new session starts a new run
+    try:
+        paths = open_run(NOTEBOOK["projects"], model_id, project, settings=notebook_settings())
+    except OutputsEdited as problem:
+        print(problem)
+        return None
+    before = NOTEBOOK["paths"]
+    if before is None or (before.project_dir, before.run_id) != (paths.project_dir, paths.run_id):
+        print(paths.opened)
+    NOTEBOOK["paths"] = paths
     return paths
 
 def review():
@@ -6201,14 +6264,14 @@ def review():
         print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
         for message in record["messages"]:
             print("      " + message)
-    print("\nRun folder:", paths.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
+    print("\nProject folder:", paths.project_dir)
+    print("Open Output.xlsx there, beside Inputs: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
     print("organisation's model says of each piece, the chunks of the methodology it found for it, and the potential")
     print("deviations it flagged.")
-    print("Then run cell 4 to check the run folder against its own record.")
+    print("Then run cell 4 to check the project's two files against their own record.")
 
 def verify():
-    """Cell 4: check the run folder against its own record."""
+    """Cell 4: check the project's two files against their own record."""
     paths = NOTEBOOK["paths"]
     if paths is None:
         print("Cell 3 has not read the inputs yet. Run cell 3 first.")
@@ -6216,5 +6279,5 @@ def verify():
     print("Verifying the evidence pack:")
     for what, verdict, detail in verify_evidence_pack(paths, notebook_settings(), live=NOTEBOOK["live"] or LiveValues()):
         print("  %-62s %-16s %s" % (what, verdict, detail))
-    print("\nRun folder:", paths.run_dir, "- Output.xlsx is the deliverable; _audit/Audit_Log.xlsx is the record")
-    print("of the run: every step, every record, and every exchange with the model.")
+    print("\nProject folder:", paths.project_dir, "- Output.xlsx is the deliverable; Audit_Log.xlsx beside it is the")
+    print("record of the run: every step, every record, and every exchange with the model.")

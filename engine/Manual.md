@@ -14,14 +14,16 @@ It does not run the model. It does not judge whether the methodology is sound. I
 
 Its reading and its accounts assume no field: the methodology can be about anything the package computes, and what the tool knows about a project comes from the project's own files. Its code interpretations are written for credit: step 04 asks the organisation's model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology. Step 05 then asks it, for each piece, which chunks of the methodology describe, explain or inform it, and where the code departs from them.
 
-**What comes out.** One run produces a folder with two deliverables and a record:
+**What comes out.** A run writes two files into the project's folder, beside its inputs:
 
 ```
-Run_2026-09-22_1430/
+Projects/<model id>/<date>/
+  Inputs/                   the methodology, the package and the documentation, as you put them there
   Output.xlsx               four sheets: what was read, and what the organisation's model says of the code
-  _audit/
-    Audit_Log.xlsx          the record: the run, every step, every record, every exchange with the model
+  Audit_Log.xlsx            the record: the run, every step, every record, every exchange with the model
 ```
+
+A project holds one run at a time. Cell 3 carries it on where it stopped - in the same session or a later one - while the input files, the engine and the settings are the ones it started with; when one of them has changed, it starts a new run, replaces both files, and `Model_Package_Info` lists what changed since the run before. An `Output.xlsx` you have edited is never replaced: cell 3 asks you to move it aside first.
 
 The record is what makes the run an **evidence pack**: from that workbook alone, anyone can check that the inputs are the ones fingerprinted, that the code that ran is the code released, and that nothing was edited afterwards.
 
@@ -32,7 +34,7 @@ The record is what makes the run an **evidence pack**: from that workbook alone,
 3. **Link.** The tool links each piece of the package to the pieces it takes something from and gives something to, with flowR reading the R code. No model is involved.
 4. **Ask.** Through your `chat()`, the organisation's model explains each piece of code (step 04), finds the chunks of the methodology that bear on it and flags where the code may depart from them (step 05). Its words fill three columns of Chunks_Model, each headed as the model's own.
 5. **Read.** `Output.xlsx` shows everything that was read, and what the model said.
-6. **Keep.** The run folder is the evidence pack.
+6. **Keep.** The two files, with the inputs beside them, are the evidence pack.
 
 ## 3. Design rules
 
@@ -45,7 +47,7 @@ Thirteen rules, each enforced by named code: its docstring says so (`Enforces: R
 | R3 | The model's opinion is never the last word. What a language model writes is marked as its own - three columns, each headed "(... by LLM ...)" - and recorded, question and answer, in the audit log; code checks that every chunk the model names was shown to it; everything else the workbook shows is read and parsed by code, and nothing the code reads, links or checks depends on an answer. |
 | R4 | Every record carries its provenance - the run and the step - and every unit can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
-| R6 | Inputs are never modified. A run writes only inside its own folder. |
+| R6 | Inputs are never modified. A run writes only its two files, beside the Inputs folder, and its scratch folder on the driver. |
 | R7 | Nothing taken from an input or from the model is ever executed or evaluated: no R, no evaluation of text, no unpickling, no string parsing by a symbolic library, safe reading of archives, safe loading of YAML only. |
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
 | R9 | Credit is the domain of the model's interpretations. Step 04 asks the model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology, and step 05 to find the methodology behind each piece and where the code departs from it; the reading and the accounts assume no field. |
@@ -107,10 +109,10 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 |---|---|---|
 | **cell 1** | `verifier.setup(dbutils)`: makes the four widgets, takes your user id from Databricks, installs a package only if one the engine imports is missing (then restarts Python and asks for the cell once more), gets flowR ready, and prints what the other three cells do | whenever Python restarts |
 | **cell 2** | Your organisation's `chat()`, already filled in; it returns the model's reply under `"answer"` and reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Cell 3 calls it from many threads at once, up to 256, so it keeps nothing from one call to the next. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | whenever Python restarts, and when the gateway or your id changes |
-| **cell 3** | `verifier.review()`: reads every input file, links the units of the package, then asks your `chat()` to describe each piece of the model's code (step 04), and to find the methodology behind each piece and where the code departs from it (step 05), with a line of progress every minute. Prints what each step did and where the run folder is | when it says a step did not finish - after pasting a fresh token, if it ran out: finished steps are never repeated, and no answer received is asked for again, even after an interruption. After Python restarts, run cells 1 and 2 first: the new session starts a new run |
-| **cell 4** | `verifier.verify()`: eight checks of the finished run folder against its own record, each Confirmed or Not confirmed | after any run |
+| **cell 3** | `verifier.review()`: reads every input file, links the units of the package, then asks your `chat()` to describe each piece of the model's code (step 04), and to find the methodology behind each piece and where the code departs from it (step 05), with a line of progress every minute. Prints what each step did and where the project folder is | when it says a step did not finish - after pasting a fresh token, if it ran out: finished steps are never repeated, and no answer received is asked for again, even after an interruption. After Python restarts, run cells 1 and 2 first: cell 3 carries the run on where it stopped |
+| **cell 4** | `verifier.verify()`: eight checks of the project's two files against their own record, each Confirmed or Not confirmed | after any run |
 
-**The widgets.** Four: the endpoint and token for the model gateway (01, 02), the model id (03) and the project date (04). Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>/Inputs`. A session keeps working on the run it opened; a new session, after a restart, starts a new run.
+**The widgets.** Four: the endpoint and token for the model gateway (01, 02), the model id (03) and the project date (04). Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<model id>/<date>`, with its `Inputs` and the two files a run writes beside them. A run is named by the minute it started, as `2026-09-22_1430`. Cell 3 carries the project's run on, in this session or a later one, until an input file, the engine or a setting changes; then it starts a new one.
 
 **No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Packages come from PyPI, named in the engine (section 18).
 
@@ -192,9 +194,9 @@ Four sheets, always in this order; a sheet whose step has not run yet shows its 
 
 **How the links are found.** R looks a name up inside the function first, then in the script it runs in, then in the package, and the two link columns follow the same order. flowR reads each function, and each script whole: a test file, a vignette, or the top-level code of an R file. It resolves every name it can to where it is defined, such as a parameter, a value set earlier, or a variable an earlier statement of the same script set, so a link between statements of one script is flowR's own. A name flowR cannot resolve inside a unit is one the unit takes from outside, and the package names it: one of its functions, a variable its R files set at top level, or its stored data. A data file named in the code, as in `read.csv(system.file("extdata", "limits.csv", ...))`, links to that file's row. A package function named like a base function wins, as it does in R. A function or variable set in a test or vignette is seen only later in the same file, and a test helper by every test. What is not a link: a name of another package (`dplyr::filter`), a parameter or local value that shares a name with a package function, the export list in `NAMESPACE`, and documentation naming a dataset.
 
-## 8. The run folder as an evidence pack
+## 8. The project's two files as an evidence pack
 
-`_audit/Audit_Log.xlsx` is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsx` carries this run's ids and fingerprints, and that no access token was written anywhere in the folder.
+`Audit_Log.xlsx`, beside `Output.xlsx` and the `Inputs` folder, is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsx` carries this run's ids and fingerprints, and that no access token was written into either file.
 
 ## 9. When something goes wrong
 
@@ -207,11 +209,12 @@ Four sheets, always in this order; a sheet whose step has not run yet shows its 
 | "The model stopped answering: the last N questions got no answer" | Usually the token has run out: paste a fresh one into widget 02 and run `cell 3` again. If it happens again at once with a fresh token, the gateway may hold fewer tokens than `chat_token_limit` allows for: lower it (section 16). |
 | "No question showing C-0012 has been answered" | Questions showing the rest of the methodology were answered, but none showing that chunk: the gateway may refuse what it holds. The rows of the pieces affected say which chunk is still to search. |
 | A deviation reads "The model's words for this one cannot be shown in plain words" | The model kept using words the workbook may not hold, three times running. Its answer is in the audit log's Model_Calls sheet; the Refs at the start of the line say which chunks it rests on. |
-| The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. A new session starts a new run; the earlier run folder stays as it was. |
-| An input changed | Start a **new run** in the same project. `Model_Package_Info` lists what changed since the previous run. Never edit inputs of a run that has started. |
+| The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. Cell 3 carries the project's run on where it stopped: a finished step is not repeated, and no recorded answer is asked for again. |
+| An input changed | Run `cell 3`: it says the input files changed and starts a new run, replacing `Output.xlsx` and `Audit_Log.xlsx`; `Model_Package_Info` lists what changed since the run before. The same happens when the engine or a setting changes. |
+| "Output.xlsx ... has been changed since the tool wrote it" | A new run would replace an `Output.xlsx` you have edited, so cell 3 stopped. Move it to another folder or rename it, then run `cell 3` again. |
 | A unit of kind *File not read* | That file or expression could not be parsed. `Model_Package_Info` lists it with the reason; the rest of the package was still read. |
-| A cell reads "This text could not be shown in plain words" | The tool withheld a text that contained technical traces; the text is in `_audit/run_log.txt`. Please report it; it is a defect in the tool. |
-| "This is a defect in the tool, not in the model under review" | The coverage identity did not hold and the run stopped on purpose. Keep the run folder and report it. |
+| A cell reads "This text could not be shown in plain words" | The tool withheld a text that contained technical traces; the text is in `run_log.txt`, in the run's scratch folder on the driver. Please report it; it is a defect in the tool. |
+| "This is a defect in the tool, not in the model under review" | The coverage identity did not hold and the run stopped on purpose. Keep the project's two files and report it. |
 
 ## 10. Known limitations
 
@@ -243,7 +246,7 @@ Five steps, named in `verifier.PIPELINE`; nothing is loaded by path, and only a 
 
 | Step | Name | What it does |
 |---|---|---|
-| 01 | prepare-run | the run folder, the manifest, the fingerprints of the inputs |
+| 01 | prepare-run | the manifest: the fingerprints of the inputs and of the engine, the settings, and what changed since the run before |
 | 02 | read-inputs | the methodology, the documentation and the model package, each read into units |
 | 03 | link-chunks | the links between the units of Chunks_Model - the Immediate Upstream and Downstream Model Chunk columns - read by flowR |
 | 04 | interpret-code | each unit of Chunks_Model put to the organisation's model through your `chat()`, with the units it takes from and gives to as context, `parallel_chats` questions at a time, for the Code Interpretation (by LLM) column; a step with questions left unanswered does not finish, and cell 3 run again asks only for those |
