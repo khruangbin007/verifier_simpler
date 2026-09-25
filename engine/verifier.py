@@ -155,12 +155,11 @@ def to_plain(value):
 def canonical_json(value):
     """One JSON text per content: sorted keys, no spare white space. Enforces: R5"""
     return json.dumps(to_plain(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-def sha256_bytes(data):
-    """SHA-256 of bytes, in hexadecimal."""
-    return hashlib.sha256(data).hexdigest()
-def sha256_text(text):
-    """SHA-256 of a text in UTF-8, in hexadecimal."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def digest(value):
+    """SHA-256 in hexadecimal: of bytes as they are, of text in UTF-8."""
+    return hashlib.sha256(value.encode("utf-8") if isinstance(value, str) else value).hexdigest()
+
+
 def swhid_content(data):
     """The ISO/IEC 18670 content identifier of a file; the same value Git computes."""
     return "swh:1:cnt:" + hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
@@ -173,7 +172,7 @@ def normalise_text(text):
 def content_hash(text):
     """The hash that makes a citation re-verifiable. It ignores white-space and
     line-ending differences and nothing else. Enforces: R4"""
-    return sha256_text(normalise_text(text))
+    return digest(normalise_text(text))
 
 def make_ref(prefix, number):
     """make_ref("C", 9) gives "C-0009". Numbers follow reading order."""
@@ -360,10 +359,6 @@ def attribute_text(element, names, digits_too=False):
 
 BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_item", "table")
 
-def written_numbering(element, rules):
-    """The numbering an element carries in an attribute, exactly as the document wrote it
-    (num="36." gives "36."): more faithful than any count the tool could make, skipped numbers included."""
-    return attribute_text(element, rules["numbering_attributes"], digits_too=True)[0]
 
 def table_rows(element, rules):
     """The rows of a table: the children that hold cells, looked for directly below the table
@@ -852,13 +847,6 @@ FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "svg": "SVG
                 "xml": "XML", "markdown": "Markdown", "delimited": "delimited rows", "rtf": "RTF",
                 "latex": "LaTeX", "text": "plain text"}
 
-def looks_binary(data):
-    """Bytes that are not text: a NUL byte, or more than one in ten bytes a control character."""
-    head = data[:4096]
-    if b"\x00" in head:
-        return True
-    control = sum(1 for byte in head if byte < 32 and byte not in (9, 10, 12, 13))
-    return bool(head) and control * 10 > len(head)
 
 def sniff_zip(data):
     """What a ZIP archive holds, which is what it is. Enforces: R6"""
@@ -895,7 +883,9 @@ def detect_format(data, file_name=""):
         return "gzip"
     if data.startswith(IMAGE_MAGIC):
         return "image"
-    if looks_binary(data):
+    first_bytes = data[:4096]                            # not text: a NUL byte, or more than one byte in ten a control
+    control = sum(1 for byte in first_bytes if byte < 32 and byte not in (9, 10, 12, 13))   # character
+    if b"\x00" in first_bytes or (bool(first_bytes) and control * 10 > len(first_bytes)):
         return "binary"
     lowered, name = head.lower(), file_name.lower()
     if name.endswith(MARKDOWN_NAMES):
@@ -1148,8 +1138,9 @@ def list_input_files(inputs_dir):
 # reading the methodology, the documentation and the model package
 # ================================================================================================
 # ---------------------------------------------------------------- the methodology and the documentation, read into units
-class NotReadable(Exception):
-    """A formula or a file that the tool cannot read. The message is a plain reason for the analyst."""
+class Unreadable(Exception):
+    """What the tool could not read, with why in plain words: a formula it does not read, a data file that expands past
+    its limit, or a reply of chat() that holds no answer. Each is caught where it can arise; the reason is shown."""
 
 # ---------------------------------------------------------------- the linear-notation parser
 SUPERSCRIPTS = {"\u207b\u00b9": "^-1", "\u00b2": "^2", "\u00b3": "^3", "\u00b9": "^1"}
@@ -1259,9 +1250,6 @@ domains:
   exp:            {argument: [null, 50]}
 '''
 
-def load_notation():
-    """The names the tool reads as functions in a written formula."""
-    return yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]
 
 def tokenize_formula(text):
     """Cut a written formula into numbers, names and signs. Anything else makes it unreadable."""
@@ -1273,7 +1261,7 @@ def tokenize_formula(text):
     while position < len(text):
         match = _TOKEN_RE.match(text, position)
         if not match or match.end() == position:
-            raise NotReadable("it contains '%s', which the tool does not read in a formula" % text[position:position + 12].strip())
+            raise Unreadable("it contains '%s', which the tool does not read in a formula" % text[position:position + 12].strip())
         if match.group("number"):
             value = Decimal(match.group("number"))
             tokens.append(("number", plain_decimal(value / 100 if match.group("percent") else value)))
@@ -1302,7 +1290,7 @@ class FormulaReader:
         """Take the next token; with `sign`, insist that it is that sign."""
         token = self.peek()
         if sign is not None and token != ("sign", sign):
-            raise NotReadable("a '%s' was expected where '%s' stands" % (sign, token[1] or "the end"))
+            raise Unreadable("a '%s' was expected where '%s' stands" % (sign, token[1] or "the end"))
         self.position += 1
         return token
 
@@ -1313,7 +1301,7 @@ class FormulaReader:
             self.take()
             left = Expr("eq", args=(left, self.comparison()))
             if self.peek() == ("sign", "="):
-                raise NotReadable("it has more than one equals sign")
+                raise Unreadable("it has more than one equals sign")
         return left
 
     def comparison(self):
@@ -1366,7 +1354,7 @@ class FormulaReader:
             self.take()
             base = Expr("pow", args=(base, self.unary()))
         if self.term_follows() and not self.implicit_product:
-            raise NotReadable("two terms stand side by side without a sign between them, which could "
+            raise Unreadable("two terms stand side by side without a sign between them, which could "
                               "mean a product or something else; the tool does not guess")
         return base
 
@@ -1391,18 +1379,18 @@ class FormulaReader:
         if kind == "sign" and text == "\u221a":
             return Expr("call", name="sqrt", args=(self.atom(),))
         if kind != "name":
-            raise NotReadable("'%s' stands where a number or a symbol was expected" % (text or "the end"))
+            raise Unreadable("'%s' stands where a number or a symbol was expected" % (text or "the end"))
         function = self.functions.get(text) or self.functions.get(normalise_symbol(text))
         skip = self.minus_one_follows() if function else 0
         if skip:
             inverse = self.notation.get("inverse", {}).get(function)
             if not inverse:
-                raise NotReadable("the inverse of '%s' is not a function the tool knows" % text)
+                raise Unreadable("the inverse of '%s' is not a function the tool knows" % text)
             self.position += skip
             function = inverse
         if self.peek() == ("sign", "("):
             if not function:
-                raise NotReadable("'%s(' could be a product or a function; the tool does not guess" % text)
+                raise Unreadable("'%s(' could be a product or a function; the tool does not guess" % text)
             self.take()
             arguments = [self.statement()]
             while self.peek() == ("sign", ","):
@@ -1413,15 +1401,15 @@ class FormulaReader:
         return Expr("sym", name=normalise_symbol(text))
 
 def parse_formula(text, notation, implicit_product=False):
-    """Read a formula written in linear notation into the tool's expression tree. Raises NotReadable
+    """Read a formula written in linear notation into the tool's expression tree. Raises Unreadable
     with a plain reason; it never guesses and never executes anything. Enforces: R7"""
     tokens = tokenize_formula(text)
     if not tokens:
-        raise NotReadable("it is empty")
+        raise Unreadable("it is empty")
     reader = FormulaReader(tokens, notation, implicit_product)
     tree = reader.statement()
     if reader.peek()[0] != "end":
-        raise NotReadable("'%s' stands where the formula should have ended" % reader.peek()[1])
+        raise Unreadable("'%s' stands where the formula should have ended" % reader.peek()[1])
     return tree
 
 def read_equation(source_form, linear, notation, image_sha256=""):
@@ -1432,7 +1420,7 @@ def read_equation(source_form, linear, notation, image_sha256=""):
         return EquationData(source_form, "", False, reason, image_sha256)
     try:
         tree = parse_formula(linear, notation, implicit_product=source_form in ("omml", "mathml", "latex"))
-    except NotReadable as problem:
+    except Unreadable as problem:
         return EquationData(source_form, linear, False, str(problem), image_sha256)
     return EquationData(source_form, expr_to_text(tree), True, "", image_sha256)
 
@@ -1449,7 +1437,7 @@ def inline_formula(text, notation):
             continue                                  # "x = 5" or "a = b": a value, not a formula
         try:
             tree = parse_formula("%s = %s" % (match.group(1), right), notation)
-        except NotReadable:
+        except Unreadable:
             continue
         return EquationData("inline", expr_to_text(tree), True, "", "")
     return None
@@ -1493,7 +1481,9 @@ def math_to_linear(element):
     if name == "d":                                               # OMML brackets
         return "(%s)" % ", ".join(math_children(child) for child in element if local_name(child.tag) == "e")
     if name == "func":
-        return "%s(%s)" % (part("fname").strip(), strip_outer_brackets(part("e")))
+        argument = part("e").strip()                          # one pair of brackets round the whole argument is dropped
+        argument = argument[1:-1] if argument.startswith("(") and argument.endswith(")") and argument.count("(") == 1 else argument
+        return "%s(%s)" % (part("fname").strip(), argument)
     if name == "nary":
         properties = child_named(element, "narypr")
         sign = child_named(properties, "chr") if properties is not None else None
@@ -1534,10 +1524,6 @@ def math_children(element):
             pieces.append(piece)
     return re.sub(r"\s+", " ", "".join(pieces)).strip()
 
-def strip_outer_brackets(text):
-    """Remove one pair of brackets that encloses the whole text."""
-    text = text.strip()
-    return text[1:-1] if text.startswith("(") and text.endswith(")") and text.count("(") == 1 else text
 
 LATEX_WORDS = {"cdot": "*", "times": "*", "div": "/", "le": "<=", "leq": "<=", "ge": ">=", "geq": ">=",
                "ln": "ln", "log": "log", "exp": "exp", "max": "max", "min": "min", "left": "", "right": "",
@@ -1547,7 +1533,7 @@ LATEX_WRAPPERS = ("text", "mathrm", "mathit", "mathbf", "operatorname", "mbox", 
 def latex_group(source, position):
     """The content of the {...} group that starts at `position`, and the position after it."""
     if position >= len(source):
-        raise NotReadable("a LaTeX command lacks its argument")
+        raise Unreadable("a LaTeX command lacks its argument")
     if source[position] != "{":
         return source[position], position + 1
     depth, start = 0, position
@@ -1556,7 +1542,7 @@ def latex_group(source, position):
         position += 1
         if depth == 0:
             return source[start + 1:position - 1], position
-    raise NotReadable("a LaTeX group is never closed")
+    raise Unreadable("a LaTeX group is never closed")
 
 def latex_to_linear(source):
     """The LaTeX subset found in roxygen \\eqn{} and \\deqn{} and in some XML, to linear notation:
@@ -1588,7 +1574,7 @@ def latex_to_linear(source):
             elif word in LATEX_WORDS:
                 output.append(LATEX_WORDS[word])
             else:
-                raise NotReadable("it uses the LaTeX command '\\%s', which the tool does not read" % word)
+                raise Unreadable("it uses the LaTeX command '\\%s', which the tool does not read" % word)
         elif char == "^":
             inner, position = latex_group(source, position + 1)
             output.append("^(%s)" % latex_to_linear(inner))
@@ -1855,7 +1841,7 @@ def walk_element(element, path, depth, state):
         return
     if family is None:                                   # discovery names every tag it reaches; this is the net under it
         family = "container" if len(element) else "paragraph"
-    numbering = written_numbering(element, state.rules)
+    numbering = attribute_text(element, state.rules["numbering_attributes"], digits_too=True)[0]   # as written: num="36."
     if family == "heading":
         text = element_text(element, state.rules)
         digit = re.fullmatch(r"h([1-6])", name)
@@ -2053,7 +2039,7 @@ def svg_blocks(data, name, here, state, caption=""):
     blocks = walk_svg_markup(parse_markup(markup, name, [], False), here, state)
     for block in blocks:
         block["caption"] = caption or own_caption
-        block["source"], block["image_sha256"] = name, sha256_bytes(data)
+        block["source"], block["image_sha256"] = name, digest(data)
         if block["type"] == "figure" and not block["text"].strip():
             seen = "".join(pictures_not_read(state) for picture in svg_embedded_pictures(root)).strip()
             if seen:
@@ -2088,13 +2074,13 @@ def equation_block(element, here, state):
         equation = read_equation(form, math_to_linear(markup), state.notation)
     elif picture is not None and not normalise_text(element_text(element, state.rules)):
         source = picture.get("src") or picture.get("fileref") or ""
-        equation = read_equation("image", "", state.notation, state.images.get(source, "") or sha256_text(source))
+        equation = read_equation("image", "", state.notation, state.images.get(source, "") or digest(source))
     else:
         written = normalise_text(element_text(element, state.rules, skip=("caption", "ignore")))
         try:
             linear = latex_to_linear(written) if "\\" in written else written
             equation = read_equation("latex" if "\\" in written else "inline", linear, state.notation)
-        except NotReadable as problem:
+        except Unreadable as problem:
             equation = EquationData("latex", written, False, str(problem), "")
     label = picture.get("alt") if picture is not None and picture.get("alt") else ""
     text = equation.linear or label or "Equation shown as a picture"
@@ -2122,7 +2108,7 @@ def blocks_from_mhtml(data, file_name, state, repairs):
         if content_type == "text/html" and page is None:
             page = payload.decode(part.get_content_charset() or "utf-8", "replace")
         elif content_type.startswith("image/"):
-            fingerprint = sha256_bytes(payload)
+            fingerprint = digest(payload)
             for key in (part.get("Content-Location", ""), (part.get("Content-ID", "") or "").strip("<>")):
                 if key:
                     state.images[key] = fingerprint
@@ -2130,16 +2116,10 @@ def blocks_from_mhtml(data, file_name, state, repairs):
     if page is None:
         return [not_read_block(file_name, "the file holds no web page part")]
     blocks = blocks_from_markup(page, file_name, state, repairs, tolerant_only=True)
-    return [block for block in title_block(page, file_name) + blocks]
+    title = re.search(r"<title[^>]*>(.*?)</title>", page, re.IGNORECASE | re.DOTALL)   # the page's title: a heading that
+    title = normalise_text(re.sub(r"<[^>]+>", " ", title.group(1))) if title else ""   # opens the file
+    return ([new_block("heading", title, "%s title" % file_name, level_hint=1)] if title else []) + blocks
 
-def title_block(page, file_name):
-    """The <title> of a web page, as a heading above everything in it. In a Word file exported
-    to the web it is often the only place the document's own name survives, because the visible
-    heading may be a styled paragraph carrying no heading level. Without this the title reaches
-    no unit and can be cited by nothing. Enforces: R13"""
-    found = re.search(r"<title[^>]*>(.*?)</title>", page, re.IGNORECASE | re.DOTALL)
-    text = normalise_text(re.sub(r"<[^>]+>", " ", found.group(1))) if found else ""
-    return [new_block("heading", text, "%s title" % file_name, level_hint=1)] if text else []
 
 # ---------------------------------------------------------------- .docx
 WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -2211,8 +2191,8 @@ def docx_figure(picture, related, locator, state):
     for node in picture.iter():
         for key, value in node.attrib.items():
             if key.startswith("{%s}" % WORD_NS["r"]) and value in related:
-                fingerprint, words = sha256_bytes(related[value]), pictures_not_read(state)
-    fingerprint = fingerprint or sha256_bytes(ElementTree.tostring(picture))
+                fingerprint, words = digest(related[value]), pictures_not_read(state)
+    fingerprint = fingerprint or digest(ElementTree.tostring(picture))
     said = (description or "Picture without a description") + words
     return new_block("figure", said, locator, image_sha256=fingerprint, display=said)
 
@@ -2337,7 +2317,7 @@ def pdf_lines(document, file_name):
             lines.append({"page": number, "top": table.bbox[1], "table": rows, "edge": ""})
         for count, image in enumerate(page.images, start=1):
             mark = "%s page %d picture %d %s" % (file_name, number, count, image.get("srcsize"))
-            lines.append({"page": number, "top": image["top"], "figure": sha256_text(mark), "text": "picture %s" % (image.get("srcsize"),),
+            lines.append({"page": number, "top": image["top"], "figure": digest(mark), "text": "picture %s" % (image.get("srcsize"),),
                           "edge": edge(image["top"], image["bottom"]), "box": (image["x0"], image["top"], image["x1"], image["bottom"])})
         for line in page.extract_text_lines():
             inside = any(t.bbox[0] <= line["x0"] and line["top"] >= t.bbox[1] and line["bottom"] <= t.bbox[3] for t in tables)
@@ -2591,7 +2571,7 @@ def read_corner(ctx, corner, input_key, label):
     """Read every file of one corner, in file-name order, into chunks numbered in reading order."""
     options = ctx.options
     rules = load_tag_rules(options["inputs"].get("tag_rules"))
-    notation = load_notation()
+    notation = yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]   # names read as functions in a formula
     chunks, repairs, info_rows, accounts, read_as_what = [], [], [], [], []
     root = (options["inputs"].get("roots") or {}).get(input_key)
     for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
@@ -2682,8 +2662,6 @@ def read_documentation(ctx):
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
 PARSER_NAME = "flowR"
 
-class NotParsed(Exception):
-    """One R expression that the tool's reader could not read. The message is a plain reason."""
 
 # ---------------------------------------------------------------- safe unpacking and inventory
 ARCHIVE_NAMES = (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".zip")
@@ -2737,12 +2715,6 @@ def unpack_package(path, max_member_bytes):
                 files[name] = read()
     return files, refused
 
-def strip_top_folder(files):
-    """R tarballs hold one top folder named after the package; paths are shown without it."""
-    tops = {path.split("/", 1)[0] for path in files if "/" in path}
-    if len(tops) == 1 and all("/" in path for path in files):
-        return {path.split("/", 1)[1]: data for path, data in files.items()}
-    return dict(files)
 
 def read_description(text):
     """The fields of DESCRIPTION (name: value, continuation lines start with white space)."""
@@ -3235,7 +3207,7 @@ def expand(data, cap):
     opener = {"gzip": lambda: zlib.decompressobj(31), "bzip2": bz2.BZ2Decompressor, "xz": lzma.LZMADecompressor}[method]()
     expanded = opener.decompress(data, cap + 1)
     if len(expanded) > cap:
-        raise NotParsed("it expands to more than %d MB, so it was not read; it looks like a dataset" % (cap // 1048576))
+        raise Unreadable("it expands to more than %d MB, so it was not read; it looks like a dataset" % (cap // 1048576))
     return expanded, method
 
 def cell_text(value):
@@ -3318,10 +3290,6 @@ def table_of(value):
     return None
 
 
-def table_display(header, rows):
-    """A stored table as the workbook shows it: its header and every row, one line each, cells joined by "; ".
-    Nothing is left out; a table too long for one row of Chunks_Model takes several (model_rows). Enforces: R13"""
-    return "\n".join(["; ".join(header)] + ["; ".join(row) for row in rows])
 
 def data_object_unit(name, value, path, settings):
     """One stored object to a unit: a table shown whole (table_display), or, when it has no tabular meaning, described
@@ -3342,7 +3310,8 @@ def data_object_unit(name, value, path, settings):
     kind = KIND_OBJECT if shape == "list" else KIND_TABLE
     named = "%s - %s: %d row%s, %d column%s" % (name, path, len(rows), "" if len(rows) == 1 else "s",
                                                 len(header), "" if len(header) == 1 else "s")
-    unit = draft(kind, path, None, name, named + "\n" + table_display(header, rows), data=detail)
+    shown = "\n".join(["; ".join(header)] + ["; ".join(row) for row in rows])   # every row, one line each: nothing left out
+    unit = draft(kind, path, None, name, named + "\n" + shown, data=detail)
     return unit
 
 def decode_data_file(path, data, settings):
@@ -3355,7 +3324,9 @@ def decode_data_file(path, data, settings):
         delimiter = "\t" if path.lower().endswith(".tsv") else ","
         table = [row for row in csv.reader(io.StringIO(decode_text(data)), delimiter=delimiter) if row]
         frame_header, frame_rows = (table[0], table[1:]) if table else ([], [])
-        return [data_object_unit_from_rows(stem, frame_header, frame_rows, path, settings)], "%s: text table" % path
+        import pandas                                        # a table given as header and rows: delimited text under data/
+        rows_frame = pandas.DataFrame([list(row) + [""] * (len(frame_header) - len(row)) for row in frame_rows], columns=frame_header)
+        return [data_object_unit(stem, rows_frame, path, settings)], "%s: text table" % path
     try:
         raw, method = expand(data, cap)
         import rdata
@@ -3368,20 +3339,14 @@ def decode_data_file(path, data, settings):
             converted = rdata.conversion.convert(rdata.parser.parse_data(raw))
         decoded_by = "rdata %s" % rdata.__version__
     except Exception as problem:                                   # any failure means: not decoded, never lost
-        reason = str(problem) if isinstance(problem, NotParsed) else "the file could not be decoded as R data"
+        reason = str(problem) if isinstance(problem, Unreadable) else "the file could not be decoded as R data"
         unit = draft(KIND_NOT_READ, path, None, stem, "", read_problem="This data file was not read: %s." % reason)
-        return [unit], "%s: not decoded (%s)" % (path, type(problem).__name__ if not isinstance(problem, NotParsed) else reason)
+        return [unit], "%s: not decoded (%s)" % (path, type(problem).__name__ if not isinstance(problem, Unreadable) else reason)
     objects = converted if container.startswith("several") and isinstance(converted, dict) else {stem: converted}
     units = [data_object_unit(str(name), objects[name], path, settings) for name in objects]
     fact = "%s: %s, %s layout, %s compression, %d object(s), decoded by %s" % (path, container, layout, method, len(units), decoded_by)
     return units, fact
 
-def data_object_unit_from_rows(name, header, rows, path, settings):
-    """A unit for a table given as header and rows (delimited text files under data/ or inst/extdata/)."""
-    import pandas
-    width = len(header)
-    frame = pandas.DataFrame([list(row) + [""] * (width - len(row)) for row in rows], columns=header)
-    return data_object_unit(name, frame, path, settings)
 
 # ---------------------------------------------------------------- which code reads which data
 def data_reads(function_node, formals, data_names, data_files):
@@ -3545,7 +3510,9 @@ def read_package(ctx):
     except Exception as problem:                     # a package that cannot be opened is named, never a stopped run (R2)
         return StepResult({}, {"units": 0}, ["The package could not be opened: %s." % reason_for(problem)])
     tarballs = archives or tarballs
-    files = strip_top_folder(files)
+    top_folders = {path.split("/", 1)[0] for path in files if "/" in path}   # a tarball's one top folder, named after the
+    if len(top_folders) == 1 and all("/" in path for path in files):          # package: paths are shown without it
+        files = {path.split("/", 1)[1]: data for path, data in files.items()}
     function_map = yaml.safe_load(R_FUNCTION_MAP_YAML)
     description = read_description(decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
     namespace = flowr_package(files)
@@ -3569,7 +3536,7 @@ def read_package(ctx):
             formals = [name for name, _ in unit["code"]["formals"]]
             unit["code"]["reads_data"] = data_reads(unit["node"], formals, data_names, data_files)
     link_documentation_units(drafts)
-    hashes = {path: sha256_bytes(data) for path, data in files.items()}
+    hashes = {path: digest(data) for path, data in files.items()}
     units, refs = finalise_units(drafts, hashes)
     inventory = [{"file": path, "bytes": len(files[path]), "sha256": hashes[path], "swhid": swhid_content(files[path])}
                  for path in sorted(files)]
@@ -4231,8 +4198,10 @@ def link_chunks(ctx):
 
 # ================================================================================================
 # ---------------------------------------------------------------- a fault inside the tool
-class EngineFault(Exception):
-    """The tool found itself inconsistent. Never raised about the model under review. Enforces: R2"""
+class RunStopped(Exception):
+    """Why the run cannot go on, in plain words: a defect in the tool - rows that do not rebuild their text, a question
+    too large for chat(), a workbook that does not match its records - or an Output.xlsm a person has changed, which a
+    new run would replace."""
 
 
 # ---------------------------------------------------------------- the run: its folder, its record and its two deliverables
@@ -4275,16 +4244,7 @@ class RunPaths:
     previous: Optional[dict] = None; opened: str = ""
 
 
-class OutputsEdited(Exception):
-    """The project's Output.xlsm was changed after the tool wrote it: a person's work, never replaced."""
 
-def check_project_name(project):
-    """Return "" when the project name - a model id will do - is usable as a folder's name, otherwise a plain
-    sentence saying why not."""
-    if PROJECT_NAME_RE.match(project or ""):
-        return ""
-    return ("The project name may hold at most 24 characters from letters, digits, hyphen and "
-            "underscore. Please shorten or change '%s'." % project)
 
 LEGACY_INPUTS = "Inputs"                   # where the three folders were kept before they stood beside Output.xlsm
 BESIDE_FOLDERS = ("glossary.xlsx", "tag_rules.yaml")   # the optional files that sit beside the three folders
@@ -4346,7 +4306,7 @@ def archive_run(project_dir, run_id):
     """The run a new run replaces, kept whole: everything in _Audit - Audit_Log.xlsx, run_log.txt, the step folders -
     and the Output.xlsm, or the Output.xlsx of before, the tool wrote for it, moved into
     _Audit/previous_runs/<its run id>/. Nothing of it is deleted or changed; a run kept before stays where it is.
-    An Output a person changed never comes here: open_run stops first (OutputsEdited). Returns the folder, or ""
+    An Output a person changed never comes here: open_run stops first (RunStopped). Returns the folder, or ""
     when there was nothing to keep. Enforces: R4, R6"""
     audit = os.path.join(project_dir, AUDIT_FOLDER)
     kept = [os.path.join(audit, name) for name in sorted(os.listdir(audit)) if name != PREVIOUS_RUNS] if os.path.isdir(audit) else []
@@ -4372,7 +4332,9 @@ def setup_project(projects_dir, project):
     in the project's folder beside Output.xlsm and Audit_Log.xlsx. A project laid out before, with its folders inside
     Inputs/, is first brought to this layout (lift_project). Returns (project folder, what stops the run, what was
     done). The content of an input is never touched. Enforces: R6"""
-    problem = check_project_name(project)
+    problem = "" if PROJECT_NAME_RE.match(project or "") else (
+        "The project name may hold at most 24 characters from letters, digits, hyphen and underscore. Please shorten or "
+        "change '%s'." % project)
     if problem:
         raise ValueError(problem)
     project_dir = os.path.join(projects_dir, project)          # the project's folder: its three input folders, Output.xlsm and _Audit
@@ -4463,14 +4425,14 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
     Audit_Log.xlsx and the files of every step, sit beside its three input folders. The run the audit log records is carried on - by this session
     or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
     run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
-    changed since the tool wrote it is never replaced: OutputsEdited says so. Inputs are never touched.
+    changed since the tool wrote it is never replaced: RunStopped says so. Inputs are never touched.
     Enforces: R6, R12"""
     project_dir, _, _ = setup_project(projects_dir, project)
     inputs_dir = project_dir                                # the three input folders stand in the project's folder
     record = recorded_manifest(project_dir)
     why = run_changes(record, inputs_dir, settings or make_settings({}))
     scratch_root = pick_scratch_root(scratch_root)
-    place = sha256_text(os.path.abspath(project_dir))[:8]   # two Projects folders never share scratch space
+    place = digest(os.path.abspath(project_dir))[:8]   # two Projects folders never share scratch space
     local_of = lambda run: os.path.join(scratch_root, "%s_%s_%s" % (project, run, place))
     previous = None
     if not why:
@@ -4480,7 +4442,7 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
         for name in (OUTPUT_FILE, LEGACY_OUTPUT_FILE):
             workbook = os.path.join(project_dir, name)
             if os.path.exists(workbook) and file_sha256(workbook) != (record or {}).get("last_workbook_sha256"):
-                raise OutputsEdited(
+                raise RunStopped(
                     "%s in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
                     "Move it to another folder or rename it, then run cell 3 again." % (name, project_dir, why))
         replaced = os.path.exists(os.path.join(project_dir, LEGACY_OUTPUT_FILE))
@@ -4607,7 +4569,7 @@ class AuditStore:
         self.append("audit_files", [{"number": len(inventory) + 1, "step_id": step_id, "step": step_name, "file": relative,
                                      "holds": holds, "about": about, "sent_at": sent_at, "returned_at": returned_at,
                                      "written_at": datetime.datetime.now().isoformat(timespec="seconds"),
-                                     "bytes": len(data), "sha256": sha256_bytes(data)}])
+                                     "bytes": len(data), "sha256": digest(data)}])
         return relative
 
     def target(self):
@@ -4876,8 +4838,6 @@ def restore_answers(ctx):
                 held.setdefault(question["id"], (question, result))
 
 
-class NoAnswer(Exception):
-    """What chat() returned held no answer: a dictionary without "answer", or with an empty one, or not a dictionary."""
 
 
 def unwelcome_words(text):
@@ -4932,11 +4892,11 @@ def ask_model(chat, system, main, check=None, halt=None):
             reply = chat(system, question)
             answer = str(reply.get("answer") or "").strip() if isinstance(reply, dict) else ""
             if not answer:
-                raise NoAnswer("chat() returned no \"answer\": %s" % " ".join(repr(reply).split())[:300])
+                raise Unreadable("chat() returned no \"answer\": %s" % " ".join(repr(reply).split())[:300])
         except Exception as problem:
             failed_calls += 1
             plain.append("try %d: the call did not return an answer" % attempt)
-            technical.append("try %d: %s" % (attempt, problem if isinstance(problem, NoAnswer) else "%s: %s" % (type(problem).__name__, problem)))
+            technical.append("try %d: %s" % (attempt, problem if isinstance(problem, Unreadable) else "%s: %s" % (type(problem).__name__, problem)))
             if attempt < CHAT_ATTEMPTS:
                 halt.wait(CHAT_BACKOFF ** attempt * random.uniform(0.5, 1.5))   # a busy gateway is given a moment; the
                                                  # jitter keeps many refused calls from coming back all at once
@@ -5101,7 +5061,7 @@ def call_record(ctx, asked, result, redact, **extra):
     record.update({"attempt": result["attempt"], "outcome": "answered" if answer else "not answered",
                    "tokens": asked.get("tokens", 0), "answer": answer,
                    "reading": redacted(result["reading"], redact),
-                   "prompt_hash": asked["id"], "response_hash": sha256_text(answer) if answer else "",
+                   "prompt_hash": asked["id"], "response_hash": digest(answer) if answer else "",
                    "what happened": [redact(line) for line in result["plain"]], "seconds": round(result["seconds"], 3),
                    "sent_at": sent_stamp(result.get("started"))})
     if isinstance(getattr(ctx, "exchanges", None), list):  # the exchange as chat() saw it, for the audit folder
@@ -5222,7 +5182,7 @@ def code_question(unit, upstream=(), downstream=(), room=None):
         "\n" + part_note(unit) if part_note(unit) else "", text)
     left = room - estimate_tokens(CODE_SYSTEM_PROMPT) - estimate_tokens(first) - 200
     main = "\n\n\n".join([first] + context_block(upstream, downstream, left))
-    return CODE_SYSTEM_PROMPT, main, sha256_text(CODE_SYSTEM_PROMPT + "\n\n" + main)
+    return CODE_SYSTEM_PROMPT, main, digest(CODE_SYSTEM_PROMPT + "\n\n" + main)
 
 
 def interpret_code(ctx):
@@ -5459,16 +5419,8 @@ def methodology_batches(pieces, cap):
     return batches + ([current] if current else [])
 
 
-def methodology_plan(chunks, settings):
-    """The methodology as step 05 puts it to the model: (its pieces, the batches they go in)."""
-    batch, _ = search_shares(settings)
-    pieces = methodology_pieces(chunks, piece_cap(settings))
-    return pieces, methodology_batches(pieces, batch)
 
 
-def unit_label(unit):
-    """A unit named on one line: its ref and its name, or its kind when it has none."""
-    return "%s %s" % (unit["ref"], unit["name"]) if unit.get("name") else "%s (%s)" % (unit["ref"], unit["kind"])
 
 
 def neighbours_line(upstream, downstream):
@@ -5476,7 +5428,8 @@ def neighbours_line(upstream, downstream):
     lines = []
     for title, pieces in (("It takes something from", upstream), ("It gives something to", downstream)):
         if pieces:
-            named = "; ".join(unit_label(unit) for unit, _ in pieces[:NEIGHBOURS_NAMED])
+            named = "; ".join("%s %s" % (unit["ref"], unit["name"]) if unit.get("name") else "%s (%s)" % (unit["ref"], unit["kind"])
+                              for unit, _ in pieces[:NEIGHBOURS_NAMED])      # each: its ref and its name, or its kind without one
             more = " and %d more" % (len(pieces) - NEIGHBOURS_NAMED) if len(pieces) > NEIGHBOURS_NAMED else ""
             lines.append("%s: %s%s" % (title, named, more))
     return "\n".join(lines)
@@ -5541,7 +5494,7 @@ def model_rows(units, settings):
                              text=piece, lines=lines, joined=joined, unit_lines=unit.get("lines")))
             line = lines[1] + (0 if joined else 1) if lines else None
         if joined_rows(mine) != text:
-            raise EngineFault("The rows of %s do not rebuild its text. This is a defect in the tool, not in the model under "
+            raise RunStopped("The rows of %s do not rebuild its text. This is a defect in the tool, not in the model under "
                               "review." % unit["ref"])
         rows += mine
     return rows
@@ -5622,7 +5575,7 @@ def question_of(kind, unit, pieces, system, parts, **extra):
     main = "\n\n\n".join(text for text, _ in parts)
     tokens = estimate_tokens(system) + sum(count for _, count in parts) + 3 * len(parts)
     question = {"type": kind, "unit_ref": unit["ref"], "pieces": [[p["ref"], p["part"], p["parts"]] for p in pieces],
-                "system": system, "main": main, "id": sha256_text(system + "\n\n" + main), "tokens": tokens}
+                "system": system, "main": main, "id": digest(system + "\n\n" + main), "tokens": tokens}
     question.update(extra)
     return question
 
@@ -5768,7 +5721,9 @@ def methodology_account(units, chunks, calls, settings):
     a chunk of the methodology any row finds counts for the whole unit; once every row is searched, each row is
     compared with every chunk found for the unit, in all its parts; the deviations named for any row are the unit's, in
     the order of its rows. A question answered twice counts once. Enforces: R2, R3"""
-    pieces, batches = methodology_plan(chunks, settings)
+    batch_tokens, _ = search_shares(settings)            # the methodology as step 05 puts it to the model: its pieces,
+    pieces = methodology_pieces(chunks, piece_cap(settings))   # and the batches they go in
+    batches = methodology_batches(pieces, batch_tokens)
     position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
     parts_of = {}
     for piece in pieces:
@@ -5918,7 +5873,7 @@ def search_methodology(ctx):
         else:
             question = compare_question(row, said.get(ref, ""), upstream, downstream, chosen, compare_room, context_room)
         if question["tokens"] > question_room(ctx.settings, kind):
-            raise EngineFault("A question of step 05 would take %d tokens where chat() holds %d with its answer. This is a "
+            raise RunStopped("A question of step 05 would take %d tokens where chat() holds %d with its answer. This is a "
                               "defect in the tool, not in the model under review." % (question["tokens"], question_room(ctx.settings, kind)))
         return question
 
@@ -6003,12 +5958,6 @@ PIPELINE = (                       # the steps, in order, each carried out by on
     {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"},
     {"id": "05", "name": "search-methodology", "carried_out_by": "search_methodology"})
 
-def update_manifest(store, changes):
-    """Change fields of the run manifest and write it back."""
-    manifest = (store.read("run_manifest") or [{}])[0]
-    manifest.update(changes)
-    store.append("run_manifest", [manifest])
-    return manifest
 
 
 def run_pipeline(paths, settings, stop_after=""):
@@ -6158,7 +6107,7 @@ def fingerprint_file(path, corner, inputs_dir):
     with open(path, "rb") as handle:
         data = handle.read()
     return {"corner": corner, "file": os.path.relpath(path, inputs_dir).replace(os.sep, "/"),
-            "bytes": len(data), "sha256": sha256_bytes(data), "swhid": swhid_content(data)}
+            "bytes": len(data), "sha256": digest(data), "swhid": swhid_content(data)}
 
 def engine_file_hashes():
     """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts and reference
@@ -6580,7 +6529,7 @@ def rows_package_info(store, paths, settings, progress, split=None):
     add("Identity", "Run progress", progress)
     manifest = (store.read("run_manifest") or [{}])[0]
     if manifest.get("engine_files"):
-        add("Identity", "Engine files fingerprint", sha256_text(canonical_json(manifest["engine_files"]))[:16] +
+        add("Identity", "Engine files fingerprint", digest(canonical_json(manifest["engine_files"]))[:16] +
             " (%d files; the full list is in the run manifest)" % len(manifest["engine_files"]))
     for entry in manifest.get("inputs", []):
         add("Inputs", entry["file"], "SHA-256 %s (%d bytes)" % (entry["sha256"], entry["bytes"]))
@@ -6759,7 +6708,7 @@ def check_written_totals(rows, store):
         refs = [row["ref"] for row in written]
         if {row[key] for row in written} != set(read) or len(set(refs)) != len(refs) or \
                 any(joined_rows(texts.get(ref, [])) != (read[ref]["text"] or "") for ref in read):
-            raise EngineFault(
+            raise RunStopped(
                 "The workbook does not hold exactly what was read: %d unit(s) read for %s and %d row(s) written. "
                 "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
     flagged, counted, pieces = {}, {}, {row["unit_ref"] for row in rows["Chunks_Model"]}
@@ -6772,7 +6721,7 @@ def check_written_totals(rows, store):
     ids = [row["ref"] for row in rows.get("Flagged_Items") or ()]
     if set(flagged) - pieces or set(flagged) - set(counted) or len(set(ids)) != len(ids) or \
             any(flagged.get(ref, 0) != number for ref, number in counted.items()):
-        raise EngineFault("The workbook's flagged items do not match the counts of Chunks_Model: %d item(s) on "
+        raise RunStopped("The workbook's flagged items do not match the counts of Chunks_Model: %d item(s) on "
                           "Flagged_Items. This is a defect in the tool, not in the model under review." % len(ids))
 
 # ---------------------------------------------------------------- the workbook layout
@@ -6931,7 +6880,7 @@ def link_references(workbook, rows):
 def file_sha256(path):
     """SHA-256 of a file's bytes."""
     with open(path, "rb") as handle:
-        return sha256_bytes(handle.read())
+        return digest(handle.read())
 
 
 def progress_text(store, waiting_message):
@@ -6962,7 +6911,9 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     else:
         copy_whole(local_workbook, target)
         if manifest:
-            update_manifest(store, {"last_workbook_sha256": file_sha256(target)})
+            kept_manifest = (store.read("run_manifest") or [{}])[0]   # the manifest keeps the fingerprint of the workbook written
+            kept_manifest["last_workbook_sha256"] = file_sha256(target)
+            store.append("run_manifest", [kept_manifest])
     store.sync()
     return not guarded
 
@@ -7270,7 +7221,7 @@ def open_current():
         return None
     try:
         paths = open_run(NOTEBOOK["projects"], project, settings=notebook_settings())
-    except OutputsEdited as problem:
+    except RunStopped as problem:
         print(problem)
         return None
     before = NOTEBOOK["paths"]
