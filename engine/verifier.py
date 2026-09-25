@@ -5,7 +5,7 @@ Reads a model's methodology, its package of code and data, and its documentation
 links each unit of the package to the units it takes something from and gives something to; and asks the
 organisation's language model, through the chat() of cell 2, to explain each unit of code, to find the
 chunks of the methodology that bear on it, and to flag where the code may depart from them. One
-deliverable: Output.xlsm. Everything a run does is recorded in Audit_Log.xlsx, beside it and the Inputs folder.
+deliverable: Output.xlsm. Everything a run does is recorded in Audit_Log.xlsx, beside it and the three input folders.
 
 The file is one piece of engineering in three parts, in dependency order:
   the contracts, the reading floor and the front door
@@ -422,7 +422,7 @@ def discover_families(root, rules, report):
     exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
     table; an element carrying its own heading in an attribute; one holding other blocks (a
     container); one holding text (a paragraph). Every decision is recorded with its reason in
-    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml."""
+    plain words, shown on Model_Package_Info, and can be overridden by the project's tag_rules.yaml, beside its three input folders."""
     known, found = rules["family_of"], {}
 
     def note(tag, family, reason):
@@ -968,7 +968,7 @@ def decode_text(data):
 LEFT_BEHIND = re.compile(r"^(~\$.*|\.~lock\..*#|thumbs\.db|desktop\.ini|ehthumbs\.db|.*\.tmp|.*\.bak|.*\.swp|\.ds_store)$", re.I)
 
 def input_files(folder):
-    """The documents of one Inputs corner, walking into its folders, in a fixed order; and every
+    """The documents of one input folder, walking into its folders, in a fixed order; and every
     file left out, with why. An operating system's and an editor's leavings (a Word lock file,
     Thumbs.db) are left out, and so is the support folder a browser writes beside a saved web
     page, whose pictures and style sheets are part of the page and not documents of their own.
@@ -1347,7 +1347,7 @@ def reason_for(problem):
         return "it is damaged, or is not the archive its name says; save it again and put the new copy in its place"
     return "a reader failed on it (%s); the rest of the run went on without it" % name
 
-# ---------------------------------------------------------------- the three Inputs folders of a project
+# ---------------------------------------------------------------- the three input folders of a project
 INPUT_FOLDERS = (
     ("methodology", "1_Methodology", "Put the canonical methodology here: XML (also inside a .txt), .mhtml, .docx, "
      ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything the tool cannot read is named."),
@@ -1387,11 +1387,11 @@ _TOKEN_RE = re.compile(
 
 # ---------------------------------------------------------------- reference data of the reader
 # The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
-# schemes. An analyst's Inputs/tag_rules.yaml is laid
+# schemes. An analyst's tag_rules.yaml, beside the project's input folders, is laid
 # over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
 # caller that changes the rules it was given changes only its own copy.
 TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
-# Reviewer 1 owns this file. A project can override any part of it with Inputs/tag_rules.yaml
+# Reviewer 1 owns this file. A project can override any part of it with its own tag_rules.yaml
 # (same layout; a family given there replaces the family given here).
 # Tag names are compared in lower case and without their namespace prefix.
 # A tag that is in no family is read as a paragraph (or, when it only wraps other blocks,
@@ -1970,7 +1970,7 @@ def parse_markup(text, file_name, repairs, tolerant_only=False):
 
 # ---------------------------------------------------------------- tag rules and the block walker
 def load_tag_rules(override_path=None):
-    """The shipped tag rules, with any part replaced by the project's own Inputs/tag_rules.yaml."""
+    """The shipped tag rules, with any part replaced by the project's own tag_rules.yaml."""
     rules = yaml.safe_load(TAG_RULES_YAML)
     rules["shipped_tags"] = sorted(str(tag).lower() for tags in rules["families"].values() for tag in tags)
     analyst_families = {}
@@ -2889,7 +2889,7 @@ def read_corner(ctx, corner, input_key, label):
             because = ", because it %s" % seen["reason"] if seen.get("reason") else ""
             info_rows.append({"group": label, "item": "%s: unrecognised tag" % file_name, "value":
                               "Unrecognised tag '%s', %d times, read as %s%s. "
-                              "It can be added to Inputs/tag_rules.yaml."
+                              "It can be added to the project's tag_rules.yaml."
                               % (tag, seen["count"], seen.get("family") or seen.get("read_as"), because)})
     kind = "chunks_canon" if corner == "canon" else "chunks_doc"
     unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)
@@ -3805,7 +3805,7 @@ def read_package(ctx):
     for an unchanged tarball. Enforces: R2, R5"""
     tarballs = ctx.options["inputs"]["package"]
     if not tarballs:
-        return StepResult({}, {"units": 0}, ["No package was found in Inputs/2_Model_Package."])
+        return StepResult({}, {"units": 0}, ["No package was found in 2_Model_Package."])
     limit, root = int(ctx.settings["max_file_mb"] * 1024 * 1024), (ctx.options["inputs"].get("roots") or {}).get("package")
     archives = [path for path in tarballs if is_archive(path)]
     try:
@@ -4535,7 +4535,7 @@ PATH_BUDGET = 100
 @dataclass
 class RunPaths:
     """Where a project's run lives: its two files, Output.xlsm and Audit_Log.xlsx, sit in the project folder
-    beside its Inputs folder - run_dir, outputs_dir and audit_dir are that one folder, each name kept so that
+    beside its three input folders - run_dir, outputs_dir, audit_dir and inputs_dir are that one folder, each name kept so that
     every reader says which file it means - and local_dir is scratch space on the driver. previous is the
     manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
     projects_dir: str; project: str; project_dir: str; inputs_dir: str
@@ -4554,23 +4554,73 @@ def check_project_name(project):
     return ("The project name may hold at most 24 characters from letters, digits, hyphen and "
             "underscore. Please shorten or change '%s'." % project)
 
+LEGACY_INPUTS = "Inputs"                   # where the three folders were kept before they stood beside Output.xlsm
+BESIDE_FOLDERS = ("glossary.xlsx", "tag_rules.yaml")   # the optional files that sit beside the three folders
+
+
+def holds_nothing(path):
+    """Does a folder hold nothing but the tool's README.txt and hidden files?"""
+    return not [n for n in os.listdir(path) if n != "README.txt" and not n.startswith(".")]
+
+
+def lift_inputs(project_dir):
+    """A project laid out before - its three folders inside Inputs/ - brought to the present layout, once: each folder,
+    and each optional file beside them, moved up into the project's folder whole, not a file of it changed. A folder
+    above that holds only its README.txt gives way to the one it replaces; one that holds more is never overwritten:
+    then nothing of that folder is moved, and the run cannot start until a person keeps one. Inputs is removed when
+    nothing but hidden files is left in it. Returns (what was done, what stops the run), in plain words. Enforces: R6"""
+    legacy = os.path.join(project_dir, LEGACY_INPUTS)
+    if not os.path.isdir(legacy):
+        return [], []
+    done, blocking = [], []
+    for name in [folder for _, folder, _ in INPUT_FOLDERS] + list(BESIDE_FOLDERS):
+        old, new = os.path.join(legacy, name), os.path.join(project_dir, name)
+        if not os.path.exists(old):
+            continue
+        if os.path.isdir(new) and os.path.isdir(old) and holds_nothing(new):
+            shutil.rmtree(new)                                 # only the tool's README: the older folder takes its place
+        if os.path.exists(new):
+            blocking.append("%s is both in %s and beside it, and both hold files. Keep one: move what the one in Inputs holds "
+                            "into %s, or delete it, then remove Inputs and run cell 3 again." % (name, legacy, new))
+            continue
+        try:
+            os.rename(old, new)
+            done.append(name)
+        except OSError as problem:
+            blocking.append("%s could not be moved up out of %s (%s). Move it beside Output.xlsm yourself, then run cell 3 "
+                            "again." % (name, legacy, problem))
+    left = [n for n in os.listdir(legacy) if not n.startswith(".")]
+    said = (["Moved up out of Inputs, into the project's folder beside Output.xlsm: %s; no file in them was changed."
+             % ", ".join(done)] if done else [])
+    if not left and not blocking:
+        shutil.rmtree(legacy)
+        said.append("Inputs, now empty, was removed.")
+    elif left and not blocking:
+        said.append("Inputs still holds %s, which the tool does not read; left as it is." % ", ".join(sorted(left)))
+    return said, blocking
+
+
 def setup_project(projects_dir, project):
-    """Create the project skeleton and say what is still missing. Inputs are never touched."""
+    """Create the project skeleton and say what is still missing: the three input folders, each with its README.txt,
+    in the project's folder beside Output.xlsm and Audit_Log.xlsx. A project laid out before, with its folders inside
+    Inputs/, is first brought to this layout (lift_inputs). Returns (project folder, what stops the run, what was
+    done). The content of an input is never touched. Enforces: R6"""
     problem = check_project_name(project)
     if problem:
         raise ValueError(problem)
-    project_dir = os.path.join(projects_dir, project)          # the project's folder: its Inputs, and a run's two files
-    missing = []
+    project_dir = os.path.join(projects_dir, project)          # the project's folder: its three input folders, and a run's two files
+    os.makedirs(project_dir, exist_ok=True)
+    said, missing = lift_inputs(project_dir)
     for _, folder, readme in INPUT_FOLDERS:
-        path = os.path.join(project_dir, "Inputs", folder)
+        path = os.path.join(project_dir, folder)
         os.makedirs(path, exist_ok=True)
         readme_path = os.path.join(path, "README.txt")
         if not os.path.exists(readme_path):
             with open(readme_path, "w", encoding="utf-8") as handle:
                 handle.write(readme + "\n")
-        if not [n for n in os.listdir(path) if n != "README.txt" and not n.startswith(".")]:
-            missing.append("Inputs/%s is still empty. %s" % (folder, readme))
-    return project_dir, missing
+        if holds_nothing(path):
+            missing.append("%s is still empty. %s" % (folder, readme))
+    return project_dir, missing, said
 
 def new_run_id(taken, now=None):
     """A run is named by the minute it started, <date>_<HHMM>, with a letter added while that name is taken:
@@ -4643,13 +4693,13 @@ def pick_scratch_root(preferred=""):
 
 def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
     """The project's run, and its local scratch folder. A project holds one run: its two files, Output.xlsm and
-    Audit_Log.xlsx, sit beside its Inputs folder. The run the audit log records is carried on - by this session
+    Audit_Log.xlsx, sit beside its three input folders. The run the audit log records is carried on - by this session
     or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
     run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
     changed since the tool wrote it is never replaced: OutputsEdited says so. Inputs are never touched.
     Enforces: R6, R12"""
-    project_dir, _ = setup_project(projects_dir, project)
-    inputs_dir = os.path.join(project_dir, "Inputs")
+    project_dir, _, _ = setup_project(projects_dir, project)
+    inputs_dir = project_dir                                # the three input folders stand in the project's folder
     record = recorded_manifest(project_dir)
     why = run_changes(record, inputs_dir, settings or make_settings({}))
     scratch_root = pick_scratch_root(scratch_root)
@@ -4729,7 +4779,7 @@ class LiveValues:
 
 # ---------------------------------------------------------------- the audit store
 AUDIT_OBJECTS = ("run_manifest", "package_info")
-AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsm and the Inputs folder
+AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsm and the three input folders
 CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
 
 def copy_whole(source, target):
@@ -6974,7 +7024,7 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     """Rebuild Output.xlsm (and the report once flagged items exist) on local disk and copy
     them whole into the project folder. The guard: a workbook there that differs from the last
     one the tool wrote is a reviewer's work in progress and is never overwritten before it has
-    been read in. Afterwards the project folder holds the two files beside its Inputs. Enforces: R6, R12"""
+    been read in. Afterwards the project folder holds the two files beside its three input folders. Enforces: R6, R12"""
     work = os.path.join(store.local_dir, "work")
     os.makedirs(work, exist_ok=True)
     progress = progress_text(store, waiting_message)
@@ -7014,7 +7064,7 @@ def contents_of(path):
         return                                       # a damaged archive is caught by the other lines of the verification
 
 def verify_evidence_pack(paths, settings, live=None):
-    """Works from the project's two files and its Inputs folder alone. Returns rows (what was checked,
+    """Works from the project's two files and its three input folders alone. Returns rows (what was checked,
     "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
     content hash is computed again from the input files and compared with the record."""
     store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
@@ -7051,7 +7101,7 @@ def verify_evidence_pack(paths, settings, live=None):
         line("The workbook carries this run's ids and fingerprints", False, "Output.xlsm could not be opened")
     secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
     leaked = []
-    for name in (OUTPUT_FILE, AUDIT_FILE):                # the tool's own files; the Inputs are the project's
+    for name in (OUTPUT_FILE, AUDIT_FILE):                # the tool's own files; the input folders are the project's
         path = os.path.join(paths.outputs_dir, name)
         if os.path.exists(path):
             leaked += [name for data in contents_of(path) for value in secrets if value in data]
@@ -7248,7 +7298,7 @@ def notebook_settings():
 
 def check_chat(chat):
     """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's steps 04 and 05,
-    make the project's three Inputs folders and say what belongs in each."""
+    make the project's three input folders and say what belongs in each."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
         return
@@ -7264,22 +7314,26 @@ def check_chat(chat):
               " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
         return
     widgets = NOTEBOOK["dbutils"].widgets
-    project_dir, missing = setup_project(NOTEBOOK["projects"], widgets.get("project_name"))
-    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
+    project_dir, missing, said = setup_project(NOTEBOOK["projects"], widgets.get("project_name"))
+    for line in said:
+        print("\n" + line)
+    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, in the project's folder beside Output.xlsm, then run cell 3:")
     for _, folder, note in INPUT_FOLDERS:
-        print("  %s\n      %s" % (os.path.join(project_dir, "Inputs", folder), note))
+        print("  %s\n      %s" % (os.path.join(project_dir, folder), note))
     print("\nOne methodology file, the model package as it ships (.tar.gz, .zip or the unpacked folder), and the")
     print("model documentation. A folder with nothing in it stops the run and says so, rather than reading around it.")
-    print("\nStill empty: " + "; ".join(missing) if missing else "\nAll three folders have files in them. Next: cell 3.")
+    print("\nBefore cell 3: " + " ".join(missing) if missing else "\nAll three folders have files in them. Next: cell 3.")
 
 def open_current():
     """The run of the project the widgets name, carried on or started anew as open_run decides - asked each time
     cell 3 runs, so that an input changed meanwhile is noticed - and said in plain words when it is not the run
-    this session worked on already. None, with what to do, while a folder of Inputs is empty or while a new run
+    this session worked on already. None, with what to do, while an input folder is empty or while a new run
     would replace an Output.xlsm a person has changed."""
     widgets = NOTEBOOK["dbutils"].widgets
     project = widgets.get("project_name")
-    _, missing = setup_project(NOTEBOOK["projects"], project)
+    _, missing, said = setup_project(NOTEBOOK["projects"], project)
+    for line in said:
+        print(line)
     if missing:
         print("\n".join(missing))
         print("Put the files in, then run cell 3.")
@@ -7317,7 +7371,7 @@ def review():
         for message in record["messages"]:
             print("      " + message)
     print("\nProject folder:", paths.project_dir)
-    print("Open Output.xlsm there, beside Inputs: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
+    print("Open Output.xlsm there, beside the three input folders: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
     print("organisation's model says of each piece, the chunks of the methodology it found for it, and how many items it")
     print("flagged; Flagged_Items lists every item, one to a row, with a column for your decision and one for your notes.")
     print("A click on a reference shows only the rows it names, once Excel lets the workbook's macro run;")
