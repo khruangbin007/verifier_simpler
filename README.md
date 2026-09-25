@@ -10,6 +10,6 @@ engine/
   Manual.md             the one manual, for everyone
 ```
 
-A run writes into the project's folder, beside its three input folders: `Output.xlsm`, with five sheets - what was read, what the organisation's model says of the code, and each item it flags, one to a row, for a reviewer's decision; a click on a reference shows only the rows it names - and the `_Audit` folder, the record of the run: `Audit_Log.xlsx` - every step, every record, every exchange with the model, and an inventory of every file - and, for each step, a folder of JSON files for everything it read, made or asked the model, in the order written.
+A run writes into the project's folder, beside its three input folders: `Output.xlsm`, with five sheets - what was read, what the organisation's model says of the code, and each item it flags, one to a row, for a reviewer's decision; a click on a reference shows only the rows it names - and the `_Audit` folder, the record of the run: `Audit_Log.xlsx` - every step, every record, every exchange with the model, and an inventory of every file - and, for each step, a folder of JSON files for everything it read, made or asked the model, in the order written. A new run keeps the one before, whole, in `_Audit/previous_runs`.
 
 Everything else is in the manual.

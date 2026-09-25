@@ -4601,6 +4601,32 @@ def lift_inputs(project_dir):
     return said, blocking
 
 
+PREVIOUS_RUNS = "previous_runs"            # in _Audit: each run a new run replaced, kept whole
+
+
+def archive_run(project_dir, run_id):
+    """The run a new run replaces, kept whole: everything in _Audit - Audit_Log.xlsx, run_log.txt, the step folders -
+    and the Output.xlsm, or the Output.xlsx of before, the tool wrote for it, moved into
+    _Audit/previous_runs/<its run id>/. Nothing of it is deleted or changed; a run kept before stays where it is.
+    An Output a person changed never comes here: open_run stops first (OutputsEdited). Returns the folder, or ""
+    when there was nothing to keep. Enforces: R4, R6"""
+    audit = os.path.join(project_dir, AUDIT_FOLDER)
+    kept = [os.path.join(audit, name) for name in sorted(os.listdir(audit)) if name != PREVIOUS_RUNS] if os.path.isdir(audit) else []
+    kept += [path for path in (os.path.join(project_dir, OUTPUT_FILE), os.path.join(project_dir, LEGACY_OUTPUT_FILE))
+             if os.path.exists(path)]
+    if not kept:
+        return ""
+    base = os.path.join(audit, PREVIOUS_RUNS, re.sub(r"[^A-Za-z0-9_.-]+", "-", run_id) or "run-before")
+    target, number = base, 1
+    while os.path.exists(target):
+        number += 1
+        target = "%s-%d" % (base, number)
+    os.makedirs(target)
+    for path in kept:
+        os.rename(path, os.path.join(target, os.path.basename(path)))
+    return target
+
+
 def lift_audit_log(project_dir):
     """A project whose Audit_Log.xlsx stands in its own folder, as it did before, has it moved into _Audit, once - the
     tool's own file, moved whole. Returns what was done, in plain words."""
@@ -4729,17 +4755,20 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
                 raise OutputsEdited(
                     "%s in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
                     "Move it to another folder or rename it, then run cell 3 again." % (name, project_dir, why))
-        legacy = os.path.join(project_dir, LEGACY_OUTPUT_FILE)
-        replaced = os.path.exists(legacy)
-        if replaced:                                      # the tool's own, unchanged: Output.xlsm takes its place
-            os.remove(legacy)
+        replaced = os.path.exists(os.path.join(project_dir, LEGACY_OUTPUT_FILE))
+        kept = archive_run(project_dir, (record or {}).get("run_id") or "")   # the run before, kept whole: never deleted
         previous = record if record and record.get("inputs") else None
-        run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run)), now)
-        opened = ("A new run, %s: %s since run %s, so Output.xlsm and the _Audit folder are replaced." % (run_id, why, record["run_id"])
+        archived = os.path.join(project_dir, AUDIT_FOLDER, PREVIOUS_RUNS)     # a run id is never used twice in a project
+        run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run))
+                            or os.path.exists(os.path.join(archived, run)), now)
+        opened = ("A new run, %s: %s since run %s." % (run_id, why, record["run_id"])
                   if record and record.get("run_id") else "A new run, %s." % run_id)
+        if kept:
+            opened += (" The run before - its Output.xlsm and its _Audit folder - is kept, whole, in %s."
+                       % os.path.relpath(kept, project_dir).replace(os.sep, "/"))
         if replaced:
-            opened += (" %s, which the tool wrote before, is replaced by %s: the same sheets, and a click on a reference "
-                       "shows only the chunks it names." % (LEGACY_OUTPUT_FILE, OUTPUT_FILE))
+            opened += (" %s, which the tool wrote before, is kept with it; %s takes its place: the same sheets, and a click "
+                       "on a reference shows only the chunks it names." % (LEGACY_OUTPUT_FILE, OUTPUT_FILE))
     local_dir = local_of(run_id)
     paths = RunPaths(projects_dir, project, project_dir, inputs_dir, run_id, project_dir,
                      project_dir, os.path.join(project_dir, AUDIT_FOLDER), local_dir, previous, opened)
@@ -4750,8 +4779,6 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
                          "Excel can still open downloaded files. Please use a shorter project name "
                          "or Projects folder." % (len(relative), PATH_BUDGET))
     os.makedirs(paths.local_dir, exist_ok=True)
-    if why and os.path.isdir(paths.audit_dir):              # a new run replaces the record of the one before, whole
-        shutil.rmtree(paths.audit_dir)
     if why:                                                 # a new run: the record of the one it replaces is not read back
         OPEN_STORES[(paths.local_dir, paths.audit_dir)] = AuditStore(paths.local_dir, paths.audit_dir, loaded=True)
     return paths
@@ -4818,7 +4845,8 @@ class AuditStore:
         Steps          every step that ran, what it counted and what it said
         Records        every record of every kind, in the order written, each as its own JSON
         Model_Calls    every exchange with the model: the question, the answer and the outcome
-        Files          every file of the audit folder, in the order written, with its size and SHA-256
+        Files          every file of the audit folder, in the order written, with when an exchange was sent and
+                       returned, its size and its SHA-256
 
     Records are held in memory while a cell runs and the workbook is written whole at each
     sync, beside and then swapped in, so a reader never sees it half written. Text longer than
@@ -4831,7 +4859,7 @@ class AuditStore:
     loaded: bool = False
     copied: set = field(default_factory=set)       # the files of the audit folder already in the project's _Audit
 
-    def write_file(self, step_id, step_name, label, payload, holds, about=""):
+    def write_file(self, step_id, step_name, label, payload, holds, about="", sent_at="", returned_at=""):
         """One file of the audit folder: payload as JSON, in the step's own folder - 02_read-inputs - numbered after the
         files the step wrote before it, so that a step's files, and a step tried again, read in the order written:
         02_read-inputs/0003_methodology_capital_methodology.txt.json. Written on local disk with the token removed,
@@ -4849,7 +4877,7 @@ class AuditStore:
         with open(local, "wb") as handle:
             handle.write(data)
         self.append("audit_files", [{"number": len(inventory) + 1, "step_id": step_id, "step": step_name, "file": relative,
-                                     "holds": holds, "about": about,
+                                     "holds": holds, "about": about, "sent_at": sent_at, "returned_at": returned_at,
                                      "written_at": datetime.datetime.now().isoformat(timespec="seconds"),
                                      "bytes": len(data), "sha256": sha256_bytes(data)}])
         return relative
@@ -4896,7 +4924,7 @@ class AuditStore:
         steps = book.create_sheet("Steps")
         steps.append(["Step", "Name", "Seconds", "What it counted", "What it said"])
         for record in self.read("step_records"):
-            steps.append([record.get("step_id", ""), record.get("step", ""), record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
+            steps.append([record.get("step_id", ""), record.get("name") or record.get("step", ""), record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
                           "\n".join(record.get("messages") or [])[:CELL_LIMIT]])
         records = book.create_sheet("Records")
         records.append(["Kind", "Number", "Part", "Record (JSON)"])
@@ -4910,26 +4938,29 @@ class AuditStore:
                 calls.append([number, record.get("question_id", ""), record.get("step", ""), record.get("question_type", ""),
                               record.get("attempt", ""), record.get("outcome", ""), part_number, part])
         inventory = book.create_sheet("Files")          # every file of the audit folder, in the order written
-        inventory.append(["Number", "Step", "File", "What it holds", "About", "Written at", "Bytes", "SHA-256"])
+        inventory.append(["Number", "Step", "File", "What it holds", "About", "Sent at", "Returned at", "Written at", "Bytes",
+                          "SHA-256"])
         for entry in self.read("audit_files"):
             inventory.append([entry["number"], "%s %s" % (entry["step_id"], entry["step"]), entry["file"], entry["holds"],
-                              entry.get("about", ""), entry["written_at"], entry["bytes"], entry["sha256"]])
+                              entry.get("about", ""), entry.get("sent_at", ""), entry.get("returned_at", ""), entry["written_at"],
+                              entry["bytes"], entry["sha256"]])
             inventory.cell(row=inventory.max_row, column=3).hyperlink = entry["file"]     # opens the file beside the workbook
         for sheet in book.worksheets:
             sheet.freeze_panes = "A2"
-        partial = os.path.join(self.local_dir, AUDIT_FILE + ".writing")
-        os.makedirs(self.local_dir, exist_ok=True)
-        book.save(partial)
-        copy_whole(partial, self.target())
-        os.remove(partial)
-        written = [AUDIT_FILE]
-        for entry in self.read("audit_files"):          # each file of the audit folder copied once, whole
-            local = os.path.join(self.local_dir, AUDIT_FOLDER, *entry["file"].split("/"))
+        written = []
+        for entry in self.read("audit_files"):          # each file of the audit folder copied once, whole - before the
+            local = os.path.join(self.local_dir, AUDIT_FOLDER, *entry["file"].split("/"))   # inventory that lists it
             if entry["file"] in self.copied or not os.path.exists(local):
                 continue                                # copied before, or by the session that wrote it
             copy_whole(local, os.path.join(self.remote_dir, *entry["file"].split("/")))
             self.copied.add(entry["file"])
             written.append(entry["file"])
+        partial = os.path.join(self.local_dir, AUDIT_FILE + ".writing")
+        os.makedirs(self.local_dir, exist_ok=True)
+        book.save(partial)
+        copy_whole(partial, self.target())
+        os.remove(partial)
+        written.insert(0, AUDIT_FILE)
         log = os.path.join(self.local_dir, "run_log.txt")
         if os.path.exists(log):                         # the technical log of the run, the token already removed
             copy_whole(log, os.path.join(self.remote_dir, "run_log.txt"))
@@ -5067,6 +5098,53 @@ CHAT_STOP_WAIT = 120         # seconds a stopped step waits for the questions st
 CHAT_PROGRESS_SECONDS = 60   # how often a long step says how far it has got
 ANSWERS = {}                 # run (its scratch folder) -> {question id: (question, what came back)}, until written
 ANSWERS_LOCK = threading.Lock()
+RESTORED = set()             # the runs whose journal this Python process has read back
+JOURNAL = "answers.jsonl"    # in the run's work folder: every answer, as it arrives, the token removed
+
+
+def sent_stamp(moment):
+    """When a question was sent, as the records and the files of the audit folder give it."""
+    return datetime.datetime.fromtimestamp(moment).isoformat(timespec="milliseconds") if moment else ""
+
+
+def journal_answer(local_dir, question, result):
+    """One answer, appended to the run's journal on local scratch the moment it arrives - the token removed - so that a
+    restart of Python loses none: restore_answers reads it back. Appended only, never rewritten. Enforces: R8"""
+    redact = (NOTEBOOK["live"] or LiveValues()).redact
+    line = json.dumps({"question": redacted(to_plain(question), redact), "result": redacted(to_plain(result), redact)},
+                      default=str, ensure_ascii=False)
+    folder = os.path.join(local_dir, "work")
+    os.makedirs(folder, exist_ok=True)
+    with ANSWERS_LOCK:
+        with open(os.path.join(folder, JOURNAL), "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+
+def restore_answers(ctx):
+    """Once in a Python process, the answers of this run's journal that no record holds yet - those that arrived before
+    Python restarted - held again as if they had just arrived. A record holds an answer when it names the same question
+    and the same moment it was sent. Enforces: R2"""
+    local = ctx.options["paths"].local_dir
+    with ANSWERS_LOCK:
+        if local in RESTORED:
+            return
+        RESTORED.add(local)
+        held = ANSWERS.setdefault(local, {})
+    path = os.path.join(local, "work", JOURNAL)
+    if not os.path.exists(path):
+        return
+    written = {(record.get("question_id"), record.get("sent_at")) for record in ctx.read("llm_calls")}
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue                                 # a line cut off by the stop itself
+            question, result = entry["question"], entry["result"]
+            if (question.get("id"), sent_stamp(result.get("started"))) in written:
+                continue
+            with ANSWERS_LOCK:
+                held.setdefault(question["id"], (question, result))
 
 
 class NoAnswer(Exception):
@@ -5151,6 +5229,7 @@ def ask_model(chat, system, main, check=None, halt=None):
 def held_answers(ctx, types):
     """The answers of this run that arrived but are not yet written, as call records without their provenance: those
     of a cell that was interrupted, for instance. Read, not taken: ask_all takes them when it hands them over."""
+    restore_answers(ctx)
     held = ANSWERS.get(ctx.options["paths"].local_dir) or {}
     with ANSWERS_LOCK:
         entries = list(held.values())
@@ -5167,6 +5246,7 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
     Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
     questions that were out at once. Enforces: R2, R5, R8"""
+    restore_answers(ctx)
     held = ANSWERS.setdefault(ctx.options["paths"].local_dir, {})
     most = max(1, int(ctx.settings.get("parallel_chats") or 1))
     waiting, running = collections.deque(work), {}
@@ -5184,6 +5264,10 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
             return
         with ANSWERS_LOCK:
             held[question["id"]] = (question, result)
+        try:
+            journal_answer(ctx.options["paths"].local_dir, question, result)
+        except OSError:
+            pass                                         # the journal is a spare: the answer is held all the same
 
     def progress(final=False):
         parts = ["%d answered" % answered] + (["%d not answered" % failed] if failed else [])
@@ -5275,9 +5359,10 @@ def call_record(ctx, asked, result, redact, **extra):
                    "tokens": asked.get("tokens", 0), "answer": answer,
                    "reading": redacted(result["reading"], redact),
                    "prompt_hash": asked["id"], "response_hash": sha256_text(answer) if answer else "",
-                   "what happened": [redact(line) for line in result["plain"]], "seconds": round(result["seconds"], 3)})
+                   "what happened": [redact(line) for line in result["plain"]], "seconds": round(result["seconds"], 3),
+                   "sent_at": sent_stamp(result.get("started"))})
     if isinstance(getattr(ctx, "exchanges", None), list):  # the exchange as chat() saw it, for the audit folder
-        stamp = lambda moment: datetime.datetime.fromtimestamp(moment).isoformat(timespec="milliseconds") if moment else ""
+        stamp = sent_stamp
         ctx.exchanges.append({"question_id": asked["id"], "attempt": result["attempt"], "unit_ref": asked["unit_ref"],
                               "question_type": asked["type"], "sent_at": stamp(result.get("started")),
                               "returned_at": stamp(result.get("ended")),
@@ -6286,8 +6371,8 @@ def audit_step_files(store, step, result, exchanges):
     SystemPrompt and MainPrompt as sent, the answer as returned, and what came of it. In the order the step made
     them, which is the same for the same inputs. Enforces: R2, R4, R5"""
     records = {kind: [to_plain(record) for record in items] for kind, items in result.records.items()}
-    def write(label, payload, holds, about=""):
-        store.write_file(step["id"], step["name"], label, payload, holds, about)
+    def write(label, payload, holds, about="", sent_at="", returned_at=""):
+        store.write_file(step["id"], step["name"], label, payload, holds, about, sent_at, returned_at)
     for manifest in records.get("run_manifest") or ():
         write("run-manifest", manifest, "The run's identity, the fingerprints of its input files and of the engine's files, "
                                         "the packages' versions, the settings, and what changed since the run before")
@@ -6326,8 +6411,7 @@ def audit_step_files(store, step, result, exchanges):
                                                        "chat_output", "technical") if key in exchange})
         write("%s_%s%s" % (call.get("unit_ref") or "", str(call.get("question_type") or "").replace(" ", "-"), detail), payload,
               "One exchange with chat(): the SystemPrompt and MainPrompt sent, the answer returned, and what came of it",
-              "%s - sent %s, returned %s" % (call.get("unit_ref") or "", exchange.get("sent_at", "")[11:] or "not sent",
-                                             exchange.get("returned_at", "")[11:] or "-"))
+              call.get("unit_ref") or "", exchange.get("sent_at", ""), exchange.get("returned_at", ""))
 
 
 def step_failure(step, problem, work_dir):

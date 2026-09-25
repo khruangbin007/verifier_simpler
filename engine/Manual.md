@@ -29,7 +29,7 @@ Projects/<project name>/
                               a JSON file for everything each step read, made or asked chat(), in the order written
 ```
 
-A project holds one run at a time. Cell 3 carries it on where it stopped - in the same session or a later one - while the input files, the engine and the settings are the ones it started with; when one of them has changed, it starts a new run, replaces both files, and `Model_Package_Info` lists what changed since the run before. An `Output.xlsm` you have edited is never replaced: cell 3 asks you to move it aside first.
+A project holds one run at a time. Cell 3 carries it on where it stopped - in the same session or a later one - while the input files, the engine and the settings are the ones it started with; when one of them has changed, it starts a new run, keeping the run before - its `Output.xlsm` and its `_Audit` folder - whole in `_Audit/previous_runs/<run id>`, and `Model_Package_Info` lists what changed since the run before. A new token pasted into widget 02 changes none of them: the run carries on. An `Output.xlsm` you have edited is never replaced: cell 3 asks you to move it aside first.
 
 The record is what makes the run an **evidence pack**: from that workbook alone, anyone can check that the inputs are the ones fingerprinted, that the code that ran is the code released, and that nothing was edited afterwards.
 
@@ -249,7 +249,13 @@ So a cell of Immediate Upstream or Immediate Downstream Model Chunk holds the li
 | 04, 05 | one file for each exchange with `chat()` - `M-0003_code-interpretation`, `M-0003_methodology-search_C-0001-C-0028`, `M-0003_methodology-comparison_C-0012` - holding the SystemPrompt and the MainPrompt exactly as sent (and any later MainPrompt, when an answer was asked for again), the answer as returned, when it was sent and returned, the outcome, and what went wrong if anything did |
 | every step | `step_attempt-1`, `-2` ...: what the attempt did, counted and said, and whether it finished; `fault_attempt-N` when it could not finish, with the fault inside the tool |
 
-The sheet *Files* of `Audit_Log.xlsx` lists every one of them, numbered across the whole run; an exchange's line also says when it was sent and returned. No file holds the access token. A new run replaces the whole folder, as it replaces `Output.xlsm`.
+The sheet *Files* of `Audit_Log.xlsx` lists every one of them, numbered across the whole run; an exchange's line also says when it was sent and returned. The columns *Sent at* and *Returned at* sort the exchanges into the order they happened. No file holds the access token.
+
+**Running again.** The rules that keep the record whole, whatever happens:
+- **A run carried on only adds.** When cell 3 runs again - after an expired token, a gateway that was down, a stopped cell - nothing in `_Audit` is overwritten or deleted: a step run again goes on with the next number, its failed exchanges stay, each with what `chat()` returned, and a question already answered is never asked again. The sheet *Steps* lists every attempt.
+- **Answers survive a stopped cell and a restart of Python.** Each answer is written, the moment it arrives, to a journal on the driver's own disk, the token removed, and the next run of the step writes it into the record with the time it was first sent. A restart of the cluster wipes that disk: answers not yet written are then asked again.
+- **A new run keeps the run before.** A changed input file, a changed engine or a changed setting starts a new run - a new token does not - and the run before, its `Output.xlsm` and everything in `_Audit`, is moved whole into `_Audit/previous_runs/<run id>/`, byte for byte, never deleted, and a run's id is never given twice. Cell 4 checks the current run, and searches the kept ones for the token too. Delete a kept run yourself once it is no longer needed.
+- **Never change `_Audit` by hand.** Cell 4's ninth check catches a changed or missing file.
 
 ## 9. When something goes wrong
 
@@ -264,7 +270,7 @@ The sheet *Files* of `Audit_Log.xlsx` lists every one of them, numbered across t
 | "No question showing C-0012 has been answered" | Questions showing the rest of the methodology were answered, but none showing that chunk: the gateway may refuse what it holds. The rows of the pieces affected say which chunk is still to search. |
 | A deviation reads "The model's words for this one cannot be shown in plain words" | The model kept using words the workbook may not hold, three times running. Its answer is in the audit log's Model_Calls sheet; the Refs at the start of the line say which chunks it rests on. |
 | The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. Cell 3 carries the project's run on where it stopped: a finished step is not repeated, and no recorded answer is asked for again. |
-| An input changed | Run `cell 3`: it says the input files changed and starts a new run, replacing `Output.xlsm` and the `_Audit` folder; `Model_Package_Info` lists what changed since the run before. The same happens when the engine or a setting changes. |
+| An input changed | Run `cell 3`: it says the input files changed and starts a new run, keeping the run before in `_Audit/previous_runs`; `Model_Package_Info` lists what changed since the run before. The same happens when the engine or a setting changes. |
 | "Output.xlsm ... has been changed since the tool wrote it" | A new run would replace an `Output.xlsm` you have edited, so cell 3 stopped. Move it to another folder or rename it, then run `cell 3` again. |
 | A unit of kind *File not read* | That file or expression could not be parsed. `Model_Package_Info` lists it with the reason; the rest of the package was still read. |
 | A cell reads "This text could not be shown in plain words" | The tool withheld a text that contained technical traces; the text is in `run_log.txt`, in the run's scratch folder on the driver. Please report it; it is a defect in the tool. |
