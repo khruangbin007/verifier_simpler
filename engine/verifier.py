@@ -5867,7 +5867,8 @@ def input_fingerprints(inputs_dir, inputs=None):
 # input. Without macros, each link still leads to the first chunk it names. Enforces: R5, R7
 
 LINK_COLUMNS = {"methodology_refs": ("Chunks_Methodology", "Click: Chunks_Methodology shows only these chunks"),
-                "upstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one")}
+                "upstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one"),
+                "downstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one")}
 REF_LIST = re.compile(r"^[CDM]-\d{4,}(?:; [CDM]-\d{4,})*$")      # a cell that is a list of references, and nothing else
 LINK_FONT = "0563C1"                                            # the blue Excel gives a hyperlink
 
@@ -5875,7 +5876,8 @@ WORKBOOK_MACRO = """Option Explicit
 
 ' Verifier: a reference in Chunks_Model, clicked, shows only the chunks it names.
 '   Relevant Chunks in Methodology (searched by LLM): Chunks_Methodology, filtered to the chunks listed.
-'   Immediate Upstream Model Chunk: Chunks_Model, filtered to the chunks listed and the row clicked.
+'   Immediate Upstream Model Chunk and Immediate Downstream Model Chunk: Chunks_Model, filtered to the
+'   chunks listed and the row clicked.
 ' A chunk shown in several rows (C-0012-1, C-0012-2 ...) is shown whole. Nothing else is changed:
 ' Data > Clear shows every row again. Without macros, a link still leads to the first chunk it names.
 
@@ -5888,7 +5890,7 @@ Private Sub Workbook_SheetFollowHyperlink(ByVal Sh As Object, ByVal Target As Hy
     refs = RefsIn(CStr(clicked.Value))
     If heading = "Relevant Chunks in Methodology (searched by LLM)" Then
         ShowOnly ThisWorkbook.Worksheets("Chunks_Methodology"), refs
-    ElseIf heading = "Immediate Upstream Model Chunk" Then
+    ElseIf heading = "Immediate Upstream Model Chunk" Or heading = "Immediate Downstream Model Chunk" Then
         ShowOnly Sh, refs & "|" & UnitOf(CStr(Sh.Cells(clicked.Row, 1).Value))
     End If
 Finish:
@@ -6437,9 +6439,10 @@ def build_workbook(store, paths, settings, progress, target):
 
 
 def link_references(workbook, rows):
-    """A hyperlink on each cell of Chunks_Model that is a list of references - Relevant Chunks in Methodology and
-    Immediate Upstream Model Chunk (LINK_COLUMNS) - leading to the first chunk it names, where the workbook's macro
-    then shows only the chunks named (WORKBOOK_MACRO). One link to a cell: Excel holds no more. Enforces: R2"""
+    """A hyperlink on each cell of Chunks_Model that is a list of references - Relevant Chunks in Methodology, Immediate
+    Upstream Model Chunk and Immediate Downstream Model Chunk (LINK_COLUMNS) - leading to the first chunk it names,
+    where the workbook's macro then shows only the chunks named (WORKBOOK_MACRO). One link to a cell: Excel holds no
+    more. Enforces: R2"""
     from openpyxl.styles import Font
     from openpyxl.worksheet.hyperlink import Hyperlink
     first_row = {}
