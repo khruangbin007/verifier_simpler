@@ -58,7 +58,7 @@ from xml.sax.saxutils import escape
 # ================================================================================================
 # the contracts, the reading floor and the front door
 # ================================================================================================
-# ---------------------------------------------------------------- vocabulary, and the words the tool may never use
+# ---------------------------------------------------------------- vocabulary
 
 UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
 
@@ -69,20 +69,6 @@ KIND_COMPILED, KIND_NOT_READ, KIND_OTHER = "Compiled code", "File not read", "Ot
 UNIT_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST, KIND_TABLE, KIND_OBJECT,
               KIND_ROXYGEN, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
 CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
-
-# This one assignment has to name the words the tool may never use; nothing else in the engine may.
-# These terminologies CAN BE USED ONLY by HUMAN reviewers/validators. Machines cannot make these determinations.
-BANNED_WORDING_PATTERNS = (
-    r"\bfindings?\b", r"\berrors?\b", r"\bseverity\b", r"\bsevere\b", r"\bcritical\b",
-    r"\bmajor\b", r"\bminor\b",
-    r"\b(high|medium|low)[\s-]+(risk|priority|rating|impact)\b",
-    r"\b(risk|priority|rating|impact)\s*[:=]?\s*(high|medium|low)\b")
-_BANNED_RE = re.compile("|".join(BANNED_WORDING_PATTERNS), re.IGNORECASE)
-
-def has_banned_wording(text):
-    """Return the first word in `text` that the tool's own wording may not use, or "". Enforces: R1"""
-    found = _BANNED_RE.search(text or "")
-    return found.group(0) if found else ""
 
 # ---------------------------------------------------------------- data contracts: the records (plan 2.7)
 @dataclass(frozen=True)
@@ -5099,6 +5085,7 @@ CHAT_PROGRESS_SECONDS = 60   # how often a long step says how far it has got
 ANSWERS = {}                 # run (its scratch folder) -> {question id: (question, what came back)}, until written
 ANSWERS_LOCK = threading.Lock()
 RESTORED = set()             # the runs whose journal this Python process has read back
+CONSUMED = {}                # run -> {(question id, when sent)}: answers a step has taken, never to be held again
 JOURNAL = "answers.jsonl"    # in the run's work folder: every answer, as it arrives, the token removed
 
 
@@ -5152,10 +5139,9 @@ class NoAnswer(Exception):
 
 
 def unwelcome_words(text):
-    """The words of an answer that no cell of the workbook may hold, as they were written. Enforces: R1, R10"""
-    found = [match.group(0) for match in PYTHON_TRACES.finditer(text)]
-    found += [match.group(0) for match in _BANNED_RE.finditer(text)]
-    return sorted(set(found), key=str.lower)
+    """The technical text of an answer - a Python trace, an internal name - that no cell of the workbook shows, as it
+    was written. Enforces: R10"""
+    return sorted(set(match.group(0) for match in PYTHON_TRACES.finditer(text)), key=str.lower)
 
 
 def own_words(text):
@@ -5164,22 +5150,22 @@ def own_words(text):
 
 
 def check_words(answer, last):
-    """Step 04's check of an answer: words the workbook cannot hold are asked about again, and kept on the last try.
-    Returns (what was read, what to ask again or None, a note)."""
+    """Step 04's check of an answer: technical text the workbook does not show - a Python trace, an internal name - is
+    asked about again, and kept on the last try. Returns (what was read, what to ask again or None, a note)."""
     unwelcome = unwelcome_words(answer)
     if not unwelcome:
         return None, None, ""
     if last:
-        return None, None, "the answer still used words the workbook cannot hold"
-    return None, {"plain": "the answer used words the workbook cannot hold (%s)" % ", ".join(unwelcome),
-                  "ask": "Your last description used words this workbook cannot hold (%s). Write it again without "
-                         "them." % ", ".join(unwelcome)}, ""
+        return None, None, "the answer still held technical text the workbook does not show"
+    return None, {"plain": "the answer held technical text the workbook does not show (%s)" % ", ".join(unwelcome),
+                  "ask": "Your last description held technical text this workbook does not show (%s). Write it again "
+                         "without it." % ", ".join(unwelcome)}, ""
 
 
 def ask_model(chat, system, main, check=None, halt=None):
     """One question, asked on a worker thread: up to CHAT_ATTEMPTS tries. A failed call - one that raises, or returns
     anything but a dictionary with an answer under "answer": an error from the gateway, an expired token - waits a
-    little and tries again; an answer `check` turns down - words the workbook cannot hold, or not the form asked for -
+    little and tries again; an answer `check` turns down - technical text the workbook does not show, or not the form asked for -
     is asked for again, saying what was wrong. Once `halt` is set - the cell that asked has ended, or was stopped - no
     further try is made: the question stays open for the next time cell 3 runs. Returns what happened, in plain words
     and in technical ones, and what check read from the answer; it never raises and never writes, because only the
@@ -5242,7 +5228,9 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     """Ask what `work` holds - and what `after` adds as answers come back - through chat(), as many at once as
     the gateway takes, up to parallel_chats (see the section's comment). build(item) makes the question, on this thread, when it is sent; check_of(question) is the
     check its answers pass; after(question, result) returns the next items, which go before the rest. Every answer is
-    held in ANSWERS by the thread that received it, so an interrupted cell loses none. When the questions already out,
+    held in ANSWERS as this loop takes it back - Python wakes the loop before a finished call's callback has run, so the
+    callback alone could hold an answer too late to be taken - and, when it comes back after the loop has ended, by the
+    thread that received it; so an interrupted cell loses none, and an answer a step has taken is never held again. When the questions already out,
     and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
     Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
     questions that were out at once. Enforces: R2, R5, R8"""
@@ -5254,6 +5242,12 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     answered = failed = in_a_row = out_when_failing = completed = calm_after = peak = 0
     stopped, stopped_at, said, refreshed, failures, last_problem = "", 0.0, time.time(), time.time(), [], ""
     halt = threading.Event()                                  # set when this cell stops asking, however it ends
+    consumed = CONSUMED.setdefault(ctx.options["paths"].local_dir, set())
+
+    def hold(question, result):                               # an answer, held until a step takes it - once
+        with ANSWERS_LOCK:
+            if (question["id"], result.get("started")) not in consumed:
+                held[question["id"]] = (question, result)
 
     def keep(question, future):
         if future.cancelled():
@@ -5262,8 +5256,7 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
             result = future.result()
         except BaseException:
             return
-        with ANSWERS_LOCK:
-            held[question["id"]] = (question, result)
+        hold(question, result)                               # for an answer that comes back after this cell stops
         try:
             journal_answer(ctx.options["paths"].local_dir, question, result)
         except OSError:
@@ -5297,7 +5290,8 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
                     refreshed = time.time()
                 for future in done:
                     question, result = running.pop(future), future.result()
-                    completed += 1
+                    hold(question, result)                   # held here, not by the callback alone: Python wakes this
+                    completed += 1                           # loop before a future's callbacks have run
                     if result["failed calls"]:                   # the gateway refused or failed a call: slow down,
                         if completed >= calm_after:              # once a round - those out were sent at the old pace
                             threshold = max(1.0, window / 2)
@@ -5329,6 +5323,7 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
         progress(final=True)
     with ANSWERS_LOCK:
         taken = [held.pop(key) for key in [key for key, (question, _) in held.items() if question["type"] in types]]
+        consumed.update((question["id"], result.get("started")) for question, result in taken)
     return taken, stopped, peak
 
 
@@ -5414,10 +5409,7 @@ CODE_SYSTEM_PROMPT = (
     "needs: a sentence or two for a simple piece, as many paragraphs as an involved calculation deserves. Describe "
     "only what the code shows; where it relies on something the code does not show, say so, and do not guess. Do "
     "not rate, grade or recommend, and do not say whether the code is right: the analyst decides that. Write prose, "
-    "with formulas in plain text where they help; no bullet points, headings or code blocks. Never use the words "
-    "finding, error, severity, severe, critical, major or minor, and never call anything high, medium or low in "
-    "risk, rating, priority or impact: say riskier or safer, stronger or weaker, near the top or the bottom of the "
-    "scale, or give the number. Where the code stops with a message, say that it stops with a message.")
+    "with formulas in plain text where they help; no bullet points, headings or code blocks.")
 CODE_TOKENS_MAX = 16000      # tokens of one unit's text in its question; a longer text is cut, and the cut is said
 CONTEXT_PIECE_TOKENS = 2000  # tokens of one context piece's text
 NO_ANSWER = "No interpretation: the model gave no answer. Run cell 3 again to ask again."
@@ -5571,7 +5563,6 @@ NO_EXAMPLE = "The model gave no example."
 FLAGGED_DECISIONS = ("True Positive", "False Positive", "True Negative", "False Negative", "For further discussion",
                      "Other Case (see notes)")
 NOT_SEARCHED = "Not searched: nothing was read from this file."
-NOT_COMPARED = "Not compared: nothing was read from this file."
 SEARCH_SYSTEM_PROMPT = (
     "You help credit analysts check whether an R package implements the methodology it was built from. The methodology "
     "is the canonical description of what the code should do. You are given part of the methodology, cut into chunks in "
@@ -5643,9 +5634,7 @@ COMPARE_SYSTEM_PROMPT = (
     "1.842%; the code gives 0.20 / 12 = 1.667%. Compounded over the twelve months, the code\u2019s figure is an annual PD of "
     "18.3%, not 20%: the borrower\u2019s chance of default comes out 1.7 points lower than the methodology intends.\"}. If "
     "the "
-    "piece does what the chunks say, answer {\"deviations\": []}. Outside quotations, never use the words finding, "
-    "error, severity, severe, critical, major or minor, and never call anything high, medium or low in risk, rating, "
-    "priority or impact.")
+    "piece does what the chunks say, answer {\"deviations\": []}.")
 
 
 def search_shares(settings):
@@ -6006,42 +5995,22 @@ def compare_check(question):
             return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
                           "ask": "Your last answer named chunks that are not among those shown (%s). Rest every deviation "
                                  "on chunks shown above, and answer with the JSON object alone." % ", ".join(unknown)}, ""
-        unwelcome = unwelcome_words(own_words(deviation_lines(deviations)))
+        said = " ".join(str(entry.get(part) or "") for entry in deviations for part in ("title",) + tuple(p for p, _ in DEVIATION_PARTS))
+        unwelcome = unwelcome_words(own_words(said))
         if unwelcome and not last:
-            return None, {"plain": "the answer used words the workbook cannot hold (%s)" % ", ".join(unwelcome),
-                          "ask": "Your last answer used words this workbook cannot hold outside quotations (%s). Write it "
-                                 "again without them; inside curly quotes \u201c \u201d they may stay." % ", ".join(unwelcome)}, ""
+            return None, {"plain": "the answer held technical text the workbook does not show (%s)" % ", ".join(unwelcome),
+                          "ask": "Your last answer held technical text this workbook does not show outside quotations (%s). "
+                                 "Write it again without it; inside curly quotes \u201c \u201d it may stay." % ", ".join(unwelcome)}, ""
         notes = (["the chunks it named that were not shown were left out (%s)" % ", ".join(unknown)] if unknown else []) + \
-                (["the answer still used words the workbook cannot hold"] if unwelcome else [])
+                (["the answer still held technical text the workbook does not show"] if unwelcome else [])
         return {"deviations": deviations}, None, "; ".join(notes)
     return check
 
 
-def sentence(text):
-    """A field of an answer as one sentence of a cell: closed with a full stop, and never opening with a bare None."""
-    text = "none" + text[4:] if text.startswith("None ") else text
-    return text if not text or text[-1] in ".!?" or text[-2:] in (".\u201d", "!\u201d", "?\u201d", ".)") else text + "."
 
 
-DEVIATION_WITHHELD = "The model's words for this one cannot be shown in plain words; they are in the audit log (Model_Calls)."
 
 
-def deviation_lines(deviations, gated=False):
-    """Deviations as the workbook shows them: one block each, numbered, blocks apart by a blank line. The first line
-    names the chunks of the methodology the deviation rests on, its kind and its title; then what the methodology
-    requires, what the code does, why that is a deviation and what it changes, each on a line of its own. Gated, a
-    deviation whose own words - outside quotations - the workbook cannot hold is replaced by a notice that keeps its
-    chunks, so that one such answer never hides the others of its cell. Enforces: R1, R2, R10"""
-    blocks = []
-    for number, item in enumerate(deviations, start=1):
-        refs = ", ".join(item["refs"]) or "No chunk named"
-        head = " ".join(s for s in (DEVIATION_KINDS.get(item.get("kind"), "") + "." if item.get("kind") in DEVIATION_KINDS else "",
-                                    sentence(item.get("title", ""))) if s)
-        lines = ["%d. %s - %s" % (number, refs, head or "A deviation.")]
-        lines += ["%s: %s" % (label, sentence(item[part])) for part, label in DEVIATION_PARTS if item.get(part)]
-        block = "\n".join(lines)
-        blocks.append("%d. %s - %s" % (number, refs, DEVIATION_WITHHELD) if gated and unwelcome_words(own_words(block)) else block)
-    return "\n\n".join(blocks)
 
 
 def methodology_account(units, chunks, calls, settings):
@@ -6105,7 +6074,7 @@ def methodology_cells(state):
     joined with "; "; and how many items it has on Flagged_Items - 0 when nothing was flagged or nothing found to
     compare, None before the methodology is searched in full, and, while comparisons are open, the number so far and
     which chunks are still to compare. What is not finished says so, and says what to do. Enforces: R2, R10"""
-    refs, _ = methodology_texts(state)
+    refs = methodology_texts(state)
     if not state["askable"] or state["open batches"]:
         return refs, None
     found = len(state["deviations"])
@@ -6116,24 +6085,16 @@ def methodology_cells(state):
 
 
 def methodology_texts(state):
-    """The chunks found, as methodology_cells shows them, and what the items flagged say in words (the words check)."""
+    """The chunks found, as the cell Relevant Chunks in Methodology shows them: the references, or why not yet."""
     if not state["askable"]:
-        return NOT_SEARCHED, NOT_COMPARED
+        return NOT_SEARCHED
     refs = "; ".join(dict.fromkeys(item["ref"] for item in state["relevant"]))
     if state["open batches"]:
         left = state["unsearched"]
         return ("Not searched in full: %d of %d chunks of the methodology searched so far%s.%s Run cell 3 again for the rest."
                 % (state["chunks"] - len(left), state["chunks"], "; still to search: %s" % ", ".join(left) if len(left) <= 5 else "",
-                   " Found so far: %s." % refs if refs else ""),
-                "Not compared yet: the methodology has not been searched in full.")
-    if not refs:
-        return "None found", "Nothing to compare: no chunk of the methodology was found to bear on this piece."
-    lines = deviation_lines(state["deviations"], gated=True)
-    if state["to compare"]:
-        open_refs = "; ".join(dict.fromkeys(key[0] for _, key in state["to compare"]))
-        return refs, (lines + "\n\n" if lines else "") + ("Not compared in full: %s not yet compared with this piece. "
-                                                         "Run cell 3 again." % open_refs)
-    return refs, lines or "None flagged against %s." % refs
+                   " Found so far: %s." % refs if refs else ""))
+    return refs or "None found"
 
 
 def search_methodology(ctx):
@@ -6834,7 +6795,7 @@ def plain_cell(value, input_text, store):
     text = str(value)
     if not input_text:
         said = own_words(text)
-        if PYTHON_TRACES.search(said) or has_banned_wording(said):
+        if PYTHON_TRACES.search(said):
             log_line(store, "cell text withheld: " + text)
             text = CELL_WITHHELD
     return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
