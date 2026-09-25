@@ -1,17 +1,15 @@
 # Verifier
 
-Reads a model's methodology, its package of code and data, and its documentation; maps how the model computes what it returns, from each final output down to its rawest inputs; and links what corresponds, in the model's own words and the documents' own words. It runs no model, rates nothing, decides nothing, and is tied to no sector.
+Reads a model's methodology, its package of code and data, and its documentation into numbered units, and links each piece of the package to the pieces it takes from and gives to. It runs no model, rates nothing and decides nothing; the organisation's language model explains each piece of code in the credit concepts it implements, finds the chunks of the methodology behind it, and flags where the code may depart from them, for the analyst who checks it against the methodology.
 
 ```
-Verifier.ipynb          the notebook: five cells
-docs/Manual.md          the one manual, for everyone
+Verifier.ipynb          the notebook: four cells, each one call into the engine
 engine/
-  verifier.py           the whole tool: reading, parsing, chunking, the map, the links, the workbook
-  pipeline.yaml         six steps, in order, each versioned
+  verifier.py           the whole tool: its steps, reading, chunking, the links, the model's questions, the workbook
   requirements.txt      what the tool needs installed
-  tests/                the tests, the sample projects and the maintainer's tooling
+  Manual.md             the one manual, for everyone
 ```
 
-A run leaves one folder: `Output.xlsx` with seven sheets — what was read, how the model computes it, the concepts, the implementation map and what it covers — and `_audit/Audit_Log.xlsx`, the record of the run: every step, every record and every exchange with the model.
+A run writes two files into the project's folder, beside its `Inputs`: `Output.xlsm`, with four sheets - what was read, and what the organisation's model says of the code, where a click on a reference shows only the chunks it names - and `Audit_Log.xlsx`, the record of the run: every step, every record and every exchange with the model.
 
-Run the tests with `python -m unittest discover engine/tests`. Everything else is in the manual.
+Everything else is in the manual.

@@ -1,44 +1,45 @@
 """
-Verifier 0.0.4 - verifier.py - the whole engine, in one file. For every reviewer.
+Verifier - verifier.py - the whole engine, in one file. For every reviewer.
 
-Reads a model's methodology, its package of code and data, and its documentation; maps how the model
-computes what it returns, from each final output down to its rawest inputs; links what corresponds;
-checks by code whether linked formulas, values and stated rules agree; and raises what it could not line
-up as questions for a person. One deliverable: Output.xlsx. Everything a run does is recorded, and a run
-replays from its record without a model.
+Reads a model's methodology, its package of code and data, and its documentation into numbered units;
+links each unit of the package to the units it takes something from and gives something to; and asks the
+organisation's language model, through the chat() of cell 2, to explain each unit of code, to find the
+chunks of the methodology that bear on it, and to flag where the code may depart from them. One
+deliverable: Output.xlsm. Everything a run does is recorded in Audit_Log.xlsx, beside it and the Inputs folder.
 
-The file is one piece of engineering in four parts, in dependency order:
-  the contracts, the prompts, the reading floor and the front door
+The file is one piece of engineering in three parts, in dependency order:
+  the contracts, the reading floor and the front door
   reading the methodology, the documentation and the model package
-  what corresponds to what, what differs, and the map's agents
-  the run: its folder, its record, the model calls and Output.xlsx
+  the run: its folder, its record, the organisation's model and Output.xlsm
 """
 import bz2
+import collections
 import concurrent.futures
 import csv
 import dataclasses
 import datetime
 import email
+import functools
 import getpass
+import random
 import gzip
 import hashlib
 import html.entities
 import html.parser
-import inspect
 import io
 import json
 import lzma
-import math
 import os
 import subprocess
-import random
 import re
 import shutil
+import struct
 import sys
 import tarfile
 import tempfile
 import threading
 import time
+import uuid
 import traceback
 import unicodedata
 import xml.etree.ElementTree as ElementTree
@@ -48,47 +49,28 @@ except ImportError:                 # cell 1 imports the engine to install what 
     yaml = None
 import zipfile
 import zlib
-from dataclasses import dataclass, field, replace
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, ROUND_HALF_UP
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 from xml.sax.saxutils import escape
 
 
 # ================================================================================================
-# the contracts, the prompts, the reading floor and the front door
+# the contracts, the reading floor and the front door
 # ================================================================================================
-# ================================================================================================
-# ---------------------------------------------------------------- the contracts: what every record is, and the words the tool may use
-ENGINE_VERSION = "0.0.3"
-GENESIS_HASH = "0" * 64
-
-# ---------------------------------------------------------------- vocabulary (Appendix B)
-RELATION_WORDING = {  # the word allowed in a prompt -> the wording shown in the workbook
-    "implements": "Implements", "partly implements": "Partly implements",
-    "deviates from": "Differs from", "merely related": "Same topic (not implemented here)",
-    "describes": "Describes", "consistent with": "Consistent with",
-    "inconsistent with": "Differs from"}
-LINKING_RELATIONS = ("Implements", "Partly implements", "Differs from", "Describes", "Consistent with")
-HOW_PARSED = "Parsed from the files"
-HOW_AI = "AI judgement ({confidence}%)"
-NOT_RUN_YET = "Not run yet"
+# ---------------------------------------------------------------- vocabulary, and the words the tool may never use
 
 UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
-REJECTION_REASONS = (
-    "it could not be read", "it named a passage that was not shown",
-    "it quoted words that are not in the text", "it accepted a planted control passage",
-    "it contradicted itself", "it repeated an action it had already taken")
 
 KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL = "Function", "Formula statement", "Top-level statement"
 KIND_TEST, KIND_TABLE, KIND_OBJECT = "Test block", "Parameter table", "Parameter object"
-KIND_ROXYGEN, KIND_HELP, KIND_VIGNETTE = "Roxygen block", "Help page", "Vignette text"
+KIND_ROXYGEN, KIND_VIGNETTE = "Roxygen block", "Vignette text"
 KIND_COMPILED, KIND_NOT_READ, KIND_OTHER = "Compiled code", "File not read", "Other file"
 UNIT_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST, KIND_TABLE, KIND_OBJECT,
-              KIND_ROXYGEN, KIND_HELP, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
+              KIND_ROXYGEN, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
 CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
-AI_WORDING_NOT_SHOWN = ("The AI's wording is not displayed here; the full text is in the audit records.")
 
-# The lint (tests/test_layout_rules.py) skips this one assignment, which has to name the words.
+# This one assignment has to name the words the tool may never use; nothing else in the engine may.
 # These terminologies CAN BE USED ONLY by HUMAN reviewers/validators. Machines cannot make these determinations.
 BANNED_WORDING_PATTERNS = (
     r"\bfindings?\b", r"\berrors?\b", r"\bseverity\b", r"\bsevere\b", r"\bcritical\b",
@@ -102,54 +84,44 @@ def has_banned_wording(text):
     found = _BANNED_RE.search(text or "")
     return found.group(0) if found else ""
 
-# ---------------------------------------------------------------- data contracts (plan 2.3)
+# ---------------------------------------------------------------- data contracts: the records (plan 2.7)
 @dataclass(frozen=True)
 class TableData:
     """A table kept whole: header cells, body rows, and which column identifies a row."""
-    header: tuple = (); rows: tuple = (); row_key: str = ""; column_types: tuple = ()
+    header: tuple = (); rows: tuple = (); row_key: str = ""
 
 @dataclass(frozen=True)
 class EquationData:
     """An equation as found: its source form, whether the tool could read it, and its tree."""
     source_form: str = ""; linear: str = ""; readable: bool = False
-    not_readable_reason: str = ""; expression: Optional[dict] = None; image_sha256: str = ""
+    not_readable_reason: str = ""; image_sha256: str = ""
 
 @dataclass(frozen=True)
 class Chunk:
     """One citable unit of a document: a paragraph, a table, a figure or an equation."""
     ref: str; corner: str; source_file: str; kind: str; level: int; heading_chain: tuple
-    numbering: str; para_no: Optional[int]; text: str; locator: str; content_hash: str
+    numbering: str; text: str; locator: str; content_hash: str
     table: Optional[TableData] = None; equation: Optional[EquationData] = None
-    refs_out: tuple = (); checkable: Optional[bool] = None; numbering_reconstructed: bool = False
+    numbering_reconstructed: bool = False
     caption: str = ""; not_read_reason: str = ""; para_label: str = ""   # para_label: the number the document itself gives ("36.")
 
 @dataclass(frozen=True)
 class CodeDetail:
     """What the R reader learned about a function or a statement, without running it."""
-    formals: tuple = (); calls: tuple = (); symbols_read: tuple = (); symbols_written: tuple = ()
-    numbers: tuple = (); strings: tuple = (); exported: Optional[bool] = None
-    expression: Optional[dict] = None; reads_data: tuple = (); plumbing: bool = False
-    plumbing_reason: str = ""; composed: Optional[dict] = None; not_composed_reason: str = ""
+    formals: tuple = (); calls: tuple = (); symbols_written: tuple = (); exported: Optional[bool] = None
+    reads_data: tuple = ()
 
 @dataclass(frozen=True)
 class ParameterDataDetail:
-    """The profile of one stored data object. The cell values live in parameter_tables."""
-    object_name: str; container_file: str; r_class: tuple = (); r_type: str = ""
-    dims: tuple = (); attributes: dict = field(default_factory=dict); columns: tuple = ()
-    row_keys: tuple = (); n_cells: int = 0; canonical_value_hash: str = ""
-    decoded_by: str = ""; assessable: bool = True; not_assessable_reason: Optional[str] = None
+    """The profile of one stored data object."""
+    object_name: str; container_file: str; dims: tuple = (); columns: tuple = ()
+    assessable: bool = True; not_assessable_reason: Optional[str] = None
 
 @dataclass(frozen=True)
 class RoxygenDetail:
-    """A roxygen block: what it documents, its tags with their lines, and its formulas."""
+    """A roxygen block: what it documents, and its tags with their lines."""
     documents_ref: Optional[str] = None; documents_name: str = ""; tags: tuple = ()
-    formulas: tuple = ()
 
-@dataclass(frozen=True)
-class HelpPageDetail:
-    """A help page as read from its macro format."""
-    rd_name: str = ""; aliases: tuple = (); title: str = ""; usage: str = ""; arguments: tuple = ()
-    generated_from_ref: Optional[str] = None; in_step_with_source: Optional[bool] = None
 
 @dataclass(frozen=True)
 class ModelUnit:
@@ -157,40 +129,28 @@ class ModelUnit:
     ref: str; kind: str; file: str; lines: Optional[tuple]; name: str; inside: str; text: str
     parent_ref: Optional[str]; file_sha256: str; content_hash: str
     code: Optional[CodeDetail] = None; data: Optional[ParameterDataDetail] = None
-    roxygen: Optional[RoxygenDetail] = None; helppage: Optional[HelpPageDetail] = None
+    roxygen: Optional[RoxygenDetail] = None
     read_problem: Optional[str] = None
 
 @dataclass(frozen=True)
 class Provenance:
-    """Which run and step produced a record, at which version, and from which AI exchange if any."""
-    run_id: str; step_id: str; step: str; step_version: str; engine_version: str = ENGINE_VERSION
-    prompt_hash: Optional[str] = None; response_hash: Optional[str] = None; created_at: str = ""
+    """Which run and step produced a record, and from which AI exchange if any."""
+    run_id: str; step_id: str; step: str
+    prompt_hash: Optional[str] = None; response_hash: Optional[str] = None
 
-@dataclass(frozen=True)
-class Edge:
-    """A recorded connection between two nodes of the graph. Never changed once written."""
-    source: str; target: str; kind: str; how: str; provenance: Provenance
-    relation: str = ""; confidence: Optional[int] = None
-    evidence: dict = field(default_factory=dict); record_type: str = "edge"
 
-@dataclass(frozen=True)
-class Candidate:
-    """A passage the search stage proposes for a unit, with the reason in plain words."""
-    unit_ref: str; target_ref: str; target_corner: str; rank: int; fused_score: float
-    signals: dict; reason: str; path: tuple = (); suggestion_only: bool = False
-    search_pass: int = 1
 
 @dataclass
 class StepContext:
     """What every step function receives. It never contains the access token."""
-    settings: dict; options: dict; read: Callable; ask: Optional[Callable]
+    settings: dict; options: dict; read: Callable
     work_dir: str; note: Callable; provenance: Optional[Provenance] = None
 
 @dataclass
 class StepResult:
     """What every step function returns: records by kind, counts, and plain notes."""
     records: dict = field(default_factory=dict); counts: dict = field(default_factory=dict)
-    messages: list = field(default_factory=list)
+    messages: list = field(default_factory=list); finished: bool = True
 
 # ---------------------------------------------------------------- canonical JSON and hashes
 def to_plain(value):
@@ -232,40 +192,7 @@ def make_ref(prefix, number):
     """make_ref("C", 9) gives "C-0009". Numbers follow reading order."""
     return "%s-%04d" % (prefix, number)
 
-def strip_volatile(value, volatile):
-    """A copy of a record without the named keys, at any depth (time stamps, run id)."""
-    if isinstance(value, dict):
-        return {k: strip_volatile(v, volatile) for k, v in value.items() if k not in volatile}
-    if isinstance(value, list):
-        return [strip_volatile(v, volatile) for v in value]
-    return value
 
-def chain_records(prev_hash, records, volatile=()):
-    """Give each record the hash of the one before it and its own hash. The last hash
-    then identifies the whole list: changing, removing or re-ordering any record
-    changes it. Keys named in `volatile` are left out of the hash. Enforces: R4, R5"""
-    chained = []
-    for record in records:
-        body = {k: v for k, v in to_plain(record).items() if k not in ("prev_hash", "record_hash")}
-        body["prev_hash"] = prev_hash
-        body["record_hash"] = sha256_text(canonical_json(strip_volatile(body, volatile)))
-        prev_hash = body["record_hash"]
-        chained.append(body)
-    return chained
-def verify_chain(records, volatile=()):
-    """Re-compute a chain. Returns (True, -1, "") or (False, position, plain reason)."""
-    prev_hash = GENESIS_HASH
-    for position, record in enumerate(records):
-        if record.get("prev_hash") != prev_hash:
-            return False, position, "record %d does not follow the record before it" % (position + 1)
-        body = {k: v for k, v in record.items() if k != "record_hash"}
-        if sha256_text(canonical_json(strip_volatile(body, volatile))) != record.get("record_hash"):
-            return False, position, "record %d has been changed" % (position + 1)
-        prev_hash = record["record_hash"]
-    return True, -1, ""
-def chain_head(records):
-    """The hash of the last record of a chain, or the fixed starting value for an empty one."""
-    return records[-1]["record_hash"] if records else GENESIS_HASH
 
 # ---------------------------------------------------------------- numbers
 # A number as prose writes it. Thousands may be grouped with commas in groups of exactly three
@@ -381,27 +308,6 @@ class Expr:
     op: str; name: Optional[str] = None; value: Optional[str] = None; args: tuple = ()
     span: Optional[tuple] = None
 
-def expr_from_dict(record):
-    """Rebuild a tree that was read back from _audit as plain JSON."""
-    if record is None:
-        return None
-    args = tuple(expr_from_dict(arg) for arg in record.get("args") or ())
-    span = tuple(record["span"]) if record.get("span") else None
-    return Expr(record["op"], record.get("name"), record.get("value"), args, span)
-
-def expr_walk(expr):
-    """Every node of a tree, parents before children."""
-    yield expr
-    for arg in expr.args:
-        yield from expr_walk(arg)
-
-def expr_symbols(expr):
-    """The distinct symbols of a tree, in order of first appearance."""
-    seen = []
-    for node in expr_walk(expr):
-        if node.op == "sym" and node.name not in seen:
-            seen.append(node.name)
-    return tuple(seen)
 
 _INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
 
@@ -431,177 +337,8 @@ def expr_to_text(expr, parent_rank=0):
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- the reading floor
-# ---------------------------------------------------------------- prompt machinery: one question, its budget and its id
-
-# ---------------------------------------------------------------- the prompts
-# Every question the tool asks, as the model sees it: a version line, the system half, the main half
-# with [[UNIT]] and similar places the question builder fills. The text is exact - a question's id is
-# the hash of its prompt, and recorded answers are found by that id - so a changed word here is a new
-# version and asks new questions. Enforces: R3, R5, R9
-PROMPTS = {
-    'trace-gap': r'''VERSION 1
-=== SYSTEM ===
-You trace how an R package computes its values, one step at a time. You are given one place in its code that the tool could not follow by reading it, what the tool already knows about that function, and a list of actions. Each turn you choose exactly one action; the tool carries it out and shows you what it found. Once you know what the value at that place is computed from, you declare it, copying the code that shows it word for word. You never use a name that is not in the code, never write code of your own, and you stop when the place is traced or when the code cannot tell. Reply with JSON only. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: trace-gap
-[[UNIT]]
-THE ACTIONS
-open_unit {"ref": "M-0012"}: shows the code of a unit of the package
-statements_setting {"function": "f", "name": "x"}: shows the statements of f that set x, and what each is computed from
-callers_of {"function": "f"}: shows every call of f in the package, with what each call gives each parameter
-return_of {"function": "f"}: shows what f returns is computed from
-columns_of {"table": "t"}: shows the columns of a stored table
-declare_edge {"value": "x", "from": ["a", "b"], "quote": "code copied word for word"}: records that x is computed from a and b; the quote must be code of the function at this place, or of a unit you opened, and must contain x and every name in from
-declare_input {"name": "x", "kind": "argument", "quote": "code copied word for word"}: records that x comes from outside the computation; kind is one of argument, stored data, file, hard-coded number, from outside
-done {"because": "a few words"}: the place is traced
-give_up {"because": "a few words"}: the code cannot tell
-[[ABOUT]]
-ANSWER FORMAT
-{"action": "declare_edge", "args": {"value": "total", "from": ["price", "count"], "quote": "total <- price * count"}}
-Rules on your answer:
-- exactly one action from the list above, with its arguments;
-- every ref, function, table and name must be one the tool has shown you;
-- a quote must be copied from the code word for word;
-- never repeat an action you have already taken;
-- end with done once you have declared what the value is computed from, or with give_up.
-''',
-    'judge-doc-to-canon': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-doc-to-canon
-TASK: Which passages of the methodology, if any, does this passage of the documentation correspond to, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"consistent with","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: consistent with, inconsistent with, merely related.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-If the unit states nothing that could be checked (no formula, number, rule or definition), add "states_nothing_checkable": true.
-''',
-    'judge-doc-to-model': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-doc-to-model
-TASK: Which units of the package, if any, does this passage of the documentation describe, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: describes, inconsistent with.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-''',
-    'judge-unit-to-canon': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-unit-to-canon
-TASK: Which passages of the methodology, if any, does this unit of the package correspond to, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"implements","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: implements, partly implements, deviates from, merely related.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-''',
-    'judge-unit-to-doc': r'''VERSION 1
-=== SYSTEM ===
-You compare one item with lettered passages. Reply with JSON only.
-Use only the letters shown. "NONE" (an empty list of matches) is a valid and common answer.
-Quote exact words; do not paraphrase inside quotation fields. Do not rate importance.
-=== MAIN ===
-QUESTION TYPE: judge-unit-to-doc
-TASK: Which passages of the documentation, if any, describe this unit of the package, and how?
-[[UNIT]]
-[[ABOUT]]
-PASSAGES
-[[PASSAGES]]
-ANSWER FORMAT
-{"matches":[{"letter":"A","relation":"describes","confidence":0-100,
-             "quote_from_passage":"exact words from the passage","quote_from_unit":"exact words from the unit"}],
- "none_reason":""}
-Allowed relation words: describes, consistent with, inconsistent with.
-If no passage corresponds, return {"matches":[],"none_reason":"one plain sentence"}.
-''',
-}
 
 
-def load_prompt(question_type):
-    """A prompt template: its version line, its SYSTEM part and its MAIN part with slots."""
-    text = PROMPTS[question_type]
-    version, rest = text.split("\n", 1)
-    system, main = rest.split("=== MAIN ===\n", 1)
-    return {"version": version.strip(), "system": system.replace("=== SYSTEM ===\n", "").strip(), "main": main.strip()}
-
-def estimate_tokens(prose, code=""):
-    """No tokenizer can be installed, so tokens are estimated from characters, on the safe
-    side: one token per 3.2 characters of prose and per 2.5 characters of code and numbers."""
-    return int(len(prose) / 3.2 + len(code) / 2.5) + 1
-
-def prompt_budget(settings, system_prompt):
-    """Tokens available for the main prompt: the smaller of the target size (long prompts are
-    answered badly) and what the cap leaves after all reserves."""
-    room = settings["token_cap"] - settings["answer_reserve"] - settings["thinking_reserve"] - estimate_tokens(system_prompt)
-    return min(int(settings["prompt_target_tokens"]), int(room * (1 - settings["safety_margin"])))
-
-def cut_text(text, limit, keep_words=()):
-    """Cut a long text to `limit` characters around the first of `keep_words` it contains (the
-    matched region), marking the cuts; lines stay whole where possible."""
-    if len(text) <= limit:
-        return text
-    lowered = text.lower()
-    hits = [lowered.find(word.lower()) for word in keep_words if word and lowered.find(word.lower()) >= 0]
-    centre = min(hits) if hits else 0
-    start = max(0, min(centre - limit // 3, len(text) - limit))
-    piece = text[start:start + limit]
-    return ("[... cut ...] " if start else "") + piece + (" [... cut ...]" if start + limit < len(text) else "")
-
-# ---------------------------------------------------------------- answer machinery: reading a reply, strictly
-def last_json_object(text):
-    """The last balanced {...} object in a text, or None. Braces inside strings are skipped."""
-    end = text.rfind("}")
-    while end >= 0:
-        depth, in_string, position = 0, False, end
-        while position >= 0:
-            char = text[position]
-            if char == '"' and (position == 0 or text[position - 1] != "\\"):
-                in_string = not in_string
-            elif not in_string:
-                depth += 1 if char == "}" else -1 if char == "{" else 0
-                if depth == 0:
-                    return text[position:end + 1]
-            position -= 1
-        end = text.rfind("}", 0, end)
-    return None
-
-def strict_json(text):
-    """Strict parsing: no repair of malformed JSON, and a repeated key is refused."""
-    def no_repeats(pairs):
-        keys = [key for key, _ in pairs]
-        if len(keys) != len(set(keys)):
-            raise ValueError("repeated key")
-        return dict(pairs)
-    return json.loads(text, object_pairs_hook=no_repeats)
 
 # ---------------------------------------------------------------- element helpers
 def local_name(tag):
@@ -685,8 +422,7 @@ def discover_families(root, rules, report):
     exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
     table; an element carrying its own heading in an attribute; one holding other blocks (a
     container); one holding text (a paragraph). Every decision is recorded with its reason in
-    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml.
-    Enforces: R9"""
+    plain words, shown on Model_Package_Info, and can be overridden in Inputs/tag_rules.yaml."""
     known, found = rules["family_of"], {}
 
     def note(tag, family, reason):
@@ -819,7 +555,6 @@ def without_page_furniture(lines, pages, state, file_name):
 # smallest countable pieces of the file are counted independently of the reader that read it,
 # and every one of them has to end in a named class.
 
-ATOM_CLASSES = ("in unit text", "relocated", "rewritten", "declared drop", "not read", "unaccounted")
 
 # An atom found in one of these places is not expected word for word in a unit, and why.
 # "rewritten" is the class R1 added to the plan's four: an equation is not lost and not carried
@@ -1034,9 +769,9 @@ def account(file_name, atoms, chunks, dropped=(), marks=(), file_bytes=0):
     found["what unaccounted"] = sorted(left)[:24]
     found["what injected"] = sorted(added)[:24]
     # A file that is large, yielded no text at all, and was neither refused nor said to be
-    # unreadable has probably not been opened. Until 0.0.2 such a file closed its account, because
-    # an account over nothing balances. That is the one place the identity held while everything
-    # was lost, so it is the one place it now refuses to close. Enforces: R13
+    # unreadable has probably not been opened. Its account would balance, because an account over
+    # nothing balances: the one place the identity holds while everything is lost, so the one
+    # place it refuses to close. Enforces: R13
     found["vacuous"] = (not refused and file_bytes > VACUOUS_BYTES and not sum(source.values())
                         and not any(chunk.get("not_read_reason") for chunk in chunks))
     found["file_bytes"] = file_bytes
@@ -1068,20 +803,26 @@ def account_lines(found):
     return lines
 
 
-def account_of_package(files, units, refused, is_text_file):
+def account_of_package(files, units, refused, is_text_file, dropped=()):
     """The content account of a package tarball. The atom of a package is a line: every
     non-blank line of every member that holds text has to lie inside a unit, be refused with a
     reason, or be named as not read. A member the tool cannot read as text (a compiled object, a
     picture, stored data in a binary form) is counted as one atom of its own, because its lines
-    cannot be counted without reading it. Extends the line coverage that read-package already
-    kept for parsed R files to every member of the tarball. Enforces: R13"""
-    inside, not_read, atoms, unaccounted, fenced, text_only = 0, 0, 0, [], 0, 0
+    cannot be counted without reading it. Extends the line coverage that read_package already
+    kept for parsed R files to every member of the tarball. A member left out on purpose (dropped: a help
+    page, generated from the roxygen comments in the R files, which are read) is a declared drop, every
+    line of it. Enforces: R13"""
+    inside, not_read, atoms, unaccounted, fenced, text_only, declared = 0, 0, 0, [], 0, 0, 0
     covered = {}
     for unit in units:
         lines = unit.get("lines")
         if unit.get("file") and lines:
             covered.setdefault(unit["file"], set()).update(range(int(lines[0]), int(lines[1]) + 1))
     for path in sorted(files):
+        if path in dropped:                           # not read on purpose, under a named rule
+            lines = sum(1 for line in files[path].decode("utf-8", "replace").split("\n") if line.strip())
+            atoms, declared = atoms + lines, declared + lines
+            continue
         if not is_text_file(path):
             atoms += 1
             if any(unit.get("file") == path for unit in units):
@@ -1115,63 +856,14 @@ def account_of_package(files, units, refused, is_text_file):
             else:
                 unaccounted.append("%s line %d" % (path, number))
     found = {"file": "the package", "atoms": atoms + len(refused), "in unit text": inside, "relocated": 0,
-             "rewritten": 0, "declared drop": len(refused) + fenced, "not read": not_read,
+             "rewritten": 0, "declared drop": len(refused) + fenced + declared, "not read": not_read,
              "unaccounted": len(unaccounted), "injected": 0, "where unaccounted": sorted(unaccounted)[:12],
              "what unaccounted": [], "what injected": [], "held as text only": text_only}
     found["closed"] = found["unaccounted"] == 0
     return found
 
 
-# ---------------------------------------------------------------- the shape digest and the rules it asks for
-# What a model is shown about a file it must help slice: its STRUCTURE and a few short samples,
-# never the file. The digest is built by code from plain facts, is bounded, and is recorded, so
-# a reviewer can see exactly what was put in front of the model. Enforces: R3, R7
-
-# The families a PROPOSAL may use, and why it is only these five. Each keeps the words of the
-# element it is given to wherever that element sits: a heading's text goes into the chain of
-# everything below it and, where nothing sits below it, into a unit of its own; a paragraph's
-# and a list item's into a unit; a container's children are walked.
-#
-# The families left out fall into two groups. Table, row, cell, header_cell, caption, figure
-# and equation rest on counting the shape of the file rather than on anybody's opinion, and
-# their readers may put text somewhere other than a unit or drop it where a shape does not hold
-# up. "inline" is left out for a different reason, and the property test found it rather than
-# anyone reasoning it out: an inline mark keeps its words only when it sits inside something
-# that has running text, so the same answer is safe in one place and loses words in another.
-# A family whose safety depends on where a tag sits is not a family a proposal may give.
-# This is what makes "no answer can lose a word" true by construction rather than by hope.
-# Enforces: R13
-
-
-
-
-
-
-
-# Families discovery does not guess at: it counts the widths of the rows and refuses to call
-# something a table unless the counting holds up. A proposal may not overturn them.
-
-
-# ---------------------------------------------------------------- asking about the shape of a file
-
-
-
-# ---------------------------------------------------------------- asking how to read a package
-# A tarball laid out in an unusual way loses content in a quieter way than a document does: a
-# file of R code under inst/ rather than R/ is not parsed, and its two thousand first characters
-# become one unit of running text while the rest of it reaches nothing. The question here picks
-# WHICH EXISTING READER takes a member. It never touches the R tokenizer, the parser, the
-# expression trees or the decoder of stored data: a model's reading of code is an assertion
-# ABOUT the code, not a parse OF it. Enforces: R7, R13
-
-
-
-
-
-
-
 # ================================================================================================
-# ---------------------------------------------------------------- the front door: what a file is, and how it becomes markup
 # ---------------------------------------------------------------- what a file is
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")
@@ -1513,7 +1205,6 @@ def latex_to_markup(text):
     return "<document>%s</document>" % "".join(out)
 
 
-
 def svg_texts(root):
     """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
     a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
@@ -1681,7 +1372,6 @@ def list_input_files(inputs_dir):
 # ================================================================================================
 # reading the methodology, the documentation and the model package
 # ================================================================================================
-# ================================================================================================
 # ---------------------------------------------------------------- the methodology and the documentation, read into units
 class NotReadable(Exception):
     """A formula or a file that the tool cannot read. The message is a plain reason for the analyst."""
@@ -1697,9 +1387,9 @@ _TOKEN_RE = re.compile(
 
 # ---------------------------------------------------------------- reference data of the reader
 # The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
-# schemes, the phrases that make a statement checkable. An analyst's Inputs/tag_rules.yaml is laid
+# schemes. An analyst's Inputs/tag_rules.yaml is laid
 # over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
-# caller that changes the rules it was given changes only its own copy. Enforces: R9
+# caller that changes the rules it was given changes only its own copy.
 TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
 # Reviewer 1 owns this file. A project can override any part of it with Inputs/tag_rules.yaml
 # (same layout; a family given there replaces the family given here).
@@ -1738,10 +1428,6 @@ numbering_schemes:
   - {name: bracket_letter, pattern: '^\(([a-z])\)(?=\s|$)'}
 # Words that start a cross-reference as written ("see Table 3", "section 4.2").
 cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
-# A documentation passage "states something checkable" when it holds a number, a formula,
-checkable_phrases: [is calculated, is computed, is set to, equals, is defined as, is floored, is capped,
-                    at least, at most, not exceed, no less than, no more than, minimum, maximum,
-                    must, shall, is applied, are applied, is multiplied, is divided, rounded, per cent, percent]
 '''
 
 # The notation of R's mathematical functions: how each is written in the tool's linear notation and
@@ -1796,11 +1482,6 @@ domains:
   log1p:          {argument: [-1, null]}
   sqrt:           {argument: [0, null]}
   exp:            {argument: [null, 50]}
-# plumbing: calls that mark a statement as supporting code by syntax (no formula in it).
-plumbing_calls: [stop, warning, message, stopifnot, print, cat, library, require, requireNamespace,
-                 missing, is.null, is.numeric, is.character, is.na, match.arg, invisible, on.exit,
-                 tryCatch, suppressWarnings, inherits, class, structure, names, length, nrow, ncol,
-                 seq_len, seq_along, vapply, lapply, sapply, data, utils::data, format, paste, paste0, sprintf]
 '''
 
 def load_notation():
@@ -1973,12 +1654,12 @@ def read_equation(source_form, linear, notation, image_sha256=""):
     linear = normalise_text(linear)
     if not linear:
         reason = UNDECIDED_REASONS[0] if image_sha256 or source_form == "image" else "no formula text was found"
-        return EquationData(source_form, "", False, reason, None, image_sha256)
+        return EquationData(source_form, "", False, reason, image_sha256)
     try:
         tree = parse_formula(linear, notation, implicit_product=source_form in ("omml", "mathml", "latex"))
     except NotReadable as problem:
-        return EquationData(source_form, linear, False, str(problem), None, image_sha256)
-    return EquationData(source_form, expr_to_text(tree), True, "", to_plain(tree), image_sha256)
+        return EquationData(source_form, linear, False, str(problem), image_sha256)
+    return EquationData(source_form, expr_to_text(tree), True, "", image_sha256)
 
 _INLINE_FORMULA_RE = re.compile(r"(?<![\w.])([^\W\d_][\w.\[\]{}]*)\s*=\s*([^=;]+)")
 
@@ -1995,7 +1676,7 @@ def inline_formula(text, notation):
             tree = parse_formula("%s = %s" % (match.group(1), right), notation)
         except NotReadable:
             continue
-        return EquationData("inline", expr_to_text(tree), True, "", to_plain(tree), "")
+        return EquationData("inline", expr_to_text(tree), True, "", "")
     return None
 
 # ---------------------------------------------------------------- equation markup -> linear notation
@@ -2354,10 +2035,7 @@ class WalkState:
     atoms: list = field(default_factory=list)      # the smallest pieces of text the file holds, counted from the file itself
     dropped: list = field(default_factory=list)    # text left out under a named rule, kept so the account can show it
     lent_numbering: str = ""                       # a number a container carries for the heading inside it
-    ask: object = None                             # the asker, where a guided reading is turned on
     settings: dict = field(default_factory=dict)
-    digests: list = field(default_factory=list)    # the shapes shown to the model, recorded
-    guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     folder: str = ""                               # where the file being read stands, so a picture beside it can be found
     svgs: dict = field(default_factory=dict)       # the corner's SVG files, by lower-case name and by name without .svg
     consumed: set = field(default_factory=set)     # SVGs already read in place by a document of the corner (shared by the corner)
@@ -2523,14 +2201,11 @@ def table_from_rows(rows, locator, caption=""):
         display = "\n".join(lines)
     else:
         display = "\n".join("; ".join(row[:max((i for i, cell in enumerate(row) if cell), default=0) + 1]) for row in rows)
-    types = []
-    for column in range(width):
-        values = [row[column] for row in body if row[column]]
-        numeric = values and all(find_numbers(v) and len(find_numbers(v)) == 1 and
-                                 len(re.sub(r"[\d.,%\s+-]|bps?|basis points?", "", v)) == 0 for v in values)
-        types.append("number" if numeric else "text")
-    row_key = header[0] if header and types and types[0] == "text" else ""
-    table = TableData(tuple(header), tuple(tuple(row) for row in body), row_key, tuple(types))
+    first = [row[0] for row in body if row[0]] if width else []     # a first column of words keys the rows
+    numeric = first and all(find_numbers(v) and len(find_numbers(v)) == 1 and
+                            len(re.sub(r"[\d.,%\s+-]|bps?|basis points?", "", v)) == 0 for v in first)
+    row_key = header[0] if header and width and not numeric else ""
+    table = TableData(tuple(header), tuple(tuple(row) for row in body), row_key)
     return new_block("table", "", locator, table=table, caption=caption, display=display)
 
 PICTURE_READER = []                     # the OCR engine, looked for once: [engine] or [None]
@@ -2539,8 +2214,8 @@ OCR_NOTE = "Words read from the picture by OCR (a machine reading: check it agai
 def read_picture(data, state):
     """The words in a picture, read by OCR, as lines to show under the Figure; "" when there are
     none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside
-    the package, so nothing is fetched when it runs). The words help a person and the search to
-    find the picture. They are never evidence: a machine misreads digits, so a Figure still ends
+    the package, so nothing is fetched when it runs). The words help a person find the
+    picture. They are never evidence: a machine misreads digits, so a Figure still ends
     "for manual review" whatever was read. A missing reader is said once per file. Enforces: R2"""
     if not PICTURE_READER:
         try:
@@ -2677,7 +2352,7 @@ def equation_block(element, here, state):
             linear = latex_to_linear(written) if "\\" in written else written
             equation = read_equation("latex" if "\\" in written else "inline", linear, state.notation)
         except NotReadable as problem:
-            equation = EquationData("latex", written, False, str(problem), None, "")
+            equation = EquationData("latex", written, False, str(problem), "")
     label = picture.get("alt") if picture is not None and picture.get("alt") else ""
     text = equation.linear or label or "Equation shown as a picture"
     return new_block("equation", text, here, equation=equation)
@@ -2974,7 +2649,7 @@ def blocks_from_pdf(data, file_name, state):
             elif title:
                 kind, more = "heading", {"level_hint": None if numbered else -int(round(entry["size"] * 2)) + (0 if entry["size"] > body_size * 1.08 else 1)}
             elif dense > 0.25 and len(text.split()) <= 12:
-                kind, more = "equation", {"equation": EquationData("pdf", text, False, UNDECIDED_REASONS[1], None, "")}
+                kind, more = "equation", {"equation": EquationData("pdf", text, False, UNDECIDED_REASONS[1], "")}
             elif bullet:
                 kind, more, text = "list_item", {"marker": LIST_MARKER}, text[bullet.end():]
             elif (near and open_block["block"]["type"] in ("paragraph", "list_item")) or over_the_page:
@@ -3008,22 +2683,7 @@ def blocks_from_pdf_text_only(data, file_name, state):
 
 # ---------------------------------------------------------------- levels, references, chunks
 
-def cross_references(text, rules):
-    """Cross-references as written: "Table 3", "section 4.2", "Annex A"."""
-    labels = "|".join(re.escape(label) for label in rules["cross_reference_labels"])
-    found = re.findall(r"\b((?:%s)\s+(?:[A-Z]\b|\d+(?:\.\d+)*[a-z]?|\([a-z0-9]+\)))" % labels, text or "", re.IGNORECASE)
-    return tuple(dict.fromkeys(normalise_text(reference) for reference in found))
 
-def states_something_checkable(block, rules):
-    """Does a documentation passage state something that can be checked against the methodology
-    or the code: a number, a formula, a table, or a phrase from the rules file?"""
-    if block["type"] in ("table", "equation"):
-        return True
-    if block["type"] == "figure" or block["not_read_reason"]:
-        return None
-    lowered = block["text"].lower()
-    return bool(find_numbers(block["text"]) or "=" in lowered or
-                any(phrase in lowered for phrase in rules["checkable_phrases"]))
 
 KIND_OF_BLOCK = {"paragraph": "Paragraph", "list_item": "Paragraph", "table": "Table", "figure": "Figure",
                  "equation": "Equation"}
@@ -3051,7 +2711,7 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
     """Blocks to chunks. A heading is not a chunk of its own: it becomes part of the heading
     chain of everything below it. Paragraph numbers restart under every heading. Enforces: R2, R4"""
     prefix = "C" if corner == "canon" else "D"
-    chunks, chain, levels, paragraph_number, section_numbering = [], [], [], 0, ""
+    chunks, chain, levels, section_numbering = [], [], [], ""
     carried, empty = [], []                          # (heading block, anything under it yet), and those with nothing
     for block in fold_lists(infer_levels(blocks, state.rules)):
         if block["type"] == "heading":
@@ -3068,7 +2728,7 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
             levels.append(block["level"])
             chain.append(block["text"])
             carried.append((block, False))
-            paragraph_number, section_numbering = 0, block["numbering"]
+            section_numbering = block["numbering"]
             # The number belongs to the heading whether the document wrote it (num="1.") or Word
             # left it to be counted back. Without it a citation to "section 2" can be resolved
             # against nothing, and the number itself reaches no unit at all. Enforces: R13
@@ -3078,18 +2738,14 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
         carried = [(was, True) for was, _ in carried]
         kind = KIND_OF_BLOCK[block["type"]]
         text = block.get("display") or block["text"]
-        if kind == "Paragraph" and not block["not_read_reason"]:
-            paragraph_number += 1
         equation = block["equation"]
         if kind == "Paragraph" and equation is None:
             equation = inline_formula(text, state.notation)
         chunks.append(Chunk(
             ref=make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
             kind=kind, level=levels[-1] if levels else 0, heading_chain=tuple(chain), numbering=section_numbering,
-            para_no=paragraph_number if kind == "Paragraph" and not block["not_read_reason"] else None,
             text=text, locator=block["locator"], content_hash=content_hash(text + block.get("image_sha256", "")),
-            table=block["table"], equation=equation, refs_out=cross_references(text + " " + block["caption"], state.rules),
-            checkable=states_something_checkable(block, state.rules) if corner == "doc" else None,
+            table=block["table"], equation=equation,
             numbering_reconstructed=bool(chain) and block_is_under_reconstructed(blocks, block),
             caption=block["caption"], not_read_reason=block["not_read_reason"],
             para_label=block["numbering"] if kind == "Paragraph" else ""))
@@ -3101,10 +2757,8 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
         chunks.append(Chunk(
             ref=make_ref(prefix, first_number + len(chunks)), corner=corner, source_file=source_file,
             kind="Paragraph", level=block["level"], heading_chain=(), numbering=block["numbering"],
-            para_no=None, text=block["text"], locator=block["locator"],
+            text=block["text"], locator=block["locator"],
             content_hash=content_hash(block["text"]), table=None, equation=None,
-            refs_out=cross_references(block["text"], state.rules),
-            checkable=states_something_checkable(block, state.rules) if corner == "doc" else None,
             numbering_reconstructed=False, caption="", not_read_reason="",
             para_label=block["numbering"]))
     return chunks
@@ -3119,21 +2773,6 @@ def block_is_under_reconstructed(blocks, block):
             above = candidate
     return bool(above and above["reconstructed"])
 
-def outline_lines(chunks):
-    """The indented outline an analyst compares with the document's own table of contents:
-    one line per section, with its range of references and the number of units in it."""
-    sections = {}
-    for chunk in chunks:
-        for depth in range(0 if not chunk.heading_chain else 1, len(chunk.heading_chain) + 1):
-            key = (chunk.source_file, chunk.heading_chain[:depth])     # the section and every section above it
-            entry = sections.setdefault(key, {"depth": depth, "first": chunk.ref, "count": 0})
-            entry["last"], entry["count"] = chunk.ref, entry["count"] + 1
-    lines = []
-    for (source_file, chain), entry in sections.items():
-        title = chain[-1] if chain else "(text before the first heading of %s)" % source_file
-        lines.append("%s%s   [%s to %s, %d units]" % ("    " * max(0, entry["depth"] - 1), title,
-                                                      entry["first"], entry["last"], entry["count"]))
-    return lines
 
 # ---------------------------------------------------------------- the two steps
 def atoms_of_file(data, found, file_name, state, repairs):
@@ -3200,7 +2839,7 @@ def read_corner(ctx, corner, input_key, label):
     options = ctx.options
     rules = load_tag_rules(options["inputs"].get("tag_rules"))
     notation = load_notation()
-    chunks, repairs, info_rows, outline, accounts, digests, read_as_what = [], [], [], [], [], [], []
+    chunks, repairs, info_rows, accounts, read_as_what = [], [], [], [], []
     root = (options["inputs"].get("roots") or {}).get(input_key)
     for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
         info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
@@ -3219,7 +2858,7 @@ def read_corner(ctx, corner, input_key, label):
             info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
             continue
         state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
-        state.ask, state.settings = ctx.ask, ctx.settings
+        state.settings = ctx.settings
         state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
         try:
             found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
@@ -3230,10 +2869,6 @@ def read_corner(ctx, corner, input_key, label):
         new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
         chunks.extend(new_chunks)
         plain = [to_plain(chunk) for chunk in new_chunks]
-        for tag in sorted(state.guided):
-            info_rows.append({"group": label, "item": "%s: how it was read" % file_name,
-                              "value": "<%s> was read as %s on the model's proposal." % (tag, state.guided[tag])})
-        digests.extend(state.digests)
         found_account = account(file_name, state.atoms, plain, state.dropped,
                                         marks_of_rendering(plain)
                                         + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING],
@@ -3256,7 +2891,6 @@ def read_corner(ctx, corner, input_key, label):
                               "Unrecognised tag '%s', %d times, read as %s%s. "
                               "It can be added to Inputs/tag_rules.yaml."
                               % (tag, seen["count"], seen.get("family") or seen.get("read_as"), because)})
-    outline.append({"corner": corner, "lines": outline_lines(chunks)})
     kind = "chunks_canon" if corner == "canon" else "chunks_doc"
     unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)
     messages = ["%d units read from %d file(s)." % (len(chunks), len(options["inputs"][input_key]))]
@@ -3272,29 +2906,28 @@ def read_corner(ctx, corner, input_key, label):
     if skipped:
         messages.append("%d file(s) in the folder were left out; Model_Package_Info lists them." % len(skipped))
     if unreadable:
-        messages.append("%d equation(s) could not be read and will be raised for a person." % unreadable)
+        messages.append("%d equation(s) could not be read." % unreadable)
     open_accounts = [one for one in accounts if not one["closed"]]
     if open_accounts:
         messages.append("The content account is open on %d file(s); Model_Package_Info says what could not be placed."
                         % len(open_accounts))
-    return StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows, "outline": outline,
-                              "content_accounts": accounts, "shape_digests": digests},
+    return StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows},
                              {"units": len(chunks), "repairs": len(repairs),
                               "content account open on": len(open_accounts)}, messages)
 
 def read_methodology(ctx):
-    """Step 02, read-methodology: the canonical methodology into chunks C-0001, C-0002, ..."""
+    """Step 02, read-inputs, first part: the canonical methodology into chunks C-0001, C-0002, ..."""
     return read_corner(ctx, "canon", "methodology", "Methodology files")
 
 def read_documentation(ctx):
-    """Step 03, read-documentation: the model documentation into chunks D-0001, D-0002, ..."""
+    """Step 02, read-inputs, second part: the model documentation into chunks D-0001, D-0002, ..."""
     return read_corner(ctx, "doc", "documentation", "Documentation files")
 
 
 # ================================================================================================
 # ---------------------------------------------------------------- the model package, read into units
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
-PARSER_NAME = "the tool R reader 0.0.1"
+PARSER_NAME = "flowR"
 
 class NotParsed(Exception):
     """One R expression that the tool's reader could not read. The message is a plain reason."""
@@ -3333,7 +2966,7 @@ def unpack_zip(zip_path, max_member_bytes):
 def loose_package(paths, root, max_member_bytes):
     """A package put in the folder unpacked - its source folder rather than a built tarball -
     read file by file, under the same size limit. People very often have the one and not the
-    other, and until 0.0.2 a folder here stopped the run."""
+    other."""
     files, refused = {}, []
     for path in paths:
         name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
@@ -3384,17 +3017,6 @@ def read_description(text):
             fields[current.strip()] = value.strip()
     return fields
 
-def read_namespace(text):
-    """Exported names and export patterns from NAMESPACE."""
-    text = re.sub(r"#[^\n]*", "", text)
-    exports, patterns = set(), []
-    for directive, inner in re.findall(r"(export|exportPattern|S3method)\s*\(([^)]*)\)", text):
-        names = [part.strip().strip("\"'`") for part in inner.split(",") if part.strip()]
-        if directive == "export":
-            exports.update(names)
-        elif directive == "exportPattern":
-            patterns.extend(names)
-    return {"exports": exports, "patterns": patterns}
 
 def is_exported(name, namespace):
     """Is `name` exported by this NAMESPACE (by name, by pattern or as an S3 method)? None when there is no NAMESPACE."""
@@ -3402,61 +3024,7 @@ def is_exported(name, namespace):
         return None
     return name in namespace["exports"] or any(re.search(pattern, name) for pattern in namespace["patterns"])
 
-# ---------------------------------------------------------------- the R tokenizer
-@dataclass
-class Token:
-    """One token of R source: kind is num, str, name, op, newline or end. `column` is 0 for a
-    token that starts its line, which is where a new top-level statement usually begins."""
-    kind: str; text: str; line: int; column: int = -1
-
-_R_TOKEN = re.compile(r"""
-  (?P<space>[ \t\r\f]+)
- |(?P<newline>\n)
- |(?P<comment>\#[^\n]*)
- |(?P<raw>[rR]["'](?P<dashes>-*)[\(\[\{])
- |(?P<num>0[xX][0-9a-fA-F]+[Li]?|(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?[Li]?)
- |(?P<str>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
- |(?P<backtick>`[^`]*`)
- |(?P<name>(?:[^\W\d_]|\.(?![0-9]))[\w.]*)
- |(?P<op><<-|->>|\|>|:::|%[^%\n]*%|<-|->|<=|>=|==|!=|&&|\|\||::|\*\*|\[\[|[-+*/^<>=!&|~?:$@(){}\[\],;\\])
-""", re.X)
-_RAW_CLOSERS = {"(": ")", "[": "]", "{": "}"}
-
-def tokenize_r(source):
-    """R source to tokens. Comments are dropped here (roxygen lines are collected by
-    roxygen_blocks). Line breaks are kept as tokens because in R a line break ends an
-    expression unless a bracket is open or an operator is waiting for its right side."""
-    tokens, position, line, line_start = [], 0, 1, 0
-    while position < len(source):
-        match = _R_TOKEN.match(source, position)
-        column = position - line_start
-        if not match:
-            raise NotParsed("line %d holds the character '%s', which the tool's R reader does not know"
-                            % (line, source[position]))
-        kind, text = match.lastgroup, match.group(0)
-        if kind == "dashes":
-            kind = "raw"
-        if kind == "raw":
-            closer = _RAW_CLOSERS[text[-1]] + match.group("dashes") + text[1]
-            end = source.find(closer, match.end())
-            if end < 0:
-                raise NotParsed("a raw string that starts on line %d is never closed" % line)
-            tokens.append(Token("str", source[match.end():end], line, column))
-            text = source[position:end + len(closer)]
-        elif kind == "str":
-            tokens.append(Token("str", text[1:-1], line, column))
-        elif kind == "backtick":
-            tokens.append(Token("name", text[1:-1], line, column))
-        elif kind in ("num", "name", "op", "newline"):
-            tokens.append(Token(kind, text, line, column))
-        line += text.count("\n")
-        position += len(text)
-        if "\n" in text:
-            line_start = position - (len(text) - text.rfind("\n") - 1)
-    tokens.append(Token("end", "", line))
-    return tokens
-
-# ---------------------------------------------------------------- the R parser
+# ---------------------------------------------------------------- the expression tree's node
 @dataclass
 class Node:
     """One node of the syntax tree. kind is one of: num, str, name, call, index, binary,
@@ -3466,270 +3034,198 @@ class Node:
     defaults (kind "missing" when there is none) and args[-1] the body."""
     kind: str; value: str = ""; args: tuple = (); names: tuple = (); line: int = 0; end_line: int = 0
 
-BINARY_POWER = {"?": 1, "=": 2, "<-": 3, "<<-": 3, "->": 4, "->>": 4, "~": 5, "|": 6, "||": 6, "&": 7, "&&": 7,
-                "==": 9, "!=": 9, "<": 9, ">": 9, "<=": 9, ">=": 9, "+": 10, "-": 10, "*": 11, "/": 11,
-                "|>": 12, ":": 13, "^": 15, "**": 15}
-RIGHT_TO_LEFT = ("=", "<-", "<<-", "^", "**")
-UNARY_POWER = {"-": 14, "+": 14, "!": 8, "~": 5, "?": 1}
 ASSIGNMENT_SIGNS = ("<-", "<<-", "=", "->", "->>")
-KEYWORDS = ("if", "else", "for", "while", "repeat", "function", "break", "next")
 
-class RParser:
-    """Precedence climbing over R's documented operator table (?Syntax). `open_brackets`
-    remembers which bracket is open: inside ( and [ a line break means nothing; at the top
-    level and inside { it ends the expression."""
-    def __init__(self, tokens):
-        self.tokens, self.position, self.open_brackets, self.last_line = tokens, 0, [], 1
 
-    def peek(self):
-        """The token at the reading position, without taking it."""
-        while self.tokens[self.position].kind == "newline" and self.open_brackets and self.open_brackets[-1] != "{":
-            self.position += 1
-        return self.tokens[self.position]
+# ---------------------------------------------------------------- R code, read by flowR
+# flowR reads the package's R code; its syntax tree is turned into the tool's Node, the shape every reader of
+# R code here expects. One flowR run reads a whole package, and every source is read once per session.
+PARSED = {}                               # R source text -> its top-level expressions
 
-    def take(self, text=None):
-        """Take the next token; with `text`, insist that it is that token."""
-        token = self.peek()
-        if text is not None and not (token.kind == "op" and token.text == text):
-            raise NotParsed("line %d: '%s' was expected where '%s' stands" % (token.line, text, token.text or "the end of the file"))
-        self.position += 1
-        self.last_line = token.line
-        return token
+def flowr_answer(folder, target, queries, work, *flags):
+    """flowR's answer to `queries` about `target` - an R file or a folder of them - read from a file: a pipe
+    can lose the end of a large answer. An answer too large to read safely is refused before it is read."""
+    answer = os.path.join(work, "answer.json")
+    with open(answer, "w", encoding="utf-8") as sink:
+        subprocess.run([os.path.join(folder, "flowr"), "--no-ansi", *flags, "--default-engine", "tree-sitter",
+                        "--engine.r-shell.disabled", "--engine.tree-sitter.wasm-path", os.path.join(folder, "tree-sitter-r.wasm"),
+                        "--engine.tree-sitter.tree-sitter-wasm-path", os.path.join(folder, "tree-sitter.wasm"), "--execute",
+                        ":query* %s file://%s" % (json.dumps(queries, separators=(",", ":")), target)], stdout=sink, stderr=subprocess.DEVNULL, cwd=work, timeout=900)
+    if os.path.getsize(answer) > FLOWR_ANSWER_MAX:
+        raise ValueError("flowR's answer is %d MB, too large to read safely" % (os.path.getsize(answer) // 2 ** 20))
+    with open(answer, encoding="utf-8") as handle:
+        said = handle.read()
+    if "{" not in said:
+        raise RuntimeError("flowR gave no answer for the package's R code.")
+    return json.JSONDecoder().raw_decode(said[said.index("{"):])[0]
 
-    def skip_newlines(self):
-        """Skip line ends where R allows an expression to go on."""
-        while self.tokens[self.position].kind == "newline":
-            self.position += 1
+def flowr_files(found):
+    """The syntax tree of every file in a flowR answer, by path."""
+    tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
+    return {os.path.normpath(entry["filePath"]): entry["root"] for entry in tree.get("files", [])}
 
-    def is_op(self, *texts):
-        """Is the next token one of these operators?"""
-        token = self.peek()
-        return token.kind == "op" and token.text in texts
+def top_level(root, text):
+    """The top-level expressions of one file; one flowR could not give in the tool's shape is 'not read'. Enforces: R2"""
+    found = []
+    for child in (root or {}).get("children", []):
+        try:
+            found.append(flowr_node(child))
+        except (KeyError, ValueError, TypeError, IndexError) as problem:
+            span = (child.get("info") or {}).get("fullRange") or child.get("location") or [1, 0, text.count("\n") + 1, 0]
+            found.append(("not read", span[0], span[2], "its syntax tree could not be used (%s)" % problem))
+    return found
 
-    def expression(self, minimum=0):
-        """Operator-precedence parsing of one expression; `minimum` is the weakest binding still accepted."""
-        left = self.prefix()
-        while True:
-            token = self.peek()
-            if token.kind != "op":
-                return left
-            if token.text in ("(", "[", "[["):
-                left = self.call_or_index(left)
-            elif token.text in ("$", "@", "::", ":::"):
-                self.take()
-                self.skip_newlines()
-                right = self.take()
-                kind = "dollar" if token.text in ("$", "@") else "ns"
-                right_node = Node("paren", args=(self.finish_paren(),)) if right.text == "(" else Node(right.kind, right.text, line=right.line)
-                left = Node(kind, token.text, (left, right_node), line=left.line, end_line=self.last_line)
-            else:
-                power = 12 if token.text.startswith("%") else BINARY_POWER.get(token.text)
-                if power is None or power < minimum:
-                    return left
-                self.take()
-                self.skip_newlines()
-                right = self.expression(power if token.text in RIGHT_TO_LEFT else power + 1)
-                left = Node("binary", "^" if token.text == "**" else token.text, (left, right), line=left.line, end_line=self.last_line)
+def flowr_package(files, folder=None):
+    """ONE flowR run over the package's R files and NAMESPACE: every R file's syntax tree is kept for
+    parse_r_source, and the NAMESPACE is returned as flowR reads it - exported names and export patterns -
+    or None when the package has none."""
+    folder = folder or flowr_ready()
+    with tempfile.TemporaryDirectory(prefix="pkg-") as work:
+        root, texts = os.path.join(work, "package"), {}
+        for path, data in files.items():
+            if path == "NAMESPACE" or path.lower().endswith(".r"):
+                target = os.path.normpath(os.path.join(root, path))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                texts[target] = decode_text(data)
+                with open(target, "w", encoding="utf-8") as handle:
+                    handle.write(texts[target])
+        try:
+            found = flowr_answer(folder, root, [{"type": "files"}, {"type": "normalized-ast"}], work)
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired):  # too large for one answer: each source is read when asked for
+            for path in list(texts):
+                if path.lower().endswith(".r"):
+                    os.remove(path)
+            found = flowr_answer(folder, root, [{"type": "files"}], work)
+            found["normalized-ast"] = {"normalized": {"ast": {"files": []}}}
+    for path, tree in flowr_files(found).items():
+        if path in texts and path.lower().endswith(".r"):
+            PARSED[texts[path]] = top_level(tree, texts[path])
+    namespace = next((entry["content"]["current"] for entry in found["files"]["files"] if "namespace" in entry.get("roles", [])), None)
+    return {"exports": set(namespace["exportedSymbols"]), "patterns": list(namespace["exportedPatterns"])} if namespace else None
 
-    def finish_paren(self):
-        """A bracketed expression, after its opening bracket."""
-        self.open_brackets.append("(")
-        inner = self.expression()
-        self.open_brackets.pop()
-        self.take(")")
-        return inner
-
-    def prefix(self):
-        """What an expression can start with: a literal, a name, a unary sign, a bracket, a block or a keyword."""
-        token = self.take()
-        if token.kind in ("num", "str"):
-            return Node(token.kind, token.text, line=token.line, end_line=token.line)
-        if token.kind == "name" and token.text not in KEYWORDS:
-            return Node("name", token.text, line=token.line, end_line=token.line)
-        if token.kind == "name":
-            return self.keyword(token)
-        if token.kind == "op" and token.text == "(":
-            self.open_brackets.append("(")
-            inner = self.expression()
-            self.open_brackets.pop()
-            self.take(")")
-            return Node("paren", args=(inner,), line=token.line, end_line=self.last_line)
-        if token.kind == "op" and token.text == "{":
-            return self.block(token)
-        if token.kind == "op" and token.text == "\\":
-            return self.function(token)
-        if token.kind == "op" and token.text in UNARY_POWER:
-            self.skip_newlines()
-            operand = self.expression(UNARY_POWER[token.text])
-            return Node("unary", token.text, (operand,), line=token.line, end_line=self.last_line)
-        raise NotParsed("line %d: '%s' stands where an expression should start" % (token.line, token.text or "the end of the file"))
-
-    def block(self, opening):
-        """The expressions between curly brackets."""
-        self.open_brackets.append("{")
-        statements = []
-        while True:
-            while self.tokens[self.position].kind == "newline" or self.is_op(";"):
-                self.position += 1
-            if self.is_op("}"):
-                break
-            if self.peek().kind == "end":
-                raise NotParsed("the '{' on line %d is never closed" % opening.line)
-            statements.append(self.expression())
-        self.open_brackets.pop()
-        self.take("}")
-        return Node("block", args=tuple(statements), line=opening.line, end_line=self.last_line)
-
-    def condition(self):
-        """The bracketed condition of if and while."""
-        self.take("(")
-        self.open_brackets.append("(")
-        inner = self.expression()
-        self.open_brackets.pop()
-        self.take(")")
-        self.skip_newlines()
-        return inner
-
-    def keyword(self, token):
-        """if, for, while, repeat, function and the other reserved words."""
-        if token.text == "function":
-            return self.function(token)
-        if token.text == "if":
-            parts = [self.condition(), self.expression()]
-            mark = self.position
-            self.skip_newlines()
-            if self.peek().kind == "name" and self.peek().text == "else":
-                self.take()
-                self.skip_newlines()
-                parts.append(self.expression())
-            else:
-                self.position = mark
-            return Node("if", args=tuple(parts), line=token.line, end_line=self.last_line)
-        if token.text == "for":
-            self.take("(")
-            self.open_brackets.append("(")
-            variable = self.take()
-            if not (self.peek().kind == "name" and self.peek().text == "in"):
-                raise NotParsed("line %d: 'in' was expected in the for loop" % token.line)
-            self.take()
-            sequence = self.expression()
-            self.open_brackets.pop()
-            self.take(")")
-            self.skip_newlines()
-            body = self.expression()
-            return Node("for", variable.text, (sequence, body), line=token.line, end_line=self.last_line)
-        if token.text == "while":
-            return Node("while", args=(self.condition(), self.expression()), line=token.line, end_line=self.last_line)
-        if token.text == "repeat":
-            self.skip_newlines()
-            return Node("repeat", args=(self.expression(),), line=token.line, end_line=self.last_line)
-        if token.text in ("break", "next"):
-            return Node("name", token.text, line=token.line, end_line=token.line)
-        raise NotParsed("line %d: '%s' stands where an expression should start" % (token.line, token.text))
-
-    def function(self, token):
-        """A function definition: its formal arguments with their defaults as written, and its body."""
-        self.take("(")
-        self.open_brackets.append("(")
-        names, defaults = [], []
-        while not self.is_op(")"):
-            formal = self.take()
-            if formal.kind != "name" and formal.text != "...":
-                raise NotParsed("line %d: an argument name was expected in the function header" % formal.line)
-            names.append(formal.text)
-            if self.is_op("="):
-                self.take()
-                defaults.append(self.expression(3))
-            else:
-                defaults.append(Node("missing", line=formal.line))
-            if self.is_op(","):
-                self.take()
-        self.open_brackets.pop()
-        self.take(")")
-        self.skip_newlines()
-        body = self.expression(1)
-        return Node("function", args=tuple(defaults) + (body,), names=tuple(names), line=token.line, end_line=self.last_line)
-
-    def call_or_index(self, target):
-        """Calls and the three kinds of indexing that may follow an expression."""
-        opening = self.take()
-        closer = ")" if opening.text == "(" else "]"
-        self.open_brackets.append("(" if opening.text == "(" else "[")
-        arguments, names = [], []
-        while not self.is_op(closer):
-            if self.is_op(","):
-                self.take()
-                arguments.append(Node("missing", line=self.last_line))
-                names.append("")
-                continue
-            name = ""
-            following = self.tokens[self.position + 1] if self.position + 1 < len(self.tokens) else None
-            if self.peek().kind in ("name", "str") and following is not None and following.kind == "op" and following.text == "=":
-                name = self.take().text
-                self.take("=")
-            if self.is_op(",") or self.is_op(closer):
-                arguments.append(Node("missing", line=self.last_line))
-            else:
-                arguments.append(self.expression(3))
-            names.append(name)
-            if self.is_op(","):
-                self.take()
-                if self.is_op(closer) and opening.text != "(":
-                    arguments.append(Node("missing", line=self.last_line))
-                    names.append("")
-        self.open_brackets.pop()
-        self.take(closer)
-        if opening.text == "[[":
-            self.take("]")
-        kind = "call" if opening.text == "(" else "index"
-        return Node(kind, opening.text, (target,) + tuple(arguments), tuple(names), target.line, self.last_line)
+def parse_r_sources(sources, folder=None):
+    """Read in ONE flowR run every source not read yet this session."""
+    todo = [text for text in dict.fromkeys(sources) if text not in PARSED]
+    if not todo:
+        return
+    folder = folder or flowr_ready()
+    with tempfile.TemporaryDirectory(prefix="src-") as work:
+        root = os.path.join(work, "sources")
+        os.makedirs(root)
+        names = {}
+        for number, text in enumerate(todo):
+            names[os.path.normpath(os.path.join(root, "s%05d.R" % number))] = text
+            with open(os.path.join(root, "s%05d.R" % number), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        try:
+            trees = flowr_files(flowr_answer(folder, root, [{"type": "normalized-ast"}], work))
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+            if len(todo) == 1:
+                raise
+            for text in todo:                         # too large for one answer: one source at a time
+                parse_r_sources([text], folder)
+            return
+    for path, text in names.items():
+        PARSED[text] = top_level(trees[path], text) if path in trees else [("not read", 1, text.count("\n") + 1, "flowR gave no syntax tree for it")]
 
 def parse_r_source(source):
-    """Parse a file ONE top-level expression at a time. An expression that cannot be read
-    becomes ("not read", first line, last line, reason) and reading continues with the next
-    one, so a single odd construct never costs the rest of the file. Enforces: R2, R7"""
-    try:
-        tokens = tokenize_r(source)
-    except NotParsed as problem:
-        return [("not read", 1, source.count("\n") + 1, str(problem))]
-    parser, results = RParser(tokens), []
-    while True:
-        while parser.tokens[parser.position].kind == "newline" or (parser.tokens[parser.position].kind == "op" and
-                                                                   parser.tokens[parser.position].text == ";"):
-            parser.position += 1
-        if parser.tokens[parser.position].kind == "end":
-            return results
-        start = parser.position
-        try:
-            parser.open_brackets = []
-            node = parser.expression()
-            follower = parser.tokens[parser.position]
-            if follower.kind not in ("newline", "end") and not (follower.kind == "op" and follower.text == ";"):
-                raise NotParsed("line %d: '%s' stands where the expression should have ended" % (follower.line, follower.text))
-            results.append(node)
-        except NotParsed as problem:
-            depth, position = 0, start
-            while tokens[position].kind != "end":               # skip to where the next statement starts
-                text = tokens[position].text if tokens[position].kind == "op" else ""
-                depth += 1 if text in ("(", "{", "[") else 2 if text == "[[" else -1 if text in (")", "}", "]") else 0
-                if tokens[position].kind == "newline" and position >= parser.position:
-                    first, second = tokens[position + 1], tokens[min(position + 2, len(tokens) - 1)]
-                    fresh_start = (first.column == 0 and first.kind == "name" and second.kind == "op"
-                                   and second.text in ASSIGNMENT_SIGNS)
-                    if depth <= 0 or fresh_start:
-                        break
-                position += 1
-            parser.position = position
-            results.append(("not read", tokens[start].line, tokens[max(start, position - 1)].line, str(problem)))
+    """The top-level expressions of one R source, as flowR reads them; one that cannot be read becomes
+    ("not read", first line, last line, reason) and the rest are still read. Enforces: R2, R7"""
+    parse_r_sources([source])
+    return PARSED[source]
 
-# ---------------------------------------------------------------- facts read from a syntax tree
 ARITHMETIC_SIGNS = ("+", "-", "*", "/", "^", "%%", "%/%")
 COMPARISON_SIGNS = ("==", "!=", "<", ">", "<=", ">=")
-CONSTANT_NAMES = ("TRUE", "FALSE", "NULL", "NA", "NA_integer_", "NA_real_", "NA_character_", "Inf", "NaN",
-                  "T", "F", "break", "next", "...")
 
-class CannotConvert(Exception):
-    """A piece of code that cannot become a formula tree. The message is a plain reason."""
+def flowr_node(n):
+    """One flowR node as the tool's Node. Kinds and argument order are those Node documents."""
+    kind = n["type"]
+    token = kind in ("RSymbol", "RLogical", "RNumber", "RString", "RBreak", "RNext")
+    rng = (n.get("location") if token else None) or (n.get("info") or {}).get("fullRange") or n.get("location") or [0, 0, 0, 0]
+    line, end = rng[0], rng[2]
+    conv = flowr_node
+    if kind == "RExpressionList":
+        grouping = [g for g in (n.get("grouping") or []) if isinstance(g, dict)]
+        children = tuple(conv(c) for c in n.get("children", []))
+        if grouping:
+            opening, closing = grouping[0], grouping[-1]
+            line, end = opening["location"][0], closing["location"][2]
+            if opening.get("lexeme") == "(":
+                return Node("paren", args=children[:1], line=line, end_line=end)
+            return Node("block", args=children, line=line, end_line=end)
+        return children[0] if len(children) == 1 else Node("block", args=children, line=line, end_line=end)
+    if kind == "RSymbol":
+        content = n.get("content", n.get("lexeme", ""))
+        if isinstance(content, list):                    # pkg::name comes as [name, package, internal]
+            return namespaced(content[1], ":::" if len(content) > 2 and content[2] else "::", str(content[0]), line, end)
+        name = str(content)
+        written = str(n.get("lexeme", ""))
+        if n.get("namespace") or "::" in written:
+            return namespaced(n.get("namespace") or written.split(":")[0], ":::" if ":::" in written else "::", name, line, end)
+        return Node("name", name, line=line, end_line=end)
+    if kind == "RLogical":
+        return Node("name", "TRUE" if n.get("content") else "FALSE", line=line, end_line=end)
+    if kind == "RNumber":
+        return Node("num", n.get("lexeme", ""), line=line, end_line=end)
+    if kind == "RString":
+        return Node("str", (n.get("content") or {}).get("str", ""), line=line, end_line=end)
+    if kind in ("RBreak", "RNext"):
+        return Node("name", "break" if kind == "RBreak" else "next", line=line, end_line=end)
+    if kind in ("RBinaryOp", "RPipe"):
+        op = "|>" if kind == "RPipe" else "^" if n["operator"] == "**" else n["operator"]
+        left, right = conv(n["lhs"]), conv(n["rhs"])
+        return Node("binary", op, (left, right), line=left.line, end_line=max(end, right.end_line))
+    if kind == "RUnaryOp":
+        return Node("unary", n["operator"], (conv(n["operand"]),), line=line, end_line=end)
+    if kind == "RFunctionDefinition":
+        names, defaults = [], []
+        for p in n.get("parameters", []):
+            names.append(str(p["name"].get("content", p["name"].get("lexeme", ""))))
+            default = p.get("defaultValue")
+            defaults.append(conv(default) if default else Node("missing", line=p["name"]["location"][0]))
+        return Node("function", args=tuple(defaults) + (conv(n["body"]),), names=tuple(names), line=line, end_line=end)
+    if kind in ("RFunctionCall", "RAccess"):
+        arguments, names = [], []
+        for a in (n.get("arguments") if kind == "RFunctionCall" else n.get("access")) or []:
+            if not isinstance(a, dict) or a.get("type") != "RArgument" or a.get("value") is None:
+                arguments.append(Node("missing", line=line)); names.append(
+                    str(a["name"].get("content", a["name"].get("lexeme", ""))) if isinstance(a, dict) and a.get("name") else "")
+                continue
+            arguments.append(conv(a["value"]))
+            names.append(str(a["name"].get("content", a["name"].get("lexeme", ""))) if a.get("name") else "")
+        if kind == "RAccess":
+            target, op = conv(n["accessed"]), n["operator"]
+            if op in ("$", "@"):
+                field = arguments[0] if arguments else Node("missing")
+                field = Node(field.kind, field.value, line=field.line) if field.kind in ("name", "str") else field
+                return Node("dollar", op, (target, field), line=target.line, end_line=end)
+            return Node("index", op, (target,) + tuple(arguments), tuple(names), line=target.line, end_line=end)
+        if n.get("infixSpecial"):
+            return Node("binary", n["functionName"]["content"], tuple(arguments), line=arguments[0].line,
+                        end_line=max([end] + [a.end_line for a in arguments]))
+        if n.get("named"):
+            written = str(n.get("lexeme", ""))
+            callee = conv(n["functionName"])
+            if "::" in written and callee.kind == "name":
+                callee = namespaced(written.split(":")[0], ":::" if ":::" in written else "::", callee.value, callee.line, callee.end_line)
+        else:
+            callee = conv(n["calledFunction"])
+        return Node("call", "(", (callee,) + tuple(arguments), tuple(names), line=callee.line, end_line=end)
+    if kind == "RIfThenElse":
+        parts = [conv(n["condition"]), conv(n["then"])] + ([conv(n["otherwise"])] if n.get("otherwise") else [])
+        return Node("if", args=tuple(parts), line=line, end_line=end)
+    if kind == "RForLoop":
+        return Node("for", str(n["variable"].get("content", "")), (conv(n["vector"]), conv(n["body"])), line=line, end_line=end)
+    if kind == "RWhileLoop":
+        return Node("while", args=(conv(n["condition"]), conv(n["body"])), line=line, end_line=end)
+    if kind == "RRepeatLoop":
+        return Node("repeat", args=(conv(n["body"]),), line=line, end_line=end)
+    raise ValueError("flowR node %s is not one the tool reads" % kind)
+
+
+def namespaced(package, sign, name, line, end):
+    """pkg::name as the tool's parser made it: the package, then the name, which carries no end line."""
+    return Node("ns", sign, (Node("name", package, line=line, end_line=line), Node("name", name, line=line)), line=line, end_line=end)
 
 def walk(node):
     """Every node of a tree, parents first."""
@@ -3751,13 +3247,6 @@ def assignment_parts(node):
     left, right = node.args
     return (right, left) if node.value in ("->", "->>") else (left, right)
 
-def number_token(node):
-    """A number as written in the code, brought to one form, with its line."""
-    written = node.value.rstrip("Li")
-    text = str(int(written, 16)) if written.lower().startswith("0x") else written
-    parsed = parse_number(text) or {"value": text, "as_written": text, "decimals": 0, "unit": ""}
-    parsed.update(as_written=node.value, line=node.line)
-    return parsed
 
 def unparse(node):
     """The tree back as short R-like text: used to show defaults and conditions as written."""
@@ -3785,10 +3274,11 @@ def unparse(node):
         return "function(%s) ..." % ", ".join(node.names)
     return "{ ... }" if kind == "block" else kind
 
-def has_arithmetic(node, function_map, trivial):
+def has_arithmetic(node, function_map):
     """Does this code compute something: arithmetic, a mathematical function, a comparison with
-    a number, or a number that is not on the list of trivial ones? Numbers used as positions
-    inside [ ] do not count."""
+    a number, or a number? Every number counts, whatever its value; only a position inside [ ]
+    does not. What this decides is a label - Formula statement or Top-level statement - and both
+    are read, shown, linked and asked about alike."""
     positions = set()
     for inner in walk(node):
         if inner.kind == "index":
@@ -3804,14 +3294,13 @@ def has_arithmetic(node, function_map, trivial):
             return True
         if inner.kind == "binary" and inner.value in COMPARISON_SIGNS and "num" in (inner.args[0].kind, inner.args[1].kind):
             return True
-        if inner.kind == "num" and id(inner) not in positions and number_token(inner)["value"] not in trivial:
+        if inner.kind == "num" and id(inner) not in positions:
             return True
     return False
 
 def code_facts(node, skip_inner_functions=True):
-    """Calls, symbols read and written, numbers and strings of a piece of code, in order of
-    appearance. Nested function definitions are left to their own units."""
-    calls, read, written, numbers, strings = [], [], [], [], []
+    """The functions a piece of code calls and the names it assigns, in order of appearance."""
+    calls, written = [], []
     def visit(inner, top):
         if inner.kind == "function" and not top and skip_inner_functions:
             return
@@ -3830,200 +3319,37 @@ def code_facts(node, skip_inner_functions=True):
         if inner.kind in ("dollar", "ns"):
             visit(inner.args[0], False) if inner.kind == "dollar" else None
             return
-        if inner.kind == "name" and inner.value not in CONSTANT_NAMES:
-            read.append(inner.value)
-        elif inner.kind == "num":
-            numbers.append(number_token(inner))
-        elif inner.kind == "str":
-            strings.append(inner.value)
         for child in inner.args:
             visit(child, False)
     visit(node, True)
     unique = lambda values: tuple(dict.fromkeys(values))
-    return {"calls": unique(calls), "symbols_read": unique(read), "symbols_written": unique(written),
-            "numbers": tuple(numbers), "strings": unique(strings)}
+    return {"calls": unique(calls), "symbols_written": unique(written)}
 
-# ---------------------------------------------------------------- from R code to a formula tree
-SIGN_TO_OP = {"+": "add", "-": "sub", "*": "mul", "/": "div", "^": "pow"}
-
-def to_expr(node, function_map, known):
-    """One R expression to the tool's neutral formula tree, through r_function_map.yaml. `known`
-    holds local variables already assigned in the same function: they are substituted, so a
-    change three lines above the return still reaches the comparison. Anything the tool cannot
-    evaluate raises CannotConvert; nothing is guessed and nothing is run. Enforces: R7"""
-    kind = node.kind
-    if kind == "num":
-        return Expr("num", value=number_token(node)["value"])
-    if kind == "name":
-        if node.value in known:
-            return known[node.value]
-        if node.value in CONSTANT_NAMES:
-            raise CannotConvert("it uses the constant %s" % node.value)
-        return Expr("sym", name=normalise_symbol(node.value))
-    if kind == "paren" or (kind == "block" and len(node.args) == 1):
-        return to_expr(node.args[0], function_map, known)
-    if kind == "unary" and node.value in ("-", "+"):
-        inner = to_expr(node.args[0], function_map, known)
-        return Expr("neg", args=(inner,)) if node.value == "-" else inner
-    if kind == "binary" and node.value in SIGN_TO_OP:
-        return Expr(SIGN_TO_OP[node.value], args=tuple(to_expr(arg, function_map, known) for arg in node.args))
-    if kind == "binary" and node.value in COMPARISON_SIGNS:
-        return Expr("cmp", name=node.value, args=tuple(to_expr(arg, function_map, known) for arg in node.args))
-    if kind == "if" and len(node.args) == 3:
-        return Expr("piecewise", args=tuple(to_expr(arg, function_map, known) for arg in node.args))
-    if kind == "dollar" and node.args[0].kind == "name":
-        return Expr("sym", name="%s$%s" % (node.args[0].value, node.args[1].value))
-    if kind == "index" and node.args[0].kind == "name" and node.args[-1].kind == "str" and len(node.args) == 3:
-        return Expr("sym", name="%s$%s" % (node.args[0].value, node.args[-1].value))   # table[rows, "column"]
-    if kind == "call":
-        return call_to_expr(node, function_map, known)
-    raise CannotConvert("it uses '%s', which the tool cannot turn into a formula" % unparse(node)[:40])
-
-def call_to_expr(node, function_map, known):
-    """A call in R to the neutral expression tree, through r_function_map.yaml; anything else cannot be converted."""
-    name = callee_name(node)
-    if name == "return" and len(node.args) == 2:
-        return to_expr(node.args[1], function_map, known)
-    entry = function_map["r_functions"].get(name)
-    if entry is None:
-        raise CannotConvert("it calls %s(), which the tool cannot evaluate" % (name or "a computed function"))
-    expected = entry.get("arguments", [])
-    placed, extra = {}, []
-    for argument_name, argument in zip(node.names, node.args[1:]):
-        if argument_name == "na.rm" or argument.kind == "missing":
-            continue
-        if argument_name in entry.get("only_defaults", []) or (argument_name and argument_name not in expected):
-            raise CannotConvert("it calls %s() with '%s', which the tool does not evaluate" % (name, argument_name))
-        if argument_name:
-            placed[expected.index(argument_name)] = argument
-        else:
-            extra.append(argument)
-    ordered = []
-    for position in range(len(placed) + len(extra)):
-        ordered.append(placed[position] if position in placed else extra.pop(0))
-    enough = len(expected) - entry.get("optional", 0) <= len(ordered) <= len(expected)
-    if not entry.get("variadic") and not enough:
-        raise CannotConvert("it calls %s() with %d argument(s) where the tool knows it with %d"
-                            % (name, len(ordered), len(expected)))
-    return Expr("call", name=entry["neutral"], args=tuple(to_expr(arg, function_map, known) for arg in ordered))
-
-def is_guard(node, function_map):
-    """An argument check that does not change the value: stop(...), stopifnot(...), or an `if`
-    without `else` whose body only holds such calls."""
-    if node.kind == "call":
-        return callee_name(node) in function_map["plumbing_calls"]
-    if node.kind == "if" and len(node.args) == 2:
-        body = node.args[1]
-        return all(is_guard(statement, function_map) for statement in (body.args if body.kind == "block" else (body,)))
-    return False
-
-def compose_function(function_node, function_map):
-    """The value a straight-line function returns, as one formula in its arguments: local
-    assignments are substituted in order. Branches that assign, loops and anything the tool
-    cannot evaluate raise CannotConvert ("the function could not be composed")."""
-    body = function_node.args[-1]
-    statements = body.args if body.kind == "block" else (body,)
-    known, result = {}, None
-    for position, statement in enumerate(statements):
-        parts = assignment_parts(statement)
-        if parts and parts[0].kind == "name" and parts[1].kind != "function":
-            known[parts[0].value] = result = to_expr(parts[1], function_map, known)
-        elif statement.kind == "call" and callee_name(statement) == "return":
-            return to_expr(statement, function_map, known), known
-        elif position == len(statements) - 1:
-            result = to_expr(statement, function_map, known)
-        elif is_guard(statement, function_map):
-            continue
-        else:
-            raise CannotConvert("it has steps that the tool cannot follow in a straight line")
-    if result is None:
-        raise CannotConvert("it returns nothing that the tool can follow")
-    return result, known
 
 # ---------------------------------------------------------------- units from R source
 def draft(kind, path, lines, name, text, **more):
     """A unit before it has its reference. References are given at the end, in reading order."""
     unit = {"kind": kind, "file": path, "lines": lines, "name": name, "inside": "", "text": text,
             "parent_key": None, "key": "%s:%s:%s:%s" % (path, lines[0] if lines else 0, kind, name),
-            "code": None, "data": None, "roxygen": None, "helppage": None, "read_problem": None, "node": None}
+            "code": None, "data": None, "roxygen": None, "read_problem": None, "node": None}
     unit.update(more)
     return unit
 
 def code_detail(node, function_map, settings, **more):
-    """The facts about a piece of code that later steps use: symbols, numbers, calls, strings, expression."""
+    """The facts about a piece of code that later steps use: its calls, what it assigns, what it reads."""
     facts = code_facts(node)
-    return dict(facts, formals=(), exported=None, expression=None, reads_data=(), plumbing=False,
-                plumbing_reason="", composed=None, not_composed_reason="", **more)
+    return dict(facts, formals=(), exported=None, reads_data=(), **more)
 
-def formula_statements(function_node, function_name, parent_key, path, source_lines, context):
-    """The formula statements inside one function: assignments, return(...) calls and the last
-    expression, when they compute something. Statements at the top of the body also get
-    their composed form, with the local variables before them substituted."""
-    function_map, trivial = context["function_map"], context["trivial"]
-    body = function_node.args[-1]
-    top_statements = body.args if body.kind == "block" else (body,)
-    units, known = [], {}
-    def visit(statement, at_top, is_last):
-        if statement.kind in ("block", "if", "for", "while", "repeat"):
-            inner = statement.args if statement.kind == "block" else statement.args[1 if statement.kind in ("if", "for", "while") else 0:]
-            for position, child in enumerate(inner):
-                visit(child, False, is_last and statement.kind == "block" and position == len(inner) - 1)
-            return
-        parts = assignment_parts(statement)
-        value = parts[1] if parts else statement
-        if value.kind == "function":
-            return
-        returned = statement.kind == "call" and callee_name(statement) == "return"
-        if not (parts or returned or is_last) or not has_arithmetic(value, function_map, trivial) or is_guard(statement, function_map):
-            return
-        target = parts[0].value if parts and parts[0].kind == "name" else function_name
-        detail = code_detail(statement, function_map, context["settings"])
-        for form, table in (("expression", {}), ("composed", known if at_top else None)):
-            if table is None:
-                detail["not_composed_reason"] = "the statement sits inside a branch or a loop"
-                continue
-            try:
-                tree = to_expr(value, function_map, table)
-                detail[form] = to_plain(Expr("eq", args=(Expr("sym", name=normalise_symbol(target)), tree)))
-            except CannotConvert as problem:
-                detail["not_composed_reason"] = str(problem)
-        lines = (statement.line, statement.end_line)
-        units.append(draft(KIND_FORMULA, path, lines, target, "\n".join(source_lines[lines[0] - 1:lines[1]]),
-                           inside=function_name, parent_key=parent_key, code=detail, node=statement))
-    for position, statement in enumerate(top_statements):
-        visit(statement, True, position == len(top_statements) - 1)
-        parts = assignment_parts(statement)
-        if parts and parts[0].kind == "name" and parts[1].kind != "function":
-            try:
-                known[parts[0].value] = to_expr(parts[1], function_map, known)
-            except CannotConvert:
-                known.pop(parts[0].value, None)
-    return units
 
 def function_units(name, function_node, lines, path, source_lines, context, inside="", parent_key=None):
-    """A function, the formula statements inside it, and any functions defined inside it."""
+    """A function, as one unit: what is written inside it is part of it."""
     function_map = context["function_map"]
     formals = tuple((formal, unparse(default)) for formal, default in zip(function_node.names, function_node.args[:-1]))
     detail = code_detail(function_node, function_map, context["settings"], )
     detail.update(formals=formals, exported=is_exported(name, context["namespace"]) if not inside else False)
-    try:
-        tree, _ = compose_function(function_node, function_map)
-        detail["composed"] = to_plain(Expr("eq", args=(Expr("sym", name=normalise_symbol(name)), tree)))
-    except CannotConvert as problem:
-        detail["not_composed_reason"] = str(problem)
-    computes = any(has_arithmetic(part, function_map, context["trivial"]) for part in function_node.args if part.kind != "missing")
-    if not computes:                                     # the body AND the defaults: a non-trivial default is never "supporting"
-        detail.update(plumbing=True, plumbing_reason="no arithmetic and no number other than the trivial ones: it only "
-                                                     "checks, converts or passes values on")
     unit = draft(KIND_FUNCTION, path, lines, name, "\n".join(source_lines[lines[0] - 1:lines[1]]),
                  inside=inside, parent_key=parent_key, code=detail, node=function_node)
-    units = [unit] + formula_statements(function_node, name, unit["key"], path, source_lines, context)
-    for inner in walk(function_node.args[-1]):
-        parts = assignment_parts(inner)
-        if parts and parts[1].kind == "function" and parts[0].kind == "name":
-            units.extend(function_units(parts[0].value, parts[1], (inner.line, inner.end_line), path, source_lines,
-                                        context, inside=name, parent_key=unit["key"]))
-    return units
+    return [unit]
 
 def statement_units(node, path, source_lines, context, in_tests):
     """The unit(s) of one top-level expression."""
@@ -4036,15 +3362,9 @@ def statement_units(node, path, source_lines, context, in_tests):
         label = node.args[1].value if node.args[1].kind == "str" else "test"
         return [draft(KIND_TEST, path, lines, label, text, code=code_detail(node, function_map, context["settings"]), node=node)]
     detail = code_detail(node, function_map, context["settings"])
-    if parts and parts[0].kind == "name" and has_arithmetic(parts[1], function_map, context["trivial"]):
-        try:
-            tree = to_expr(parts[1], function_map, {})
-            detail["expression"] = to_plain(Expr("eq", args=(Expr("sym", name=normalise_symbol(parts[0].value)), tree)))
-        except CannotConvert as problem:
-            detail["not_composed_reason"] = str(problem)
+    if parts and parts[0].kind == "name" and has_arithmetic(parts[1], function_map):
         return [draft(KIND_FORMULA, path, lines, parts[0].value, text, code=detail, node=node)]
     kind = KIND_TEST if in_tests and node.kind == "call" and callee_name(node).startswith("expect_") else KIND_TOPLEVEL
-    detail.update(plumbing=True, plumbing_reason="a statement without arithmetic (it loads, declares or sets something up)")
     name = parts[0].value if parts and parts[0].kind in ("name", "str") else (callee_name(node) if node.kind == "call" else "")
     return [draft(kind, path, lines, name, text, code=detail, node=node)]
 
@@ -4086,8 +3406,8 @@ def units_from_r_source(path, source, context, line_offset=0):
 
 def self_contained(units):
     """Rows that never overlap, each a whole piece of code: what is written inside a function is the
-    function's (its statements are taken apart on Model_Implementation_Map, not here); a roxygen block
-    is one row with what it documents; and two rows over the same lines are one row."""
+    function's; a roxygen block is one row with what it documents; and two rows over the same lines are
+    one row."""
     kept = []
     for unit in sorted((u for u in units if not u["parent_key"]), key=lambda u: (u["lines"][0], -u["lines"][1])):
         last = kept[-1] if kept else None
@@ -4105,19 +3425,6 @@ def self_contained(units):
     return kept
 
 # ---------------------------------------------------------------- roxygen blocks and help pages
-def braces_content(text, position):
-    """The content of the {...} that starts at `position` (nested braces allowed), and the
-    position after it. Used for \\eqn{}, \\deqn{} and the help-page format."""
-    depth, start = 0, position
-    while position < len(text):
-        if text[position] == "\\":
-            position += 2
-            continue
-        depth += {"{": 1, "}": -1}.get(text[position], 0)
-        position += 1
-        if depth == 0:
-            return text[start + 1:position - 1], position
-    return text[start + 1:], len(text)
 
 def roxygen_units(path, source_lines, parsed, context):
     """Consecutive #' lines form one block. It documents the object that follows: a function,
@@ -4144,15 +3451,6 @@ def roxygen_units(path, source_lines, parsed, context):
                 current["text"] = (current["text"] + "\n" + line).strip("\n")
         tags.append(current)
         tags = [tag for tag in tags if tag["tag"] != "description" or tag["text"].strip()]
-        formulas = []
-        text = "\n".join(block_lines)
-        for found in re.finditer(r"\\d?eqn(?=\{)", text):
-            latex, _ = braces_content(text, found.end())
-            try:
-                equation = read_equation("latex", latex_to_linear(latex), context["notation"])
-            except NotReadable as problem:
-                equation = EquationData("latex", latex, False, str(problem), None, "")
-            formulas.append(dict(to_plain(equation), line=first + 1 + text[:found.start()].count("\n")))
         follower = next((r for r in parsed if not isinstance(r, tuple) and r.line >= number + 1), None)
         documents = ""
         if follower is not None:
@@ -4162,35 +3460,11 @@ def roxygen_units(path, source_lines, parsed, context):
             elif follower.kind == "str":
                 documents = follower.value
         documents = documents or next((tag["text"].split()[0] for tag in tags if tag["tag"] == "name" and tag["text"]), "")
-        detail = {"documents_ref": None, "documents_name": documents, "tags": tuple(tags), "formulas": tuple(formulas)}
+        detail = {"documents_ref": None, "documents_name": documents, "tags": tuple(tags)}
         units.append(draft(KIND_ROXYGEN, path, (first + 1, number), documents, "\n".join(source_lines[first:number]),
                            roxygen=detail))
     return units
 
-def help_page_unit(path, text):
-    """A help page (.Rd): name, aliases, title, usage and arguments, read from the macro format
-    with nested braces; % starts a comment."""
-    generated_from = re.search(r"%\s*Please edit documentation in\s+(\S+)", text)
-    body = re.sub(r"(?<!\\)%[^\n]*", "", text)
-    sections, position = [], 0
-    for found in re.finditer(r"\\([A-Za-z]+)\s*(?=\{)", body):
-        if found.start() < position:
-            continue
-        content, position = braces_content(body, found.end())
-        sections.append((found.group(1), content))
-    first = lambda macro: next((normalise_text(content) for name, content in sections if name == macro), "")
-    arguments = []
-    for name, content in sections:
-        if name == "arguments":
-            for item in re.finditer(r"\\item\s*(?=\{)", content):
-                argument, after = braces_content(content, item.end())
-                description, _ = braces_content(content, after) if content[after:after + 1] == "{" else ("", after)
-                arguments.append((normalise_text(argument), normalise_text(description)))
-    detail = {"rd_name": first("name"), "aliases": tuple(normalise_text(c) for n, c in sections if n == "alias"),
-              "title": first("title"), "usage": first("usage"), "arguments": tuple(arguments),
-              "generated_from_ref": None, "in_step_with_source": None,
-              "generated_from_file": generated_from.group(1) if generated_from else ""}
-    return draft(KIND_HELP, path, (1, text.count("\n") + 1), detail["rd_name"] or os.path.basename(path), text, helppage=detail)
 
 def vignette_units(path, text, context):
     """A vignette: prose becomes "Vignette text" units, one per stretch between code chunks;
@@ -4307,76 +3581,42 @@ def table_of(value):
         return ["value"], [[cell_text(value)]], "single value"
     return None
 
-def column_kind(cells):
-    """Is a column made of numbers, of text, or of both?"""
-    values = [cell for cell in cells if cell != "NA"]
-    if values and all(re.fullmatch(r"-?\d+", cell) for cell in values):
-        return "integer"
-    if values and all(re.fullmatch(r"-?\d+(\.\d+)?|-?Inf", cell) for cell in values):
-        return "decimal"
-    return "logical" if values and all(cell in ("TRUE", "FALSE") for cell in values) else "text"
-
-def row_key_columns(header, rows, kinds):
-    """How a row is identified: real row names if present; otherwise the left-most single
-    column, or the smallest left-most combination of up to three non-numeric columns, whose
-    values are unique; otherwise the row number. The choice is shown in the workbook."""
-    import itertools
-    if header and header[0] in ("(row name)", "name", "path"):
-        return (header[0],)
-    candidates = [i for i, kind in enumerate(kinds) if kind in ("text", "logical")]
-    for size in (1, 2, 3):
-        for combination in itertools.combinations(candidates, size):
-            seen = {tuple(row[i] for i in combination) for row in rows}
-            if len(seen) == len(rows) and rows:
-                return tuple(header[i] for i in combination)
-    return ()
 
 def table_display(header, rows):
-    """The one-cell display form: at most 50 rows, always below Excel's limit for one cell."""
-    shown = ["; ".join(header)] + ["; ".join(row) for row in rows[:50]]
-    if len(rows) > 50:
-        shown.append("... %d more rows; the full table is in the audit files" % (len(rows) - 50))
-    text = "\n".join(shown)
-    return text if len(text) < 30000 else text[:30000] + "\n... (cut here; the full table is in the audit files)"
+    """A stored table as the workbook shows it: its header and every row, one line each, cells joined by "; ".
+    Nothing is left out; a table too long for one row of Chunks_Model takes several (model_rows). Enforces: R13"""
+    return "\n".join(["; ".join(header)] + ["; ".join(row) for row in rows])
 
-def data_object_unit(name, value, path, settings, decoded_by):
-    """One stored object to a unit and, when it is assessable, its full values."""
+def data_object_unit(name, value, path, settings):
+    """One stored object to a unit: a table shown whole (table_display), or, when it has no tabular meaning, described
+    in a sentence. Too large to be a parameter table, it is marked not assessable: a dataset (asked_rows)."""
     found = table_of(value)
     if found is None:
         described = "An object of Python type %s after decoding; it has no tabular meaning, so it is described and not compared." % type(value).__name__
-        detail = {"object_name": name, "container_file": path, "r_class": (), "r_type": type(value).__name__, "dims": (),
-                  "attributes": {}, "columns": (), "row_keys": (), "n_cells": 0, "canonical_value_hash": "",
-                  "decoded_by": decoded_by, "assessable": False,
+        detail = {"object_name": name, "container_file": path, "dims": (), "columns": (), "assessable": False,
                   "not_assessable_reason": "it is not a table, a vector or a list of short values"}
         return draft(KIND_OBJECT, path, None, name, described, data=detail), None
     header, rows, shape = found
-    kinds = [column_kind([row[i] for row in rows]) for i in range(len(header))]
     n_cells = len(rows) * len(header)
-    value_hash = sha256_text("\x1f".join(header + [cell for row in rows for cell in row]))
     too_large = n_cells > settings["max_parameter_cells"] or len(header) > settings["max_parameter_columns"]
     reason = "too large to be a parameter table (%d cells); it looks like a dataset" % n_cells if too_large else None
-    keys = row_key_columns(header, rows, kinds)
-    detail = {"object_name": name, "container_file": path, "r_class": (shape,), "r_type": shape,
-              "dims": (len(rows), len(header)), "attributes": {}, "columns": tuple(zip(header, kinds)), "row_keys": keys,
-              "n_cells": n_cells, "canonical_value_hash": value_hash, "decoded_by": decoded_by,
+    detail = {"object_name": name, "container_file": path, "dims": (len(rows), len(header)), "columns": tuple(header),
               "assessable": not too_large, "not_assessable_reason": reason}
     kind = KIND_OBJECT if shape == "list" else KIND_TABLE
     unit = draft(kind, path, None, name, table_display(header, rows), data=detail)
-    values = None if too_large else {"object_name": name, "header": header, "rows": rows, "row_key": list(keys), "column_types": kinds}
-    return unit, values
+    return unit
 
 def decode_data_file(path, data, settings):
     """Decode one stored-data file without R. The file is parsed by `rdata`, which evaluates
     nothing; a function or another language object inside it is described, never called.
-    Returns (units, full-value records, facts for Model_Package_Info). Enforces: R7"""
+    Returns (units, the fact for Model_Package_Info). Enforces: R7"""
     cap = int(settings["max_file_mb"] * 1024 * 1024)
     stem = os.path.splitext(os.path.basename(path))[0]
     if path.lower().endswith((".csv", ".tsv")):
         delimiter = "\t" if path.lower().endswith(".tsv") else ","
         table = [row for row in csv.reader(io.StringIO(decode_text(data)), delimiter=delimiter) if row]
         frame_header, frame_rows = (table[0], table[1:]) if table else ([], [])
-        unit, values = data_object_unit_from_rows(stem, frame_header, frame_rows, path, settings)
-        return [unit], [values] if values else [], "%s: text table" % path
+        return [data_object_unit_from_rows(stem, frame_header, frame_rows, path, settings)], "%s: text table" % path
     try:
         raw, method = expand(data, cap)
         import rdata
@@ -4391,23 +3631,18 @@ def decode_data_file(path, data, settings):
     except Exception as problem:                                   # any failure means: not decoded, never lost
         reason = str(problem) if isinstance(problem, NotParsed) else "the file could not be decoded as R data"
         unit = draft(KIND_NOT_READ, path, None, stem, "", read_problem="This data file was not read: %s." % reason)
-        return [unit], [], "%s: not decoded (%s)" % (path, type(problem).__name__ if not isinstance(problem, NotParsed) else reason)
+        return [unit], "%s: not decoded (%s)" % (path, type(problem).__name__ if not isinstance(problem, NotParsed) else reason)
     objects = converted if container.startswith("several") and isinstance(converted, dict) else {stem: converted}
-    units, tables = [], []
-    for name in objects:
-        unit, values = data_object_unit(str(name), objects[name], path, settings, decoded_by)
-        units.append(unit)
-        if values:
-            tables.append(values)
+    units = [data_object_unit(str(name), objects[name], path, settings) for name in objects]
     fact = "%s: %s, %s layout, %s compression, %d object(s), decoded by %s" % (path, container, layout, method, len(units), decoded_by)
-    return units, tables, fact
+    return units, fact
 
 def data_object_unit_from_rows(name, header, rows, path, settings):
     """A unit for a table given as header and rows (delimited text files under data/ or inst/extdata/)."""
     import pandas
     width = len(header)
     frame = pandas.DataFrame([list(row) + [""] * (width - len(row)) for row in rows], columns=header)
-    return data_object_unit(name, frame, path, settings, "the standard csv reader")
+    return data_object_unit(name, frame, path, settings)
 
 # ---------------------------------------------------------------- which code reads which data
 def data_reads(function_node, formals, data_names, data_files):
@@ -4442,7 +3677,7 @@ def data_reads(function_node, formals, data_names, data_files):
             note(node.args[0].value, "", column=columns[0] if columns else "", row_key=literals[0] if literals else "")
     return tuple(reads[name] for name in sorted(reads))
 
-# ---------------------------------------------------------------- step 04: read-package
+# ---------------------------------------------------------------- reading the package
 DATA_EXTENSIONS = (".rda", ".rdata", ".rds")
 
 def is_data_file(path):
@@ -4466,18 +3701,17 @@ def file_units(path, data, context, facts, reader=""):
         if text is not None:
             if reader == "r-source":
                 return units_from_r_source(path, text, context)
-            if reader == "help-page":
-                return [help_page_unit(path, text)]
+            if reader == "help-page":                 # generated from the roxygen comments, which are read
+                facts["help pages"].append(path)
+                return []
             if reader == "vignette":
                 return vignette_units(path, text, context)
             if reader in ("r-data", "table-file"):
-                units, tables, fact = decode_data_file(path, data, context["settings"])
-                context["tables"].extend(tables)
+                units, fact = decode_data_file(path, data, context["settings"])
                 facts["data"].append(fact)
                 return units
     if is_data_file(path):
-        units, tables, fact = decode_data_file(path, data, context["settings"])
-        context["tables"].extend(tables)
+        units, fact = decode_data_file(path, data, context["settings"])
         facts["data"].append(fact)
         return units
     if lowered.startswith("src/"):
@@ -4489,46 +3723,31 @@ def file_units(path, data, context, facts, reader=""):
                       read_problem="A binary file of a kind the tool does not know; it needs a manual review.")]
     if is_parsed_r_file(path):
         return units_from_r_source(path, text, context)
-    if lowered.endswith(".rd") and lowered.startswith("man/"):
-        return [help_page_unit(path, text)]
+    if lowered.endswith(".rd") and lowered.startswith("man/"):   # a help page repeats the roxygen comments in the R files
+        facts["help pages"].append(path)
+        return []
     if lowered.endswith((".rmd", ".rnw", ".qmd")):
         return vignette_units(path, text, context)
-    return [draft(KIND_OTHER, path, (1, text.count("\n") + 1), os.path.basename(path), text[:2000])]
+    return [draft(KIND_OTHER, path, (1, text.count("\n") + 1), os.path.basename(path), text)]
 
 def link_documentation_units(units):
-    """Tie each roxygen block to the object it documents and each help page to the block that
-    generated it (by name and aliases), and say whether the page is still in step with it."""
+    """Tie each roxygen block to the object it documents."""
     by_name = {}
     for unit in units:
         if unit["kind"] in (KIND_FUNCTION, KIND_TABLE, KIND_OBJECT) and not unit["inside"]:
             by_name.setdefault(unit["name"], unit)
-    blocks = {}
     for unit in units:
         if unit["roxygen"]:                               # a block, or the object it is one row with
             target = by_name.get(unit["roxygen"]["documents_name"])
             unit["roxygen"]["documents_ref"] = target["key"] if target else None
-            blocks.setdefault(unit["roxygen"]["documents_name"], unit)
-    for unit in units:
-        if unit["kind"] == KIND_HELP:
-            page = unit["helppage"]
-            block = next((blocks[name] for name in (page["rd_name"],) + tuple(page["aliases"]) if name in blocks), None)
-            if block is not None:
-                page["generated_from_ref"] = block["key"]
-                parameters = [tag["name"] for tag in block["roxygen"]["tags"] if tag["tag"] == "param"]
-                documented = [name for names in parameters for name in names.split(",")]
-                page["in_step_with_source"] = sorted(documented) == sorted(name for a, _ in page["arguments"] for name in a.split(", "))
 
 def finalise_units(drafts, file_hashes):
     """Give every draft its reference, in reading order, and turn keys into references."""
     refs = {unit["key"]: make_ref("M", number) for number, unit in enumerate(drafts, start=1)}
     units = []
     for unit in drafts:
-        for part, field_name in (("roxygen", "documents_ref"), ("helppage", "generated_from_ref")):
-            if unit[part] and unit[part][field_name]:
-                unit[part][field_name] = refs.get(unit[part][field_name])
-        helppage = dict(unit["helppage"]) if unit["helppage"] else None
-        if helppage:
-            helppage.pop("generated_from_file", None)
+        if unit["roxygen"] and unit["roxygen"]["documents_ref"]:
+            unit["roxygen"]["documents_ref"] = refs.get(unit["roxygen"]["documents_ref"])
         units.append(ModelUnit(
             ref=refs[unit["key"]], kind=unit["kind"], file=unit["file"], lines=unit["lines"], name=unit["name"],
             inside=unit["inside"], text=unit["text"], parent_ref=refs.get(unit["parent_key"]),
@@ -4536,7 +3755,7 @@ def finalise_units(drafts, file_hashes):
             code=CodeDetail(**unit["code"]) if unit["code"] else None,
             data=ParameterDataDetail(**unit["data"]) if unit["data"] else None,
             roxygen=RoxygenDetail(**unit["roxygen"]) if unit["roxygen"] else None,
-            helppage=HelpPageDetail(**helppage) if helppage else None, read_problem=unit["read_problem"]))
+            read_problem=unit["read_problem"]))
     return units, refs
 
 def package_rows(description, namespace, units, facts, refused):
@@ -4550,6 +3769,9 @@ def package_rows(description, namespace, units, facts, refused):
     rows.extend(("Package", "Units of kind %s" % kind, counts[kind]) for kind in UNIT_KINDS if kind in counts)
     exported = sorted(u.name for u in units if u.kind == KIND_FUNCTION and u.code and u.code.exported)
     rows.append(("Package", "Exported functions", ", ".join(exported) or "none found"))
+    if facts["help pages"]:
+        rows.append(("Package", "Help pages not read", "%d in man/: generated from the roxygen comments in the R files, which are read"
+                     % len(facts["help pages"])))
     rows.extend(("Package data", "Data file", fact) for fact in facts["data"])
     rows.extend(("Package data", "Not assessed", "%s (%s): %s" % (u.ref, u.name, u.data.not_assessable_reason))
                 for u in units if u.data and not u.data.assessable)
@@ -4559,9 +3781,8 @@ def package_rows(description, namespace, units, facts, refused):
     return [{"group": group, "item": item, "value": value} for group, item, value in rows if value != ""]
 
 
-
 def read_package(ctx):
-    """Step 04, read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
+    """Step 02, read-inputs, third part: the package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
     data, man/, tests/, vignettes/, the rest; by name inside each), so references are stable
     for an unchanged tarball. Enforces: R2, R5"""
     tarballs = ctx.options["inputs"]["package"]
@@ -4577,15 +3798,15 @@ def read_package(ctx):
     files = strip_top_folder(files)
     function_map = yaml.safe_load(R_FUNCTION_MAP_YAML)
     description = read_description(decode_text(files["DESCRIPTION"])) if "DESCRIPTION" in files else {}
-    namespace = read_namespace(decode_text(files["NAMESPACE"])) if "NAMESPACE" in files else None
+    namespace = flowr_package(files)
     context = {"function_map": function_map, "notation": function_map["notation"], "namespace": namespace,
-               "trivial": set(ctx.settings["trivial_numbers"]), "settings": ctx.settings, "tables": []}
+               "settings": ctx.settings}
     order = ("description", "namespace", "r", "data", "inst", "man", "tests", "vignettes")
     def rank(path):
         top = path.split("/")[0].lower()
         return (order.index(top) if top in order else len(order), path)
-    chosen, digests, plan_notes = {}, [], []
-    drafts, facts = [], {"data": []}
+    chosen, plan_notes = {}, []
+    drafts, facts = [], {"data": [], "help pages": []}
     for path in sorted(files, key=rank):
         drafts.extend(file_units(path, files[path], context, facts, chosen.get(path, "")))
     data_names = {unit["name"] for unit in drafts if unit["data"]}
@@ -4600,11 +3821,6 @@ def read_package(ctx):
     link_documentation_units(drafts)
     hashes = {path: sha256_bytes(data) for path, data in files.items()}
     units, refs = finalise_units(drafts, hashes)
-    tables = []
-    for unit in units:
-        if unit.data and unit.data.assessable:
-            values = next(t for t in context["tables"] if t["object_name"] == unit.name)
-            tables.append(dict(values, unit_ref=unit.ref))
     inventory = [{"file": path, "bytes": len(files[path]), "sha256": hashes[path], "swhid": swhid_content(files[path])}
                  for path in sorted(files)]
     for entry in inventory:                              # for identity part 3: the lines that must lie inside a unit
@@ -4632,49 +3848,26 @@ def read_package(ctx):
     if len(tarballs) > 1:
         messages.append("More than one tarball was found; only %s was read." % os.path.basename(tarballs[0]))
     plain_units = [to_plain(unit) for unit in units]
-    account = account_of_package(files, plain_units, refused, lambda path: is_parsed_r_file(path) or os.path.splitext(path)[1].lower() in TEXT_MEMBERS or "/" not in path)
+    account = account_of_package(files, plain_units, refused, lambda path: is_parsed_r_file(path) or os.path.splitext(path)[1].lower() in TEXT_MEMBERS or "/" not in path,
+                                 dropped=set(facts["help pages"]))
     info["rows"].extend({"group": "The package", "item": "content account", "value": line}
                         for line in account_lines(account))
     if not account["closed"]:
         messages.append("The content account of the package is open; Model_Package_Info says what could not be placed.")
     info["rows"].extend({"group": "The package", "item": "how it was read", "value": note} for note in plan_notes)
-    return StepResult({"model_units": units, "parameter_tables": tables, "package_info": [info],
-                              "content_accounts": [account], "shape_digests": digests},
+    return StepResult({"model_units": units, "package_info": [info],
+                              },
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)
 
-# ---------------------------------------------------------------- the data flow of a package: the implementation map's backbone
-# Every function traced by code alone: each value it sets and the values it is computed from; each call,
-# with which argument went to which parameter there; each column a dplyr verb creates and from what; the
-# stored tables, files and hard-coded numbers everything comes from. What code cannot follow - a lambda
-# purrr applies, do.call over a list built at run time, eval, <<-, an object system - is a named gap with
-# its code, for the agents. Nothing here is guessed, and the units are not touched: this is a record of its
-# own, so every M- reference stays as it was. Enforces: R2, R4, R7
-DPLYR_CREATE = {"mutate", "transmute", "summarise", "summarize", "reframe"}
-DPLYR_JOIN = {"left_join", "inner_join", "right_join", "full_join", "semi_join", "anti_join"}
-DPLYR_MASKING = DPLYR_CREATE | DPLYR_JOIN | {"filter", "select", "arrange", "group_by", "rename", "distinct", "count", "pull",
-                                              "case_when", "if_else", "slice", "relocate", "summarise_at", "with", "within", "subset", "transform"}
-FILE_READERS = {"read.csv", "read.csv2", "read.table", "read.delim", "readRDS", "read_csv", "read_csv2", "read_tsv", "read_delim",
-                "read_excel", "read_xlsx", "read_xls", "fread", "load", "scan", "readLines", "read_rds", "read_parquet", "fromJSON", "read_yaml"}
-APPLIERS = {"map", "map_dbl", "map_chr", "map_int", "map_lgl", "map_df", "map_dfr", "map_dfc", "map2", "map2_dbl", "pmap", "imap", "walk",
-            "reduce", "keep", "discard", "lapply", "sapply", "vapply", "mapply", "Map", "Reduce", "Filter", "apply", "tapply", "outer"}
-OPAQUE_CALLS = {"do.call": "do.call over arguments built at run time", "eval": "code built at run time and evaluated",
-                "evalq": "code built at run time and evaluated", "parse": "code built from text at run time",
-                "get": "a value looked up by a name built at run time", "mget": "values looked up by names built at run time",
-                "assign": "a value stored under a name built at run time", "match.fun": "a function chosen at run time",
-                "UseMethod": "a function chosen by the class of its argument at run time", "NextMethod": "a function chosen by class at run time",
-                "setRefClass": "an object system (reference classes)", "R6Class": "an object system (R6)", "setClass": "an object system (S4)",
-                "setMethod": "an object system (S4 methods)", "local": "code run in an environment of its own"}
-
-# ---------------------------------------------------------------- flowR: the program the data flow is read with
+# ---------------------------------------------------------------- flowR: the program R code is read with
 # flowR (Sihler and Tichy, Ulm University; GPLv3) parses R with tree-sitter and tells, for every name, the
 # definition it reads, for every call, the function it calls, and for every argument, the parameter it becomes.
 # It is fetched once, verified against the pinned SHA-256, and run in one-shot mode: no R process, no server,
 # no open port, no network. Its answer is written to a file - through a pipe it stops at 128 KiB.
-ELEMENT_MAKERS = ("list", "c", "data.frame", "tibble", "data.table")   # a named argument here is an element, a value of its own
 FLOWR_VERSION = "2.15.8"
 FLOWR_SHA256 = "39e1b9e5e4fab67f76204dbf6856d32e9e7f2a36132b1323e02cc8e3392436e4"
 FLOWR_URL = "https://github.com/flowr-analysis/flowr-r-adapter/releases/download/flowr-v{0}/flowr-{0}-linux-x64.tar.gz"
-READS, CALLS, BINDS = 1, 4, 16          # flowR's edge bits: reads, calls, defines-on-call; any other bit is ignored
+READS, CALLS = 1, 4                     # flowR's edge bits: reads, calls; any other bit is ignored
 FLOWR_ANSWER_MAX = 200 * 1024 * 1024    # flowR answers ~64 KB of JSON per line of R, and Python needs ~8x that to read it
 
 FLOWR_FOLDERS = {}                      # once ready in a session, ready for the rest of it
@@ -4711,22 +3904,10 @@ def flowr_read(folder, text, prefix=""):
     id carries the prefix, so that the answers for several sources can stand side by side. An answer too
     large to read safely is refused before it is read: loading it would take the driver's memory."""
     with tempfile.TemporaryDirectory() as work:
-        source, answer = os.path.join(work, "package.R"), os.path.join(work, "answer.json")
+        source = os.path.join(work, "package.R")
         with open(source, "w", encoding="utf-8") as handle:
             handle.write(text)
-        with open(answer, "w", encoding="utf-8") as sink:
-            subprocess.run([os.path.join(folder, "flowr"), "--no-ansi", "--no-fs", "--default-engine", "tree-sitter",
-                            "--engine.r-shell.disabled", "--engine.tree-sitter.wasm-path", os.path.join(folder, "tree-sitter-r.wasm"),
-                            "--engine.tree-sitter.tree-sitter-wasm-path", os.path.join(folder, "tree-sitter.wasm"), "--execute",
-                            ':query* [{"type":"dataflow"},{"type":"normalized-ast"}] file://' + source],
-                           stdout=sink, stderr=subprocess.DEVNULL, cwd=work, timeout=900)
-        if os.path.getsize(answer) > FLOWR_ANSWER_MAX:
-            raise ValueError("flowR's answer is %d MB, too large to read safely" % (os.path.getsize(answer) // 2 ** 20))
-        with open(answer, encoding="utf-8") as handle:
-            said = handle.read()
-    if "{" not in said:
-        raise RuntimeError("flowR gave no answer for the package's R code.")
-    found = json.JSONDecoder().raw_decode(said[said.index("{"):])[0]
+        found = flowr_answer(folder, source, [{"type": "dataflow"}, {"type": "normalized-ast"}], work, "--no-fs")
     tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
     edges = {prefix + str(s): [(prefix + str(t), e["types"]) for t, e in targets] for s, targets in found["dataflow"]["graph"]["edgeInformation"]}
     nodes, stack = {}, [(tree, None)]
@@ -4742,1647 +3923,238 @@ def flowr_read(folder, text, prefix=""):
             stack += [(value, up) for value in node]
     return nodes, edges
 
-class Dataflow:
-    """The data flow of one package, read by flowR and laid out as the map needs it. flowR says which
-    definition each name reads, which function each call calls and which parameter each argument becomes;
-    what is the model's own - dplyr columns, stored tables, files read, the gaps left for the agents - is
-    decided here, as it was before flowR. Node ids: 'f:v' a value v set in function f; 'f:arg:a' a
-    parameter; 'f:return' what f returns; 'call:f:line:g' one call of g from f; 'column:c' a data-frame
-    column; 'data:t' a stored table; 'file:path'; 'number:value:f:line'; 'outside:name'."""
-
-    def __init__(self, units, trivial=(), folder=None):
-        self.units, self.trivial = units, set(trivial)
-        self.functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-        self.tables = {u["data"]["object_name"]: u for u in units if (u.get("data") or {}).get("object_name")}
-        self.nodes, self.records, self.tree, self.edges, self.unit_of, self.unread = {}, [], {}, {}, {}, {}
-        folder = folder or flowr_ready()
-        for number, unit in enumerate(sorted(self.functions.values(), key=lambda u: u["ref"])):
-            prefix = "%d:" % number             # one function at a time: memory is bounded by the largest function,
-            self.unit_of[prefix] = unit["name"]  # not by the package - the whole package at once took a driver down
-            try:
-                tree, edges = flowr_read(folder, unit["text"], prefix)
-            except (ValueError, KeyError, OSError, subprocess.SubprocessError) as problem:
-                self.unread[unit["name"]] = "flowR could not read it: %s" % problem
-                continue
-            self.tree.update(tree)
-            self.edges.update(edges)
-        named = lambda n: (n["lhs"].get("lexeme") or "").strip("`")          # an operator is defined as `%||%`
-        self.defs = {str(n["rhs"]["info"]["id"]): named(n) for n in self.tree.values()
-                     if n["type"] == "RBinaryOp" and n.get("rhs", {}).get("type") == "RFunctionDefinition"
-                     and named(n) in self.functions and self.place(n)[0] == named(n)}
-        self.assigned = {}                              # (function, name) -> how many times it is set there
-        for n in self.tree.values():
-            for label in self.set_here(n):
-                key = (self.owner(str(n["info"]["id"])), label)
-                self.assigned[key] = self.assigned.get(key, 0) + 1
-
-    # ------------------------------------------------ where a node is, and what it holds
-    def place(self, node):
-        """(function, first line, last line) of a node, the lines counted in its function's own unit."""
-        where = node["info"].get("fullRange") or node.get("location") or [0, 0, 0, 0]
-        return self.unit_of[node["info"]["id"].split(":")[0] + ":"], max(where[0], 1), max(where[2], where[0], 1)
-
-    def set_here(self, node):
-        """The names a node sets: the variable an assignment sets, or the names of a list's elements."""
-        if node["type"] == "RBinaryOp" and node.get("lexeme") in ("<-", "=", "<<-", "->", "->>"):
-            target = node["rhs"] if node["lexeme"].startswith("-") else node["lhs"]
-            while target["type"] == "RAccess":
-                target = target["accessed"]
-            return [target["lexeme"].strip("\"'`")] if target["type"] in ("RSymbol", "RString") else []
-        if node["type"] == "RFunctionCall" and node["functionName"].get("lexeme") in ELEMENT_MAKERS:
-            return [a["name"]["lexeme"] for a in node.get("arguments") or [] if a and a.get("name") and a.get("value")]
-        return []
-
-    def value_id(self, function, name, at):
-        """A value set once is 'f:v'; one set several times is 'f:v@line', one node for each time it is set -
-        tie_outputs set four times in tie_model_call is four nodes, each reading the one before it."""
-        many = self.assigned.get((function, name), 0) > 1
-        return "%s:%s@%d" % (function, name, self.place(at)[1]) if many else "%s:%s" % (function, name)
-
-    def owner(self, node_id):
-        while node_id and node_id not in self.defs:
-            node_id = self.tree[node_id]["up"] if node_id in self.tree else None
-        return self.defs.get(node_id)
-
-    def kids(self, node):
-        found = []
-        for key, value in node.items():
-            if key not in ("info", "location", "lexeme", "up", "grouping"):      # ( ) and { } group; they are not names
-                found += [v for v in (value if isinstance(value, list) else [value]) if isinstance(v, dict) and "type" in v]
-        return found
-
-    def node(self, node_id, kind, name, env=None, at=None, sources=(), **extra):
-        record = self.nodes.get(node_id)
-        if record is None:
-            record = self.nodes[node_id] = {"record_type": "node", "node": node_id, "kind": kind, "name": name,
-                                            "function": env["function"] if env else "", "line": self.line_of(env, at),
-                                            "function_ref": self.functions[env["function"]]["ref"] if env else "",
-                                            "code": self.code_of(env, at), "from": []}
-        elif env and not record["function"] and kind == "column" and at is not None:   # read before it was created
-            record.update(function=env["function"], function_ref=self.functions[env["function"]]["ref"],
-                          line=self.line_of(env, at), code=self.code_of(env, at))
-        record["from"] += [s for s in dict.fromkeys(sources) if s not in record["from"] and s != node_id]
-        record.update(extra)
-        return node_id
-
-    def line_of(self, env, at):
-        return self.functions[env["function"]]["lines"][0] + self.place(at)[1] - 1 if env and at else 0
-
-    def code_of(self, env, at):
-        if not env or not at:
-            return ""
-        _, first, last = self.place(at)
-        return "\n".join(self.functions[env["function"]]["text"].split("\n")[first - 1:max(first, last)]).strip()
-
-    def exact_of(self, env, at, to=None):
-        """The characters from where a node starts to where `to` ends, not whole lines: a named argument's
-        range covers its name only, so overrides_and_caps = tie_anchor_overrides(...) runs to the value's end."""
-        span = lambda n: n["info"].get("fullRange") or n.get("location") or [0, 0, 0, 0]
-        (first, c1), (last, c2) = span(at)[:2], span(to or at)[2:]
-        lines = self.functions[env["function"]]["text"].split("\n")[first - 1:last]
-        if not lines:
-            return ""
-        lines[-1] = lines[-1][:c2] if len(lines) > 1 else lines[-1][c1 - 1:c2]
-        lines[0] = lines[0][c1 - 1:] if len(lines) > 1 else lines[0]
-        return "\n".join(lines).strip()
-
-    def gap(self, env, at, why):
-        self.records.append({"record_type": "gap", "function": env["function"], "function_ref": self.functions[env["function"]]["ref"],
-                             "line": self.line_of(env, at), "code": self.code_of(env, at), "why": why})
-
-    # ------------------------------------------------ one function
-    def trace(self, name):
-        fdef = next((i for i, n in self.defs.items() if n == name), None)
-        env = {"function": name}
-        if fdef is None:
-            self.records.append({"record_type": "gap", "function": name, "function_ref": self.functions[name]["ref"],
-                                 "line": self.functions[name]["lines"][0], "code": self.functions[name]["text"].split("\n")[0],
-                                 "why": self.unread.get(name, "the function could not be read")})
-            return
-        function = self.tree[fdef]
-        for parameter in function.get("parameters") or []:
-            default = parameter.get("defaultValue")
-            self.node("%s:arg:%s" % (name, parameter["name"]["lexeme"]), "argument", parameter["name"]["lexeme"], env, function,
-                      default_from=self.sources(default, env) if default else [], default_code=self.code_of(env, default) if default else "")
-        body = function["body"]
-        returned, stack = self.body(body, env), [body]
-        while stack:                                       # return() anywhere, but not inside a function written in place
-            inner = stack.pop()
-            if inner["type"] == "RFunctionCall" and inner["functionName"].get("lexeme") == "return" and inner.get("arguments"):
-                returned += self.sources(inner["arguments"][0], env)
-            stack += [k for k in self.kids(inner) if k["type"] != "RFunctionDefinition"]
-        items = body.get("children") if body["type"] == "RExpressionList" else [body]
-        self.node("%s:return" % name, "return", "the value %s returns" % name, env, (items or [function])[-1], returned)
-
-    def body(self, block, env):
-        """The statements of a body, each value it sets a node; returns the sources of what the body gives."""
-        items, given = (block.get("children") or []) if block["type"] == "RExpressionList" else [block], []
-        for position, item in enumerate(items):
-            last = position == len(items) - 1
-            if item["type"] == "RBinaryOp" and item.get("lexeme") in ("<-", "=", "<<-", "->", "->>"):
-                target, value = (item["rhs"], item["lhs"]) if item["lexeme"].startswith("-") else (item["lhs"], item["rhs"])
-                while target["type"] == "RAccess":                          # x$c <- v and x[i] <- v change x
-                    target = target["accessed"]
-                if "<<" in item["lexeme"] or ">>" in item["lexeme"]:
-                    self.gap(env, item, "a value assigned outside the function with <<-")
-                if target["type"] in ("RSymbol", "RString"):
-                    changed = item["rhs"] if item["lexeme"].startswith("-") else item["lhs"]
-                    extra = self.sources(changed, env) if changed is not target else []
-                    name = target["lexeme"].strip("\"'`")
-                    node = self.node(self.value_id(env["function"], name, target), "value", name, env, item,
-                                     self.sources(value, env) + extra)
-                    given = [node] if last else given
-            elif item["type"] == "RIfThenElse" and not last:
-                self.sources(item["condition"], env)
-                for branch in (item.get("then"), item.get("otherwise")):
-                    if branch:
-                        self.body(branch, env)
-            elif item["type"] in ("RForLoop", "RWhileLoop", "RRepeatLoop"):
-                self.body(item["body"], env)
-            elif last:
-                given = self.sources(item, env)
-        return given
-
-    # ------------------------------------------------ what a value is computed from
-    def sources(self, node, env, masked=False):
-        kind = node["type"] if node else ""
-        if kind == "RNumber":
-            value = node["lexeme"].rstrip("Li")
-            return [self.node("number:%s:%s:%d" % (value, env["function"], self.place(node)[1]), "number", value, env, node,
-                              trivial=value in self.trivial)]
-        if kind in ("", "RString", "RLogical", "RComment"):
-            return []
-        if kind == "RSymbol":
-            return self.resolve(node, env, masked)
-        if kind == "RArgument":
-            return self.sources(node.get("value"), env, masked)
-        if kind == "RPipe":
-            return self.call(node["rhs"], env, masked, first=node["lhs"].get("value", node["lhs"]))
-        if kind == "RFunctionCall":
-            return self.call(node, env, masked)
-        if kind == "RBinaryOp" and node.get("lexeme") in ("<-", "=", "<<-"):
-            self.body(node, env)
-            return self.resolve(node["lhs"], env, masked) if node["lhs"]["type"] == "RSymbol" else []
-        if kind == "RAccess":
-            accessed, access = node["accessed"], node.get("access") or []
-            access = access if isinstance(access, list) else [access]
-            if accessed.get("lexeme") in (".data", ".env") and access:
-                field = access[0].get("value") or access[0]
-                if accessed["lexeme"] == ".data":
-                    return self.column(field["lexeme"])
-                own = [i % (env["function"], field["lexeme"]) for i in ("%s:arg:%s", "%s:%s") if i % (env["function"], field["lexeme"]) in self.nodes]
-                return own[:1] or self.resolve(field, env, False)
-            return self.sources(accessed, env, masked) + ([] if node.get("lexeme") == "$" else
-                                                          [s for a in access for s in self.sources(a, env, masked)])
-        if kind == "RFunctionDefinition":
-            self.gap(env, node, "a function written in place, whose arguments are given at run time")
-            return self.sources(node["body"], env, masked)
-        return [s for k in self.kids(node) for s in self.sources(k, env, masked)]
-
-    def resolve(self, symbol, env, masked):
-        """What a name reads, as flowR resolves it: a parameter, a value set in a function, or a column a
-        dplyr verb created. A name flowR finds no definition for is a stored table, a column of the data,
-        or a name from outside the package."""
-        name = symbol["lexeme"]
-        if name in CONSTANT_NAMES:
-            return []
-        # a name reads only what has that name: inside a verb flowR also links a column the same verb made
-        # earlier, which a later argument may use - but berth_utilisation does not read throughput_score
-        found, reads = [], [t for t, bits in self.edges.get(str(symbol["info"]["id"]), []) if bits & READS and t in self.tree
-                            and name in (self.tree[t].get("lexeme"), (self.tree[t].get("name") or {}).get("lexeme"))]
-        for target in reads:
-            up = self.tree.get(self.tree[target]["up"] or "", {})
-            if up.get("type") == "RParameter":                       # a parameter: of a function of the package, or of a lambda
-                owner = self.defs.get(up["up"])
-                found += ["%s:arg:%s" % (owner, name)] if owner else []
-            elif "RArgument" in (up.get("type"), self.tree[target]["type"]):   # a column a verb named: mutate(name = ...)
-                found += self.column(name)
-            elif self.tree[target]["lexeme"] not in self.functions and self.owner(target):   # the very assignment it reads
-                found.append(self.value_id(self.owner(target), self.tree[target]["lexeme"], self.tree[target]))
-        if reads:
-            return list(dict.fromkeys(found))
-        if name in self.tables:
-            return [self.table_node(name)]
-        if name in self.functions:
-            return []
-        return self.column(name) if masked else [self.node("outside:%s" % name, "outside", name)]
-
-    def column(self, name):
-        return [self.node("column:%s" % name, "column", name, created_in=self.nodes.get("column:%s" % name, {}).get("created_in", []))]
-
-    def table_node(self, name):
-        table = self.tables[name]
-        return self.node("data:%s" % name, "stored data", name, file=table["data"].get("container_file", ""), unit_ref=table["ref"],
-                         columns=[column for column, _ in table["data"].get("columns") or []])
-
-    def call(self, node, env, masked, first=None):
-        name = (node.get("functionName") or {}).get("lexeme", "")
-        args = ([None] if first is not None else []) + [a for a in node.get("arguments") or [] if a]
-        pairs = [("", first)] if first is not None else []
-        pairs += [((a.get("name") or {}).get("lexeme", ""), a.get("value")) for a in node.get("arguments") or [] if a]
-        values = [v for _, v in pairs]
-        if name == "%>%" and len(values) == 2:                       # a %>% f(b) is f(a, b)
-            left, right = values
-            return self.call(right, env, masked, first=left) if right and right["type"] == "RFunctionCall" else self.sources(left, env, masked)
-        flat = lambda inner: [s for v in values for s in self.sources(v, env, inner)]
-        if name in OPAQUE_CALLS:
-            self.gap(env, node, OPAQUE_CALLS[name])
-            return flat(masked)
-        if name in ELEMENT_MAKERS and any(label for label, _ in pairs):
-            made = []            # list(overrides_and_caps = tie_anchor_overrides(...)): every named element is a value,
-            for (label, value), argument in zip(pairs, args):   # one holding only NA as much as any other
-                got = self.sources(value, env, masked)
-                if label and value is not None:
-                    made.append(self.node(self.value_id(env["function"], label, value), "value", label, env, argument, got,
-                                          code=self.exact_of(env, argument, value)))
-                else:
-                    made += got
-            return made
-        if name in FILE_READERS:
-            path = self.file_path(values[0]) if values else ""
-            if not path:
-                self.gap(env, node, "a file read from a path built at run time")
-                return flat(masked)
-            table = next((t for t, u in self.tables.items() if u["data"].get("container_file") == path), None)
-            return [self.node("file:%s" % path, "file", path, unit_ref=self.tables[table]["ref"] if table else "")]
-        if name in DPLYR_CREATE:
-            created = self.sources(values[0], env, masked) if pairs and not pairs[0][0] else []
-            for (label, value), argument in zip(pairs, args):
-                if label:
-                    column = self.node("column:%s" % label, "column", label, env, argument, self.sources(value, env, True),
-                                       code=self.exact_of(env, argument, value))
-                    self.nodes[column].setdefault("created_in", [])
-                    if env["function"] not in self.nodes[column]["created_in"]:
-                        self.nodes[column]["created_in"].append(env["function"])
-                    created.append(column)
-                elif value is not values[0]:
-                    self.gap(env, node, "columns created by an expression that does not name them")
-            return created
-        if name in DPLYR_JOIN:
-            keys = {k["lexeme"].strip("\"'") for label, value in pairs if label == "by" and value
-                    for k in [value] + self.kids(value) if k["type"] == "RString"}
-            joined = []
-            for value in values[:2]:
-                joined += self.sources(value, env, masked)
-                if value and value["type"] == "RSymbol" and value["lexeme"] in self.tables:
-                    table = self.nodes[self.table_node(value["lexeme"])]
-                    joined += [self.node("column:%s" % c, "column", c, env, node, [table["node"]]) for c in table["columns"] if c not in keys]
-            return joined
-        callee = next((self.defs[t] for t, bits in self.edges.get(str(node["info"]["id"]), []) if bits & CALLS and t in self.defs),
-                      name if name in self.functions else None)   # another function of the package: by its name
-        if callee is None and name in APPLIERS:                     # map(x, f): a package function handed over by name
-            handed = [v["lexeme"] for v in values if v and v["type"] == "RSymbol" and v["lexeme"] in self.functions]
-            return [self.record_call(f, env, node, [], []) for f in handed] + [s for v in values if not (v and v["type"] == "RSymbol"
-                    and v["lexeme"] in self.functions) for s in self.sources(v, env, masked)]
-        inner = masked or name in DPLYR_MASKING
-        if callee:
-            return [self.record_call(callee, env, node, pairs, [self.sources(v, env, inner) for v in values])]
-        return flat(inner)
-
-    def record_call(self, callee, env, node, pairs, values):
-        """One call of a package function: which parameter each argument becomes there - as flowR binds it,
-        and for what flowR leaves unbound (a value piped in, say) as R does, by name and then by position -
-        and a parameter left out takes its default."""
-        formals = [p["name"]["lexeme"] for p in self.tree[next(i for i, n in self.defs.items() if n == callee)].get("parameters") or []]
-        bound, left = {}, []
-        for (label, value), got in zip(pairs, values):
-            ids = [str(value["info"]["id"])] if value else []
-            binds = [self.tree[t]["lexeme"] for i in ids for t, bits in self.edges.get(i, []) if bits & BINDS and t in self.tree]
-            target = next((b for b in binds if b in formals and b not in bound), None)
-            (bound.__setitem__(target, got) if target else left.append((label, got)))
-        free = [f for f in formals if f not in bound and f != "..."]
-        for label, got in left:
-            if label in free:
-                bound[label] = got
-                free.remove(label)
-            elif free:
-                bound[free.pop(0)] = got
-            elif "..." in formals:
-                bound.setdefault("...", []).extend(got)
-        call_id = "call:%s:%d:%s" % (env["function"], self.place(node)[1], callee)
-        return self.node(call_id, "call", "%s()" % callee, env, node, [s for got in values for s in got] + ["%s:return" % callee],
-                         callee=callee, bindings={f: bound.get(f, ["default"]) for f in formals})
-
-    def file_path(self, value):
-        """The path a reader is given: a string as written, or system.file(...), which names a file under inst/."""
-        if value and value["type"] == "RString":
-            return value["lexeme"].strip("\"'")
-        if value and value["type"] == "RFunctionCall" and value["functionName"].get("lexeme") == "system.file":
-            parts = [a["value"]["lexeme"].strip("\"'") for a in value.get("arguments") or []
-                     if a and not a.get("name") and (a.get("value") or {}).get("type") == "RString"]
-            return "inst/" + "/".join(parts) if parts else ""
-        return ""
-
-    # ------------------------------------------------ the whole package
-    def run(self):
-        for name in sorted(self.functions, key=lambda n: self.functions[n]["ref"]):
-            self.trace(name)
-        calls = [r for r in self.nodes.values() if r["kind"] == "call"]
-        called = {r["callee"] for r in calls if r["callee"] != r["function"]}
-        entry = set()
-        for unit in self.units:                          # the tests and vignettes that call a package function
-            if unit["kind"] in (KIND_TEST, KIND_TOPLEVEL, KIND_VIGNETTE):
-                for found in parse_r_source(unit["text"]):
-                    if not isinstance(found, tuple):
-                        entry |= {callee_name(inner) for inner in walk_nodes(found) if inner.kind == "call"} & set(self.functions)
-        uncalled = set(self.functions) - called
-        proposed = sorted(name for name in uncalled if (self.functions[name].get("code") or {}).get("exported") or name in entry)
-        reached, frontier = set(proposed), list(proposed)
-        while frontier:
-            caller = frontier.pop()
-            for record in calls:
-                if record["function"] == caller and record["callee"] not in reached:
-                    reached.add(record["callee"])
-                    frontier.append(record["callee"])
-        roots = {"record_type": "roots", "proposed": proposed, "not_reached": sorted(set(self.functions) - reached),
-                 "why": {name: ", ".join(filter(None, ["nothing in the package calls it",
-                                                         "exported" if (self.functions[name].get("code") or {}).get("exported") else "",
-                                                         "called by a test or vignette" if name in entry else ""])) for name in uncalled}}
-        return list(self.nodes.values()) + self.records + [roots]
-
-
-def walk_nodes(node):
-    """Every node of a tree, the tree itself first, without entering functions written inside it."""
-    yield node
-    for child in node.args:
-        if child.kind != "function":
-            yield from walk_nodes(child)
-
-def trace_dataflow(ctx):
-    """Step 05a, trace-dataflow: the package's data flow, by code alone - every value each function sets
-    and what it is computed from, every call with its arguments matched to their parameters, every column
-    a dplyr verb creates, every stored table, file and hard-coded number, and the gaps code cannot follow.
-    Proposes the final outputs: exported functions nothing in the package calls, and those its tests and
-    vignettes call. Enforces: R2, R4, R7, R14"""
-    flow = Dataflow(ctx.read("model_units"), ctx.settings["trivial_numbers"], flowr_ready())
-    records = flow.run()
-    count = lambda kind: sum(1 for r in records if r.get("kind") == kind)
-    gaps = [r for r in records if r["record_type"] == "gap"]
-    roots = records[-1]
-    return StepResult({"dataflow": records},
-                           {"values": count("value"), "calls": count("call"), "columns": count("column"), "gaps": len(gaps),
-                            "proposed final outputs": len(roots["proposed"])},
-                           ["Traced %d functions: %d values, %d calls, %d columns; %d gaps for the agents. Proposed final outputs: %s."
-                            % (len(flow.functions), count("value"), count("call"), count("column"), len(gaps), ", ".join(roots["proposed"]) or "none")])
-
-def walk_dataflow(records, function):
-    """Everything the value a function returns is computed from, followed into every call with that call's
-    own arguments: (leaves, loops, functions reached). A parameter of a called function is what the call
-    passed it there, or its default; a parameter of the function the walk began in is a raw input. A
-    leaf is where the flow starts: such a parameter, a stored table, a file, a number, a column nothing
-    creates, or a name from outside the package. A function already being walked is a loop. Enforces: R2, R14"""
-    nodes = {r["node"]: r for r in records if r["record_type"] == "node"}
-    leaves, loops, reached, seen = set(), set(), {function}, set()
-    def visit(node_id, frames):
-        key = (node_id, tuple(frame for frame, _ in frames))
-        if key in seen:
-            return
-        seen.add(key)
-        node = nodes.get(node_id)
-        if node is None or node["kind"] in ("stored data", "file", "number", "outside"):
-            leaves.add(node_id)
-            return
-        if node["kind"] == "call":
-            if node["callee"] in (frame for frame, _ in frames):
-                loops.add(node_id)                           # a loop stops the descent, not what the call is given
-                for source in node["from"]:
-                    if source != "%s:return" % node["callee"]:
-                        visit(source, frames)
-                return
-            reached.add(node["callee"])
-            visit("%s:return" % node["callee"], frames + [(node["callee"], node["bindings"])])
-            return
-        if node["kind"] == "argument" and node["function"] == frames[-1][0]:
-            bound = frames[-1][1]
-            if bound is None:
-                leaves.add(node_id)                          # a parameter of the final output: a raw input
-                return
-            given = bound.get(node["name"], ["default"])
-            for source in (node.get("default_from") or [] if given == ["default"] else given):
-                visit(source, frames if given == ["default"] else frames[:-1])
-            if given == ["default"] and not node.get("default_from"):
-                leaves.add(node_id)
-            return
-        if node["kind"] == "column" and not node["from"]:
-            leaves.add(node_id)                              # a column no verb creates: it came in with the data
-            return
-        for source in node["from"]:
-            visit(source, frames)
-    visit("%s:return" % function, [(function, None)])
-    return leaves, loops, reached
-
-def decided_outputs(records, decisions):
-    """The final outputs a run works from, and why each is one: code's proposal, then a person's decisions
-    over it - 'yes' makes any function a final output, 'no' takes one away. Where nothing is left, every
-    function nothing in the package calls stands in, so the map always has a top. Returns (outputs, how,
-    not reached): how says of each output where it came from; not reached are the functions no output
-    reaches, following the calls. Enforces: R1, R2"""
-    roots = next((r for r in records if r["record_type"] == "roots"), {"proposed": [], "not_reached": [], "why": {}})
-    calls = [r for r in records if r["record_type"] == "node" and r["kind"] == "call"]
-    functions = {r["function"] for r in records if r["record_type"] == "node" and r.get("function")} | set(roots["why"])
-    outputs, how = [], {}
-    for name in roots["proposed"]:
-        if decisions.get(name) != "no":
-            outputs.append(name)
-            how[name] = "proposed by code: %s" % roots["why"].get(name, "")
-    for name in sorted(decisions):
-        if decisions[name] == "yes" and name in functions and name not in outputs:
-            outputs.append(name)
-            how[name] = "your decision"
-    if not outputs:
-        outputs = sorted(roots["why"])
-        how = {name: "nothing in the package calls it (no final output was proposed or decided)" for name in outputs}
-    reached, frontier = set(outputs), list(outputs)
-    while frontier:
-        caller = frontier.pop()
-        for call in calls:
-            if call["function"] == caller and call["callee"] not in reached:
-                reached.add(call["callee"])
-                frontier.append(call["callee"])
-    return outputs, how, sorted(functions - reached)
-
-
-# ================================================================================================
-# what corresponds to what, what differs, and the map's agents
-# ================================================================================================
-# ================================================================================================
-# ---------------------------------------------------------------- mapping: what corresponds to what
-LEDGER_VOLATILE = ("created_at", "run_id")
-CORNER_NAMES = {"canon": "the methodology", "doc": "the documentation", "model": "the package"}
-
-# ---------------------------------------------------------------- the ledger and the graph in memory
-def node_record(ref, node_kind, corner):
-    """The ledger record of one node."""
-    return {"record_type": "node", "ref": ref, "node_kind": node_kind, "corner": corner}
-
-def ledger_records(existing, new_records):
-    """Chain new records onto the ledger. Nodes come first (by reference), then edges sorted
-    by source, target and kind, never in the order threads finished, so the same content
-    always gives the same graph version id. There is no function that edits or removes a
-    record: a later contradiction is a NEW edge. Enforces: R4, R5"""
-    plain = [to_plain(record) for record in new_records]
-    nodes = sorted((r for r in plain if r["record_type"] == "node"), key=lambda r: r["ref"])
-    edges = sorted((r for r in plain if r["record_type"] == "edge"),
-                   key=lambda r: (r["source"], r["target"], r["kind"], r.get("relation", ""), r.get("how", "")))
-    return chain_records(chain_head(existing), nodes + edges, LEDGER_VOLATILE)
-
-def verify_ledger(records):
-    """True when no record of the ledger was edited, removed or re-ordered."""
-    return verify_chain(records, LEDGER_VOLATILE)
-
-def graph_version_id(records):
-    """G- and the first twelve characters of the ledger's head hash."""
-    return "G-" + chain_head(records)[:12]
-
-def load_graph(records):
-    """The ledger as two adjacency dictionaries: outgoing and incoming edges per node."""
-    graph = {"nodes": {}, "out": {}, "in": {}}
-    for record in records:
-        if record["record_type"] == "node":
-            graph["nodes"][record["ref"]] = record
-        else:
-            graph["out"].setdefault(record["source"], []).append(record)
-            graph["in"].setdefault(record["target"], []).append(record)
-    return graph
-
-def find_path(graph, start, is_goal, allowed_kinds=None, max_hops=4):
-    """Breadth-first walk over typed edges in either direction, at most `max_hops` long.
-    Returns the list of (edge, node reached) hops of the first shortest path, or None."""
-    frontier, seen = [(start, [])], {start}
-    for _ in range(max_hops):
-        following = []
-        for node, path in frontier:
-            steps = [(e, e["target"]) for e in graph["out"].get(node, [])] + [(e, e["source"]) for e in graph["in"].get(node, [])]
-            for edge, reached in sorted(steps, key=lambda step: (step[1], step[0]["kind"])):
-                if reached in seen or (allowed_kinds and edge["kind"] not in allowed_kinds):
-                    continue
-                seen.add(reached)
-                if is_goal(reached):
-                    return path + [(edge, reached)]
-                following.append((reached, path + [(edge, reached)]))
-        frontier = following
-    return None
-
-def links_of(graph, ref, corner_prefix):
-    """The `corresponds` edges of a unit into one corner ("C", "D" or "M"), in ledger order."""
-    edges = [e for e in graph["out"].get(ref, []) if e["kind"] == "corresponds" and e["target"].startswith(corner_prefix)]
-    return edges + [dict(e, target=e["source"]) for e in graph["in"].get(ref, [])
-                    if e["kind"] == "corresponds" and e["source"].startswith(corner_prefix)]
-
-# ---------------------------------------------------------------- words: splitting, stemming, word lists
-# ---------------------------------------------------------------- reference data of the search
-# Words too common to say anything about which passage corresponds to which, and the patterns that
-# bridge a code name and a written term (rho_a and "asset correlation"). No domain word may appear
-# in either: the layout lint checks them. Enforces: R9
-STOPWORDS_TEXT = r'''# stopwords.txt - generic function words left out of the word index. One per line.
-# Rule R9: no word of any field of business belongs here.
-a an the and or of to in is are be by for with as at on it this that these those from each which
-was were been being has have had do does did not no nor if then than so such any all some its their
-there here where when while who whom whose what how why can could may might must shall should will would
-into per under over between within without about above below after before during through up down out off
-also only other more most less least very same own both either neither one two
-function return returns returned value values given using used use uses see set sets get gets
-'''
-BRIDGE_PATTERNS_YAML = r'''# bridge_patterns.yaml - generic words the tool uses to recognise where a document ties a short
-# name to a longer phrase. Reviewer 3 owns this file. Rule R9: no word of any field of business.
-definition_verbs: [denotes, represents, stands for, is defined as, means]
-symbol_headers: [symbol, variable, notation, parameter, name, term, abbreviation, column, field]
-description_headers: [description, definition, meaning, explanation, stands for, content]
-glossary_columns: {term: Term, also: Also written as}
-# words that tie a function name to neutral mathematical words (used for the called-functions field)
-function_words:
-  normal_cdf: [cumulative, normal, distribution]
-  normal_inverse: [inverse, normal, quantile]
-  max: [maximum, larger, floor, least]
-  min: [minimum, smaller, cap, capped, most]
-  exp: [exponential]
-  log: [logarithm]
-  sqrt: [square, root]
-  round: [rounded, decimals]
-  piecewise: [condition, otherwise]
-  sum_over: [sum, total]
-'''
-
-def load_word_lists():
-    """Stop words, bridge patterns and the neutral words of mathematical functions. The lint
-    checks every one of these lists for domain words. Enforces: R9"""
-    stop = {word for line in STOPWORDS_TEXT.split("\n") if not line.startswith("#") for word in line.split()}
-    return {"stop": stop, "patterns": yaml.safe_load(BRIDGE_PATTERNS_YAML),
-            "function_map": yaml.safe_load(R_FUNCTION_MAP_YAML)}
-
-def stem(word):
-    """A light, rule-based stemmer: plural endings, -ing, -ed, and a doubled last letter.
-    Deliberately weak: a wrong merge costs more than a missed one."""
-    for ending, replacement in (("ies", "y"), ("ied", "y"), ("sses", "ss"), ("ing", ""), ("ed", ""), ("es", "e"), ("s", "")):
-        if word.endswith(ending) and len(word) - len(ending) >= 3 and not word.endswith(("ss", "us", "is")):
-            word = word[:len(word) - len(ending)] + replacement
-            break
-    if len(word) > 3 and word[-1] == word[-2] and word[-1] not in "lsz":
-        word = word[:-1]
-    return word[:-1] if len(word) > 4 and word.endswith("e") else word
-
-AS_WRITTEN = {}      # stem -> the first word seen with that stem; used only to show words to analysts
-
-def split_words(text, stop):
-    """Text or identifiers to index words: split at anything that is not a letter or digit,
-    at underscores, dots and capital letters inside a name; lower-case; drop stop words,
-    single characters and pure numbers; stem."""
-    words = []
-    for piece in re.findall(r"[^\W_]+", text or ""):
-        for part in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[^\W\d_]+|\d+", piece):
-            lowered = part.lower()
-            if len(lowered) > 1 and not lowered.isdigit() and lowered not in stop:
-                words.append(stem(lowered))
-                AS_WRITTEN.setdefault(words[-1], lowered)
-    return words
-
-def shown(words):
-    """Index words as an analyst should see them: as first written, not as stems."""
-    return [AS_WRITTEN.get(word, word) for word in words]
-
-def symbols_in(text):
-    """Short symbols a passage uses: single letters and Greek names standing alone, short
-    capital abbreviations, and names with a subscript."""
-    found = re.findall(r"(?<![\w.])([A-Za-z\u0370-\u03ff]{1,4}(?:_\{?\w+\}?|\[\w+\])?)(?![\w(])", text or "")
-    keep = []
-    for symbol in found:
-        plain = normalise_symbol(symbol)
-        if symbol.isupper() or len(symbol) == 1 or "_" in symbol or plain in GREEK or symbol in GREEK.values():
-            if symbol.lower() not in ("a", "i"):
-                keep.append(plain)
-    return list(dict.fromkeys(keep))
-
-def numbers_in(text, trivial):
-    """The non-trivial numbers of a text, as normalised values ("12.5%" gives 0.125)."""
-    return list(dict.fromkeys(n["value"] for n in find_numbers(text or "") if n["value"] not in trivial))
-
-# ---------------------------------------------------------------- what is indexed for each unit
-FIELD_WEIGHTS = {"name": 3, "heading": 3, "about": 2, "caption": 2, "symbols": 2, "body": 1, "calls": 1}
-
-def chunk_fields(chunk, lists, trivial):
-    """The named fields of a methodology or documentation chunk (plan 2.6)."""
-    table = chunk.get("table") or {}
-    table_words = " ".join(table.get("header", [])) + " " + " ".join(row[0] for row in table.get("rows", []) if row)
-    return {"fields": {"heading": split_words(" ".join(chunk["heading_chain"][-2:]), lists["stop"]),
-                       "caption": split_words(chunk.get("caption", "") + " " + table_words, lists["stop"]),
-                       "body": split_words(chunk["text"], lists["stop"])},
-            "symbols": symbols_in(chunk["text"]) + list((chunk.get("equation") or {}).get("expression") and
-                       sorted(expr_symbols(expr_from_dict(chunk["equation"]["expression"]))) or []),
-            "numbers": numbers_in(chunk["text"], trivial), "identifiers": re.findall(r"\b[a-z]+(?:[_.][a-z0-9]+)+\b", chunk["text"])}
-
-def unit_fields(unit, units_by_ref, documented_by, lists, trivial):
-    """The named fields of a model unit: name words, what the package says about it (roxygen
-    of the object or of the function it sits in), comments, symbols, numbers, the neutral
-    words of the mathematical functions it calls, and string literals."""
-    code = unit.get("code") or {}
-    about_unit = documented_by.get(unit["ref"])
-    about = about_unit["text"] if about_unit else ""
-    parent_block = documented_by.get(unit.get("parent_ref") or "")
-    if parent_block and not about_unit:                  # a statement takes only the @param lines of the symbols it uses
-        used = set(code.get("symbols_read", ())) | set(code.get("symbols_written", ()))
-        about = " ".join(tag["text"] for tag in parent_block["roxygen"]["tags"] if tag["tag"] == "param" and tag["name"] in used)
-    if unit.get("roxygen") or unit.get("helppage") or unit["kind"] == KIND_VIGNETTE:
-        about = unit["text"]
-    comments = " ".join(re.findall(r"#(?!')\s*(.*)", unit["text"])) if code else ""
-    neutral = [word for call in code.get("calls", ()) for word in
-               lists["patterns"]["function_words"].get((lists["function_map"]["r_functions"].get(call) or {}).get("neutral", ""), [])]
-    data = unit.get("data") or {}
-    columns = " ".join(name for name, _ in data.get("columns", ()))
-    body = comments + " " + " ".join(code.get("strings", ())) + " " + (unit["text"] if data else "")
-    symbols = [normalise_symbol(s) for s in tuple(code.get("symbols_read", ())) + tuple(code.get("symbols_written", ()))]
-    return {"fields": {"name": split_words(unit["name"] + " " + unit.get("inside", "") + " " + columns, lists["stop"]),
-                       "about": split_words(re.sub(r"#'|@\w+|\\\w+", " ", about), lists["stop"]),
-                       "body": split_words(body, lists["stop"]), "calls": [stem(word) for word in neutral]},
-            "symbols": list(dict.fromkeys(symbols)),
-            "numbers": list(dict.fromkeys([n["value"] for n in code.get("numbers", ()) if n["value"] not in trivial] +
-                                          numbers_in(about + " " + (unit["text"] if data else ""), trivial))),
-            "identifiers": [unit["name"]] if code and unit["name"] else []}
-
-# ---------------------------------------------------------------- S1: field-aware BM25 (the only text-ranking formula)
-def build_index(documents):
-    """documents: {ref: {"fields": {field: [words]}}}. Term frequencies are weighted by field;
-    the length of a document is its weighted number of words."""
-    index = {"tf": {}, "length": {}, "df": {}, "n": len(documents)}
-    for ref in sorted(documents):
-        weighted = {}
-        for field_name, words in documents[ref]["fields"].items():
-            for word in words:
-                weighted[word] = weighted.get(word, 0) + FIELD_WEIGHTS.get(field_name, 1)
-        index["tf"][ref], index["length"][ref] = weighted, sum(weighted.values())
-        for word in weighted:
-            index["df"][word] = index["df"].get(word, 0) + 1
-    index["average_length"] = (sum(index["length"].values()) / len(documents)) if documents else 0.0
-    return index
-
-def bm25_scores(index, query_weights, k1, b):
-    """BM25 with the usual constants k1 and b. query_weights: {word: weight}; a bridged word
-    seen only once in the inputs counts half. Returns {ref: (score, matched words)}."""
-    scores = {}
-    for word in sorted(query_weights):
-        df = index["df"].get(word)
-        if not df:
-            continue
-        idf = math.log(1 + (index["n"] - df + 0.5) / (df + 0.5))
-        for ref, weighted in index["tf"].items():
-            tf = weighted.get(word)
-            if tf:
-                norm = tf + k1 * (1 - b + b * index["length"][ref] / (index["average_length"] or 1.0))
-                score, words = scores.get(ref, (0.0, []))
-                scores[ref] = (score + query_weights[word] * idf * tf * (k1 + 1) / norm, words + [word])
-    return scores
-
-def ranked(scores):
-    """References by falling score; ties break by reference. Enforces: R5"""
-    return [ref for ref, _ in sorted(scores.items(), key=lambda item: (-item[1][0] if isinstance(item[1], tuple) else -item[1], item[0]))]
-
-# ---------------------------------------------------------------- S2: the bridge vocabulary
-def initials_match(short, words):
-    """Do the letters of an abbreviation appear, in order, as initials of the long form?
-    Guards against reading "(see Table 3)" as an abbreviation."""
-    letters = [c for c in short.lower() if c.isalpha()]
-    initials = [w[0].lower() for w in words if w]
-    position = 0
-    for letter in letters:
-        while position < len(initials) and initials[position] != letter:
-            position += 1
-        if position == len(initials):
-            return False
-        position += 1
-    return bool(letters)
-
-def harvest_text(text, source, patterns):
-    """Bridge entries from one text: "long form (ABBR)", "ABBR (long form)", "where X denotes
-    ...", "let X be ...". Returns (term, phrase, source, pattern name) tuples."""
-    entries = []
-    for found in re.finditer(r"((?:[A-Za-z][\w-]*\s+){1,6}[A-Za-z][\w-]*)\s+\(([A-Za-z\u0370-\u03ff][\w]{0,9})\)", text):
-        words = found.group(1).split()
-        for start in range(len(words) - 1, -1, -1):
-            if initials_match(found.group(2), words[start:]) and len(words[start:]) <= len(found.group(2)) + 2:
-                entries.append((found.group(2), " ".join(words[start:]), source, "long form (short form)"))
-                break
-    for found in re.finditer(r"\b([A-Z][A-Za-z0-9_]{1,9})\s+\(([a-z][^()]{3,60})\)", text):
-        if initials_match(found.group(1), found.group(2).split()):
-            entries.append((found.group(1), found.group(2), source, "short form (long form)"))
-    verbs = "|".join(re.escape(verb) for verb in patterns["definition_verbs"])
-    for found in re.finditer(r"(?:\bwhere|,|\band)\s+(\S{1,12})\s+(?:%s|is)\s+(?:the\s+|an?\s+)?([^,.;()]{3,60})" % verbs, text):
-        if len(found.group(1)) <= 4 or "_" in found.group(1):
-            entries.append((found.group(1), found.group(2).strip(), source, "where ... denotes"))
-    for found in re.finditer(r"\b[Ll]et\s+(\S{1,12})\s+be\s+(?:the\s+|an?\s+)?([^,.;()]{3,60})", text):
-        entries.append((found.group(1), found.group(2).strip(), source, "let ... be"))
-    return entries
-
-def harvest_bridge(canon, doc, units, lists, glossary_path):
-    """The bridge vocabulary of this project, harvested from its own inputs: documents,
-    symbol tables, roxygen @param and @return lines, column descriptions of data blocks,
-    comments of the form "# x: phrase", and the optional Inputs/glossary.xlsx. Every entry
-    records where it was seen and how often; entries seen once count half."""
-    patterns, raw = lists["patterns"], []
-    for chunk in canon + doc:
-        raw.extend(harvest_text(chunk["text"], chunk["ref"], patterns))
-        table = chunk.get("table") or {}
-        header = [cell.lower() for cell in table.get("header", [])]
-        if len(header) >= 2 and header[0] in patterns["symbol_headers"] and any(h in patterns["description_headers"] for h in header[1:]):
-            described = next(i for i, h in enumerate(header) if h in patterns["description_headers"])
-            raw.extend((row[0], row[described], chunk["ref"], "table of symbols") for row in table["rows"] if row[0] and row[described])
-    for unit in units:
-        roxygen = unit.get("roxygen")
-        if roxygen:
-            for tag in roxygen["tags"]:
-                if tag["tag"] == "param" and tag["name"] and tag["text"]:
-                    raw.extend((name, tag["text"], "%s@param:%s" % (unit["ref"], name), "roxygen @param") for name in tag["name"].split(","))
-                elif tag["tag"] == "return" and tag["text"] and roxygen["documents_name"]:
-                    raw.append((roxygen["documents_name"], tag["text"], unit["ref"] + "@return", "roxygen @return"))
-            for found in re.finditer(r"\\item\{([^{}]+)\}\{([^{}]+)\}", unit["text"]):
-                raw.append((found.group(1), found.group(2), unit["ref"], "column description"))
-        if unit.get("code"):
-            for found in re.finditer(r"#(?!')\s*([A-Za-z][\w.]{0,20})\s*:\s+([^\n]{3,60})", unit["text"]):
-                raw.append((found.group(1), found.group(2).strip(), unit["ref"], "code comment"))
-    if glossary_path:
-        import openpyxl
-        sheet = openpyxl.load_workbook(glossary_path, read_only=True).worksheets[0]
-        for row in list(sheet.iter_rows(values_only=True))[1:]:
-            if row and row[0] and len(row) > 1 and row[1]:
-                raw.extend([(str(row[0]), str(row[1]), "glossary.xlsx", "glossary"), (str(row[1]), str(row[0]), "glossary.xlsx", "glossary")])
-    merged = {}
-    for term, phrase, source, pattern in raw:
-        key = (normalise_symbol(term.strip()), " ".join(split_words(phrase, lists["stop"])))
-        if not key[1]:
-            continue
-        entry = merged.setdefault(key, {"term": key[0], "term_as_written": term.strip(), "phrase": normalise_text(phrase)[:80],
-                                        "words": key[1].split(), "sources": [], "patterns": [], "count": 0})
-        entry["count"] += 1
-        entry["sources"].append(source)
-        entry["patterns"].append(pattern)
-    return [merged[key] for key in sorted(merged)]
-
-def expansions_for(representation, bridge_by_term):
-    """The bridge entries that apply to a unit: by its symbols and by its name words."""
-    found = []
-    for term in list(representation["symbols"]) + representation["fields"].get("name", []) + representation.get("identifiers", []):
-        for entry in bridge_by_term.get(normalise_symbol(term), []):
-            if entry not in found:
-                found.append(entry)
-    return found
-
-# ---------------------------------------------------------------- S3: explicit references as written
-def resolve_reference(reference, chunks):
-    """"Table 3", "section 4.2", "Annex B" as written, resolved among `chunks` (one corner):
-    tables, figures and equations by the label at the start of their caption, sections by
-    their numbering as written. Several matches are all returned; none gives an empty list."""
-    label, _, number = reference.partition(" ")
-    label, number = label.lower().rstrip("s"), number.strip("().").lower()
-    matches = []
-    for chunk in chunks:
-        caption = (chunk.get("caption") or "").lower()
-        if label in ("table", "figure", "equation") and chunk["kind"].lower() == label:
-            if re.match(r"%s\s+\(?%s\)?(?!\w)(?!\.\d)" % (label, re.escape(number)), caption):
-                matches.append(chunk["ref"])
-        elif label in ("section", "paragraph", "chapter", "annex", "appendix"):
-            written = (chunk.get("numbering") or "").lower().rstrip(".")
-            if written == number or written in ("%s %s" % (label, number), "annex %s" % number, "appendix %s" % number):
-                matches.append(chunk["ref"])
-    return matches
-
-# ---------------------------------------------------------------- S4: rare shared anchors and the restart random walk
-def anchors_of(representation, heading_words, scope):
-    """The anchors one unit or chunk mentions, as (kind, key) pairs. A symbol is scoped by
-    `scope` (symbol -> key of the section that defines it) where a definition is known."""
-    anchors = [("number", value) for value in representation["numbers"]]
-    anchors += [("symbol", scope.get(symbol, symbol)) for symbol in representation["symbols"]]
-    anchors += [("identifier", name) for name in representation.get("identifiers", [])]
-    anchors += [("term", word) for word in representation.get("terms", [])]
-    if heading_words:
-        anchors.append(("heading", " ".join(heading_words)))
-    return list(dict.fromkeys(anchors))
-
-def anchor_weights(mentions, settings):
-    """Weight of an anchor = 1 / log(1 + number of units that mention it). An anchor that
-    more than `anchor_max_share` of all units mention is dropped; an anchor only one unit
-    mentions joins nothing and is dropped too; heading anchors are capped so that a section
-    title shared by many passages cannot dominate."""
-    total = len({ref for refs in mentions.values() for ref in refs})
-    weights = {}
-    for anchor, refs in mentions.items():
-        if len(refs) < 2 or len(refs) > max(2, settings["anchor_max_share"] * total):
-            continue
-        weight = 1.0 / math.log(1 + len(refs))
-        weights[anchor] = min(weight, settings["heading_anchor_cap"]) if anchor[0] == "heading" else weight
-    return weights
-
-def restart_walk(mentions, weights, starts, settings):
-    """A random walk over the two-sided graph of units and anchors that keeps restarting at the
-    unit (personalised PageRank): fixed restart probability and a fixed number of rounds, so
-    it is deterministic. Returns {start: {ref: closeness}}."""
-    import numpy
-    from scipy import sparse
-    refs = sorted({ref for anchor in weights for ref in mentions[anchor]})
-    anchors = sorted(weights)
-    position = {ref: i for i, ref in enumerate(refs)}
-    rows, columns, values = [], [], []
-    for column, anchor in enumerate(anchors):
-        for ref in mentions[anchor]:
-            rows.append(position[ref])
-            columns.append(len(refs) + column)
-            values.append(weights[anchor])
-    size = len(refs) + len(anchors)
-    if not values:
-        return {start: {} for start in starts}
-    matrix = sparse.coo_matrix((values + values, (rows + columns, columns + rows)), shape=(size, size)).tocsr()
-    degree = numpy.asarray(matrix.sum(axis=0)).ravel()
-    degree[degree == 0] = 1.0
-    transition = matrix.multiply(1.0 / degree).tocsr()               # each column sums to one: hubs pass on little
-    results, restart = {}, settings["walk_restart"]
-    for start in starts:
-        if start not in position:
-            results[start] = {}
-            continue
-        home = numpy.zeros(size)
-        home[position[start]] = 1.0
-        state = home.copy()
-        for _ in range(int(settings["walk_rounds"])):
-            state = (1 - restart) * transition.dot(state) + restart * home
-        results[start] = {ref: float(state[position[ref]]) for ref in refs if ref != start and state[position[ref]] > 1e-9}
-    return results
-
-# ---------------------------------------------------------------- S6: signatures (re-order only) and table shape
-def formula_signature(expression):
-    """What a formula is made of, whatever its symbols are called: operators, neutral
-    function names with their number of arguments, and non-trivial constants."""
-    parts = {}
-    for node in expr_walk(expr_from_dict(expression)):
-        if node.op in ("sym", "eq"):
-            continue
-        key = "%s/%d" % (node.name, len(node.args)) if node.op == "call" else node.value if node.op == "num" else node.op
-        if key not in ("0", "1", "2"):
-            parts[key] = parts.get(key, 0) + 1
-    return parts
-
-def overlap(left, right):
-    """Weighted overlap of two multisets, between 0 and 1."""
-    shared_count = sum(min(count, right.get(key, 0)) for key, count in left.items())
-    return shared_count / max(1, max(sum(left.values()), sum(right.values())))
-
-def table_shape_score(table, chunk_table, stop):
-    """How alike two tables are: shared header words, shared row keys and shared values at
-    printed precision. The package table comes from parameter_tables; the other from a chunk."""
-    header_a = set(split_words(" ".join(table["header"]), stop))
-    header_b = set(split_words(" ".join(chunk_table.get("header", [])), stop))
-    keys_a = {row[0].strip().lower() for row in table["rows"] if row}
-    keys_b = {row[0].strip().lower() for row in chunk_table.get("rows", []) if row}
-    values_a = {n["value"] for row in table["rows"] for cell in row for n in find_numbers(cell)}
-    values_b = {n["value"] for row in chunk_table.get("rows", []) for cell in row for n in find_numbers(cell)}
-    share = lambda a, b: len(a & b) / max(1, min(len(a), len(b)))
-    return share(header_a, header_b) + share(keys_a, keys_b) + share(values_a, values_b)
-
-# ---------------------------------------------------------------- fusion and reasons
-REASON_TEMPLATES = {      # every phrase the search stage can put into "How established"
-    "fields": "shares the words {detail}",
-    "bridge": "{detail}",
-    "references": "it is cited as written ({detail})",
-    "anchors": "shares the rare {detail}",
-    "signatures": "its formula has a similar structure",
-    "table shape": "its table has similar headers, row keys or values",
-    "propagation": "inherited from {detail}"}
-SIGNAL_ORDER = ("references", "fields", "bridge", "anchors", "table shape", "signatures", "propagation")
-
-def fuse(rankings, settings, cited=(), reserve_from=("anchors", "propagation")):
-    """Reciprocal rank fusion: score = sum over signals of 1 / (60 + rank). Only ranks are
-    combined, so no signal's raw scale matters. Explicitly cited chunks are always included (up to
-    three); ties break by reference. Enforces: R5"""
-    constant, k = settings["rrf_constant"], int(settings["k_candidates"])
-    scores, ranks = {}, {}
-    for signal in SIGNAL_ORDER:
-        refs = rankings.get(signal, [])
-        if signal == "signatures":                       # used to re-order, never alone
-            refs = [ref for ref in refs if ref in scores]
-        weight = 1.0
-        for rank, ref in enumerate(refs, start=1):
-            scores[ref] = scores.get(ref, 0.0) + weight / (constant + rank)
-            ranks.setdefault(ref, {})[signal] = rank
-    ordered = sorted(scores, key=lambda ref: (-scores[ref], ref))
-    must = list(dict.fromkeys(list(cited)[:3]))
-    reserved = [ref for signal in reserve_from for ref in rankings.get(signal, []) if "fields" not in ranks.get(ref, {})]
-    must += [ref for ref in dict.fromkeys(reserved) if ref not in must][:int(settings["reserved_places"])]
-    shortlist = [ref for ref in ordered if ref not in must][:max(0, k - len(must))] + must
-    shortlist.sort(key=lambda ref: (-scores.get(ref, 0.0), ref))
-    return [(ref, scores.get(ref, 0.0), ranks.get(ref, {})) for ref in shortlist]
-
-def reason_text(signals, details):
-    """The plain reason of one candidate, assembled from the signals that proposed it."""
-    phrases = [REASON_TEMPLATES[signal].format(detail=details.get(signal, "")) for signal in SIGNAL_ORDER
-               if signal in signals and (details.get(signal) or "{detail}" not in REASON_TEMPLATES[signal])]
-    return "Proposed because: " + "; ".join(phrases) if phrases else "Proposed by rank only"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def verbatim(words, text):
-    """The words exactly as the text writes them, found without regard to upper or lower case or the
-    width of a space; None where the text does not hold them. What is kept is always the text's."""
-    pattern = r"(?<![A-Za-z0-9])" + r"\s+".join(re.escape(w) for w in (words or "").split()) + r"(?![A-Za-z0-9])"
-    found = re.search(pattern, text or "", re.I) if (words or "").strip() else None
-    return found.group(0) if found else None
-
-
-
-
-# ---------------------------------------------------------------- the skill map-implementation: the implementation map's agents
-# Code traced the data flow (step 05a); these agents work only where it stopped. The Tracer is given one
-# gap on the path from a final output and a fixed list of actions; each turn it chooses one, code carries
-# it out on the records and shows what it found, and every link it declares must copy the code word for
-# word and use only names that code holds. Each turn is a question of its own, recorded, so a run replays
-# without a model. The Namer gives each step a plain name, outside the accounting. The Auditor is code.
-# The model chooses; code executes. Enforces: R3, R4, R5
-MAP_ACTIONS = ("open_unit", "statements_setting", "callers_of", "return_of", "columns_of", "declare_edge", "declare_input", "done", "give_up")
-INPUT_KINDS = ("argument", "stored data", "file", "hard-coded number", "from outside")
-
-class MapTools:
-    """What the Tracer can ask to see, answered by code from the traced flow and the units."""
-    def __init__(self, flow, units):
-        self.nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
-        self.units = {u["ref"]: u for u in units}
-        self.functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-        self.tables = {r["name"]: r for r in self.nodes.values() if r["kind"] == "stored data"}
-
-    def label(self, node_id):
-        return self.nodes.get(node_id, {}).get("name", node_id)
-
-    def sources(self, record):
-        return ", ".join(self.label(s) for s in record["from"]) or "nothing the tool could see"
-
-    def show(self, action, args):
-        if action == "open_unit":
-            return cut_text(self.units[args["ref"]]["text"], 3000)
-        if action == "statements_setting":
-            found = [r for r in self.nodes.values() if r["name"] == args["name"] and r["kind"] in ("value", "column")
-                     and (r.get("function") == args["function"] or args["function"] in r.get("created_in", []))]
-            return "\n".join("line %d: %s  (computed from: %s)" % (r["line"], r["code"], self.sources(r)) for r in found) or \
-                "No statement of %s sets %s that the tool could see." % (args["function"], args["name"])
-        if action == "callers_of":
-            calls = [r for r in self.nodes.values() if r["kind"] == "call" and r["callee"] == args["function"]]
-            return "\n".join("in %s, line %d: %s  (%s)" % (r["function"], r["line"], r["code"], "; ".join(
-                "%s = %s" % (formal, ", ".join(self.label(s) for s in given)) for formal, given in r["bindings"].items())) for r in calls) or \
-                "Nothing in the package calls %s." % args["function"]
-        if action == "return_of":
-            record = self.nodes.get("%s:return" % args["function"])
-            return "%s returns what is computed from: %s" % (args["function"], self.sources(record)) if record else "The tool could not read %s." % args["function"]
-        if action == "columns_of":
-            return "%s has the columns: %s" % (args["table"], ", ".join(self.tables[args["table"]].get("columns") or []))
-        return "Recorded."
-
-def trace_question(state, tools, settings):
-    """One turn of the Tracer: the gap, what the tool knows of its function, the names it may use, and
-    every action taken so far with what it showed."""
-    gap, function = state["gap"], state["gap"]["function"]
-    known = [r for r in tools.nodes.values() if r.get("function") == function and r["kind"] in ("value", "argument", "return")]
-    listing = "\n".join("  %s (%s): computed from %s" % (r["name"], r["kind"], tools.sources(r)) for r in known)
-    place = ("function %s (%s), line %d: %s\ncode at this place: %s\n\nTHE WHOLE FUNCTION\n%s\n\n"
-             "WHAT THE TOOL KNOWS OF THIS FUNCTION\n%s\n\nTHE PACKAGE\nfunctions: %s\nstored tables: %s") % (
-        function, gap["function_ref"], gap["line"], gap["why"], gap["code"], tools.functions[function]["text"], listing or "  nothing",
-        ", ".join("%s (%s)" % (name, unit["ref"]) for name, unit in sorted(tools.functions.items())), ", ".join(sorted(tools.tables)) or "none")
-    history = "\n".join("%d. %s %s\n   the tool showed: %s" % (number, hop["action"], json.dumps(hop["args"], sort_keys=True), hop["shown"])
-                        for number, hop in enumerate(state["hops"], start=1)) or "Nothing yet: this is the first action."
-    texts = [tools.functions[function]["text"]] + [tools.units[ref]["text"] for ref in state["opened"]]
-    # a block needs its label: the assembler drops a block without one, which sent the model a question with no gap in it
-    return narrow_question("trace-gap", gap["function_ref"], [("THE PLACE THE TOOL COULD NOT FOLLOW", place), ("WHAT HAPPENED SO FAR", history)], settings,
-                           more={"texts": texts, "refs": sorted(tools.units), "functions": sorted(tools.functions),
-                                 "tables": sorted(tools.tables), "taken": [[hop["action"], hop["args"]] for hop in state["hops"]]})
-
-def validate_trace(question, answer):
-    """One action of the Tracer. It must be one of the list, with the arguments that action takes; every
-    unit, function and table must be the package's; a quote must be in the code shown word for word and
-    must hold every name the action declares, so no link rests on a name the model made up; and no
-    action may be taken twice. Enforces: R3"""
-    action, args = answer.get("action"), answer.get("args")
-    if action not in MAP_ACTIONS or not isinstance(args, dict):
-        raise Rejected(REJECTION_REASONS[0])
-    if [action, args] in question["taken"]:
-        raise Rejected(REJECTION_REASONS[5])
-    text = lambda key: args.get(key) if isinstance(args.get(key), str) and args.get(key).strip() else None
-    if action == "open_unit" and args.get("ref") not in question["refs"]:
-        raise Rejected(REJECTION_REASONS[1])
-    if action in ("statements_setting", "callers_of", "return_of") and args.get("function") not in question["functions"]:
-        raise Rejected(REJECTION_REASONS[1])
-    if action == "statements_setting" and not text("name"):
-        raise Rejected(REJECTION_REASONS[0])
-    if action == "columns_of" and args.get("table") not in question["tables"]:
-        raise Rejected(REJECTION_REASONS[1])
-    if action in ("declare_edge", "declare_input"):
-        names = [args.get("value")] + list(args.get("from") or []) if action == "declare_edge" else [args.get("name")]
-        if not text("quote") or not all(isinstance(n, str) and n.strip() for n in names) or \
-           (action == "declare_edge" and not args.get("from")) or (action == "declare_input" and args.get("kind") not in INPUT_KINDS):
-            raise Rejected(REJECTION_REASONS[0])
-        squash = lambda words: re.sub(r"\s+", " ", words).strip()
-        if not any(squash(args["quote"]) in squash(code) for code in question["texts"]):
-            raise Rejected(REJECTION_REASONS[2])
-        if not all(re.search(r"(?<![\w.$])%s(?![\w.])" % re.escape(n.strip()), args["quote"]) for n in names):
-            raise Rejected(REJECTION_REASONS[1])
-    if action in ("done", "give_up") and not text("because"):
-        raise Rejected(REJECTION_REASONS[0])
-
-def map_implementation(ctx):
-    """Step 07d, map-implementation, the skill: the Tracer resolves the gaps on the path from each final
-    output, turn by turn, within map_hops_max turns a gap and map_calls_max questions in all; the
-    Auditor, code alone, says what is traced, what is open and what no output
-    reaches. Without a model the gaps stay named and the steps unnamed. Enforces: R2, R3, R4, R5, R14"""
-    flow, units, settings = ctx.read("dataflow"), ctx.read("model_units"), ctx.settings
-    if not flow:
-        return StepResult(messages=["No data flow was traced, so there is nothing to map."])
-    outputs, _, not_reached = decided_outputs(flow, {})
-    reached = set()
-    for output in outputs:
-        reached |= walk_dataflow(flow, output)[2]
-    tools, gaps = MapTools(flow, units), [g for g in flow if g["record_type"] == "gap"]
-    states = [{"gap": g, "hops": [], "edges": [], "inputs": [], "status": "", "opened": []} for g in gaps if g["function"] in reached]
-    budget, asked = int(settings["map_calls_max"]), 0
-    use_ai = ctx.ask is not None and settings["map_with_ai"]
-    for _ in range(int(settings["map_hops_max"]) if use_ai else 0):
-        turn = [state for state in states if not state["status"]][:max(0, budget - asked)]
-        if not turn:
-            break
-        questions = [trace_question(state, tools, settings) for state in turn]
-        asked += len(questions)
-        answers = ctx.ask([q for q in questions if not q["too_large"]])
-        for question, state in zip(questions, turn):
-            final = answers.get(question["question_id"])
-            if final is None or final["outcome"] != "accepted":
-                state["status"] = "the AI's answer could not be used: %s" % (final or {}).get("outcome", "not asked, the question was too large").split(": ", 1)[-1]
-                continue
-            action, args = final["answer"]["action"], final["answer"]["args"]
-            shown = tools.show(action, args)
-            state["hops"].append({"action": action, "args": args, "shown": cut_text(shown, 600), "question_id": question["question_id"]})
-            if action == "open_unit" and args["ref"] not in state["opened"]:
-                state["opened"].append(args["ref"])
-            elif action == "declare_edge":
-                state["edges"].append({"value": args["value"], "from": list(args["from"]), "quote": args["quote"]})
-            elif action == "declare_input":
-                state["inputs"].append({"name": args["name"], "kind": args["kind"], "quote": args["quote"]})
-            elif action == "done":
-                state["status"] = "traced: %s" % args["because"]
-            elif action == "give_up":
-                state["status"] = "the code cannot tell: %s" % args["because"]
-    for state in states:
-        state["status"] = state["status"] or ("not asked: no model" if not use_ai else "stopped at the limit of %d turns" % int(settings["map_hops_max"])
-                                              if len(state["hops"]) >= int(settings["map_hops_max"]) else "stopped at the limit of %d questions" % budget)
-    traced = [s for s in states if s["status"].startswith("traced")]
-    audit = {"final_outputs": outputs, "functions reached": sorted(reached), "not reached": not_reached,
-             "gaps": len(gaps), "gaps on the path": len(states), "gaps traced": len(traced),
-             "gaps open": [{"function": s["gap"]["function"], "line": s["gap"]["line"], "status": s["status"]} for s in states if s not in traced],
-             "gaps not reached": [{"function": g["function"], "line": g["line"], "why": g["why"]} for g in gaps if g["function"] not in reached],
-             "loops": sorted({loop for output in outputs for loop in walk_dataflow(flow, output)[1]}), "questions": asked}
-    traces = [{"gap": s["gap"], "hops": s["hops"], "edges": s["edges"], "inputs": s["inputs"], "status": s["status"]} for s in states]
-    return StepResult({"map_traces": traces, "map_audit": [audit]},
-                           {"gaps on the path": len(states), "gaps traced": len(traced)},
-                           ["Final outputs %s: %d gaps on the path, %d traced by the AI; %d gaps in functions no output reaches."
-                            % (", ".join(outputs), len(states), len(traced), len(audit["gaps not reached"]))])
-
-# ---------------------------------------------------------------- step 05: build-graph
-def structural_edges(units, provenance):
-    """Edges the readers established: contains, calls, tested_by, documents, generated_from,
-    reads_data. All are parsed from the files, none comes from the AI."""
-    functions = {u["name"]: u["ref"] for u in units if u["kind"] == KIND_FUNCTION and not u["inside"]}
-    data_units = {u["name"]: u["ref"] for u in units if u.get("data")}
-    edges = []
-    def add(source, target, kind, evidence=None):
-        edges.append(Edge(source, target, kind, HOW_PARSED, provenance, evidence=evidence or {}))
-    for unit in units:
-        code = unit.get("code") or {}
-        if unit.get("parent_ref"):
-            add(unit["parent_ref"], unit["ref"], "contains")
-        for name in code.get("calls", ()):
-            if name in functions and functions[name] != unit["ref"] and unit["kind"] in (KIND_FUNCTION, KIND_TEST):
-                add(functions[name] if unit["kind"] == KIND_TEST else unit["ref"],
-                    unit["ref"] if unit["kind"] == KIND_TEST else functions[name],
-                    "tested_by" if unit["kind"] == KIND_TEST else "calls")
-        for read in code.get("reads_data", ()):
-            if read["object"] in data_units:
-                add(unit["ref"], data_units[read["object"]], "reads_data", dict(read))
-        if unit.get("roxygen") and unit["roxygen"]["documents_ref"] not in (None, unit["ref"]):   # a row does not document itself
-            add(unit["ref"], unit["roxygen"]["documents_ref"], "documents")
-        page = unit.get("helppage")
-        if page:
-            if page["generated_from_ref"]:
-                add(unit["ref"], page["generated_from_ref"], "generated_from")
-            target = functions.get(page["rd_name"]) or data_units.get(page["rd_name"])
-            if target:
-                add(unit["ref"], target, "documents")
-    return edges
-
-def build_graph(ctx):
-    """Step 05, build-graph: nodes for every chunk and unit, structural edges,
-    cross-references resolved within their own corner, and the bridge vocabulary."""
-    canon, doc, units = ctx.read("chunks_canon"), ctx.read("chunks_doc"), ctx.read("model_units")
-    lists = load_word_lists()
-    records = [node_record(c["ref"], c["kind"], c["corner"]) for c in canon + doc]
-    records += [node_record(u["ref"], u["kind"], "model") for u in units]
-    edges, unresolved = structural_edges(units, ctx.provenance), []
-    for corner_chunks in (canon, doc):
-        for chunk in corner_chunks:
-            same_file = [c for c in corner_chunks if c["source_file"] == chunk["source_file"]]
-            for reference in chunk.get("refs_out", ()):
-                targets = [ref for ref in resolve_reference(reference, same_file) if ref != chunk["ref"]]
-                for target in targets:
-                    edges.append(Edge(chunk["ref"], target, "cross_reference", HOW_PARSED, ctx.provenance,
-                                             evidence={"as_written": reference}))
-                own_caption = (chunk.get("caption") or "").lower().startswith(reference.lower())
-                if not targets and not own_caption:
-                    unresolved.append({"unit_ref": chunk["ref"], "reference": reference,
-                                       "note": "'%s' is cited here but could not be found in %s" % (reference, chunk["source_file"])})
-    bridge = harvest_bridge(canon, doc, units, lists, ctx.options["inputs"].get("glossary"))
-    ledger = ledger_records(ctx.read("graph_ledger"), records + edges)
-    return StepResult({"graph_ledger": ledger, "bridge_vocabulary": bridge, "unresolved_references": unresolved},
-                             {"nodes": len(records), "edges": len(edges), "bridge entries": len(bridge)},
-                             ["Graph version %s." % graph_version_id(ctx.read("graph_ledger") + ledger)])
-
-# ---------------------------------------------------------------- step 06: find-candidates
-SEARCHED_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TABLE, KIND_OBJECT, KIND_VIGNETTE)
-
-def is_searched(unit, settings):
-    """Which model units look for passages. Test blocks, files that were not read, package
-    files without code, and (unless the setting says otherwise) supporting code by syntax
-    are not sent to the search or to the judge; roxygen blocks and help pages take the
-    tracing of the object they document."""
-    if unit["kind"] not in SEARCHED_KINDS:
-        return False
-    if unit.get("data") and not unit["data"]["assessable"]:
-        return False
-    code = unit.get("code") or {}
-    return not code.get("plumbing") or bool(settings["judge_supporting_code"])
-
-def searched_text(representation, expansions, corner, proposed):
-    """The "What was searched" sentence of one unit and corner."""
-    words = list(dict.fromkeys(representation["fields"].get("name", []) + representation["fields"].get("heading", [])))[:8]
-    if not words:
-        words = list(dict.fromkeys(representation["fields"].get("body", [])))[:8]
-    listed = []
-    for word in words:
-        entry = next((e for e in expansions if stem(e["term"].lower()) == word or e["term"] == word), None)
-        listed.append("%s (%s)" % (AS_WRITTEN.get(word, word), entry["phrase"]) if entry else AS_WRITTEN.get(word, word))
-    parts = ["Searched %s for: %s" % (CORNER_NAMES[corner], ", ".join(listed) or "no usable words")]
-    if representation["symbols"]:
-        parts.append("symbols " + ", ".join(representation["symbols"][:8]))
-    if representation["numbers"]:
-        parts.append("numbers " + ", ".join(representation["numbers"][:8]))
-    return "; ".join(parts) + ". %d passage(s) proposed." % proposed
-
-def search_one(source_ref, representation, corner, world, settings):
-    """All signals for one unit and one target corner, fused into a shortlist of candidates."""
-    targets, index, enabled = world["targets"][corner], world["index"][corner], settings["signals"]
-    rankings, details = {}, {}
-    query = {word: 1.0 for words in representation["fields"].values() for word in words}
-    expansions = expansions_for(representation, world["bridge_by_term"]) if "bridge" in enabled else []
-    if "fields" in enabled:
-        scores = bm25_scores(index, query, settings["bm25_k1"], settings["bm25_b"])
-        rankings["fields"] = ranked(scores)
-        details["fields"] = {ref: ", ".join(dict.fromkeys(shown(words[:4]))) for ref, (score, words) in scores.items()}
-    if expansions:
-        bridged = {word: (1.0 if e["count"] > 1 else 0.5) for e in expansions for word in e["words"] if word not in query}
-        scores = bm25_scores(index, bridged, settings["bm25_k1"], settings["bm25_b"])
-        rankings["bridge"] = ranked(scores)
-        for ref, (score, words) in scores.items():
-            entry = next(e for e in expansions if set(e["words"]) & set(words))
-            details.setdefault("bridge", {})[ref] = "'%s' is described as '%s' (%s), which this passage mentions" % (
-                entry["term_as_written"], entry["phrase"], entry["sources"][0])
-    cited = []
-    if "references" in enabled:
-        for reference in representation.get("references", ()):
-            for ref in resolve_reference(reference, targets.values()):
-                cited.append(ref)
-                details.setdefault("references", {})[ref] = reference
-        rankings["references"] = list(dict.fromkeys(cited))
-    if "anchors" in enabled:
-        closeness = world["walk"].get(source_ref, {})
-        rankings["anchors"] = ranked({ref: score for ref, score in closeness.items() if ref in targets})[:2 * int(settings["k_candidates"])]
-        own = set(world["anchors"].get(source_ref, ()))
-        for ref in rankings["anchors"]:
-            common = sorted(own & set(world["anchors"].get(ref, ())), key=lambda a: (-world["weights"].get(a, 0), a))
-            common = [a for a in common if a in world["weights"]]
-            if common:
-                details.setdefault("anchors", {})[ref] = " and ".join("%s %s" % (kind, key.split("@")[0]) for kind, key in common[:2])
-    if "signatures" in enabled and representation.get("signature"):
-        alike = {ref: overlap(representation["signature"], world["signatures"][ref]) for ref in targets if ref in world["signatures"]}
-        rankings["signatures"] = ranked({ref: score for ref, score in alike.items() if score >= 0.5})
-    if representation.get("table"):
-        shapes = {ref: table_shape_score(representation["table"], targets[ref]["table"], world["lists"]["stop"])
-                  for ref in targets if targets[ref].get("table")}
-        rankings["table shape"] = ranked({ref: score for ref, score in shapes.items() if score >= 1.0})
-    if "propagation" in enabled:
-        inherited = world["propagated"].get((source_ref, corner), [])
-        rankings["propagation"] = [ref for ref, _ in inherited]
-        details["propagation"] = dict(inherited)
-    fused = fuse(rankings, settings, cited)
-    candidates = []
-    for rank, (ref, score, signals) in enumerate(fused, start=1):
-        reason = reason_text(signals, {signal: details.get(signal, {}).get(ref, "") for signal in signals})
-        candidates.append(Candidate(source_ref, ref, corner, rank, round(score, 6), signals, reason,
-                                           suggestion_only="propagation" in signals and len(signals) == 1,
-                                           search_pass=world["search_pass"]))
-    ranked_anywhere = sorted({ref for refs in rankings.values() for ref in refs})
-    record = {"unit_ref": source_ref, "target_corner": corner, "search_pass": world["search_pass"],
-              "query_fields": representation["fields"], "expansions": [(e["term"], e["words"], e["sources"][0]) for e in expansions],
-              "anchors_used": [list(a) for a in world["anchors"].get(source_ref, ()) if a in world["weights"]][:20],
-              "per_signal": {signal: len(refs) for signal, refs in rankings.items()}, "shortlist": [c.target_ref for c in candidates],
-              "ranked_anywhere": ranked_anywhere, "searched_text": searched_text(representation, expansions, corner, len(candidates)),
-              "note": "" if candidates else "Nothing in %s shares a word, a symbol, a number or a citation with this unit." % CORNER_NAMES[corner]}
-    return candidates, record
-
-def build_world(ctx, search_pass):
-    """Everything the search needs, built once per step: representations of all units and
-    chunks, one BM25 index per corner, the bridge vocabulary, anchors and the walk."""
-    settings, lists = ctx.settings, load_word_lists()
-    trivial = set(settings["trivial_numbers"])
-    canon, doc, units = (ctx.read(kind) for kind in ("chunks_canon", "chunks_doc", "model_units"))
-    tables = {t["unit_ref"]: t for t in ctx.read("parameter_tables")}
-    by_ref = {u["ref"]: u for u in units}
-    documented_by = {u["roxygen"]["documents_ref"]: u for u in units if u.get("roxygen") and u["roxygen"]["documents_ref"]}
-    representations = {}
-    for chunk in canon + doc:
-        representations[chunk["ref"]] = dict(chunk_fields(chunk, lists, trivial), references=chunk.get("refs_out", ()),
-                                             heading=split_words(" ".join(chunk["heading_chain"][-1:]), lists["stop"]))
-        equation = chunk.get("equation") or {}
-        if equation.get("expression"):
-            representations[chunk["ref"]]["signature"] = formula_signature(equation["expression"])
-    for unit in units:
-        representation = unit_fields(unit, by_ref, documented_by, lists, trivial)
-        about = documented_by.get(unit["ref"])
-        representation["references"] = cross_references(unit["text"] + " " + (about["text"] if about else ""),
-                                                                        {"cross_reference_labels": ["Table", "Figure", "Section", "Equation", "Annex", "Appendix"]})
-        expression = (unit.get("code") or {}).get("expression") or (unit.get("code") or {}).get("composed")
-        if expression:
-            representation["signature"] = formula_signature(expression)
-        if unit["ref"] in tables:
-            representation["table"] = tables[unit["ref"]]
-        representations[unit["ref"]] = representation
-    bridge_by_term = {}
-    for entry in ctx.read("bridge_vocabulary"):
-        bridge_by_term.setdefault(entry["term"], []).append(entry)
-    definitions = {}
-    for entries in bridge_by_term.values():
-        for entry in entries:
-            for source in entry["sources"]:
-                if source[:2] in ("C-", "D-"):
-                    definitions.setdefault(entry["term"], set()).add(source)
-    scope = {term: "%s@%s" % (term, sorted(sources)[0]) for term, sources in definitions.items() if len(sources) == 1}
-    anchors, mentions = {}, {}
-    for ref, representation in representations.items():
-        anchors[ref] = anchors_of(representation, representation.get("heading"), scope)
-        for anchor in anchors[ref]:
-            mentions.setdefault(anchor, []).append(ref)
-    weights = anchor_weights(mentions, settings)
-    searched = [u["ref"] for u in units if is_searched(u, settings)] + [c["ref"] for c in doc if c.get("checkable")]
-    walk = restart_walk(mentions, weights, searched, settings) if "anchors" in settings["signals"] else {}
-    targets = {"canon": {c["ref"]: c for c in canon}, "doc": {c["ref"]: c for c in doc},
-               "model": {u["ref"]: u for u in units if is_searched(u, settings)}}
-    index = {corner: build_index({ref: representations[ref] for ref in targets[corner]}) for corner in targets}
-    signatures = {ref: r["signature"] for ref, r in representations.items() if r.get("signature")}
-    return {"representations": representations, "targets": targets, "index": index, "bridge_by_term": bridge_by_term,
-            "anchors": anchors, "weights": weights, "walk": walk, "signatures": signatures, "lists": lists,
-            "units": units, "doc": doc, "canon": canon, "propagated": {}, "search_pass": search_pass}
-
-def propagated_candidates(world, graph):
-    """S5, pass 2 only. Once the judge accepted that a function corresponds to a passage, the
-    statements inside it, the functions it calls, the data it reads and its tests inherit
-    that passage, and the tables the passage cites, as SUGGESTIONS. Never as links."""
-    inherited = {}
-    names = {u["ref"]: "%s %s" % (u["kind"].lower(), u["name"]) for u in world["units"]}
-    for unit in world["units"]:
-        accepted = [e for e in links_of(graph, unit["ref"], "C") + links_of(graph, unit["ref"], "D") if e["relation"] in LINKING_RELATIONS]
-        if unit["kind"] != KIND_FUNCTION or not accepted:
-            continue
-        heirs = [e["target"] for e in graph["out"].get(unit["ref"], []) if e["kind"] in ("contains", "calls", "reads_data", "tested_by")]
-        for edge in accepted:
-            corner = "canon" if edge["target"].startswith("C") else "doc"
-            cited = [e["target"] for e in graph["out"].get(edge["target"], []) if e["kind"] == "cross_reference"]
-            for heir in heirs:
-                for target in [edge["target"]] + cited:
-                    detail = "%s (%s), which the AI judged to correspond to %s" % (unit["ref"], names[unit["ref"]], edge["target"])
-                    inherited.setdefault((heir, corner), []).append((target, detail))
-    return inherited
-
-def find_candidates(ctx):
-    """Step 06 (pass 1) and step 08 (pass 2), find-candidates. Pass 1 searches for every
-    searched model unit in the methodology and the documentation, and for every checkable
-    documentation passage in the methodology. Pass 2 searches again, with propagation, only
-    for units still without a methodology link, and looks in the package for documentation
-    passages still without any link. Every search leaves a search record. Enforces: R2"""
-    search_pass = int(ctx.options.get("pass", 1))
-    world = build_world(ctx, search_pass)
-    graph = load_graph(ctx.read("graph_ledger"))
-    jobs = []
-    if search_pass == 1:
-        jobs += [(u["ref"], corner) for u in world["units"] if is_searched(u, ctx.settings) for corner in ("canon", "doc")]
-        jobs += [(c["ref"], "canon") for c in world["doc"] if c.get("checkable")]
-    else:
-        world["propagated"] = propagated_candidates(world, graph)
-        linked = lambda ref, prefix: any(e["relation"] in LINKING_RELATIONS for e in links_of(graph, ref, prefix))
-        jobs += [(ref, corner) for (ref, corner) in sorted(world["propagated"]) if not linked(ref, "C" if corner == "canon" else "D")
-                 and ref in world["targets"]["model"]]
-        jobs += [(c["ref"], "model") for c in world["doc"] if c.get("checkable") and not linked(c["ref"], "C") and not linked(c["ref"], "M")]
-    candidates, records = [], []
-    for source_ref, corner in jobs:
-        found, record = search_one(source_ref, world["representations"][source_ref], corner, world, ctx.settings)
-        candidates.extend(found)
-        records.append(record)
-    return StepResult({"candidates": candidates, "search_records": records},
-                             {"searches": len(jobs), "candidates": len(candidates),
-                              "searches without any proposal": sum(1 for r in records if not r["shortlist"])}, [])
-
-# ---------------------------------------------------------------- questions for the AI
-def cut_code(text, limit):
-    """Cut a long function around its formula lines: the header, then every line that
-    computes something with two lines of context, until the limit is reached."""
-    if len(text) <= limit:
-        return text
-    lines = text.split("\n")
-    wanted = {0, 1, len(lines) - 1}
-    for number, line in enumerate(lines):
-        if re.search(r"(<-|=).*[-+*/^]|\b(pnorm|qnorm|exp|log|sqrt|pmax|pmin|max|min)\(", line):
-            wanted.update(range(max(0, number - 2), min(len(lines), number + 3)))
-    kept, size, previous = [], 0, -1
-    for number in sorted(wanted):
-        if size + len(lines[number]) > limit:
-            break
-        if number != previous + 1:
-            kept.append("# [... lines cut ...]")
-        kept.append(lines[number])
-        size, previous = size + len(lines[number]) + 1, number
-    return "\n".join(kept)
-
-def passage_text(node, settings, keep_words=()):
-    """How a chunk or a unit is shown as a lettered passage. A table is never pasted whole:
-    its header, three rows and its dimensions."""
-    table = node.get("table")
-    if table and table.get("header") is not None and node.get("kind") == "Table":
-        rows = table.get("rows", [])
-        shown = ["; ".join(table["header"])] + ["; ".join(row) for row in rows[:3]]
-        return "\n".join(shown) + "\n(table of %d rows and %d columns%s)" % (
-            len(rows), len(table["header"]), "; caption: " + node["caption"] if node.get("caption") else "")
-    if node.get("code") is not None or node.get("file"):
-        return cut_code(node["text"], int(settings["max_passage_chars"]))
-    return cut_text(node["text"], int(settings["max_passage_chars"]), keep_words)
-
-def passage_label(node):
-    """The heading line of a lettered passage: where it stands, never its reference."""
-    if node.get("heading_chain") is not None:
-        place = " > ".join(node["heading_chain"][-3:]) or node["source_file"]
-        return "%s, %s%s" % (place, node["kind"].lower(), " %d" % node["para_no"] if node.get("para_no") else "")
-    lines = "lines %d-%d" % tuple(node["lines"]) if node.get("lines") else ""
-    return "%s `%s`, %s %s" % (node["kind"].lower(), node["name"], node["file"], lines)
-
-def letters_for(count):
-    """A, B, ... Z, AA, AB, ... for the passages of one question."""
-    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    return [alphabet[i] if i < 26 else alphabet[i // 26 - 1] + alphabet[i % 26] for i in range(count)]
-
-def choose_decoys(unit_ref, shortlist, never, pool, anchors, count):
-    """Planted control passages: chosen by a hash of the unit reference (never at random) from
-    passages that share no anchor with the unit and appear nowhere in its rankings."""
-    own = set(anchors.get(unit_ref, ()))
-    eligible = [ref for ref in sorted(pool) if ref not in never and ref not in shortlist
-                and not own & set(anchors.get(ref, ())) and len(pool[ref].get("text", "")) > 40]
-    eligible.sort(key=lambda ref: hashlib.sha256((unit_ref + ref).encode("utf-8")).hexdigest())
-    return eligible[:count]
-
-def assemble_question(question_type, unit_ref, blocks, passages, prompt, settings, planted=(), more=None):
-    """Put one question together. blocks: [(label line, text)]; passages: [(ref, label, text)].
-    Passages are lettered in an order derived from a hash, never by score, so position
-    carries no hint. The question id is the hash of the full prompt. Enforces: R5"""
-    ordered = sorted(passages, key=lambda p: hashlib.sha256((unit_ref + "|" + p[0]).encode("utf-8")).hexdigest())
-    letters = dict(zip(letters_for(len(ordered)), ordered))
-    shown = "\n".join("[%s] %s\n<<<\n%s\n>>>" % (letter, label, text) for letter, (ref, label, text) in letters.items())
-    main = prompt["main"].replace("[[PASSAGES]]", shown)
-    for slot, (label, text) in zip(("[[UNIT]]", "[[ABOUT]]"), list(blocks) + [("", "")]):
-        main = main.replace(slot, "%s\n<<<\n%s\n>>>" % (label, text) if label else "")
-    main = re.sub(r"\n{2,}", "\n", main)
-    question = {"question_type": question_type, "unit_ref": unit_ref, "system_prompt": prompt["system"], "main_prompt": main,
-                "letters": {letter: ref for letter, (ref, _, _) in letters.items()},
-                "planted": [letter for letter, (ref, _, _) in letters.items() if ref in planted],
-                "passage_texts": {letter: text for letter, (_, _, text) in letters.items()},
-                "unit_text": "\n".join(text for _, text in blocks), "strip_patterns": list(settings["strip_patterns"]),
-                "estimated_tokens": estimate_tokens(main, blocks[0][1] if blocks else ""),
-                "question_id": sha256_text(prompt["version"] + "\n" + prompt["system"] + "\n" + main)}
-    question.update(more or {})
-    question["too_large"] = question["estimated_tokens"] > prompt_budget(settings, prompt["system"])
-    return question
-
-def narrow_question(question_type, unit_ref, blocks, settings, passages=(), more=None):
-    """A question with one prompt of its own, assembled within the token budget as every other is."""
-    return assemble_question(question_type, unit_ref, blocks, list(passages), load_prompt(question_type), settings, more=more)
-
-def judge_question(source, corner, candidates, world, settings):
-    """The judge question of one unit (or documentation passage) and one target corner."""
-    is_chunk = source.get("heading_chain") is not None
-    question_type = {("canon", False): "judge-unit-to-canon", ("doc", False): "judge-unit-to-doc",
-                     ("canon", True): "judge-doc-to-canon", ("model", True): "judge-doc-to-model"}[(corner, is_chunk)]
-    pool = world["targets"][corner]
-    shortlist = [c["target_ref"] for c in candidates]
-    record = next((r for r in world["search_records"] if r["unit_ref"] == source["ref"] and r["target_corner"] == corner), {})
-    decoys = choose_decoys(source["ref"], shortlist, set(record.get("ranked_anywhere", ())), pool, world["anchors"],
-                           1 if len(shortlist) < 6 else 2)
-    words = [word for words in world["representations"][source["ref"]]["fields"].values() for word in words]
-    passages = [(ref, passage_label(pool[ref]), passage_text(pool[ref], settings, words)) for ref in shortlist + decoys]
-    unit_text = cut_text(source["text"], int(settings["max_unit_chars"])) if is_chunk else cut_code(source["text"], int(settings["max_unit_chars"]))
-    blocks = [("UNIT (%s)" % passage_label(source), unit_text)]
-    about = world["documented_by"].get(source["ref"]) or world["documented_by"].get(source.get("parent_ref") or "")
-    if about and not is_chunk:
-        blocks.append(("WHAT THE PACKAGE SAYS ABOUT IT", cut_text(re.sub(r"(?m)^\s*#' ?", "", about["text"]), 1200)))
-    return assemble_question(question_type, source["ref"], blocks, passages, load_prompt(question_type),
-                             settings, planted=decoys, more={"target_corner": corner})
-
-# ---------------------------------------------------------------- validators: code decides what is usable
-class Rejected(Exception):
-    """An answer that cannot be used. The message is one reason from the fixed plain list."""
-
-
-def check_quote(quote, text, required=True):
-    """A quotation must be verbatim after white-space normalisation, contiguous, without an
-    ellipsis, and of a sensible length."""
-    quote = normalise_text(quote if isinstance(quote, str) else "")
-    if not quote and not required:
-        return
-    flat = normalise_text(text)
-    if len(quote) < 4 or len(quote) > 400 or "..." in quote or "\u2026" in quote or quote not in flat:
-        raise Rejected(REJECTION_REASONS[2])
-
-JUDGE_RELATIONS = {"judge-unit-to-canon": ("implements", "partly implements", "deviates from", "merely related"),
-                   "judge-unit-to-doc": ("describes", "consistent with", "inconsistent with"),
-                   "judge-doc-to-canon": ("consistent with", "inconsistent with", "merely related"),
-                   "judge-doc-to-model": ("describes", "inconsistent with")}
-
-def validate_judge(question, answer):
-    """The answer to a judge question: its shape, the letters it names, its quotations, planted passages, self-contradiction."""
-    allowed = {"matches", "none_reason", "states_nothing_checkable"}
-    if not isinstance(answer.get("matches"), list) or set(answer) - allowed:
-        raise Rejected(REJECTION_REASONS[0])
-    for match in answer["matches"]:
-        confidence = match.get("confidence") if isinstance(match, dict) else None
-        if not isinstance(match, dict) or set(match) - {"letter", "relation", "confidence", "quote_from_passage", "quote_from_unit"} \
-                or match.get("relation") not in JUDGE_RELATIONS[question["question_type"]] \
-                or isinstance(confidence, bool) or not isinstance(confidence, int) or not 0 <= confidence <= 100:
-            raise Rejected(REJECTION_REASONS[0])
-        if match.get("letter") not in question["letters"]:
-            raise Rejected(REJECTION_REASONS[1])
-    for match in answer["matches"]:
-        check_quote(match.get("quote_from_passage"), question["passage_texts"][match["letter"]])
-        check_quote(match.get("quote_from_unit"), question["unit_text"])
-    if any(match["letter"] in question["planted"] and match["relation"] != "merely related" for match in answer["matches"]):
-        raise Rejected(REJECTION_REASONS[3])
-    if answer["matches"] and str(answer.get("none_reason") or "").strip():
-        raise Rejected(REJECTION_REASONS[4])
-
-
-def validate_answer(question, text):
-    """The validators, in a fixed order: remove any thought block and code fence; take the last
-    balanced JSON object; parse it strictly; check its shape, its letters, its quotations,
-    the planted passages and self-contradiction. Returns ("accepted", answer) or
-    ("rejected: <one reason from the fixed list>", None). Enforces: R3"""
-    try:
-        if not isinstance(text, str) or not text.strip():
-            raise Rejected(REJECTION_REASONS[0])
-        for pattern in question.get("strip_patterns", ()):
-            text = re.sub(pattern, "", text)
-        text = re.sub(r"```[a-zA-Z]*", "", text)
-        found = last_json_object(text)
+@dataclass
+class FunctionReadings:
+    """flowR's readings of a package's functions, each read alone: the function each prefix stands for, the
+    functions themselves, those flowR could not read and why, and the syntax tree and edges of the rest, every id
+    carrying its reading's prefix. The chunk links add the readings of the package's scripts to the same tree."""
+    functions: dict; unit_of: dict = field(default_factory=dict); unread: dict = field(default_factory=dict)
+    tree: dict = field(default_factory=dict); edges: dict = field(default_factory=dict)
+
+
+def read_functions(units, folder):
+    """Every function of the package read by flowR, one at a time: memory is then bounded by the largest function,
+    not by the package - the whole package at once once took a driver down. Enforces: R7"""
+    readings = FunctionReadings({u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")})
+    for number, unit in enumerate(sorted(readings.functions.values(), key=lambda u: u["ref"])):
+        prefix = "%d:" % number
+        readings.unit_of[prefix] = unit["name"]
         try:
-            answer = strict_json(found) if found else None
-        except ValueError:
-            answer = None
-        if not isinstance(answer, dict):
-            raise Rejected(REJECTION_REASONS[0])
-        if question["question_type"] == "trace-gap":
-            validate_trace(question, answer)
-        elif question["question_type"] in JUDGE_RELATIONS:
-            validate_judge(question, answer)
-        else:                                                  # a question the tool no longer asks
-            raise Rejected(REJECTION_REASONS[0])
-    except Rejected as problem:
-        return "rejected: %s" % problem, None
-    return "accepted", answer
-
-_NOT_SHOWN = re.compile(r"\b(%s)\b" % "|".join(("sev" "er(e|ity)", "crit" "ical", "maj" "or", "min" "or", "err" "ors?", "find" "ings?",
-                        "mater" "ial(ity)?", "(high|medium|low)[- ](risk|priority|impact|rating)", "non-?compl" "ian(t|ce)", "breach")), re.I)
-
-def shown_ai_text(text):
-    """Text written by the model passes the same plain-language filter as the tool's own wording:
-    if it rates seriousness or uses a policy term, a fixed sentence is shown instead and the
-    full text stays in the audit records."""
-    text = normalise_text(str(text or ""))[:300]
-    return AI_WORDING_NOT_SHOWN if _NOT_SHOWN.search(text) else text
-
-# ---------------------------------------------------------------- steps 07 and 09: judge-links
-
-# ---------------------------------------------------------------- what each piece of code does, in plain words
-INTERPRETED_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST)
-
-
-
-
-def judge_links(ctx):
-    """Steps 07 and 09, judge-links. Builds one question per unit and corner, asks them
-    through ask(), and turns ACCEPTED answers into `corresponds` edges with the relation
-    word, the confidence, both quotations and the proposal reason. Rejected answers leave
-    the unit without a link and are recorded for account-coverage. Enforces: R3, R4"""
-    search_pass, settings = int(ctx.options.get("pass", 1)), ctx.settings
-    world = build_world(ctx, search_pass)
-    world["search_records"] = [r for r in ctx.read("search_records") if r["search_pass"] == search_pass]
-    world["documented_by"] = {u["roxygen"]["documents_ref"]: u for u in world["units"] if u.get("roxygen") and u["roxygen"]["documents_ref"]}
-    sources = dict(world["targets"]["model"], **{c["ref"]: c for c in world["doc"]})
-    grouped = {}
-    for candidate in ctx.read("candidates"):
-        if candidate["search_pass"] == search_pass:
-            grouped.setdefault((candidate["unit_ref"], candidate["target_corner"]), []).append(candidate)
-    questions, skipped = {}, []
-    for (unit_ref, corner) in sorted(grouped):
-        question = judge_question(sources[unit_ref], corner, grouped[(unit_ref, corner)], world, settings)
-        if question["too_large"]:
-            skipped.append({"unit_ref": unit_ref, "target_corner": corner, "reason": "the question was too large to ask"})
-        else:
-            questions[question["question_id"]] = question
-    answers = ctx.ask(list(questions.values())) if questions else {}
-    edges, problems, records, doc_judgements = [], list(skipped), [], []
-    for question_id in sorted(questions):
-        question, final = questions[question_id], answers.get(question_id)
-        unit_ref, corner = question["unit_ref"], question["target_corner"]
-        shown = len(question["letters"])
-        if final is None or final["outcome"] != "accepted":
-            reason = (final or {}).get("outcome", "failed: no answer was obtained").split(": ", 1)[-1]
-            problems.append({"unit_ref": unit_ref, "target_corner": corner, "reason": reason, "question_id": question_id})
-            records.append({"unit_ref": unit_ref, "target_corner": corner, "search_pass": search_pass,
-                            "note": "%d passages were shown to the AI. Its answer could not be used: %s." % (shown, reason)})
+            tree, edges = flowr_read(folder, unit["text"], prefix)
+        except (ValueError, KeyError, OSError, subprocess.SubprocessError) as problem:
+            readings.unread[unit["name"]] = "flowR could not read it: %s" % problem
             continue
-        answer = final["answer"]
-        if answer.get("states_nothing_checkable"):
-            doc_judgements.append({"unit_ref": unit_ref, "states_nothing_checkable": True, "question_id": question_id})
-        accepted = [m for m in answer["matches"] if m["letter"] not in question["planted"]]
-        reasons = {c["target_ref"]: c["reason"] for c in grouped[(unit_ref, corner)]}
-        for match in accepted:
-            target = question["letters"][match["letter"]]
-            how = HOW_AI.format(confidence=match["confidence"])
-            provenance = to_plain(ctx.provenance)
-            provenance.update(prompt_hash=question_id, response_hash=final["response_hash"])
-            edges.append(dict(to_plain(Edge(unit_ref, target, "corresponds", how, ctx.provenance,
-                         relation=RELATION_WORDING[match["relation"]], confidence=match["confidence"],
-                         evidence={"how_text": "%s. %s" % (how, reasons.get(target, "")), "question_id": question_id,
-                                   "quote_from_passage": match["quote_from_passage"], "quote_from_unit": match["quote_from_unit"],
-                                   "search_pass": search_pass})), provenance=provenance))
-        linked = [m for m in accepted if RELATION_WORDING[m["relation"]] in LINKING_RELATIONS]
-        note = "" if linked else "%d passages were shown to the AI. None accepted: %s" % (
-            shown, "the AI's reason was \u201c%s\u201d" % shown_ai_text(answer.get("none_reason")) if answer.get("none_reason")
-            else "the AI only saw passages on the same topic")
-        records.append({"unit_ref": unit_ref, "target_corner": corner, "search_pass": search_pass, "note": note})
-    ledger = ledger_records(ctx.read("graph_ledger"), edges)
-    return StepResult({"graph_ledger": ledger, "judgement_problems": problems, "search_records": records,
-                              "doc_judgements": doc_judgements},
-                             {"questions": len(questions), "links recorded": len(edges), "answers not usable": len(problems) - len(skipped),
-                              "questions too large to ask": len(skipped)}, [])
+        readings.tree.update(tree)
+        readings.edges.update(edges)
+    return readings
 
+
+# Which units of Chunks_Model a unit takes something from - a function it calls, a variable, a stored
+# table or a file another unit defines - and which take something from it. R looks a name up inside the
+# function first, then in the script it runs in, then in the package, and so does this. flowR resolves
+# what it can: inside a function, a parameter or a value set there; across the statements of one script
+# (a test file, a vignette, the top-level code of an R file), the statement that set a variable before it
+# was read. What flowR leaves unresolved is what the unit takes from outside, and the package names it:
+# its functions, the variables its R files set at top level, and its stored data. The package's own name
+# comes before a base function of the same name, as it does in R. Enforces: R2, R4, R7
+SCRIPT_KINDS = (KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST)
+ASSIGNING, ASSIGNING_RIGHT = ("<-", "<<-", "=", ":="), ("->", "->>")
+BY_NAME_CALLS = ("do.call", "match.fun", "get", "get0", "exists", "mget", "data")
+BASE_OPERATORS = ("%%", "%/%", "%in%", "%o%", "%*%", "%x%")
+
+
+def node_id(node):
+    return ((node or {}).get("info") or {}).get("id")
+
+
+def symbol_read(tree, node, package):
+    """The name a flowR syntax node reads or calls, and whether it names this package outright
+    (package::name), or None when the node reads nothing: an assignment's target, a parameter, the name
+    of a named argument, a field after $ or @, a brace, or a name of another package."""
+    if node["type"] in ("RBinaryOp", "RUnaryOp"):     # a %op% of the package's own, used in place
+        operator = node.get("operator") or ""
+        if operator.startswith("%") and operator.endswith("%") and operator not in BASE_OPERATORS:
+            return operator, False
+        return None
+    if node["type"] == "RString":                     # do.call("f"), get("x"), data("x"): a name as text
+        up = tree.get(node.get("up") or "", {})
+        call = tree.get(up.get("up") or "", {})
+        if up.get("type") == "RArgument" and call.get("type") == "RFunctionCall" and \
+                (call.get("functionName") or {}).get("lexeme") in BY_NAME_CALLS:
+            return (node.get("lexeme") or "").strip("\"'`"), False
+        return None
+    if node["type"] != "RSymbol":
+        return None
+    name, me, up = (node.get("lexeme") or "").strip("`"), node_id(node), tree.get(node.get("up") or "", {})
+    if not name or name in ("{", "}", "(", ")"):
+        return None
+    content = node.get("content")
+    if isinstance(content, list) and len(content) > 1 and content[1]:
+        return (name, True) if content[1] == package else None
+    kind = up.get("type")
+    if kind == "RParameter" or (kind == "RArgument" and node_id(up.get("name")) == me):
+        return None
+    if kind == "RBinaryOp" and ((up.get("operator") in ASSIGNING and node_id(up.get("lhs")) == me) or
+                                (up.get("operator") in ASSIGNING_RIGHT and node_id(up.get("rhs")) == me)):
+        return None
+    if kind == "RArgument" and tree.get(up.get("up") or "", {}).get("type") == "RAccess" and \
+            tree[up["up"]].get("operator") in ("$", "@"):
+        return None
+    return name, False
+
+
+def visible(definer, user):
+    """Can code in `user` see what `definer` defines? The package's R files and its stored data are seen
+    everywhere; what a test or vignette sets is seen later in the same file only, and a test helper by
+    every test."""
+    if definer["ref"] == user["ref"]:
+        return False
+    home = definer["file"]
+    if home.startswith("R/") or (definer.get("data") or {}).get("object_name"):
+        return True
+    if home == user["file"]:
+        return (definer.get("lines") or [0])[0] < (user.get("lines") or [0])[0]
+    return home.startswith("tests/") and user["file"].startswith("tests/") and \
+        os.path.basename(home).startswith(("helper", "setup"))
+
+
+def unit_links(units, parsed, folder, package):
+    """The immediate upstream and downstream units of every unit, as records of kind unit_links, each with the
+    names that make each link, and the units flowR could not read for their links. `parsed` holds flowR's
+    readings of the functions (read_functions); the scripts are read here."""
+    by_ref = {u["ref"]: u for u in units}
+    definers = {}                                          # name -> the units that define it
+    for u in units:
+        names = set()
+        if u["kind"] == KIND_FUNCTION and not u.get("inside"):
+            names.add(u["name"].strip("`"))                # `%||%` is defined in backticks and used without
+        elif u["kind"] in (KIND_FORMULA, KIND_TOPLEVEL):
+            names |= set((u.get("code") or {}).get("symbols_written") or ())
+        if (u.get("data") or {}).get("object_name"):
+            names.add(u["data"]["object_name"])
+        for name in names:
+            definers.setdefault(name, []).append(u["ref"])
+    readings, unread = [], set()                           # (prefix, [(first line, last line, ref)])
+    for prefix, name in parsed.unit_of.items():             # every function: flowR read it already, alone
+        unit = parsed.functions[name]
+        if name in parsed.unread:
+            unread.add(unit["ref"])
+        else:
+            readings.append((prefix, [(1, unit["text"].count("\n") + 1, unit["ref"])]))
+    scripts = {}
+    for u in units:
+        if u["kind"] in SCRIPT_KINDS:
+            scripts.setdefault(u["file"], []).append(u)
+    def read(members, prefix):
+        text, spans, line = "", [], 1
+        for u in members:
+            size = u["text"].count("\n") + 1
+            spans.append((line, line + size - 1, u["ref"]))
+            text, line = text + u["text"] + "\n\n", line + size + 1
+        tree, edges = flowr_read(folder, text, prefix)
+        parsed.tree.update(tree)
+        parsed.edges.update(edges)
+        readings.append((prefix, spans))
+    for number, (file, members) in enumerate(sorted(scripts.items())):
+        members.sort(key=lambda u: (u.get("lines") or [0])[0])
+        try:                                               # one script, its statements in order: one reading
+            read(members, "s%d:" % number)
+        except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+            for place, u in enumerate(members):            # a statement flowR cannot read stops only itself
+                try:
+                    read([u], "s%d.%d:" % (number, place))
+                except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+                    unread.add(u["ref"])
+    data_files = {}                                       # a data file's name, as code may write it -> its units
+    for u in units:
+        if u["kind"] in (KIND_TABLE, KIND_OBJECT):
+            data_files.setdefault(os.path.basename(u["file"]), []).append(u["ref"])
+    by_prefix = {}
+    for key, node in parsed.tree.items():
+        by_prefix.setdefault(key.split(":", 1)[0] + ":", []).append(node)
+    via = {}                                               # (definer, user) -> names
+    def link(definer, user, name):
+        via.setdefault((definer, user), set()).add(name)
+    for prefix, spans in readings:
+        def unit_at(node):
+            while node is not None and not node.get("location"):
+                node = parsed.tree.get(node.get("up") or "")
+            line = node["location"][0] if node else 0
+            return next((ref for first, last, ref in spans if first <= line <= last), None)
+        for node in by_prefix.get(prefix, []):
+            if node["type"] == "RString":                  # a data file named in the code: read.csv(system.file(...))
+                written = (node.get("lexeme") or "").strip("\"'")
+                user = unit_at(node)
+                for definer in data_files.get(os.path.basename(written), []) if user else ():
+                    if by_ref[definer]["file"].endswith(written) and definer != user:
+                        link(definer, user, os.path.basename(written))
+            found = symbol_read(parsed.tree, node, package)
+            user = unit_at(node) if found else None
+            if user is None:
+                continue
+            name, named_package = found
+            up = parsed.tree.get(node.get("up") or "", {})
+            ends = [t for t, bits in parsed.edges.get(node_id(node), []) if bits & (CALLS if node["type"] in ("RBinaryOp", "RUnaryOp")
+                                                                                 else READS) and t in parsed.tree]
+            if up.get("type") == "RFunctionCall" and node_id(up.get("functionName")) == node_id(node):
+                ends += [t for t, bits in parsed.edges.get(node_id(up), []) if bits & CALLS and t in parsed.tree]
+            if ends and not named_package:                 # flowR found where it is defined: in this reading
+                for end in ends:
+                    definer = unit_at(parsed.tree[end])
+                    if definer and definer != user:
+                        link(definer, user, name)
+                continue
+            for definer in definers.get(name, []):         # not defined here: the package names it
+                if visible(by_ref[definer], by_ref[user]):
+                    link(definer, user, name)
+    for u in units:                                        # stored data the code reads by file or by data()
+        for read_data in (u.get("code") or {}).get("reads_data") or ():
+            name = read_data.get("object") if isinstance(read_data, dict) else read_data
+            for definer in definers.get(name, []):
+                if (by_ref[definer].get("data") or {}).get("object_name") == name and definer != u["ref"]:
+                    link(definer, u["ref"], name)
+    upstream, downstream = {}, {}
+    for definer, user in via:
+        upstream.setdefault(user, set()).add(definer)
+        downstream.setdefault(definer, set()).add(user)
+    return [{"record_type": "unit_links", "ref": u["ref"], "upstream": sorted(upstream.get(u["ref"], ())),
+             "downstream": sorted(downstream.get(u["ref"], ())),
+             "via": {definer: sorted(names) for (definer, user), names in sorted(via.items()) if user == u["ref"]},
+             "not_read_by_flowr": u["ref"] in unread} for u in units]
+
+
+def link_chunks(ctx):
+    """Step 03, link-chunks: for every unit of Chunks_Model, the units it takes something from and the units that
+    take something from it, read by flowR - each function alone, each script whole - and resolved as R resolves a
+    name. Enforces: R2, R4, R7"""
+    units = ctx.read("model_units")
+    folder = flowr_ready()
+    package = ((ctx.read("package_info") or [{}])[0] or {}).get("name", "")
+    links = unit_links(units, read_functions(units, folder), folder, package)
+    unread = [r["ref"] for r in links if r["not_read_by_flowr"]]
+    count = sum(len(r["upstream"]) for r in links)
+    notes = [("flowR could not read %s, so %s no links of %s own." % (", ".join(unread), "it has" if len(unread) == 1 else "they have",
+                                                                     "its" if len(unread) == 1 else "their"))] if unread else []
+    return StepResult({"unit_links": links}, {"chunk links": count, "not read by flowR": len(unread)},
+                      ["%d links between the units of Chunks_Model, read by flowR." % count] + notes)
 
 
 # ================================================================================================
-# ---------------------------------------------------------------- what a unit was linked to
+# ---------------------------------------------------------------- a fault inside the tool
 class EngineFault(Exception):
     """The tool found itself inconsistent. Never raised about the model under review. Enforces: R2"""
 
-def linked(world, ref, prefix, relations=LINKING_RELATIONS):
-    """Every unit of one corner that a unit is linked to, by a link the model accepted."""
-    return [other for other, link in world["links"].get(ref, {}).items()
-            if other.startswith(prefix) and link["relation"] in relations]
 
 # ---------------------------------------------------------------- the run: its folder, its record and its two deliverables
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-class RunPaused(Exception):
-    """The run stopped on purpose and can be resumed. The message tells the person what to do."""
 
 # ---------------------------------------------------------------- settings (allow-list)
 DEFAULT_SETTINGS = {
-    "k_candidates": 12, "concurrency_limit": 4, "token_cap": 40000, "answer_reserve": 1500,
-    "thinking_reserve": 0, "safety_margin": 0.15, "prompt_target_tokens": 6000,
-    "max_attempts": 3, "breaker_after_failures": 8, "retry_wait_seconds": 2.0,
-    "token_lifetime_minutes": 14.0, "token_wait": "wait", "foreground_minutes": 600.0,
-    "sync_every_calls": 100, "judge_supporting_code": False,
     "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
-    "system_prompt_prefix": "", "strip_patterns": [r"(?s)<think>.*?</think>", r"(?s)<thought>.*?</thought>",
-                                                   r"(?s)<\|channel\|>thought.*?<\|channel\|>"], "trivial_numbers": ["0", "1", "2", "-1", "10", "100"],
-    "bm25_k1": 1.2, "bm25_b": 0.75, "anchor_max_share": 0.10, "walk_restart": 0.25,
-    "walk_rounds": 30, "heading_anchor_cap": 0.5, "rrf_constant": 60, "reserved_places": 2,
-    "max_unit_chars": 3000, "max_passage_chars": 1100, "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
-    "signals": ["fields", "bridge", "references", "anchors", "signatures", "propagation"],
-    "map_hops_max": 8, "map_calls_max": 200, "map_granularity": "statement", "map_rows_max": 5000, "map_with_ai": True}
+    "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
+    "parallel_chats": 256,
+    "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
 
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
@@ -6396,33 +4168,40 @@ def make_settings(overrides=None):
     return settings
 
 # ---------------------------------------------------------------- paths and project setup
-MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
-LONGEST_AUDIT_NAME = "Output.xlsx"
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
+OUTPUT_FILE = "Output.xlsm"               # the deliverable: a workbook with one macro (the workbook's macro)
+LEGACY_OUTPUT_FILE = "Output.xlsx"        # what the tool wrote before its workbook held the macro
+LONGEST_AUDIT_NAME = OUTPUT_FILE
 PATH_BUDGET = 100
 
 @dataclass
 class RunPaths:
-    """Where one run lives. Output.xlsx sits in run_dir itself; _audit/
-    beside them holds the three files of the record; local_dir is scratch space on the driver.
-    outputs_dir is the same folder as run_dir, kept as a name so that every reader of the two
-    deliverables says which folder it means."""
-    projects_dir: str; model_id: str; project_date: str; project_dir: str; inputs_dir: str
+    """Where a project's run lives: its two files, Output.xlsm and Audit_Log.xlsx, sit in the project folder
+    beside its Inputs folder - run_dir, outputs_dir and audit_dir are that one folder, each name kept so that
+    every reader says which file it means - and local_dir is scratch space on the driver. previous is the
+    manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
+    projects_dir: str; project: str; project_dir: str; inputs_dir: str
     run_id: str; run_dir: str; outputs_dir: str; audit_dir: str; local_dir: str
+    previous: Optional[dict] = None; opened: str = ""
 
-def check_model_id(model_id):
-    """Return "" when the model ID is usable, otherwise a plain sentence saying why not."""
-    if MODEL_ID_RE.match(model_id or ""):
+
+class OutputsEdited(Exception):
+    """The project's Output.xlsm was changed after the tool wrote it: a person's work, never replaced."""
+
+def check_project_name(project):
+    """Return "" when the project name - a model id will do - is usable as a folder's name, otherwise a plain
+    sentence saying why not."""
+    if PROJECT_NAME_RE.match(project or ""):
         return ""
-    return ("The model ID may hold at most 24 characters from letters, digits, hyphen and "
-            "underscore. Please shorten or change '%s'." % model_id)
+    return ("The project name may hold at most 24 characters from letters, digits, hyphen and "
+            "underscore. Please shorten or change '%s'." % project)
 
-def setup_project(projects_dir, model_id, project_date=""):
+def setup_project(projects_dir, project):
     """Create the project skeleton and say what is still missing. Inputs are never touched."""
-    problem = check_model_id(model_id)
+    problem = check_project_name(project)
     if problem:
         raise ValueError(problem)
-    project_date = project_date or datetime.date.today().isoformat()
-    project_dir = os.path.join(projects_dir, model_id, project_date)
+    project_dir = os.path.join(projects_dir, project)          # the project's folder: its Inputs, and a run's two files
     missing = []
     for _, folder, readme in INPUT_FOLDERS:
         path = os.path.join(project_dir, "Inputs", folder)
@@ -6435,14 +4214,46 @@ def setup_project(projects_dir, model_id, project_date=""):
             missing.append("Inputs/%s is still empty. %s" % (folder, readme))
     return project_dir, missing
 
-def new_run_id(project_dir, now=None):
-    """Run_<date>_<HHMM>, with a letter added when that folder already exists."""
-    now = now or datetime.datetime.now()
-    base = now.strftime("Run_%Y-%m-%d_%H%M")
+def new_run_id(taken, now=None):
+    """A run is named by the minute it started, <date>_<HHMM>, with a letter added while that name is taken:
+    the run it replaces, or a run this driver has opened already."""
+    base = (now or datetime.datetime.now()).strftime("%Y-%m-%d_%H%M")
     for suffix in [""] + list("bcdefghijklmnopqrstuvwxyz"):
-        if not os.path.exists(os.path.join(project_dir, base + suffix)):
+        if not taken(base + suffix):
             return base + suffix
     raise ValueError("Too many runs were started in the same minute; please wait a minute.")
+
+def recorded_manifest(project_dir):
+    """The manifest of the run the project's Audit_Log.xlsx records, read from its Run sheet alone; None when
+    there is none, or the workbook cannot be read."""
+    target = os.path.join(project_dir, AUDIT_FILE)
+    if not os.path.exists(target):
+        return None
+    import openpyxl
+    try:
+        book = openpyxl.load_workbook(target, read_only=True)
+        parts = [row[1] or "" for row in book["Run"].iter_rows(min_row=2, values_only=True)
+                 if re.sub(r" \(part \d+\)$", "", str(row[0] or "")) == "run_manifest"]
+        book.close()
+        return json.loads("".join(parts)) if parts else None
+    except Exception:
+        return None
+
+def run_changes(record, inputs_dir, settings):
+    """Why the run a project records cannot be carried on, in plain words, or "" when it can: it is carried on
+    while its input files, the engine and the settings are the ones it started with. Who runs it does not count."""
+    if not record or not record.get("run_id") or "inputs" not in record:
+        return "no earlier run"
+    before = {f["file"]: f["sha256"] for f in record.get("inputs", [])}
+    now = {f["file"]: f["sha256"] for f in input_fingerprints(inputs_dir)}
+    if before != now:
+        return "the input files changed"
+    if record.get("engine_files") != engine_file_hashes():
+        return "the engine changed"
+    ignore = lambda values: {k: v for k, v in (values or {}).items() if k != "reviewer_id"}
+    if ignore(record.get("settings")) != ignore(json.loads(json.dumps(settings))):
+        return "the settings changed"
+    return ""
 
 def pick_scratch_root(preferred=""):
     """The first folder on the driver the tool can actually write in, tried in order.
@@ -6472,26 +4283,54 @@ def pick_scratch_root(preferred=""):
         "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
         "cluster." % "; ".join(refused))
 
-def open_run(projects_dir, model_id, project_date="", run_id="", scratch_root="", now=None):
-    """Create or re-open a run folder and its local scratch folder. Enforces: R6"""
-    project_dir, _ = setup_project(projects_dir, model_id, project_date)
-    project_date = os.path.basename(project_dir)
-    run_id = run_id or new_run_id(project_dir, now)
-    run_dir = os.path.join(project_dir, run_id)
+def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
+    """The project's run, and its local scratch folder. A project holds one run: its two files, Output.xlsm and
+    Audit_Log.xlsx, sit beside its Inputs folder. The run the audit log records is carried on - by this session
+    or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
+    run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
+    changed since the tool wrote it is never replaced: OutputsEdited says so. Inputs are never touched.
+    Enforces: R6, R12"""
+    project_dir, _ = setup_project(projects_dir, project)
+    inputs_dir = os.path.join(project_dir, "Inputs")
+    record = recorded_manifest(project_dir)
+    why = run_changes(record, inputs_dir, settings or make_settings({}))
     scratch_root = pick_scratch_root(scratch_root)
-    place = sha256_text(os.path.abspath(run_dir))[:8]       # two Projects folders never share scratch space
-    local_dir = os.path.join(scratch_root, "%s_%s_%s_%s" % (model_id, project_date, run_id, place))
-    paths = RunPaths(projects_dir, model_id, project_date, project_dir,
-                     os.path.join(project_dir, "Inputs"), run_id, run_dir,
-                     run_dir, os.path.join(run_dir, "_audit"), local_dir)
-    longest = os.path.join(paths.run_dir, LONGEST_AUDIT_NAME)
+    place = sha256_text(os.path.abspath(project_dir))[:8]   # two Projects folders never share scratch space
+    local_of = lambda run: os.path.join(scratch_root, "%s_%s_%s" % (project, run, place))
+    previous = None
+    if not why:
+        run_id = record["run_id"]
+        opened = "Carrying on run %s, which Audit_Log.xlsx records: a finished step is not repeated." % run_id
+    else:
+        for name in (OUTPUT_FILE, LEGACY_OUTPUT_FILE):
+            workbook = os.path.join(project_dir, name)
+            if os.path.exists(workbook) and file_sha256(workbook) != (record or {}).get("last_workbook_sha256"):
+                raise OutputsEdited(
+                    "%s in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
+                    "Move it to another folder or rename it, then run cell 3 again." % (name, project_dir, why))
+        legacy = os.path.join(project_dir, LEGACY_OUTPUT_FILE)
+        replaced = os.path.exists(legacy)
+        if replaced:                                      # the tool's own, unchanged: Output.xlsm takes its place
+            os.remove(legacy)
+        previous = record if record and record.get("inputs") else None
+        run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run)), now)
+        opened = ("A new run, %s: %s since run %s, so Output.xlsm and Audit_Log.xlsx are replaced." % (run_id, why, record["run_id"])
+                  if record and record.get("run_id") else "A new run, %s." % run_id)
+        if replaced:
+            opened += (" %s, which the tool wrote before, is replaced by %s: the same sheets, and a click on a reference "
+                       "shows only the chunks it names." % (LEGACY_OUTPUT_FILE, OUTPUT_FILE))
+    local_dir = local_of(run_id)
+    paths = RunPaths(projects_dir, project, project_dir, inputs_dir, run_id, project_dir,
+                     project_dir, project_dir, local_dir, previous, opened)
+    longest = os.path.join(paths.project_dir, LONGEST_AUDIT_NAME)
     relative = os.path.relpath(longest, os.path.dirname(os.path.abspath(projects_dir)))
     if len(relative) > PATH_BUDGET:
         raise ValueError("The folder path is %d characters long and the limit is %d, so that "
-                         "Excel can still open downloaded files. Please use a shorter model ID "
+                         "Excel can still open downloaded files. Please use a shorter project name "
                          "or Projects folder." % (len(relative), PATH_BUDGET))
-    for folder in (paths.outputs_dir, paths.audit_dir, paths.local_dir):
-        os.makedirs(folder, exist_ok=True)
+    os.makedirs(paths.local_dir, exist_ok=True)
+    if why:                                                 # a new run: the record of the one it replaces is not read back
+        OPEN_STORES[(paths.local_dir, paths.audit_dir)] = AuditStore(paths.local_dir, paths.audit_dir, loaded=True)
     return paths
 
 # ---------------------------------------------------------------- live values (the token)
@@ -6531,8 +4370,8 @@ class LiveValues:
         return text
 
 # ---------------------------------------------------------------- the audit store
-AUDIT_OBJECTS = ("run_manifest", "package_info", "coverage")
-AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, in the run folder's _audit
+AUDIT_OBJECTS = ("run_manifest", "package_info")
+AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsm and the Inputs folder
 CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
 
 def copy_whole(source, target):
@@ -6549,10 +4388,10 @@ def copy_whole(source, target):
 
 @dataclass
 class AuditStore:
-    """The record of a run, as one workbook a person can open: _audit/Audit_Log.xlsx.
+    """The record of a run, as one workbook a person can open: Audit_Log.xlsx, in the project folder.
 
         Run            the run's manifest and account, one line per entry
-        Steps          every step that ran, with its version, what it counted and what it said
+        Steps          every step that ran, what it counted and what it said
         Records        every record of every kind, in the order written, each as its own JSON
         Model_Calls    every exchange with the model: the question, the answer and the outcome
 
@@ -6606,10 +4445,9 @@ class AuditStore:
             for line, part in parts_of(canonical_json(self.account[key])):
                 run.append([key if line == 1 else "%s (part %d)" % (key, line), part])
         steps = book.create_sheet("Steps")
-        steps.append(["Step", "Name", "Version", "Seconds", "What it counted", "What it said"])
+        steps.append(["Step", "Name", "Seconds", "What it counted", "What it said"])
         for record in self.read("step_records"):
-            steps.append([record.get("step_id", ""), record.get("step", ""), record.get("step_version", ""),
-                          record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
+            steps.append([record.get("step_id", ""), record.get("step", ""), record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
                           "\n".join(record.get("messages") or [])[:CELL_LIMIT]])
         records = book.create_sheet("Records")
         records.append(["Kind", "Number", "Part", "Record (JSON)"])
@@ -6632,7 +4470,7 @@ class AuditStore:
         return [AUDIT_FILE]
 
     def restore(self):
-        """On resume: read the workbook of the run folder back, once."""
+        """On resume: read the project's Audit_Log.xlsx back, once."""
         if self.loaded:
             return
         self.loaded = True
@@ -6660,294 +4498,1219 @@ def parts_of(text):
     """One long text as numbered parts, each short enough for a cell."""
     return [(number + 1, text[at:at + CELL_LIMIT]) for number, at in enumerate(range(0, max(len(text), 1), CELL_LIMIT))]
 
-OPEN_STORES = {}                         # one store per run folder: two of them would overwrite each other's records
+OPEN_STORES = {}                         # one store per run: two of them would overwrite each other's records
 
 def open_store(paths, settings):
-    """The audit store of a run, read back from the run folder's workbook when there is one. The same
-    store is returned for the same run folder, so everything a run records goes into one account."""
+    """The audit store of a run, read back from the project's Audit_Log.xlsx when there is one and the run is
+    carried on. The same store is returned for the same run, so everything a run records goes into one account."""
     key = (paths.local_dir, paths.audit_dir)
     if key not in OPEN_STORES:
         OPEN_STORES[key] = AuditStore(paths.local_dir, paths.audit_dir)
     return OPEN_STORES[key]
 
-# ---------------------------------------------------------------- the wrapper around chat()
-AUTH_WORDS = ("401", "403", "unauthor", "expired", "forbidden", "invalid token", "authentication", "credential")
-OVERLOAD_WORDS = ("429", "502", "503", "504", "overload", "rate limit", "too many", "timeout", "timed out", "busy")
+# ---------------------------------------------------------------- the organisation's model: what one question may hold
+# chat() holds a question and its answer together up to chat_token_limit tokens (40,000 by default). The model's own
+# tokenizer is not at hand, so the tool counts tokens its own way, on the high side: measured on prose, R code, tables
+# of numbers, mathematics and JSON against six tokenizers (three of OpenAI's, Llama's, Mistral's and Claude's), its count
+# was never below theirs. Every question is built to fit what is left once its answer's share is set aside.
+CODE_QUESTION = "code interpretation"
+METHODOLOGY_SEARCH = "methodology search"
+METHODOLOGY_COMPARISON = "methodology comparison"
+ANSWER_TOKENS = {CODE_QUESTION: 6000, METHODOLOGY_SEARCH: 4000, METHODOLOGY_COMPARISON: 10000}   # kept for the answer
+QUESTION_MARGIN = 1000       # tokens kept for the gateway's own wrapping of a question
+TOKEN_PIECES = re.compile(r"[A-Za-z]+|[0-9]|\n|[^\S\n]+|[^A-Za-z0-9\s]")
 
-def classify_failure(text):
-    """Sort a failure into a class by the words it contains (probe P-13 matches these lists to
-    what the real gateway returns). call_chat adds one more class of its own, "truncated"."""
-    lowered = (text or "").lower()
-    if any(word in lowered for word in AUTH_WORDS):
-        return "authentication"
-    if any(word in lowered for word in OVERLOAD_WORDS):
-        return "overload"
-    return "other"
 
-class ChatOutcome(tuple):
-    """What one call to chat() came to. It unpacks as the three values the rest of the tool has
-    always read - (answer text or None, failure class or "", what was seen with tokens
-    removed) - and carries the gateway's own record of the call as .meta, so that adding
-    metadata did not change a single existing call site."""
+def token_costs(text):
+    """Each piece of a text with the tokens it is counted as: a run of letters one for every six letters; a digit, a
+    sign or a line break one; a space one unless it leads into a word; a character outside ASCII one for each of its
+    UTF-8 bytes. Yields (where the piece ends, its tokens)."""
+    size = len(text)
+    for match in TOKEN_PIECES.finditer(text):
+        piece, end = match.group(0), match.end()
+        first = piece[0]
+        if first.isascii() and first.isalpha():
+            yield end, -(-len(piece) // 6)
+        elif first.isspace() and first != "\n":
+            leads = len(piece) == 1 and end < size and text[end].isascii() and text[end].isalpha()
+            yield end, 0 if leads else 1
+        elif first.isascii():
+            yield end, 1
+        else:
+            yield end, len(first.encode("utf-8"))
 
-    def __new__(cls, answer, failure, seen, meta=None):
-        outcome = super().__new__(cls, (answer, failure, seen))
-        outcome.meta = dict(meta or {})
-        return outcome
 
-    answer = property(lambda self: self[0])
-    failure = property(lambda self: self[1])
-    seen = property(lambda self: self[2])
+def estimate_tokens(text):
+    """About how many tokens a text takes a model, erring high (see token_costs)."""
+    return sum(cost for _, cost in token_costs(text or ""))
 
-# Fields of the gateway's reply that are worth keeping in the audit record. The reply also
-# echoes the prompts back (query, defaultprompt, source) and those are dropped: the tool already
-# stores the prompts it sent, and an echo would double the size of every call record.
-META_FIELDS = ("chat_id", "thread_id", "prompt_id", "datetime", "user_id", "intent")
-RESPONSE_META_FIELDS = ("id", "model", "created", "system_fingerprint", "service_tier")
-USAGE_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
 
-def first_choice(response):
-    """The first choice of an OpenAI-shaped reply, or an empty dictionary."""
-    nested = response.get("response") if isinstance(response.get("response"), dict) else {}
-    choices = nested.get("choices")
-    return choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+def question_room(settings, question_type):
+    """How many tokens a question of this type may take: the limit, less the share kept for its answer and a margin
+    for the gateway's own wrapping. A low limit keeps a quarter of itself for the answer at most."""
+    limit = int((settings or {}).get("chat_token_limit") or DEFAULT_SETTINGS["chat_token_limit"])
+    return limit - min(ANSWER_TOKENS[question_type], limit // 4) - min(QUESTION_MARGIN, limit // 20)
 
-def chat_metadata(response):
-    """What the gateway said about the call itself: which conversation it belonged to, which
-    model answered, how many tokens it took and why it stopped. Kept for the audit record so
-    that a run can be accounted for afterwards; none of it reaches a status or a check."""
-    meta = {name: response[name] for name in META_FIELDS if response.get(name) not in (None, "")}
-    nested = response.get("response") if isinstance(response.get("response"), dict) else {}
-    meta.update({name: nested[name] for name in RESPONSE_META_FIELDS if nested.get(name) not in (None, "")})
-    usage = nested.get("usage") if isinstance(nested.get("usage"), dict) else {}
-    meta.update({name: usage[name] for name in USAGE_FIELDS if isinstance(usage.get(name), int)})
-    choice = first_choice(response)
-    if choice.get("finish_reason"):
-        meta["finish_reason"] = choice["finish_reason"]
-    return meta
 
-def answer_text_of(response):
-    """The generated text. The gateway puts it under "answer"; if that key is missing or
-    empty, the same text is read from the OpenAI-shaped part of the reply, so that a
-    gateway that only fills one of the two is still usable."""
-    if isinstance(response.get("answer"), str) and response["answer"].strip():
-        return response["answer"]
-    content = first_choice(response).get("message", {})
-    content = content.get("content") if isinstance(content, dict) else None
-    return content if isinstance(content, str) and content.strip() else None
+def cut_to_tokens(text, tokens):
+    """The longest start of `text` that takes at most `tokens`, ended at a line end when one is near; and whether
+    anything was cut."""
+    total, end = 0, 0
+    for at, cost in token_costs(text):
+        if total + cost > tokens:
+            break
+        total, end = total + cost, at
+    else:
+        return text, False
+    if end == 0:                                         # one piece longer than the room: cut inside it
+        end = max(1, tokens)
+    kept = text[:end]
+    line_end = kept.rfind("\n")
+    if line_end > len(kept) * 0.8:
+        kept = kept[:line_end]
+    return kept, True
 
-def summarise_response(response, live):
-    """A failed reply, shortened for the audit record: the fields that say what went wrong,
-    without the echoed prompts. Falls back to the whole reply when it has no known shape."""
-    if not isinstance(response, dict):
-        return live.redact(json.dumps(response, default=str)[:2000])
-    keep = ("status", "code", "message", "detail", "reason", "answer", "finish_reason")
-    kept = {name: response[name] for name in keep if name in response}
-    kept.update(chat_metadata(response))
-    if not kept:
-        kept = {name: value for name, value in response.items()
-                if name not in ("query", "defaultprompt", "source", "documents", "history")}
-    return live.redact(json.dumps(kept, default=str)[:2000])
 
-def accepts_history(chat):
-    """Whether the analyst's chat() takes the third `history` argument. The real gateway cell
-    has the signature chat(SystemPrompt, MainPrompt, history=[]); the stand-in and the older
-    cell take two arguments. The tool works with either and never depends on which."""
-    try:
-        parameters = inspect.signature(chat).parameters
-    except (TypeError, ValueError):
-        return False
-    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
-        return "history" in parameters
-    positional = [p for p in parameters.values()
-                  if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-    return "history" in parameters or len(positional) >= 3
 
-def call_chat(chat, system_prompt, main_prompt, live):
-    """Call chat() once and bring every way a failure can surface (an exception; a dictionary
-    that carries a status or code; a dictionary with no answer in either place; an answer the
-    model was cut off in the middle of) into one shape. Returns a ChatOutcome, which unpacks
-    as (answer, failure, seen).
 
-    History is always sent empty. Every question the tool asks is self-contained and is asked in
-    its own call, so nothing the model said about an earlier unit may colour the next one;
-    an empty history is also what makes a question repeatable. Enforces: R5"""
-    try:
-        response = chat(system_prompt, main_prompt, []) if accepts_history(chat) else chat(system_prompt, main_prompt)
-    except Exception as problem:                     # shape 1: chat() raised
-        seen = live.redact("%s: %s" % (type(problem).__name__, problem))
-        return ChatOutcome(None, classify_failure(seen), seen)
-    if isinstance(response, str):                    # a gateway that returns the text alone
-        response = {"answer": response}
-    if not isinstance(response, dict):
-        seen = live.redact(json.dumps(response, default=str)[:2000])
-        return ChatOutcome(None, classify_failure(seen), seen)
-    meta, text = chat_metadata(response), answer_text_of(response)
-    if text is None:                                 # shapes 2 and 3: a reply with no answer
-        seen = summarise_response(response, live)
-        return ChatOutcome(None, classify_failure(seen), seen, meta)
-    if meta.get("finish_reason") == "length":        # shape 4: the answer stops in mid-air
-        seen = "the model was cut off at the token limit; the answer is incomplete"
-        return ChatOutcome(None, "truncated", seen, meta)
-    return ChatOutcome(live.redact(text), "", "", meta)
+def shown_cut(text, tokens):
+    """A text cut to `tokens`, saying so at its end when it was cut."""
+    if estimate_tokens(text) <= tokens:
+        return text
+    kept, _ = cut_to_tokens(text, max(1, tokens - 20))
+    return kept + "\n[Only the first %d characters are shown.]" % len(kept)
 
-@dataclass
-class AskState:
-    """What the workers of one run share: the pause and stop switches, the consecutive-
-    failure count of the circuit breaker, and the generation of the token that failed."""
-    control: dict = field(default_factory=lambda: {"pause": False, "stop": False})
-    consecutive_failures: int = 0; failed_generation: int = -1; waiting_for_token: bool = False
-    deadline: float = 0.0; calls_made: int = 0
-    lock: threading.Lock = field(default_factory=threading.Lock)
 
-def wait_until_allowed(state, live, settings, sleep):
-    """Called before every call. Blocks while the run is paused or while a fresh token is
-    awaited; raises RunPaused when the run must stop by itself (mode C, stop switch)."""
-    while True:
-        if state.control.get("stop"):
-            raise RunPaused("The run was stopped on request. Run the cell again to resume.")
-        if state.deadline and time.time() > state.deadline:
-            raise RunPaused("The time box of this foreground run is over. Paste a fresh token "
-                            "and run the cell again; no call will be repeated.")
-        # Only a call the gateway actually refused for authentication makes the run wait for a fresh
-        # token. A token's age alone never does: a run once sat waiting, silently, with a token that
-        # still worked, because it was older than token_lifetime_minutes. Age is shown in cell 4 as a
-        # hint and nothing more.
-        needs_token = state.failed_generation == live.generation
-        state.waiting_for_token = bool(needs_token)
-        if not needs_token and not state.control.get("pause"):
+# ---------------------------------------------------------------- the organisation's model: many questions at once
+# Steps 04 and 05 put their questions to the chat() of cell 2, as many at once as parallel_chats allows. A question is
+# exact - its id is the hash of what was sent - so an answer already recorded in this run is never asked for twice.
+# Every answer is kept, in memory, the moment it arrives, by the thread that received it; only the step's own thread
+# writes records, in an order fixed by the units and never by which answer came back first. A cell interrupted, or a
+# step stopped because the model stopped answering, therefore loses nothing: running cell 3 again finds what arrived
+# and asks only for the rest. As many questions are out at once as the gateway takes, up to parallel_chats: the
+# number starts at CHAT_START and doubles every round while no call fails; a failed call halves it, once a round,
+# and it then grows by one a round, so that it settles just under what the gateway takes - the congestion control
+# of TCP. Enforces: R2, R3, R5, R8
+CHAT_ATTEMPTS = 3            # tries per question: a failed call, an empty answer or an answer turned down ask again
+CHAT_BACKOFF = 2             # seconds before the second try of a failed call; before the third, its square; each with jitter
+CHAT_START = 32              # questions out at once when asking starts, doubled every round while no call fails
+CHAT_REFRESH_SECONDS = 1     # how often the step's own thread reads the widgets again while it asks
+CHAT_WORKER = threading.local()
+CHAT_STOP_AFTER = 4          # questions in a row without an answer, beyond those already out: the model has stopped answering
+CHAT_STOP_WAIT = 120         # seconds a stopped step waits for the questions still out
+CHAT_PROGRESS_SECONDS = 60   # how often a long step says how far it has got
+ANSWERS = {}                 # run (its scratch folder) -> {question id: (question, what came back)}, until written
+ANSWERS_LOCK = threading.Lock()
+
+
+class NoAnswer(Exception):
+    """What chat() returned held no answer: a dictionary without "answer", or with an empty one, or not a dictionary."""
+
+
+def unwelcome_words(text):
+    """The words of an answer that no cell of the workbook may hold, as they were written. Enforces: R1, R10"""
+    found = [match.group(0) for match in PYTHON_TRACES.finditer(text)]
+    found += [match.group(0) for match in _BANNED_RE.finditer(text)]
+    return sorted(set(found), key=str.lower)
+
+
+def own_words(text):
+    """A text without what it quotes inside curly double quotes: the words it says itself."""
+    return re.sub(r"\u201c.*?\u201d", "", text or "", flags=re.S)
+
+
+def check_words(answer, last):
+    """Step 04's check of an answer: words the workbook cannot hold are asked about again, and kept on the last try.
+    Returns (what was read, what to ask again or None, a note)."""
+    unwelcome = unwelcome_words(answer)
+    if not unwelcome:
+        return None, None, ""
+    if last:
+        return None, None, "the answer still used words the workbook cannot hold"
+    return None, {"plain": "the answer used words the workbook cannot hold (%s)" % ", ".join(unwelcome),
+                  "ask": "Your last description used words this workbook cannot hold (%s). Write it again without "
+                         "them." % ", ".join(unwelcome)}, ""
+
+
+def ask_model(chat, system, main, check=None, halt=None):
+    """One question, asked on a worker thread: up to CHAT_ATTEMPTS tries. A failed call - one that raises, or returns
+    anything but a dictionary with an answer under "answer": an error from the gateway, an expired token - waits a
+    little and tries again; an answer `check` turns down - words the workbook cannot hold, or not the form asked for -
+    is asked for again, saying what was wrong. Once `halt` is set - the cell that asked has ended, or was stopped - no
+    further try is made: the question stays open for the next time cell 3 runs. Returns what happened, in plain words
+    and in technical ones, and what check read from the answer; it never raises and never writes, because only the
+    step's own thread writes. Enforces: R5, R8"""
+    check = check or check_words
+    halt = halt or threading.Event()
+    CHAT_WORKER.active = True
+    started, plain, technical, question, failed_calls = time.time(), [], [], main, 0
+    for attempt in range(1, CHAT_ATTEMPTS + 1):
+        if halt.is_set():
+            plain.append("try %d: not made, because the cell had ended" % attempt)
+            break
+        try:
+            reply = chat(system, question)
+            answer = str(reply.get("answer") or "").strip() if isinstance(reply, dict) else ""
+            if not answer:
+                raise NoAnswer("chat() returned no \"answer\": %s" % " ".join(repr(reply).split())[:300])
+        except Exception as problem:
+            failed_calls += 1
+            plain.append("try %d: the call did not return an answer" % attempt)
+            technical.append("try %d: %s" % (attempt, problem if isinstance(problem, NoAnswer) else "%s: %s" % (type(problem).__name__, problem)))
+            if attempt < CHAT_ATTEMPTS:
+                halt.wait(CHAT_BACKOFF ** attempt * random.uniform(0.5, 1.5))   # a busy gateway is given a moment; the
+                                                 # jitter keeps many refused calls from coming back all at once
+            continue
+        try:
+            reading, problem, note = check(answer, attempt == CHAT_ATTEMPTS)
+        except Exception as fault:                       # a check that fails is the tool's fault: said, never raised
+            reading, problem, note = None, {"plain": "the answer could not be checked", "ask": ""}, ""
+            technical.append("try %d: checking the answer: %s: %s" % (attempt, type(fault).__name__, fault))
+        if problem is None:
+            if note:
+                plain.append("try %d: %s" % (attempt, note))
+            return {"answer": answer, "reading": reading, "attempt": attempt, "plain": plain, "technical": technical,
+                    "failed calls": failed_calls, "seconds": time.time() - started}
+        plain.append("try %d: %s" % (attempt, problem["plain"]))
+        technical.append("try %d: the answer turned down began: %s" % (attempt, " ".join(answer.split())[:600]))
+        question = main + ("\n\n" + problem["ask"] if problem["ask"] else "")
+    return {"answer": "", "reading": None, "attempt": CHAT_ATTEMPTS, "plain": plain, "technical": technical,
+            "failed calls": failed_calls, "seconds": time.time() - started}
+
+
+def held_answers(ctx, types):
+    """The answers of this run that arrived but are not yet written, as call records without their provenance: those
+    of a cell that was interrupted, for instance. Read, not taken: ask_all takes them when it hands them over."""
+    held = ANSWERS.get(ctx.options["paths"].local_dir) or {}
+    with ANSWERS_LOCK:
+        entries = list(held.values())
+    return [dict(question, question_id=question["id"], question_type=question["type"], reading=result["reading"],
+                 outcome="answered" if result["answer"] else "not answered")
+            for question, result in entries if question["type"] in types]
+
+
+def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", types=()):
+    """Ask what `work` holds - and what `after` adds as answers come back - through chat(), as many at once as
+    the gateway takes, up to parallel_chats (see the section's comment). build(item) makes the question, on this thread, when it is sent; check_of(question) is the
+    check its answers pass; after(question, result) returns the next items, which go before the rest. Every answer is
+    held in ANSWERS by the thread that received it, so an interrupted cell loses none. When the questions already out,
+    and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
+    Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
+    questions that were out at once. Enforces: R2, R5, R8"""
+    held = ANSWERS.setdefault(ctx.options["paths"].local_dir, {})
+    most = max(1, int(ctx.settings.get("parallel_chats") or 1))
+    waiting, running = collections.deque(work), {}
+    window, threshold = float(min(CHAT_START, most)), float(most)      # how many may be out; where doubling gives way to adding
+    answered = failed = in_a_row = out_when_failing = completed = calm_after = peak = 0
+    stopped, stopped_at, said, refreshed, failures, last_problem = "", 0.0, time.time(), time.time(), [], ""
+    halt = threading.Event()                                  # set when this cell stops asking, however it ends
+
+    def keep(question, future):
+        if future.cancelled():
             return
-        if needs_token and settings["token_wait"] == "stop":
-            raise RunPaused("Paste a fresh token, then run the cell again; no call will be repeated.")
-        sleep(0.05)
+        try:
+            result = future.result()
+        except BaseException:
+            return
+        with ANSWERS_LOCK:
+            held[question["id"]] = (question, result)
 
-def ask_one(question, chat, live, settings, validate, state, sleep):
-    """Ask one question until it has a final outcome. Every attempt is recorded. An
-    authentication-like failure pauses all workers until a fresh token arrives and does
-    not count against the attempts. Enforces: R3"""
-    records, attempt = [], 0
-    system_prompt = settings["system_prompt_prefix"] + question["system_prompt"]
-    while True:
-        wait_until_allowed(state, live, settings, sleep)
-        generation = live.generation
-        started, clock = datetime.datetime.now().isoformat(timespec="seconds"), time.time()
-        with state.lock:
-            state.calls_made += 1
-        outcome_of_call = call_chat(chat, system_prompt, question["main_prompt"], live)
-        answer_text, failure, seen = outcome_of_call
-        attempt += 1
-        outcome, answer = ("failed: " + failure, None) if failure else validate(question, answer_text)
-        with state.lock:
-            state.consecutive_failures = state.consecutive_failures + 1 if failure else 0
-            breaker_open = state.consecutive_failures >= settings["breaker_after_failures"]
-            if failure == "authentication":
-                state.failed_generation = generation
-        final = outcome == "accepted" or (attempt >= settings["max_attempts"] and failure != "authentication")
-        records.append({
-            "question_id": question["question_id"], "question_type": question["question_type"],
-            "unit_ref": question.get("unit_ref", ""), "attempt": len(records) + 1,
-            "letters": question.get("letters", {}), "planted": question.get("planted", []),
-            "prompt_hash": question["question_id"], "response_hash": sha256_text(answer_text or seen),
-            "system_prompt": live.redact(system_prompt), "main_prompt": live.redact(question["main_prompt"]),
-            "response_text": answer_text if answer_text is not None else seen, "outcome": outcome,
-            "answer": answer, "final": final, "started_at": started,
-            "seconds": round(time.time() - clock, 3), "estimated_tokens": question.get("estimated_tokens", 0),
-            "gateway": outcome_of_call.meta})
-        if final:
-            return records
-        if failure == "authentication":
-            attempt -= 1
-        elif breaker_open:
-            raise RunPaused("Many calls in a row failed, so the run paused itself to avoid wasting "
-                            "calls. Check the gateway, then run the cell again to resume.")
-        elif failure:
-            sleep(settings["retry_wait_seconds"] * attempt)
+    def progress(final=False):
+        parts = ["%d answered" % answered] + (["%d not answered" % failed] if failed else [])
+        if not final:
+            parts.append("%d still to ask, %d out at once" % (len(waiting) + len(running), len(running)))
+        else:
+            parts.append("at most %d out at once" % peak)
+        print("  %s: %s" % (label, ", ".join(parts)))
 
-def run_batch(batch, chat, live, settings, validate, state, sleep):
-    """Ask one batch of questions with a thread pool. Results are gathered in the order of
-    the questions, never in the order threads finished. Enforces: R5"""
-    finished, paused = {}, None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(settings["concurrency_limit"]))) as pool:
-        futures = [(q["question_id"], pool.submit(ask_one, q, chat, live, settings, validate, state, sleep))
-                   for q in batch]
-        for question_id, future in futures:
-            try:
-                finished[question_id] = future.result()
-            except RunPaused as pause:
-                paused = paused or pause
-                state.control["stop"] = True           # let the other workers end after their call
-    if paused:
-        state.control["stop"] = False
-    return finished, paused
+    if waiting:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=most)
+        live("llm_token")                                    # the values the workers use, read here, now
+        try:
+            while waiting or running:
+                while waiting and len(running) < int(window) and not stopped:
+                    question = build(waiting.popleft())
+                    kept = {key: value for key, value in question.items() if key not in ("system", "main")}
+                    future = pool.submit(ask_model, chat, question["system"], question["main"], check_of(question), halt)
+                    future.add_done_callback(functools.partial(keep, kept))
+                    running[future] = kept
+                peak = max(peak, len(running))
+                if not running:
+                    break
+                done, _ = concurrent.futures.wait(list(running), timeout=5, return_when=concurrent.futures.FIRST_COMPLETED)
+                if time.time() - refreshed >= CHAT_REFRESH_SECONDS:
+                    live("llm_token")                        # a token pasted meanwhile reaches the next calls
+                    refreshed = time.time()
+                for future in done:
+                    question, result = running.pop(future), future.result()
+                    completed += 1
+                    if result["failed calls"]:                   # the gateway refused or failed a call: slow down,
+                        if completed >= calm_after:              # once a round - those out were sent at the old pace
+                            threshold = max(1.0, window / 2)
+                            window, calm_after = threshold, completed + len(running)
+                    elif result["answer"]:                       # doubling each round up to the threshold, then one a round
+                        window = min(float(most), window + (1.0 if window < threshold else 1.0 / window))
+                    if result["answer"]:
+                        answered, in_a_row = answered + 1, 0
+                    else:
+                        failed, in_a_row = failed + 1, in_a_row + 1
+                        out_when_failing = len(running) + 1 if in_a_row == 1 else out_when_failing
+                        failures.append(bool(result["failed calls"]))
+                        last_problem = re.sub(r"^try \d+: ", "", result["technical"][-1]) if result["technical"] else last_problem
+                    follow = after(question, result) if after else []
+                    if not stopped and in_a_row >= out_when_failing + CHAT_STOP_AFTER:
+                        stopped, stopped_at = stop_message(failures[-in_a_row:], answered,
+                                                           (NOTEBOOK["live"] or LiveValues()).redact(last_problem)), time.time()
+                        waiting.clear()
+                    if follow and not stopped:
+                        waiting.extendleft(reversed(follow))
+                if stopped and running and time.time() - stopped_at > CHAT_STOP_WAIT:
+                    break                                    # what is still out is held when it arrives
+                if time.time() - said >= CHAT_PROGRESS_SECONDS:
+                    progress()
+                    said = time.time()
+        finally:
+            halt.set()                                       # no question is tried again once the cell has stopped asking;
+            pool.shutdown(wait=False, cancel_futures=True)   # what is still out is held when it arrives
+        progress(final=True)
+    with ANSWERS_LOCK:
+        taken = [held.pop(key) for key in [key for key, (question, _) in held.items() if question["type"] in types]]
+    return taken, stopped, peak
 
-def make_asker(chat, live, store, settings, validate, state=None, sleep=time.sleep):
-    """Build ask(), the only place chat() is ever called. ask(questions) returns a dictionary
-    question id -> final record. A question that already has a final record in this run is
-    never asked again, which is what makes resume safe. Enforces: R3, R5"""
-    state = state or AskState()
-    if settings["foreground_minutes"]:
-        state.deadline = time.time() + 60.0 * settings["foreground_minutes"]
 
-    def ask(questions):
-        done = {r["question_id"]: r for r in store.read_calls() if r.get("final")}
-        unique = {q["question_id"]: q for q in questions}
-        todo = [unique[qid] for qid in sorted(unique) if qid not in done]
-        size = max(1, int(settings["sync_every_calls"]))
-        for start in range(0, len(todo), size):
-            finished, paused = run_batch(todo[start:start + size], chat, live, settings, validate, state, sleep)
-            records = [r for qid in sorted(finished) for r in finished[qid]]
-            store.append_calls(records)
-            store.sync()
-            done.update({r["question_id"]: r for r in records if r["final"]})
-            if paused:
-                raise paused
-        return {qid: done[qid] for qid in unique if qid in done}
-    ask.state = state
-    return ask
+def stop_message(failures, answered, last_problem=""):
+    """Why a step stopped asking, in plain words: the calls failed - the token may have run out, or the gateway be
+    down - or the answers came back in a form that could not be read. `last_problem` is what the last failed call
+    returned, the token removed."""
+    if all(failures):
+        return ("The model stopped answering: the last %d questions got no answer, so no more were sent.%s If the access token "
+                "has run out, paste a new one into widget 02; if the gateway is down, wait until it is back. Then run cell 3 "
+                "again - or every cell, from cell 1: the %d answers received in this cell are kept, with every answer received "
+                "before, and only the questions still open are asked." % (
+                    len(failures), " The last call returned: %s." % last_problem.rstrip(".")[:300] if last_problem else "", answered))
+    return ("The last %d answers of the model could not be read in the form asked for, so no more questions were sent. "
+            "Run cell 3 again to carry on: the %d answers received in this cell are kept; what the model wrote is in "
+            "run_log.txt." % (len(failures), answered))
 
-def replay_chat(call_records):
-    """A chat() that answers from the recorded answers of an earlier run. Running the
-    pipeline with it must reproduce the same graph version id, statuses and items, which
-    is what reproducibility means for a model that samples its answers. Enforces: R5"""
-    recorded = {}
-    for record in call_records:
-        recorded.setdefault((record["system_prompt"], record["main_prompt"]), []).append(record["response_text"])
-    position = {}
-    lock = threading.Lock()
 
-    def chat(system_prompt, main_prompt):
-        key = (system_prompt, main_prompt)
-        with lock:
-            index = position.get(key, 0)
-            position[key] = index + 1
-        answers = recorded.get(key)
-        if not answers:
-            return {"status": "no recorded answer for this prompt"}
-        return {"answer": answers[min(index, len(answers) - 1)]}
-    return chat
+def call_record(ctx, asked, result, redact, **extra):
+    """The record of one exchange with the model, as the audit log's Model_Calls sheet holds it: the token removed
+    from everything the model wrote, the technical account of what went wrong left to run_log.txt. `extra` may hold
+    the question itself, as step 04 keeps it. Enforces: R4, R8, R10"""
+    answer = redact(result["answer"])
+    record = {"run_id": ctx.provenance.run_id, "step_id": ctx.provenance.step_id, "step": ctx.provenance.step,
+              "question_id": asked["id"], "question_type": asked["type"], "unit_ref": asked["unit_ref"]}
+    record.update(extra)
+    record.update({"attempt": result["attempt"], "outcome": "answered" if answer else "not answered",
+                   "tokens": asked.get("tokens", 0), "answer": answer,
+                   "reading": redacted(result["reading"], redact),
+                   "prompt_hash": asked["id"], "response_hash": sha256_text(answer) if answer else "",
+                   "what happened": [redact(line) for line in result["plain"]], "seconds": round(result["seconds"], 3)})
+    return record
+
+
+def redacted(value, redact):
+    """Every text inside a value, the token removed. Enforces: R8"""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [redacted(item, redact) for item in value]
+    if isinstance(value, dict):
+        return {key: redacted(item, redact) for key, item in value.items()}
+    return value
+
+
+def log_technical(ctx, step_id, lines):
+    """Technical text of a step - what a failed call said - goes to run_log.txt only. Enforces: R10"""
+    if lines:
+        with open(os.path.join(os.path.dirname(ctx.work_dir), "run_log.txt"), "a", encoding="utf-8") as handle:
+            handle.write("".join("step %s, %s\n" % (step_id, line) for line in lines))
+
+
+# ---------------------------------------------------------------- step 04: interpret-code
+# Step 04 puts every unit of Chunks_Model in front of the organisation's model, with the units it takes from and gives
+# to as context, and asks it to explain the credit concepts the code implements, for a CFA-level analyst checking it
+# against the methodology. The model's words go to one column, headed "(by LLM)", and to the audit log; nothing the
+# code reads, maps or checks depends on them. Enforces: R3, R5, R8
+CODE_SYSTEM_PROMPT = (
+    "You help financial analysts review how a credit model is implemented in R. Your reader is a credit analyst at "
+    "CFA level who is checking, piece by piece, whether the model's code implements its intended methodology, and "
+    "whether it is conceptually sound; they read financial concepts fluently, but not R. You are given one piece of "
+    "the model's R package - a function, a statement, a test, stored data or another file - exactly as written, "
+    "followed, for context, by the pieces of the package it takes something from and the pieces that take something "
+    "from it. Explain the one piece in the language of credit: the financial concept it implements (a probability of "
+    "default, a loss given default, an exposure, a correlation, a capital requirement, a rating, a score, and so "
+    "on); the inputs it takes and what each means financially; how it computes its result, as a formula an analyst "
+    "would recognise; the parameters, floors, caps, thresholds and constants it fixes, and what they stand for; and "
+    "what it returns and where that goes in the model. Say which methodological choices and assumptions the code "
+    "makes, and where it follows or departs from a standard credit convention (the Basel formulas, for example), "
+    "stated as fact, so that the analyst can set them against the methodology. Use the context only to understand "
+    "this piece, and describe it only as far as it explains this one. Decide yourself how much detail the analyst "
+    "needs: a sentence or two for a simple piece, as many paragraphs as an involved calculation deserves. Describe "
+    "only what the code shows; where it relies on something the code does not show, say so, and do not guess. Do "
+    "not rate, grade or recommend, and do not say whether the code is right: the analyst decides that. Write prose, "
+    "with formulas in plain text where they help; no bullet points, headings or code blocks. Never use the words "
+    "finding, error, severity, severe, critical, major or minor, and never call anything high, medium or low in "
+    "risk, rating, priority or impact: say riskier or safer, stronger or weaker, near the top or the bottom of the "
+    "scale, or give the number. Where the code stops with a message, say that it stops with a message.")
+CODE_TOKENS_MAX = 16000      # tokens of one unit's text in its question; a longer text is cut, and the cut is said
+CONTEXT_PIECE_TOKENS = 2000  # tokens of one context piece's text
+NO_ANSWER = "No interpretation: the model gave no answer. Run cell 3 again to ask again."
+NOT_ASKED = "Not asked: nothing was read from this file."
+
+
+def askable(unit):
+    """Does this unit have text worth putting to the model? A file that could not be read has not."""
+    return unit["kind"] != KIND_NOT_READ and bool(unit["text"].strip())
+
+
+def unit_place(unit):
+    """Where a unit is: its kind, its file and its lines."""
+    return "%s, %s%s" % (unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "")
+
+
+def linked_units(unit, links, by_ref):
+    """The units a unit takes something from, each with the names it takes, and the units that take something from it:
+    step 03's links, as [(unit, names)] twice."""
+    linked = links.get(unit.get("unit_ref", unit["ref"])) or {}
+    upstream = [(by_ref[ref], (linked.get("via") or {}).get(ref, [])) for ref in linked.get("upstream") or () if ref in by_ref]
+    downstream = [(by_ref[ref], []) for ref in linked.get("downstream") or () if ref in by_ref]
+    return upstream, downstream
+
+
+def context_block(upstream, downstream, room):
+    """For context, the units a unit takes something from - each with the names it takes - and the units that take
+    something from it, each cut to CONTEXT_PIECE_TOKENS and all of them to `room` tokens. A piece past that is named,
+    not shown; once even the names do not fit, how many more there are is said instead. Returns the two blocks."""
+    blocks = []
+    for title, pieces in (("CONTEXT: THE PIECES IT TAKES SOMETHING FROM", upstream),
+                          ("CONTEXT: THE PIECES THAT TAKE SOMETHING FROM IT", downstream)):
+        shown, unnamed = [title], 0
+        for piece, names in pieces:
+            head = "[%s] %s%s" % (piece["ref"], unit_place(piece), " - it takes: %s" % ", ".join(names) if names else "")
+            body = shown_cut(piece["text"], CONTEXT_PIECE_TOKENS)
+            cost = estimate_tokens(head) + estimate_tokens(body) + 3
+            if cost <= room:
+                room -= cost
+                shown.append(head + "\n" + body)
+                continue
+            named = head + "\n[Not shown: the context is already long.]"
+            if estimate_tokens(named) + 3 <= room - 40:
+                room -= estimate_tokens(named) + 3
+                shown.append(named)
+            else:
+                unnamed += 1
+        if unnamed:
+            shown.append("[%d more are not shown or named: the context is already long.]" % unnamed)
+        blocks.append("\n\n".join(shown if len(shown) > 1 else shown + ["(none in the package)"]))
+    return blocks
+
+
+def code_question(unit, upstream=(), downstream=(), room=None):
+    """The question about one unit, exactly as sent: (system half, main half, question id). The main half is the
+    unit itself, cut to CODE_TOKENS_MAX, then, for context, the units it takes something from - each with the names
+    it takes - and the units that take something from it (step 03's links), in whatever room the question has left."""
+    room = room or question_room(DEFAULT_SETTINGS, CODE_QUESTION)
+    text = shown_cut(unit["text"], min(CODE_TOKENS_MAX, room // 2))
+    first = "THE PIECE TO EXPLAIN\nKind: %s\nFile: %s%s\nName: %s%s\n\n%s" % (
+        unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "", unit.get("name") or "-",
+        "\n" + part_note(unit) if part_note(unit) else "", text)
+    left = room - estimate_tokens(CODE_SYSTEM_PROMPT) - estimate_tokens(first) - 200
+    main = "\n\n\n".join([first] + context_block(upstream, downstream, left))
+    return CODE_SYSTEM_PROMPT, main, sha256_text(CODE_SYSTEM_PROMPT + "\n\n" + main)
+
+
+def interpret_code(ctx):
+    """Step 04, interpret-code: every unit of Chunks_Model explained by the organisation's model in the credit
+    concepts it implements, for a CFA-level analyst, through the chat() of cell 2 - with the units it takes from and
+    the units that take from it (step 03's links) as context, and at the length the model judges it needs. Questions
+    go out parallel_chats at a time (ask_all); a question already answered in this run is not asked again, and while
+    any is left unanswered the step does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
+    whole = ctx.read("model_units")
+    units, by_ref = asked_rows(whole, ctx.settings), {u["ref"]: u for u in whole}
+    datasets = [unit["ref"] for unit in whole if is_dataset(unit)]
+    links = {r["ref"]: r for r in ctx.read("unit_links")}
+    recorded = {call["question_id"] for call in ctx.read("llm_calls")
+                if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
+    arrived = {call["question_id"] for call in held_answers(ctx, (CODE_QUESTION,)) if call["outcome"] == "answered"}
+    room = question_room(ctx.settings, CODE_QUESTION)
+    questions, wanted = {}, []
+    for unit in units:
+        if askable(unit):
+            upstream, downstream = linked_units(unit, links, by_ref)
+            system, main, question_id = code_question(unit, upstream, downstream, room)
+            question = questions[question_id] = {
+                "id": question_id, "type": CODE_QUESTION, "unit_ref": unit["ref"], "system": system, "main": main,
+                "tokens": estimate_tokens(system) + estimate_tokens(main),
+                "context": {"upstream": [u["ref"] for u, _ in upstream], "downstream": [u["ref"] for u, _ in downstream]}}
+            if question_id not in recorded and question_id not in arrived:
+                wanted.append(question)
+    counts = {"code blocks": len(units), "interpreted": len(recorded & set(questions)), "asked now": len(wanted),
+              "not answered": 0, "not asked": sum(1 for unit in units if not askable(unit))}
+    chat = NOTEBOOK["chat"]
+    if wanted and chat is None:
+        counts["not answered"] = len(wanted)
+        return StepResult({}, counts, ["The code interpretations are written by your chat(): run cell 2, then cell 3 "
+                                       "again."], finished=False)
+    taken, stopped, peak = ask_all(ctx, chat, wanted, lambda question: question, lambda question: None,
+                                   label="code interpretations", types=(CODE_QUESTION,))
+    redact = (NOTEBOOK["live"] or LiveValues()).redact
+    order = {u["ref"]: number for number, u in enumerate(units)}
+    records, technical = [], []
+    for question, result in sorted(taken, key=lambda pair: (order.get(pair[0]["unit_ref"], 0), pair[0]["id"])):
+        if question["id"] in recorded:
+            continue                                     # written already, by an earlier cell
+        whole = questions.get(question["id"]) or {"system": "", "main": ""}
+        records.append(call_record(ctx, question, result, redact, context=question.get("context"),
+                                   question={"system": whole["system"], "main": whole["main"]}))
+        technical += ["%s, %s" % (question["unit_ref"], redact(line)) for line in result["technical"]]
+    log_technical(ctx, "04", technical)
+    answered = recorded | {record["question_id"] for record in records if record["outcome"] == "answered"}
+    missing = sum(1 for question_id in questions if question_id not in answered)
+    counts.update({"interpreted": len(questions) - missing, "not answered": missing, "most at once": peak})
+    messages = [stopped] if stopped else []
+    sliced = sorted({row["unit_ref"] for row in units if row["parts"] > 1})
+    if datasets:
+        messages.append("%d stored dataset%s, too large to be a parameter table, %s asked about once, from a view of its "
+                        "columns and first %d rows; Chunks_Model shows it whole: %s." % (len(datasets), "" if len(datasets) == 1 else "s",
+                                                                                        "is" if len(datasets) == 1 else "are", DATASET_VIEW_ROWS,
+                                                                                         ", ".join(datasets[:10]) + (" and more" if len(datasets) > 10 else "")))
+    if sliced:
+        messages.append("%d pieces of the package too long for one row are shown, and asked about, in parts - rows %s-1, %s-2 and "
+                        "so on: %s." % (len(sliced), sliced[0], sliced[0], ", ".join(sliced[:10]) + (" and more" if len(sliced) > 10 else "")))
+    if missing and not stopped:
+        messages.append("The model gave no interpretation for %d of %d code blocks. Run cell 3 again to ask for those "
+                        "again; what went wrong is in run_log.txt." % (missing, len(questions)))
+    return StepResult({"llm_calls": records}, counts, messages, finished=not missing)
+
+
+# ---------------------------------------------------------------- step 05: search-methodology
+# Step 05 finds, for every unit of Chunks_Model, the chunks of the methodology that describe, explain or inform it, and
+# then asks where the code departs from them. The methodology is the canonical description of the code. Two rounds:
+#   search      every unit is put to the model once for each batch of the methodology, until every chunk has been
+#               searched for it - the question shows the batch, then the unit's code and its interpretation (step 04);
+#   comparison  once a unit's search is complete, the chunks found are put to the model together, with the unit, the
+#               units it takes from and gives to, and its interpretation, for every potential deviation.
+# Comparing in a round of its own lets the model see every chunk that bears on the unit at once: a floor stated in one
+# batch and the formula it applies to in another are compared together, not flagged apart. The model's words go to two
+# columns headed "(... by LLM ...)" and to the audit log; code checks that every chunk it names was shown to it.
+# Enforces: R2, R3, R5, R8
+UNIT_TOKENS_MAX = 12000         # tokens of one unit's code and interpretation in a question of step 05
+COMPARE_CONTEXT_TOKENS = 5000   # tokens of context code in a comparison; a context piece past that is named, not shown
+NEIGHBOURS_NAMED = 20           # units named on the line of what a unit takes from, and on the line of what it gives to
+DEVIATION_KINDS = {"differs": "The code differs", "omits": "Not done in the code",
+                   "adds": "Not described in the methodology", "ambiguous": "The methodology can be read more than one way"}
+DEVIATION_PARTS = (("methodology", "Methodology"), ("code", "Code"), ("why", "Why it potentially deviates"), ("effect", "Effect"))
+NOT_SEARCHED = "Not searched: nothing was read from this file."
+NOT_COMPARED = "Not compared: nothing was read from this file."
+SEARCH_SYSTEM_PROMPT = (
+    "You help credit analysts check whether an R package implements the methodology it was built from. The methodology "
+    "is the canonical description of what the code should do. You are given part of the methodology, cut into chunks in "
+    "reading order, each headed by its reference in square brackets (such as [C-0012]), the headings it sits under and "
+    "its type; then one piece of the model's R package - a function, a statement, a test, stored data or another file - "
+    "exactly as written, with an explanation of it that a language model wrote. The rest of the methodology is put to "
+    "you in other questions: judge only the chunks shown. Pick out every chunk the analyst needs to read to check this "
+    "piece against the methodology: a chunk that describes what the piece computes or does - its formula, its steps, its "
+    "rules and conditions; a chunk that explains it - what a quantity means, why a step is taken, what an assumption "
+    "stands for; and a chunk that informs it - a definition, a parameter value, a floor, a cap, a threshold, a table of "
+    "values, a data source, a segment, a unit or a convention that the piece uses, or that the methodology says it "
+    "should use. Judge by meaning, not by shared words: the methodology may name a quantity in words or by a symbol "
+    "where the code uses a variable name or an abbreviation - the probability of default, PD and pd_1y can be one "
+    "quantity - and a chunk that only shares a word with the piece, or speaks of the same concept at a point of the "
+    "model the piece does not touch, does not count. For a test, pick the chunks that state what the test checks; for "
+    "stored data, the chunks that define its values or give them. The explanation can be wrong: where it and the code "
+    "disagree, the code counts. Go through the chunks from the first to the last; a part of the methodology often holds "
+    "only a few chunks that count, and often none. Answer with one JSON object and nothing else, in this form: "
+    "{\"relevant\": [{\"ref\": \"C-0012\", \"relation\": \"describes\", \"why\": \"gives the formula this function "
+    "computes\"}]}. The relation is describes, explains or informs, and why says in fifteen words at most, without "
+    "quotation marks, what the chunk gives the piece. Name only chunks shown, each once. If no chunk counts, answer "
+    "{\"relevant\": []}.")
+COMPARE_SYSTEM_PROMPT = (
+    "You help credit analysts check whether an R package implements the methodology it was built from. The methodology "
+    "is the canonical description of what the code should do, and the code may deviate from it. You are given the "
+    "chunks of the methodology found to bear on one piece of the model's R package, each headed by its reference in "
+    "square brackets (such as [C-0012]), the headings it sits under and its type; then, for context, the pieces of the "
+    "package this piece takes something from and the pieces that take something from it; then the piece itself, exactly "
+    "as written, with an explanation of it that a language model wrote. Find every potential deviation between what "
+    "these chunks say and what this piece of code does, and explain each one so that a CFA-level credit analyst "
+    "understands, without reading the code, exactly what differs, why it is a deviation, and what it changes in the "
+    "results. Compare everything the chunks say that bears on the piece: formulas and the order of their steps; "
+    "constants and parameter values; floors, caps and thresholds, and whether a boundary value is included; the "
+    "treatment of missing, zero, negative or out-of-range values; units, scales and conventions - a percentage or a "
+    "fraction, basis points, annual or monthly figures, signs; rounding and precision; the inputs used, their sources, "
+    "filters, segments and level of aggregation; defaults and fallbacks; what the chunks require that the piece does "
+    "not do; and what the piece does to its result that the chunks do not describe. Where a chunk can be read in more "
+    "than one way and the code follows one reading, explain both readings. A requirement met by a piece shown as "
+    "context is not a deviation of this piece; where it is met in neither, or you cannot tell, list it and say which. "
+    "For each deviation give: a title - one pointed sentence naming exactly what differs and where, with the values or "
+    "steps on both sides, such as \u201cThe monthly PD is the annual PD divided by 12, where the methodology converts it "
+    "by compounding\u201d; the methodology - what the chunks require, quoting them word for word where the wording "
+    "matters; the code - what the piece does instead, naming its variables, functions and line numbers and quoting it "
+    "where that helps; why - the precise mechanism by which the code's result departs from what the methodology "
+    "prescribes, step by step where it takes several; and the effect - which inputs or cases are affected, in which "
+    "direction the result moves, by how much where the code shows it, with a short worked example in numbers where "
+    "that makes it clearer. Be specific and direct: name the quantities, give the numbers, say which cases are "
+    "affected. Write nothing that would fit any code, such as \u201cthis may affect the results\u201d or \u201cthis "
+    "should be reviewed\u201d, and do not repeat yourself. State what the code does and what follows from it as fact; "
+    "where the code leaves something undetermined, say exactly what. Do not rate how important a deviation is, "
+    "recommend a change, or say which of the two is right: the analyst decides that. Compare only with the chunks "
+    "shown, and rest every deviation on the references of the chunks it concerns. Quote inside curly double quotes "
+    "\u201clike this\u201d - never straight ones, which would break the JSON. The explanation of the piece can be wrong: "
+    "where it and the code disagree, the code counts. Answer with one JSON object and nothing else, in this form: "
+    "{\"deviations\": [{\"refs\": [\"C-0012\"], \"kind\": \"differs\", \"title\": \"...\", \"methodology\": \"...\", "
+    "\"code\": \"...\", \"why\": \"...\", \"effect\": \"...\"}]}. The kind is differs (the piece does what the chunks "
+    "describe, differently), omits (the chunks require something the piece does not do), adds (the piece does something "
+    "to its result that the chunks do not describe) or ambiguous (the chunks can be read in more than one way, and the "
+    "code follows one reading). The depth wanted, shown on another model: {\"refs\": [\"C-0047\"], \"kind\": "
+    "\"differs\", \"title\": \"The monthly PD is the annual PD divided by 12, where the methodology converts it by "
+    "compounding\", \"methodology\": \"C-0047 derives the monthly PD from the annual one as \u201c1 - (1 - PD)^(1/12)"
+    "\u201d.\", \"code\": \"monthly_pd() returns \u201cpd_annual / 12\u201d (line 4).\", \"why\": \"Dividing by 12 "
+    "spreads defaults evenly over the year; the methodology compounds survival month by month, which gives a higher "
+    "monthly PD for the same annual PD.\", \"effect\": \"Every monthly PD is lower than the methodology's, and more so "
+    "as the annual PD rises: at an annual PD of 20% the code gives 1.667% a month, the methodology 1.842%.\"}. If the "
+    "piece does what the chunks say, answer {\"deviations\": []}. Outside quotations, never use the words finding, "
+    "error, severity, severe, critical, major or minor, and never call anything high, medium or low in risk, rating, "
+    "priority or impact.")
+
+
+def search_shares(settings):
+    """(tokens of the methodology, tokens of the unit) in one search question: methodology_batch_tokens, or less
+    when the question would not otherwise leave the unit its room."""
+    room = question_room(settings, METHODOLOGY_SEARCH) - estimate_tokens(SEARCH_SYSTEM_PROMPT) - 300
+    unit = min(UNIT_TOKENS_MAX, room // 2)
+    wanted = int(settings.get("methodology_batch_tokens") or DEFAULT_SETTINGS["methodology_batch_tokens"])
+    return max(200, min(wanted, room - unit)), unit
+
+
+def compare_shares(settings):
+    """(tokens of the methodology's chunks, of the unit, of the context) in one comparison question."""
+    room = question_room(settings, METHODOLOGY_COMPARISON) - estimate_tokens(COMPARE_SYSTEM_PROMPT) - 300
+    unit, context = min(UNIT_TOKENS_MAX, room // 2), min(COMPARE_CONTEXT_TOKENS, room // 6)
+    return max(200, room - unit - context), unit, context
+
+
+def piece_cap(settings):
+    """The most tokens one piece of the methodology may take in a question of step 05: small enough for a batch of
+    its own, and for a comparison."""
+    batch, _ = search_shares(settings)
+    chunk_room, _, _ = compare_shares(settings)
+    return min(batch, chunk_room)
+
+
+def piece_slices(text, head_tokens, tokens, chars):
+    """How a chunk's text is cut into rows: whole when it fits `chars` characters and, beside a head line of
+    `head_tokens`, `tokens` tokens; otherwise text_slices, with room for a part's head line."""
+    if len(text) <= chars and head_tokens + estimate_tokens(text) + 1 <= tokens:
+        return [(text, False)]
+    return text_slices(text, max(100, tokens - head_tokens - 30), chars)
+
+
+def chunk_where(chunk):
+    """The headings a chunk of the methodology sits under, and its type, as a question shows them."""
+    return "%s | %s" % (" > ".join(chunk.get("heading_chain") or ()) or "(no heading)", chunk["kind"])
+
+
+def methodology_slices(chunk, cap):
+    """The rows a chunk of the methodology takes - on Chunks_Methodology and in the questions of step 05 alike: whole,
+    or cut at line ends into parts small enough for a cell of Excel and for a batch of their own. Enforces: R2, R13"""
+    return piece_slices(chunk["text"] or "", estimate_tokens("[%s] %s" % (chunk["ref"], chunk_where(chunk))), cap, SLICE_CHARS)
+
+
+def methodology_pieces(chunks, cap):
+    """Every chunk of the methodology as the model is shown it: its ref, the headings it sits under, its type and its
+    text - whole, or, when too long, in the parts it takes as rows of Chunks_Methodology, each headed as the part it is
+    ([C-0045-2, part 2 of 3 of C-0045]), so that nothing of a long chunk goes unsearched and a part is the same row in
+    the sheet and in a question. The parts stay one chunk: what the model finds in any of them counts for the whole.
+    Enforces: R2"""
+    pieces = []
+    for chunk in chunks:
+        slices = methodology_slices(chunk, cap)
+        for number, (part, _) in enumerate(slices, start=1):
+            head = ("[%s] %s" % (chunk["ref"], chunk_where(chunk)) if len(slices) == 1 else
+                    "[%s-%d, part %d of %d of %s] %s" % (chunk["ref"], number, number, len(slices), chunk["ref"], chunk_where(chunk)))
+            pieces.append({"ref": chunk["ref"], "part": number, "parts": len(slices), "text": head + "\n" + part})
+    for piece in pieces:
+        piece["tokens"] = estimate_tokens(piece["text"])
+    return pieces
+
+
+def methodology_batches(pieces, cap):
+    """The pieces in reading order, packed into batches of at most cap tokens: every piece in exactly one batch, and
+    the batches the same for every unit, so a batch comes to the model as the same words each time."""
+    batches, current, used = [], [], 0
+    for piece in pieces:
+        if current and used + piece["tokens"] + 2 > cap:
+            batches.append(current)
+            current, used = [], 0
+        current.append(piece)
+        used += piece["tokens"] + 2
+    return batches + ([current] if current else [])
+
+
+def methodology_plan(chunks, settings):
+    """The methodology as step 05 puts it to the model: (its pieces, the batches they go in)."""
+    batch, _ = search_shares(settings)
+    pieces = methodology_pieces(chunks, piece_cap(settings))
+    return pieces, methodology_batches(pieces, batch)
+
+
+def unit_label(unit):
+    """A unit named on one line: its ref and its name, or its kind when it has none."""
+    return "%s %s" % (unit["ref"], unit["name"]) if unit.get("name") else "%s (%s)" % (unit["ref"], unit["kind"])
+
+
+def neighbours_line(upstream, downstream):
+    """The units a unit takes something from and gives something to, named: what orients a search."""
+    lines = []
+    for title, pieces in (("It takes something from", upstream), ("It gives something to", downstream)):
+        if pieces:
+            named = "; ".join(unit_label(unit) for unit, _ in pieces[:NEIGHBOURS_NAMED])
+            more = " and %d more" % (len(pieces) - NEIGHBOURS_NAMED) if len(pieces) > NEIGHBOURS_NAMED else ""
+            lines.append("%s: %s%s" % (title, named, more))
+    return "\n".join(lines)
+
+
+SLICE_CHARS = 30000          # the most characters one row of Chunks_Model shows; a cell of Excel holds 32,767
+
+
+def slice_limits(settings):
+    """(tokens, characters) one row of Chunks_Model may hold: few enough characters for a cell of Excel, and few
+    enough tokens for every question of steps 04 and 05 to show the row whole, beside what the model wrote about
+    it, which takes at most a third of the unit's room (unit_part)."""
+    _, search_unit = search_shares(settings)
+    _, compare_unit, _ = compare_shares(settings)
+    return max(500, min(search_unit, compare_unit) * 2 // 3 - 600), SLICE_CHARS
+
+
+def text_slices(text, tokens, chars):
+    """A text in consecutive slices of at most `tokens` and `chars` each, cut at line ends; a line too long for a slice
+    of its own is cut inside. Returns [(slice, joined)]: joined where a slice ends inside a line, which the next one
+    continues. Joined back - a line break after each slice that is not joined - the slices are the text exactly."""
+    slices, part, size, cost = [], [], 0, 0
+    for line in text.split("\n"):
+        line_cost, line_size = estimate_tokens(line) + 1, len(line) + 1
+        if part and (cost + line_cost > tokens or size + line_size > chars):
+            slices.append(("\n".join(part), False))
+            part, size, cost = [], 0, 0
+        while line_cost > tokens or line_size > chars:
+            head = cut_to_tokens(line, tokens - 1)[0][:chars - 1] or line[:1]
+            slices.append((head, True))
+            line = line[len(head):]
+            line_cost, line_size = estimate_tokens(line) + 1, len(line) + 1
+        part.append(line)
+        size, cost = size + line_size, cost + line_cost
+    slices.append(("\n".join(part), False))
+    return slices
+
+
+def joined_rows(rows):
+    """The text of a unit, rebuilt from its rows in order."""
+    return "".join(row["text"] + ("" if row.get("joined") or number == len(rows) - 1 else "\n")
+                   for number, row in enumerate(rows))
+
+
+def model_rows(units, settings):
+    """The rows of Chunks_Model. A unit is one row, or - when its text is too long for a cell of Excel, or for the
+    questions of steps 04 and 05 to show whole - several: M-0003-1, M-0003-2 and so on, cut at line ends, each with
+    its own lines. They stay one analytical chunk: they are sliced so that nothing of the piece is cut, in the
+    workbook or in a question, and every character of it is in exactly one of its rows. Enforces: R2, R13"""
+    tokens, chars = slice_limits(settings)
+    rows = []
+    for unit in units:
+        text = unit["text"] or ""
+        if len(text) <= chars and estimate_tokens(text) <= tokens:
+            rows.append(dict(unit, unit_ref=unit["ref"], part=1, parts=1, joined=False, unit_lines=unit.get("lines")))
+            continue
+        slices, first = text_slices(text, tokens, chars), (unit.get("lines") or [None])[0]
+        line, mine = first, []
+        for number, (piece, joined) in enumerate(slices, start=1):
+            lines = [line, line + piece.count("\n")] if first is not None else None
+            mine.append(dict(unit, ref="%s-%d" % (unit["ref"], number), unit_ref=unit["ref"], part=number, parts=len(slices),
+                             text=piece, lines=lines, joined=joined, unit_lines=unit.get("lines")))
+            line = lines[1] + (0 if joined else 1) if lines else None
+        if joined_rows(mine) != text:
+            raise EngineFault("The rows of %s do not rebuild its text. This is a defect in the tool, not in the model under "
+                              "review." % unit["ref"])
+        rows += mine
+    return rows
+
+
+DATASET_VIEW_ROWS = 50       # the rows of a stored dataset a question shows; the workbook shows every row
+
+
+def is_dataset(unit):
+    """A stored table too large to be a parameter table - more cells than max_parameter_cells, or more columns than
+    max_parameter_columns: a dataset."""
+    data = unit.get("data") or {}
+    return data.get("assessable") is False and bool(data.get("dims"))
+
+
+def dataset_view(unit, tokens):
+    """What a question shows of a stored dataset: what it is, its size, and its columns and first rows - as many of the
+    first DATASET_VIEW_ROWS as fit in `tokens` - saying that this is a view, and that the workbook shows it whole."""
+    count, width = (list(unit["data"]["dims"]) + [0, 0])[:2]
+    head = ("A stored dataset of %d rows and %d columns - too large to be a parameter table, so it is shown here as a "
+            "view: its columns and first rows. Chunks_Model shows it whole." % (count, width))
+    lines, shown = unit["text"].split("\n"), []
+    for line in lines[:DATASET_VIEW_ROWS + 1]:
+        if estimate_tokens(head + "\n" + "\n".join(shown + [line])) > tokens:
+            break
+        shown.append(line)
+    rest = len(lines) - len(shown)
+    return head + "\n" + "\n".join(shown) + ("\n[%d more rows are not in this view.]" % rest if rest > 0 else "")
+
+
+def asked_rows(units, settings):
+    """The rows steps 04 and 05 ask about: every part of every unit, as model_rows cuts it - so that no piece of code
+    is cut in a question - except a stored dataset, which is asked about once, from dataset_view, the question saying
+    that it is a view: the model is told what the data is, not asked to read every row. What it says stands for the
+    whole unit (rows_model_units). Enforces: R3, R13"""
+    tokens, _ = slice_limits(settings)
+    rows = []
+    for unit in units:
+        if is_dataset(unit):
+            rows.append(dict(unit, unit_ref=unit["ref"], part=1, parts=1, joined=False, unit_lines=unit.get("lines"),
+                             text=dataset_view(unit, tokens)))
+        else:
+            rows += model_rows([unit], settings)
+    return rows
+
+
+def part_note(row, comparing=False):
+    """What a question says of a row that is one part of a long unit, or "" for a whole one."""
+    if row.get("parts", 1) < 2:
+        return ""
+    whole = " (lines %d-%d)" % tuple(row["unit_lines"]) if row.get("unit_lines") else ""
+    note = ("Part %d of %d of %s%s, which is too long to show whole: each part is asked about on its own. Where this "
+            "part relies on something set in another part, say so." % (row["part"], row["parts"], row["unit_ref"], whole))
+    return note + (" A requirement this part does not meet may be met in another part: say so, rather than list it "
+                   "as not done." if comparing else "")
+
+
+def unit_part(unit, said, neighbours, room, comparing=False):
+    """One unit as a question of step 05 shows it: what and where it is, what it takes from and gives to, its text as
+    written, and what step 04's model wrote about it - cut to `room` tokens, the code keeping two thirds of it or more."""
+    head = "THE PIECE: %s, %s%s" % (unit["ref"], unit_place(unit), " - %s" % unit["name"] if unit.get("name") else "")
+    head += "\n" + part_note(unit, comparing) if part_note(unit) else ""
+    head += "\n" + neighbours if neighbours else ""
+    said, code = said or "(none)", unit["text"]
+    left = room - estimate_tokens(head) - 40
+    code_tokens, said_tokens = estimate_tokens(code), estimate_tokens(said)
+    if code_tokens + said_tokens > left:
+        said_share = min(said_tokens, max(left // 3, left - code_tokens))
+        code, said = shown_cut(code, left - said_share), shown_cut(said, said_share)
+    return head + "\n\n" + code + "\n\n\nWHAT A LANGUAGE MODEL WROTE ABOUT THIS PIECE\n" + said
+
+
+def question_of(kind, unit, pieces, system, parts, **extra):
+    """A question of step 05 as sent - its two halves, its id, the pieces of the methodology it shows - and the
+    tokens it takes, counted part by part, each join counted too. A question over its room is a fault of the tool."""
+    main = "\n\n\n".join(text for text, _ in parts)
+    tokens = estimate_tokens(system) + sum(count for _, count in parts) + 3 * len(parts)
+    question = {"type": kind, "unit_ref": unit["ref"], "pieces": [[p["ref"], p["part"], p["parts"]] for p in pieces],
+                "system": system, "main": main, "id": sha256_text(system + "\n\n" + main), "tokens": tokens}
+    question.update(extra)
+    return question
+
+
+def search_question(unit, said, neighbours, batch, room):
+    """The search question about one unit and one batch of the methodology: the batch first, then the unit."""
+    title = "THE METHODOLOGY: A PART OF IT, IN READING ORDER\n\n"
+    chunks = title + "\n\n".join(piece["text"] for piece in batch)
+    piece = unit_part(unit, said, neighbours, room)
+    ask = ("Which chunks of the methodology above does the analyst need to read to check this piece? Answer with the "
+           "JSON object only.")
+    return question_of(METHODOLOGY_SEARCH, unit, batch, SEARCH_SYSTEM_PROMPT, [
+        (chunks, estimate_tokens(title) + sum(p["tokens"] + 2 for p in batch)), (piece, estimate_tokens(piece)),
+        (ask, estimate_tokens(ask))])
+
+
+def compare_question(unit, said, upstream, downstream, chosen, room, context_room):
+    """The comparison question about one unit: the chunks found to bear on it, the units it takes from and gives to,
+    then the unit and what step 04's model wrote about it."""
+    title = "THE METHODOLOGY: THE CHUNKS FOUND TO BEAR ON THIS PIECE\n\n"
+    chunks = title + "\n\n".join(piece["text"] for piece in chosen)
+    blocks = context_block(upstream, downstream, context_room)
+    piece = unit_part(unit, said, "", room, comparing=True)
+    ask = ("List every potential deviation between the chunks of the methodology above and this piece. Answer with the "
+           "JSON object only.")
+    return question_of(METHODOLOGY_COMPARISON, unit, chosen, COMPARE_SYSTEM_PROMPT,
+                       [(chunks, estimate_tokens(title) + sum(p["tokens"] + 2 for p in chosen))] +
+                       [(block, estimate_tokens(block)) for block in blocks] +
+                       [(piece, estimate_tokens(piece)), (ask, estimate_tokens(ask))],
+                       context={"upstream": [u["ref"] for u, _ in upstream], "downstream": [u["ref"] for u, _ in downstream]})
+
+
+UNREADABLE = {"plain": "the answer was not the JSON object asked for",
+              "ask": "Your last answer could not be read as the JSON object the instructions ask for. Answer again with "
+                     "that JSON object alone, with no other words around it."}
+
+
+def json_object(answer):
+    """The one JSON object an answer holds, whatever fences or words stand around it; None when it holds none. Parsed,
+    never evaluated. Enforces: R7"""
+    decoder, start = json.JSONDecoder(), answer.find("{")
+    for _ in range(20):                                  # the first brace may open words, not the object
+        if start < 0:
+            return None
+        try:
+            found, _ = decoder.raw_decode(answer, start)
+            if isinstance(found, dict):
+                return found
+        except ValueError:
+            pass
+        start = answer.find("{", start + 1)
+    return None
+
+
+def chunk_ref(value):
+    """A chunk's reference as the model wrote it, made regular: [C-0012], c-12 and C-0012 are all C-0012."""
+    found = re.search(r"\bC\s*-?\s*(\d{1,6})\b", str(value or ""), re.I)
+    return "C-%04d" % int(found.group(1)) if found else str(value or "").strip()
+
+
+def plain_text(value):
+    """A text field of an answer, on one line."""
+    return " ".join(str(value or "").split()) if isinstance(value, (str, int, float)) else ""
+
+
+def search_check(question):
+    """The check a search answer passes: the JSON object asked for, naming only chunks the question showed. On the last
+    try, chunks it named that were not shown are left out, and said so. Enforces: R3"""
+    shown = [ref for ref, _, _ in question["pieces"]]
+
+    def check(answer, last):
+        found = json_object(answer)
+        items = found.get("relevant") if found else None
+        if not isinstance(items, list):
+            return None, UNREADABLE, ""
+        relevant, unknown = {}, []
+        for item in items:
+            ref = chunk_ref(item.get("ref") if isinstance(item, dict) else item)
+            if ref not in shown:
+                unknown.append(ref or "(empty)")
+            elif ref not in relevant:
+                detail = item if isinstance(item, dict) else {}
+                relevant[ref] = {"ref": ref, "relation": plain_text(detail.get("relation")).lower(), "why": plain_text(detail.get("why"))}
+        if unknown and not last:
+            return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
+                          "ask": "Your last answer named chunks that are not in this part of the methodology (%s). Name only "
+                                 "chunks shown above, and answer with the JSON object alone." % ", ".join(unknown)}, ""
+        reading = {"relevant": [relevant[ref] for ref in dict.fromkeys(shown) if ref in relevant]}
+        return reading, None, "the chunks it named that were not shown were left out (%s)" % ", ".join(unknown) if unknown else ""
+    return check
+
+
+def compare_check(question):
+    """The check a comparison answer passes: the JSON object asked for, every deviation resting on chunks the question
+    showed, and no words outside quotations that the workbook cannot hold. On the last try, chunks it named that were
+    not shown are left out, and said so. Enforces: R1, R3, R10"""
+    order = {ref: number for number, (ref, _, _) in enumerate(question["pieces"])}
+
+    def check(answer, last):
+        found = json_object(answer)
+        items = found.get("deviations") if found else None
+        if not isinstance(items, list):
+            return None, UNREADABLE, ""
+        deviations, unknown = [], []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            named = item.get("refs", item.get("ref", []))
+            named = [chunk_ref(ref) for ref in (named if isinstance(named, list) else [named])]
+            unknown += [ref or "(empty)" for ref in named if ref not in order]
+            kind = plain_text(item.get("kind")).lower()
+            entry = {"refs": sorted(set(ref for ref in named if ref in order), key=order.get),
+                     "kind": kind if kind in DEVIATION_KINDS else "", "title": plain_text(item.get("title"))}
+            entry.update({part: plain_text(item.get(part)) for part, _ in DEVIATION_PARTS})
+            if any(entry[part] for part in ("title",) + tuple(part for part, _ in DEVIATION_PARTS)) and entry not in deviations:
+                deviations.append(entry)
+        if unknown and not last:
+            return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
+                          "ask": "Your last answer named chunks that are not among those shown (%s). Rest every deviation "
+                                 "on chunks shown above, and answer with the JSON object alone." % ", ".join(unknown)}, ""
+        unwelcome = unwelcome_words(own_words(deviation_lines(deviations)))
+        if unwelcome and not last:
+            return None, {"plain": "the answer used words the workbook cannot hold (%s)" % ", ".join(unwelcome),
+                          "ask": "Your last answer used words this workbook cannot hold outside quotations (%s). Write it "
+                                 "again without them; inside curly quotes \u201c \u201d they may stay." % ", ".join(unwelcome)}, ""
+        notes = (["the chunks it named that were not shown were left out (%s)" % ", ".join(unknown)] if unknown else []) + \
+                (["the answer still used words the workbook cannot hold"] if unwelcome else [])
+        return {"deviations": deviations}, None, "; ".join(notes)
+    return check
+
+
+def sentence(text):
+    """A field of an answer as one sentence of a cell: closed with a full stop, and never opening with a bare None."""
+    text = "none" + text[4:] if text.startswith("None ") else text
+    return text if not text or text[-1] in ".!?" or text[-2:] in (".\u201d", "!\u201d", "?\u201d", ".)") else text + "."
+
+
+DEVIATION_WITHHELD = "The model's words for this one cannot be shown in plain words; they are in the audit log (Model_Calls)."
+
+
+def deviation_lines(deviations, gated=False):
+    """Deviations as the workbook shows them: one block each, numbered, blocks apart by a blank line. The first line
+    names the chunks of the methodology the deviation rests on, its kind and its title; then what the methodology
+    requires, what the code does, why that is a deviation and what it changes, each on a line of its own. Gated, a
+    deviation whose own words - outside quotations - the workbook cannot hold is replaced by a notice that keeps its
+    chunks, so that one such answer never hides the others of its cell. Enforces: R1, R2, R10"""
+    blocks = []
+    for number, item in enumerate(deviations, start=1):
+        refs = ", ".join(item["refs"]) or "No chunk named"
+        head = " ".join(s for s in (DEVIATION_KINDS.get(item.get("kind"), "") + "." if item.get("kind") in DEVIATION_KINDS else "",
+                                    sentence(item.get("title", ""))) if s)
+        lines = ["%d. %s - %s" % (number, refs, head or "A deviation.")]
+        lines += ["%s: %s" % (label, sentence(item[part])) for part, label in DEVIATION_PARTS if item.get(part)]
+        block = "\n".join(lines)
+        blocks.append("%d. %s - %s" % (number, refs, DEVIATION_WITHHELD) if gated and unwelcome_words(own_words(block)) else block)
+    return "\n\n".join(blocks)
+
+
+def methodology_account(units, chunks, calls, settings):
+    """How far step 05 has got with each analytical chunk of Chunks_Model - a unit, in one row or several - worked out
+    from the recorded answers alone, and those arrived but not yet written, so that the step and the workbook always
+    agree. A unit is one chunk however many rows it takes: each row is searched against every piece of the methodology;
+    a chunk of the methodology any row finds counts for the whole unit; once every row is searched, each row is
+    compared with every chunk found for the unit, in all its parts; the deviations named for any row are the unit's, in
+    the order of its rows. A question answered twice counts once. Enforces: R2, R3"""
+    pieces, batches = methodology_plan(chunks, settings)
+    position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
+    parts_of = {}
+    for piece in pieces:
+        parts_of.setdefault(piece["ref"], []).append((piece["ref"], piece["part"]))
+    every, batch_keys = [(p["ref"], p["part"]) for p in pieces], [{(p["ref"], p["part"]) for p in batch} for batch in batches]
+    chunk_of, order = {row["ref"]: row["unit_ref"] for row in units}, {row["ref"]: number for number, row in enumerate(units)}
+    searched, relevant, compared, named, seen = {}, {}, {}, {}, set()
+    for call in calls:
+        kind = call.get("question_type")
+        if kind not in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) or call.get("outcome") != "answered" \
+                or call["question_id"] in seen or call.get("unit_ref") not in chunk_of:
+            continue
+        seen.add(call["question_id"])
+        row, keys = call["unit_ref"], [(ref, part) for ref, part, _ in call.get("pieces") or ()]
+        chunk, reading = chunk_of[row], call.get("reading") or {}
+        if kind == METHODOLOGY_SEARCH:
+            searched.setdefault(row, set()).update(keys)
+            shown = {ref for ref, _ in keys}
+            for item in reading.get("relevant") or ():
+                if item["ref"] in shown:
+                    relevant.setdefault(chunk, {}).setdefault(item["ref"], item)
+        else:
+            compared.setdefault(chunk, set()).update((row, key) for key in keys)
+            first = min([position.get(key, len(pieces)) for key in keys] or [len(pieces)])
+            named.setdefault(chunk, []).append((order[row], first, call["question_id"], reading.get("deviations") or []))
+    by_chunk, account = {}, {}
+    for row in units:
+        by_chunk.setdefault(row["unit_ref"], []).append(row)
+    for chunk, rows in by_chunk.items():
+        asked = [row for row in rows if askable(row)]
+        unsearched = {row["ref"]: [key for key in every if key not in searched.get(row["ref"], ())] for row in asked}
+        missing = {key for keys in unsearched.values() for key in keys}
+        found = relevant.get(chunk, {})
+        refs = sorted(found, key=lambda ref: position.get(parts_of.get(ref, [(ref, 1)])[0], len(pieces)))
+        done = compared.get(chunk, set())
+        deviations = []
+        for _, _, _, items in sorted(named.get(chunk, []), key=lambda entry: entry[:3]):
+            deviations += [item for item in items if item not in deviations]
+        account[chunk] = {"askable": bool(asked), "batches": len(batches), "chunks": len(parts_of),
+                          "open batches": [number for number, keys in enumerate(batch_keys) if not keys.isdisjoint(missing)],
+                          "unsearched": sorted({ref for ref, _ in missing}), "unsearched keys": unsearched,
+                          "relevant": [found[ref] for ref in refs],
+                          "to compare": [(row["ref"], key) for row in asked for ref in refs for key in parts_of.get(ref, [])
+                                         if (row["ref"], key) not in done],
+                          "deviations": deviations}
+    return {"pieces": pieces, "batches": batches, "units": account}
+
+
+def methodology_cells(state):
+    """A unit's three cells of step 05: the chunks of the methodology found to bear on it, as refs joined with "; ";
+    the items flagged, each opening with the refs it rests on; and how many items that cell holds - None where it
+    holds no result yet, because the methodology is not searched in full. What is not finished says so, and says what
+    to do. Enforces: R2, R10"""
+    refs, flagged = methodology_texts(state)
+    ready = state["askable"] and not state["open batches"]
+    return refs, flagged, len(state["deviations"]) if ready else None
+
+
+def methodology_texts(state):
+    """The first two cells of methodology_cells."""
+    if not state["askable"]:
+        return NOT_SEARCHED, NOT_COMPARED
+    refs = "; ".join(dict.fromkeys(item["ref"] for item in state["relevant"]))
+    if state["open batches"]:
+        left = state["unsearched"]
+        return ("Not searched in full: %d of %d chunks of the methodology searched so far%s.%s Run cell 3 again for the rest."
+                % (state["chunks"] - len(left), state["chunks"], "; still to search: %s" % ", ".join(left) if len(left) <= 5 else "",
+                   " Found so far: %s." % refs if refs else ""),
+                "Not compared yet: the methodology has not been searched in full.")
+    if not refs:
+        return "None found", "Nothing to compare: no chunk of the methodology was found to bear on this piece."
+    lines = deviation_lines(state["deviations"], gated=True)
+    if state["to compare"]:
+        open_refs = "; ".join(dict.fromkeys(key[0] for _, key in state["to compare"]))
+        return refs, (lines + "\n\n" if lines else "") + ("Not compared in full: %s not yet compared with this piece. "
+                                                         "Run cell 3 again." % open_refs)
+    return refs, lines or "None flagged against %s." % refs
+
+
+def search_methodology(ctx):
+    """Step 05, search-methodology: for every unit of Chunks_Model, the chunks of the methodology that describe, explain
+    or inform it - searched batch by batch until every chunk has been searched for it - and then the potential
+    deviations of the code from those chunks, all through the chat() of cell 2, parallel_chats questions at a time
+    (ask_all). A unit's comparison is asked as soon as its search is complete. A question the model does not answer
+    is asked again split in two, when it shows more than one piece of the methodology; a batch taken up again asks
+    only for its pieces not yet searched. A question already answered in this run is not
+    asked again, and while any unit is not searched and compared in full the step does not finish:
+    running cell 3 again asks only for what is open. Enforces: R2, R3, R5, R8"""
+    whole, chunks, calls = ctx.read("model_units"), ctx.read("chunks_canon"), ctx.read("llm_calls")
+    units = asked_rows(whole, ctx.settings)
+    types = (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON)
+    recorded = {call["question_id"] for call in calls if call.get("question_type") in types and call.get("outcome") == "answered"}
+    start = methodology_account(units, chunks, calls + held_answers(ctx, types), ctx.settings)
+    pieces, batches, states = start["pieces"], start["batches"], start["units"]
+    position = {(piece["ref"], piece["part"]): number for number, piece in enumerate(pieces)}
+    by_key = {(piece["ref"], piece["part"]): piece for piece in pieces}
+    by_ref = {unit["ref"]: unit for unit in units}
+    wholes = {unit["ref"]: unit for unit in whole}
+    links = {r["ref"]: r for r in ctx.read("unit_links")}
+    said = {call["unit_ref"]: call["answer"] for call in calls
+            if call.get("question_type") == CODE_QUESTION and call.get("outcome") == "answered"}
+    _, unit_room = search_shares(ctx.settings)
+    chunk_room, compare_room, context_room = compare_shares(ctx.settings)
+    rows_of, parts_of = {}, {}
+    for row in units:
+        rows_of.setdefault(row["unit_ref"], []).append(row)
+    for piece in pieces:
+        parts_of.setdefault(piece["ref"], []).append((piece["ref"], piece["part"]))
+    to_search = {row: set(keys) for state in states.values() for row, keys in state["unsearched keys"].items()}
+    found = {chunk: {item["ref"]: item for item in state["relevant"]} for chunk, state in states.items()}
+
+    def comparisons(pairs):
+        """Comparison questions for (row, piece of the methodology) pairs: for each row, its pieces in reading order,
+        as many to a question as fit."""
+        items = []
+        for row in dict.fromkeys(row for row, _ in pairs):
+            groups, used = [[]], 0
+            for key in sorted((key for r, key in pairs if r == row), key=position.get):
+                if groups[-1] and used + by_key[key]["tokens"] + 2 > chunk_room:
+                    groups.append([])
+                    used = 0
+                groups[-1].append(key)
+                used += by_key[key]["tokens"] + 2
+            items += [(METHODOLOGY_COMPARISON, row, group) for group in groups if group]
+        return items
+
+    def compare_whole(chunk):
+        """A unit, once every row of it is searched: each row against every chunk of the methodology found for any of
+        them, in all its parts - the unit and those chunks each treated as a whole."""
+        refs = sorted(found[chunk], key=lambda ref: position.get(parts_of[ref][0], 0))
+        return comparisons([(row["ref"], key) for row in rows_of[chunk] if askable(row) for ref in refs for key in parts_of[ref]])
+
+    work = [item for state in states.values() if state["askable"] and not state["open batches"]
+            for item in comparisons(state["to compare"])]
+    for batch in batches:
+        keys = [(p["ref"], p["part"]) for p in batch]
+        work += [(METHODOLOGY_SEARCH, row["ref"], [key for key in keys if key in to_search[row["ref"]]])
+                 for row in units if row["ref"] in to_search and any(key in to_search[row["ref"]] for key in keys)]
+    neighbours = {}
+
+    def build(item):
+        kind, ref, keys = item
+        row = by_ref[ref]
+        upstream, downstream = linked_units(row, links, wholes)
+        chosen = [by_key[key] for key in keys]
+        if kind == METHODOLOGY_SEARCH:
+            if row["unit_ref"] not in neighbours:
+                neighbours[row["unit_ref"]] = neighbours_line(upstream, downstream)
+            question = search_question(row, said.get(ref, ""), neighbours[row["unit_ref"]], chosen, unit_room)
+        else:
+            question = compare_question(row, said.get(ref, ""), upstream, downstream, chosen, compare_room, context_room)
+        if question["tokens"] > question_room(ctx.settings, kind):
+            raise EngineFault("A question of step 05 would take %d tokens where chat() holds %d with its answer. This is a "
+                              "defect in the tool, not in the model under review." % (question["tokens"], question_room(ctx.settings, kind)))
+        return question
+
+    def after(question, result):
+        """What an answer leads to: a unit whose rows are now all searched is compared as a whole, and a question left
+        without an answer that shows more than one piece of the methodology is asked again in two halves - one piece
+        may be what the gateway refuses, or the question too long for it. Splitting costs nothing when the model
+        answers nothing at all, as when the token has run out: ask_all stops after the same number of questions either
+        way."""
+        ref, keys = question["unit_ref"], [(p[0], p[1]) for p in question["pieces"]]
+        if not result["answer"]:
+            half = len(keys) // 2
+            return [(question["type"], ref, keys[:half]), (question["type"], ref, keys[half:])] if half else []
+        if question["type"] != METHODOLOGY_SEARCH:
+            return []
+        chunk, shown = by_ref[ref]["unit_ref"], {r for r, _ in keys}
+        for item in result["reading"]["relevant"]:
+            if item["ref"] in shown:
+                found[chunk].setdefault(item["ref"], item)
+        mine = [row["ref"] for row in rows_of[chunk] if row["ref"] in to_search]
+        was_open = any(to_search[r] for r in mine)
+        to_search[ref] -= set(keys)
+        return compare_whole(chunk) if was_open and not any(to_search[r] for r in mine) else []
+
+    chat = NOTEBOOK["chat"]
+    if work and chat is None:
+        return StepResult({}, {"questions to ask": len(work)}, ["The methodology is searched by your chat(): run cell 2, "
+                                                                 "then cell 3 again."], finished=False)
+    taken, stopped, peak = ask_all(ctx, chat, work, build, lambda question: (search_check if question["type"] == METHODOLOGY_SEARCH
+                                                                       else compare_check)(question),
+                             after, label="methodology search and comparison", types=types)
+    redact = (NOTEBOOK["live"] or LiveValues()).redact
+    order = {unit["ref"]: number for number, unit in enumerate(units)}
+    records, technical = [], []
+    for question, result in sorted(taken, key=lambda pair: (order.get(pair[0]["unit_ref"], 0), types.index(pair[0]["type"]),
+                                                            min([position.get((p[0], p[1]), 0) for p in pair[0]["pieces"]] or [0]),
+                                                            pair[0]["id"])):
+        if question["id"] in recorded:
+            continue                                     # written already, by an earlier cell
+        records.append(call_record(ctx, question, result, redact, pieces=question["pieces"], context=question.get("context")))
+        technical += ["%s, %s" % (question["unit_ref"], redact(line)) for line in result["technical"]]
+    log_technical(ctx, "05", technical)
+    every = calls + records
+    final = [state for state in methodology_account(units, chunks, every, ctx.settings)["units"].values() if state["askable"]]
+    open_units = sum(1 for state in final if state["open batches"] or state["to compare"])
+    counts = {"pieces of code": len(final), "chunks of the methodology": len(chunks), "batches": len(batches),
+              "searches answered": sum(1 for c in every if c.get("question_type") == METHODOLOGY_SEARCH and c.get("outcome") == "answered"),
+              "comparisons answered": sum(1 for c in every if c.get("question_type") == METHODOLOGY_COMPARISON and c.get("outcome") == "answered"),
+              "chunks found relevant": sum(len({item["ref"] for item in state["relevant"]}) for state in final),
+              "deviations flagged": sum(len(state["deviations"]) for state in final),
+              "not answered now": sum(1 for record in records if record["outcome"] != "answered"),
+              "pieces not finished": open_units, "most at once": peak}
+    messages = [stopped] if stopped else []
+    unexplained = sum(1 for unit in units if askable(unit) and unit["ref"] not in said)
+    if unexplained:
+        messages.append("%d pieces of code had no interpretation from step 04, so the model searched and compared them on "
+                        "their code alone." % unexplained)
+    if not chunks:
+        messages.append("The methodology gave no chunks, so there was nothing to search.")
+    elif open_units and not stopped:
+        messages.append("%d pieces of code are not yet searched and compared in full: the model gave no answer to %d "
+                        "questions. Run cell 3 again to ask them again; what went wrong is in run_log.txt."
+                        % (open_units, counts["not answered now"]))
+    unsearched = sorted({ref for state in final for ref in state["unsearched"]})
+    if unsearched and len(unsearched) <= 5 and counts["searches answered"]:
+        messages.append("No question showing %s has been answered, though questions showing the rest of the methodology "
+                        "were: the gateway may refuse what %s. The rows of Chunks_Model say which pieces of code "
+                        "are affected." % (", ".join(unsearched), "that chunk holds" if len(unsearched) == 1 else "those chunks hold"))
+    elif not open_units:
+        messages.append("Each of the %d pieces of code was searched against all %d chunks of the methodology, in %d "
+                        "batch%s of up to %d tokens; %d chunks were found to bear on them, and %d potential deviations "
+                        "flagged." % (len(final), len(chunks), len(batches), "" if len(batches) == 1 else "es",
+                                      search_shares(ctx.settings)[0], counts["chunks found relevant"], counts["deviations flagged"]))
+    return StepResult({"llm_calls": records}, counts, messages, finished=not open_units)
+
 
 # ---------------------------------------------------------------- the pipeline runner
-CHAT_STEPS = ("read-inputs", "read-with-ai", "link-units")   # the consolidated steps that may ask the model
-def load_pipeline(engine_dir=ENGINE_DIR):
-    """Read pipeline.yaml and refuse anything that is not a known step carried out by a known
-    function. A step is named, versioned and mapped to its function in the one file; only
-    functions listed in STEP_FUNCTIONS can be named, and there is no loading of scripts by path.
-    Enforces: R11"""
-    with open(os.path.join(engine_dir, "pipeline.yaml"), encoding="utf-8") as handle:
-        pipeline = yaml.safe_load(handle)
-    seen = set()
-    for step in pipeline["steps"]:
-        for key in ("id", "name", "version", "carried_out_by"):
-            if key not in step:
-                raise ValueError("Step %s of pipeline.yaml has no '%s'." % (step.get("id", "?"), key))
-        if step["id"] in seen:
-            raise ValueError("Step id %s appears twice in pipeline.yaml." % step["id"])
-        seen.add(step["id"])
-        step["version"] = str(step["version"])
-        if step["carried_out_by"] != "a person" and step["carried_out_by"] not in STEP_FUNCTIONS:
-            raise ValueError("pipeline.yaml names '%s', which is not a function this engine offers. "
-                             "Only the functions in STEP_FUNCTIONS may be named." % step["carried_out_by"])
-    return pipeline
+PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. Enforces: R11
+    {"id": "01", "name": "prepare-run", "carried_out_by": "prepare_run"},
+    {"id": "02", "name": "read-inputs", "carried_out_by": "read_inputs"},
+    {"id": "03", "name": "link-chunks", "carried_out_by": "link_chunks"},
+    {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"},
+    {"id": "05", "name": "search-methodology", "carried_out_by": "search_methodology"})
 
 def update_manifest(store, changes):
     """Change fields of the run manifest and write it back."""
@@ -6957,62 +5720,58 @@ def update_manifest(store, changes):
     return manifest
 
 
-
-def run_pipeline(paths, settings, chat=None, live=None, stop_after="", state=None, sleep=time.sleep):
+def run_pipeline(paths, settings, stop_after=""):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
-    the run continues at the first step without one. A human step stops the run and says
-    what the person should do. Returns {"state", "message", "steps_run"}."""
+    the run continues at the first step without one. A step that says it did not finish - step 04 or 05 with
+    questions still unanswered - stops the run there, and is carried out again when cell 3 runs again.
+    Returns {"state", "message", "steps_run"}."""
     store = open_store(paths, settings)
-    pipeline = load_pipeline()
-    live = live or LiveValues()
-    done = {record["step_id"] for record in store.read("step_records")}
+    done = {record["step_id"] for record in store.read("step_records") if record.get("finished", True)}
     steps_run = []
-    for step in pipeline["steps"]:
+    for step in PIPELINE:
         if stop_after and step["id"] > stop_after:
             break
         if step["id"] in done:
             continue
-        try:
-            run_step(step, store, paths, settings, chat, live, state, sleep)
-        except RunPaused as pause:
-            store.sync()
-            return {"state": "paused", "message": str(pause), "steps_run": steps_run}
+        finished = run_step(step, store, paths, settings)
         steps_run.append(step["name"])
+        if not finished:
+            message = "Step %s (%s) did not finish. Run cell 3 again to carry on from it." % (step["id"], step["name"])
+            rebuild_outputs(store, paths, settings, message)
+            return {"state": "unfinished", "message": message, "steps_run": steps_run}
         if stop_after and step["id"] == stop_after:
             break
     message = "Every step has run." if not stop_after else "Stopped after step %s as asked." % stop_after
     rebuild_outputs(store, paths, settings, message)
     return {"state": "finished", "message": message, "steps_run": steps_run}
 
-def run_step(step, store, paths, settings, chat, live, state, sleep):
+def run_step(step, store, paths, settings):
     """Build the context, call the step function, write what it returns, record the step,
     rebuild the outputs and sync. Steps never touch the store themselves."""
     notes = []
-    ask = None
-    if step["name"] in CHAT_STEPS and chat is not None:
-        ask = make_asker(chat, live, store, settings, validate_answer, state, sleep)
-    provenance = Provenance(paths.run_id, step["id"], step["name"], step["version"],
-                                   created_at=datetime.datetime.now().isoformat(timespec="seconds"))
+    provenance = Provenance(paths.run_id, step["id"], step["name"])
     options = dict(step.get("with") or {})
     options.update({"inputs": list_input_files(paths.inputs_dir), "paths": paths,
-                    "run": {"model_id": paths.model_id, "project_date": paths.project_date, "run_id": paths.run_id}})
+                    "run": {"project": paths.project, "run_id": paths.run_id}})
     work_dir = os.path.join(paths.local_dir, "work")
     os.makedirs(work_dir, exist_ok=True)
-    context = StepContext(settings, options, store.read, ask, work_dir, notes.append, provenance)
+    context = StepContext(settings, options, store.read, work_dir, notes.append, provenance)
     function = STEP_FUNCTIONS[step["carried_out_by"]]
     started = time.time()
     try:
         result = function(context)
-    except RunPaused:
-        raise                                        # a pause is how a run waits for a person; it is not a failure
     except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
         result = StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
     for kind in sorted(result.records):
-        store.append(kind, result.records[kind])
+        if kind == "llm_calls":                      # exchanges with the model: the audit log's Model_Calls sheet
+            store.append_calls(result.records[kind])
+        else:
+            store.append(kind, result.records[kind])
     result.messages = list(result.messages) + notes
     record_step(store, step, result, time.time() - started)
     rebuild_outputs(store, paths, settings, "")
     store.sync()
+    return result.finished
 
 def step_failure(step, problem, work_dir):
     """What the analyst is told when a step could not finish, and where the details are kept for
@@ -7029,9 +5788,10 @@ def record_step(store, step, result, seconds):
     """Leave the step record that makes a finished step visible and resume possible."""
     produced = {kind: len(records) for kind, records in sorted(result.records.items())}
     store.append("step_records", [{
-        "step_id": step["id"], "name": step["name"], "version": step["version"],
+        "step_id": step["id"], "name": step["name"],
         "carried_out_by": step["carried_out_by"], "produced": produced, "counts": result.counts,
-        "messages": result.messages, "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "messages": result.messages, "finished": result.finished,
+        "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "seconds": round(seconds, 3)}])
 
 def log_line(store, text):
@@ -7051,12 +5811,11 @@ def fingerprint_file(path, corner, inputs_dir):
             "bytes": len(data), "sha256": sha256_bytes(data), "swhid": swhid_content(data)}
 
 def engine_file_hashes():
-    """SHA-256 of every file that makes up the engine (its code, which now holds its prompts and
-    reference data, the pipeline and the requirements), so that an evidence pack names exactly the
-    code that produced it."""
+    """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts and reference
+    data, and its requirements - so that an evidence pack names exactly the code that produced it."""
     import glob
     found = {}
-    for pattern in ("*.py", "pipeline.yaml", "requirements.txt"):
+    for pattern in ("*.py", "requirements.txt"):
         for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
             if os.path.isfile(path):
                 found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
@@ -7064,56 +5823,341 @@ def engine_file_hashes():
 
 def prepare_run(ctx):
     """Step 01. Fingerprint every input, record the environment and the allow-listed
-    settings, and say what changed since the previous run of the same project."""
+    settings, and say what changed since the run of the project this one replaced."""
     import importlib.metadata
     paths, inputs = ctx.options["paths"], ctx.options["inputs"]
-    fingerprints = []
-    for corner, _, _ in INPUT_FOLDERS:
-        fingerprints.extend(fingerprint_file(path, corner, paths.inputs_dir) for path in inputs[corner])
-    for key in ("glossary", "tag_rules"):
-        if inputs[key]:
-            fingerprints.append(fingerprint_file(inputs[key], key, paths.inputs_dir))
+    fingerprints = input_fingerprints(paths.inputs_dir, inputs)
     versions = {"python": sys.version.split()[0]}
     for name in PACKAGES_RECORDED:
         try:
             versions[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             versions[name] = "not installed"
-    previous, changes = previous_run_inputs(paths), []
+    previous, changes = paths.previous, []
     if previous is not None:
         before = {f["file"]: f["sha256"] for f in previous["inputs"]}
         now = {f["file"]: f["sha256"] for f in fingerprints}
         changes = ["%s: changed" % n for n in sorted(now) if n in before and before[n] != now[n]]
         changes += ["%s: new" % n for n in sorted(now) if n not in before]
         changes += ["%s: no longer present" % n for n in sorted(before) if n not in now]
-    manifest = dict(ctx.options["run"], engine_version=ENGINE_VERSION, versions=versions, engine_files=engine_file_hashes(),
+    manifest = dict(ctx.options["run"], versions=versions, engine_files=engine_file_hashes(),
                     settings=ctx.settings, inputs=fingerprints, changes_since_previous_run=changes,
                     previous_run=previous["run_id"] if previous else "",
                     started_at=datetime.datetime.now().isoformat(timespec="seconds"))
     return StepResult({"run_manifest": [manifest]}, {"input files": len(fingerprints)},
                              ["%d input files fingerprinted." % len(fingerprints)])
 
-def previous_run_inputs(paths):
-    """The manifest of the latest earlier run of this project, or None."""
-    runs = sorted(n for n in os.listdir(paths.project_dir) if n.startswith("Run_") and n < paths.run_id)
-    for run in reversed(runs):
-        manifest_path = os.path.join(paths.project_dir, run, "_audit", "run_manifest.json")
-        if os.path.exists(manifest_path):
-            with open(manifest_path, encoding="utf-8") as handle:
-                return json.load(handle)
-    return None
+def input_fingerprints(inputs_dir, inputs=None):
+    """The fingerprint of every input file of a project, corner by corner, in the order they are read."""
+    inputs = inputs or list_input_files(inputs_dir)
+    found = []
+    for corner, _, _ in INPUT_FOLDERS:
+        found.extend(fingerprint_file(path, corner, inputs_dir) for path in inputs[corner])
+    for key in ("glossary", "tag_rules"):
+        if inputs[key]:
+            found.append(fingerprint_file(inputs[key], key, inputs_dir))
+    return found
 
-# ---------------------------------------------------------------- Output.xlsx
+# ---------------------------------------------------------------- the workbook's macro
+# Output.xlsm carries one macro, in the workbook's own module: a reference in Chunks_Model, clicked, shows only the
+# chunks it names. Its source is WORKBOOK_MACRO below, and vba_project() packs it into the part Excel reads macros
+# from, xl/vbaProject.bin, written here from Microsoft's published formats - [MS-OVBA] for the project, [MS-CFB] for
+# the compound file that holds it. The project holds the source alone, no compiled code, as [MS-OVBA] asks of a
+# writer: Excel compiles it when it opens the workbook. It is the same for every run, and nothing in it comes from an
+# input. Without macros, each link still leads to the first chunk it names. Enforces: R5, R7
+
+LINK_COLUMNS = {"methodology_refs": ("Chunks_Methodology", "Click: Chunks_Methodology shows only these chunks"),
+                "upstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one"),
+                "downstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one")}
+REF_LIST = re.compile(r"^[CDM]-\d{4,}(?:; [CDM]-\d{4,})*$")      # a cell that is a list of references, and nothing else
+LINK_FONT = "0563C1"                                            # the blue Excel gives a hyperlink
+
+WORKBOOK_MACRO = """Option Explicit
+
+' Verifier: a reference in Chunks_Model, clicked, shows only the chunks it names.
+'   Relevant Chunks in Methodology (searched by LLM): Chunks_Methodology, filtered to the chunks listed.
+'   Immediate Upstream Model Chunk and Immediate Downstream Model Chunk: Chunks_Model, filtered to the
+'   chunks listed and the row clicked.
+' A chunk shown in several rows (C-0012-1, C-0012-2 ...) is shown whole. Nothing else is changed:
+' Data > Clear shows every row again. Without macros, a link still leads to the first chunk it names.
+
+Private Sub Workbook_SheetFollowHyperlink(ByVal Sh As Object, ByVal Target As Hyperlink)
+    Dim clicked As Range, heading As String, refs As String
+    On Error GoTo Finish
+    If Sh.Name <> "Chunks_Model" Then Exit Sub
+    Set clicked = Target.Range.Cells(1, 1)
+    heading = CStr(Sh.Cells(1, clicked.Column).Value)
+    refs = RefsIn(CStr(clicked.Value))
+    If heading = "Relevant Chunks in Methodology (searched by LLM)" Then
+        ShowOnly ThisWorkbook.Worksheets("Chunks_Methodology"), refs
+    ElseIf heading = "Immediate Upstream Model Chunk" Or heading = "Immediate Downstream Model Chunk" Then
+        ShowOnly Sh, refs & "|" & UnitOf(CStr(Sh.Cells(clicked.Row, 1).Value))
+    End If
+Finish:
+End Sub
+
+Private Function RefsIn(ByVal cellText As String) As String
+    ' The references a cell names, such as C-0012 or M-0003, joined with |.
+    Dim position As Long, letter As String, word As String, found As String
+    cellText = cellText & " "
+    For position = 1 To Len(cellText)
+        letter = Mid$(cellText, position, 1)
+        If InStr(1, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-", letter, vbBinaryCompare) > 0 Then
+            word = word & letter
+        Else
+            If IsRef(word) Then found = found & "|" & word
+            word = ""
+        End If
+    Next position
+    If Len(found) > 0 Then RefsIn = Mid$(found, 2)
+End Function
+
+Private Function IsRef(ByVal word As String) As Boolean
+    ' C-0012, D-0003 or M-0017: C, D or M, a hyphen, then four digits or more.
+    Dim position As Long
+    If Len(word) < 6 Then Exit Function
+    If InStr(1, "CDM", Left$(word, 1), vbBinaryCompare) = 0 Then Exit Function
+    If Mid$(word, 2, 1) <> "-" Then Exit Function
+    For position = 3 To Len(word)
+        If InStr(1, "0123456789", Mid$(word, position, 1), vbBinaryCompare) = 0 Then Exit Function
+    Next position
+    IsRef = True
+End Function
+
+Private Function UnitOf(ByVal rowRef As String) As String
+    ' A row's reference without its part: M-0003-2 is a part of M-0003.
+    Dim cut As Long
+    cut = InStr(3, rowRef, "-")
+    If cut > 0 Then UnitOf = Left$(rowRef, cut - 1) Else UnitOf = rowRef
+End Function
+
+Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String)
+    ' Filter the sheet on its Ref column to the chunks named, each with every row it takes.
+    Dim wanted As Variant, shown As String, cellRef As String, last As Long, rowNumber As Long, i As Long, locked As Boolean
+    If Len(refs) = 0 Then Exit Sub
+    wanted = Split(refs, "|")
+    last = onSheet.UsedRange.Row + onSheet.UsedRange.Rows.Count - 1
+    For rowNumber = 2 To last
+        cellRef = CStr(onSheet.Cells(rowNumber, 1).Value)
+        For i = LBound(wanted) To UBound(wanted)
+            If Len(wanted(i)) > 0 Then
+                If cellRef = wanted(i) Or Left$(cellRef, Len(wanted(i)) + 1) = wanted(i) & "-" Then
+                    shown = shown & "|" & cellRef
+                    Exit For
+                End If
+            End If
+        Next i
+    Next rowNumber
+    If Len(shown) = 0 Then Exit Sub
+    locked = onSheet.ProtectContents
+    On Error GoTo Restore
+    If locked Then onSheet.Unprotect
+    On Error Resume Next
+    onSheet.ShowAllData                                ' clears any filter; with none on, there is nothing to clear
+    On Error GoTo Restore
+    If Not onSheet.AutoFilterMode Then onSheet.Range("A1").CurrentRegion.AutoFilter
+    onSheet.AutoFilter.Range.AutoFilter Field:=1, Criteria1:=Split(Mid$(shown, 2), "|"), Operator:=xlFilterValues
+    onSheet.Activate
+    Application.Goto onSheet.Range("A1"), True
+Restore:
+    If locked Then onSheet.Protect DrawingObjects:=False, Contents:=True, Scenarios:=False, AllowFormattingColumns:=True, AllowFiltering:=True
+End Sub
+"""
+
+VBA_WORKBOOK_CLASS = "0{00020819-0000-0000-C000-000000000046}"   # the classes of a workbook's and a sheet's module
+VBA_SHEET_CLASS = "0{00020820-0000-0000-C000-000000000046}"
+VBA_STDOLE = b"*\\G{00020430-0000-0000-C000-000000000046}#2.0#0#C:\\WINDOWS\\system32\\stdole2.tlb#OLE Automation"
+
+
+def ovba_compress(data):
+    """[MS-OVBA] 2.4.1 compression: chunks of 4,096 bytes, each a run of tokens - a literal byte, or a copy of bytes
+    met earlier in the chunk. A chunk that would not shrink is kept as it is."""
+    out = bytearray(b"\x01")
+    for start in range(0, len(data), 4096):
+        chunk = data[start:start + 4096]
+        body, position, seen = bytearray(), 0, {}
+        while position < len(chunk):
+            flag_at, flags = len(body), 0
+            body.append(0)
+            for bit in range(8):
+                if position >= len(chunk):
+                    break
+                bits = max((position - 1).bit_length(), 4) if position else 16
+                longest, offset = 0, 0
+                most = min((0xFFFF >> bits) + 3, len(chunk) - position) if position else 0
+                for earlier in reversed(seen.get(bytes(chunk[position:position + 3]), [])) if most >= 3 else ():
+                    length = 0
+                    while length < most and chunk[earlier + length] == chunk[position + length]:
+                        length += 1
+                    if length > longest:
+                        longest, offset = length, position - earlier
+                        if length == most:
+                            break
+                step = longest if longest >= 3 else 1
+                if longest >= 3:
+                    body += struct.pack("<H", ((offset - 1) << (16 - bits)) | (longest - 3))
+                    flags |= 1 << bit
+                else:
+                    body.append(chunk[position])
+                for index in range(position, position + step):
+                    seen.setdefault(bytes(chunk[index:index + 3]), []).append(index)
+                position += step
+            body[flag_at] = flags
+        if len(body) > 4096:
+            if len(chunk) < 4096:
+                raise ValueError("a short chunk that does not compress")
+            out += struct.pack("<H", 0x3FFF) + chunk
+        else:
+            out += struct.pack("<H", 0xB000 | (len(body) - 1)) + body
+    return bytes(out)
+
+
+def ovba_encrypt(project_id, data, seed):
+    """[MS-OVBA] 2.4.3.2 data encryption, for the project's protection, password and visibility: a seed, the version,
+    the project's key - the sum of its id's bytes - then the data's length and the data, each byte folded into the
+    ones before it. Returned as the hexadecimal text the PROJECT stream holds."""
+    key = sum(project_id.encode("latin-1")) & 0xFF
+    version_enc, key_enc = seed ^ 2, seed ^ key
+    out = [seed, version_enc, key_enc]
+    plain1, enc1, enc2 = key, key_enc, version_enc
+    for byte in [7] * ((seed & 6) // 2) + list(struct.pack("<I", len(data)) + data):
+        byte_enc = byte ^ ((enc2 + plain1) & 0xFF)
+        out.append(byte_enc)
+        enc2, enc1, plain1 = enc1, byte_enc, byte
+    return bytes(out).hex().upper()
+
+
+def vba_record(record_id, payload=b""):
+    """One record of the project's dir stream: its id, its size, what it holds."""
+    return struct.pack("<HI", record_id, len(payload)) + payload
+
+
+@functools.lru_cache(maxsize=None)
+def vba_project(sheets):
+    """The bytes of xl/vbaProject.bin: the workbook's module holding WORKBOOK_MACRO, and a module for each sheet,
+    `sheets` giving their code names in order. [MS-OVBA] 2.2 and 2.3; the same bytes on every call."""
+    project_id = "{%s}" % str(uuid.UUID(bytes=hashlib.sha256(b"Verifier workbook macro").digest()[:16])).upper()
+    attributes = ('Attribute VB_Name = "%s"\r\nAttribute VB_Base = "%s"\r\nAttribute VB_GlobalNameSpace = False\r\n'
+                  'Attribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = True\r\n'
+                  'Attribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = True\r\n')
+    modules = [("ThisWorkbook", attributes % ("ThisWorkbook", VBA_WORKBOOK_CLASS) + WORKBOOK_MACRO.replace("\n", "\r\n"))]
+    modules += [(name, attributes % (name, VBA_SHEET_CLASS)) for name in sheets]
+    wide = lambda name: name.encode("utf-16-le")
+    directory = (vba_record(0x01, struct.pack("<I", 1)) + vba_record(0x02, struct.pack("<I", 0x409))
+                 + vba_record(0x14, struct.pack("<I", 0x409)) + vba_record(0x03, struct.pack("<H", 1252))
+                 + vba_record(0x04, b"VBAProject") + vba_record(0x05) + vba_record(0x40) + vba_record(0x06)
+                 + vba_record(0x3D) + vba_record(0x07, struct.pack("<I", 0)) + vba_record(0x08, struct.pack("<I", 0))
+                 + struct.pack("<HIIH", 0x09, 4, 1, 0) + vba_record(0x0C) + vba_record(0x3C)
+                 + vba_record(0x16, b"stdole") + vba_record(0x3E, wide("stdole"))
+                 + vba_record(0x0D, struct.pack("<I", len(VBA_STDOLE)) + VBA_STDOLE + b"\0" * 6)
+                 + vba_record(0x0F, struct.pack("<H", len(modules))) + vba_record(0x13, struct.pack("<H", 0xFFFF)))
+    for name, _ in modules:
+        encoded = name.encode("latin-1")
+        directory += (vba_record(0x19, encoded) + vba_record(0x47, wide(name)) + vba_record(0x1A, encoded)
+                      + vba_record(0x32, wide(name)) + vba_record(0x1C) + vba_record(0x48)
+                      + vba_record(0x31, struct.pack("<I", 0)) + vba_record(0x1E, struct.pack("<I", 0))
+                      + vba_record(0x2C, struct.pack("<H", 0xFFFF)) + vba_record(0x22) + vba_record(0x2B))
+    directory += vba_record(0x10)
+    project = ('ID="%s"\r\n' % project_id + "".join("Document=%s/&H00000000\r\n" % name for name, _ in modules)
+               + 'Name="VBAProject"\r\nHelpContextID="0"\r\nVersionCompatible32="393222000"\r\n'
+               + 'CMG="%s"\r\nDPB="%s"\r\nGC="%s"\r\n\r\n' % (ovba_encrypt(project_id, b"\0\0\0\0", 0x3E),
+                                                              ovba_encrypt(project_id, b"\0", 0x9A),
+                                                              ovba_encrypt(project_id, b"\xff", 0x51))
+               + "[Host Extender Info]\r\n&H00000001={3832D640-CF90-11CF-8E43-00A0C911005A};VBE;&H00000000\r\n\r\n"
+               + "[Workspace]\r\n" + "".join("%s=0, 0, 0, 0, C\r\n" % name for name, _ in modules))
+    streams = {"PROJECT": project.encode("latin-1"),
+               "PROJECTwm": b"".join(name.encode("latin-1") + b"\0" + wide(name) + b"\0\0" for name, _ in modules) + b"\0\0",
+               "VBA/_VBA_PROJECT": b"\xcc\x61\xff\xff\x00\x00\x00",
+               "VBA/dir": ovba_compress(directory)}
+    streams.update({"VBA/" + name: ovba_compress(source.encode("latin-1")) for name, source in modules})
+    return cfb_file(streams)
+
+
+def cfb_file(streams):
+    """A compound file, [MS-CFB] version 3, holding `streams` - a path of names, "VBA/dir", to its bytes; the storages
+    are those the paths name. Streams under 4,096 bytes live in the mini stream, in sectors of 64 bytes; the rest,
+    and the file's own tables, in sectors of 512. The entries of each storage form a balanced tree in the order the
+    format sets - shorter names first, then by their capitals - coloured so that it is a red-black tree."""
+    SECTOR, MINI, CUTOFF, FREE, END, FATSECT = 512, 64, 4096, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD
+    nodes = [{"name": "Root Entry", "type": 5, "children": {}, "data": b""}]
+    for path in streams:
+        parent = nodes[0]
+        *storages, name = path.split("/")
+        for storage in storages:
+            if storage not in parent["children"]:
+                nodes.append({"name": storage, "type": 1, "children": {}, "data": b""})
+                parent["children"][storage] = len(nodes) - 1
+            parent = nodes[parent["children"][storage]]
+        nodes.append({"name": name, "type": 2, "children": {}, "data": streams[path]})
+        parent["children"][name] = len(nodes) - 1
+    for node in nodes:
+        node.update(left=FREE, right=FREE, child=FREE, colour=1, start=0, size=len(node["data"]))
+    for node in nodes:                                            # each storage's entries: a balanced tree
+        order = sorted(node["children"].values(), key=lambda i: (len(nodes[i]["name"]), nodes[i]["name"].upper()))
+        depths = {}
+        def grow(members, depth):
+            if not members:
+                return FREE
+            middle = len(members) // 2
+            index = members[middle]
+            depths[index] = depth
+            nodes[index]["left"], nodes[index]["right"] = grow(members[:middle], depth + 1), grow(members[middle + 1:], depth + 1)
+            return index
+        node["child"] = grow(order, 0)
+        if depths and len(depths) != 2 ** (max(depths.values()) + 1) - 1:
+            for index, depth in depths.items():                   # an incomplete last level is red
+                nodes[index]["colour"] = 0 if depth == max(depths.values()) else 1
+    sectors, fat = [], []
+    def allocate(data):
+        if not data:
+            return END
+        count, first = -(-len(data) // SECTOR), len(sectors)
+        for number in range(count):
+            sectors.append(data[number * SECTOR:(number + 1) * SECTOR].ljust(SECTOR, b"\0"))
+            fat.append(first + number + 1 if number < count - 1 else END)
+        return first
+    mini, minifat = bytearray(), []
+    for node in nodes:
+        if node["type"] == 2 and node["size"] < CUTOFF:
+            count = -(-node["size"] // MINI)
+            node["start"] = len(minifat) if count else END
+            minifat += [node["start"] + number + 1 if number < count - 1 else END for number in range(count)]
+            mini += node["data"].ljust(count * MINI, b"\0")
+    for node in nodes:
+        if node["type"] == 2 and node["size"] >= CUTOFF:
+            node["start"] = allocate(node["data"])
+    nodes[0]["start"], nodes[0]["size"] = allocate(bytes(mini)), len(mini)
+    minifat_sectors = -(-len(minifat) // (SECTOR // 4))
+    minifat_start = allocate(struct.pack("<%dI" % (minifat_sectors * SECTOR // 4), *(minifat + [FREE] * (minifat_sectors * SECTOR // 4 - len(minifat)))))
+    entries = b""
+    for node in nodes:
+        name = node["name"].encode("utf-16-le") + b"\0\0"
+        entries += struct.pack("<64sHBBIII16sIQQIQ", name, len(name), node["type"], node["colour"], node["left"],
+                               node["right"], node["child"], b"\0" * 16, 0, 0, 0, node["start"], node["size"])
+    entries += struct.pack("<64sHBBIII16sIQQIQ", b"", 0, 0, 0, FREE, FREE, FREE, b"\0" * 16, 0, 0, 0, 0, 0) * (-len(nodes) % 4)
+    directory_start = allocate(entries)
+    fat_sectors = 1
+    while fat_sectors * (SECTOR // 4) < len(sectors) + fat_sectors:
+        fat_sectors += 1
+    fat_start = len(sectors)
+    table = fat + [FATSECT] * fat_sectors
+    table += [FREE] * (fat_sectors * (SECTOR // 4) - len(table))
+    sectors += [struct.pack("<%dI" % (SECTOR // 4), *table[number * (SECTOR // 4):(number + 1) * (SECTOR // 4)]) for number in range(fat_sectors)]
+    if fat_sectors > 109:
+        raise ValueError("a compound file this large needs more than its header's table of tables")
+    header = struct.pack("<8s16sHHHHH6sIIIIIIIII", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", b"\0" * 16, 0x3E, 3, 0xFFFE, 9, 6,
+                         b"\0" * 6, 0, fat_sectors, directory_start, 0, CUTOFF, minifat_start if minifat else END,
+                         minifat_sectors, END, 0)
+    header += struct.pack("<109I", *([fat_start + number for number in range(fat_sectors)] + [FREE] * (109 - fat_sectors)))
+    return header + b"".join(sectors)
+
+
+# ---------------------------------------------------------------- Output.xlsm
 CELL_WITHHELD = "This text could not be shown in plain words; the technical text is in the audit records."
 CUT_NOTE = " ... (cut here; the full text is in the audit files)"
 PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
                            r"[:=(\[]\s*None\b|\{'|\['|^None$")
 
-def quoted(text, citation=""):
-    """Text taken from an input or from the AI is always shown visibly quoted, with its
-    citation. The wording rules apply to the tool's own words, not to quotations. Enforces: R1"""
-    inner = (text or "").replace("\u201c", '"').replace("\u201d", '"')
-    return "\u201c%s\u201d%s" % (inner, " (%s)" % citation if citation else "")
 
 def plain_cell(value, input_text, store):
     """The last gate before a cell is written. the tool's own words must be free of Python
@@ -7129,32 +6173,25 @@ def plain_cell(value, input_text, store):
         return int(value) if value == int(value) else plain_number(value)
     text = str(value)
     if not input_text:
-        own_words = re.sub(r"\u201c.*?\u201d", "", text, flags=re.S)
-        if PYTHON_TRACES.search(own_words) or has_banned_wording(own_words):
+        said = own_words(text)
+        if PYTHON_TRACES.search(said) or has_banned_wording(said):
             log_line(store, "cell text withheld: " + text)
             text = CELL_WITHHELD
     return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
 
 
-
 def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
-    ledger = store.read("graph_ledger")
-    return {"model_id": paths.model_id, "date_initiated": paths.project_date, "run_id": paths.run_id,
-            "engine_version": ENGINE_VERSION,
-            "graph_version_id": "G-" + chain_head(ledger)[:12] if ledger else ""}
+    return {"project": paths.project, "run_id": paths.run_id}
 
-def rows_package_info(store, paths, settings, progress):
-    """The rows of Model_Package_Info: identity, inputs, what was read, repairs, how values and formulas are compared, AI calls."""
+def rows_package_info(store, paths, settings, progress, split=None):
+    """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
     identity, rows = run_identity(store, paths), []
     def add(group, item, value):
         rows.append({"group": group, "item": item, "value": value})
-    add("Identity", "Model ID", identity["model_id"])
-    add("Identity", "Date initiated", identity["date_initiated"])
+    add("Identity", "Project", identity["project"])
     add("Identity", "Run", identity["run_id"])
     add("Identity", "Run progress", progress)
-    add("Identity", "Engine version", identity["engine_version"])
-    add("Identity", "Graph version id", identity["graph_version_id"] or NOT_RUN_YET)
     manifest = (store.read("run_manifest") or [{}])[0]
     if manifest.get("engine_files"):
         add("Identity", "Engine files fingerprint", sha256_text(canonical_json(manifest["engine_files"]))[:16] +
@@ -7168,313 +6205,160 @@ def rows_package_info(store, paths, settings, progress):
             add(row["group"], row["item"], row["value"])
     for row in store.read("info_rows"):
         add(row["group"], row["item"], row["value"])
+    for group, several in (split or {}).items():          # beside the other rows of their group: what takes several rows
+        if several:
+            at = max((number for number, row in enumerate(rows) if row["group"] == group), default=len(rows) - 1) + 1
+            code = group == "Package"
+            rows.insert(at, {"group": group, "item": "Pieces shown in several rows" if code else "Chunks shown in several rows",
+                             "value": "; ".join("%s in %d rows, %s-1 to %s-%d" % (ref, n, ref, ref, n) for ref, n in several) +
+                                      (". Each is one piece of the package, too long for one row, and is treated as one wherever "
+                                       "it is used: what the model says of it stands together on its first row." if code else
+                                       ". Each is one chunk, too long for one row, and is treated as one wherever it is used.")})
     repairs = {}
     for repair in store.read("read_repairs"):
         repairs.setdefault(repair["file"], []).append(repair["kind"])
     for name in sorted(repairs):
         kinds = sorted(set(repairs[name]))
         add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
-    for label, value in call_statistics(store):
-        add("AI calls", label, value)
     return rows
 
 
-
-
-MAP_ROLES = {"return": "Final output", "value": "Intermediate value", "column": "Column", "argument": "Parameter",
-             "stored data": "Raw input: stored data", "file": "Raw input: file", "number": "Raw input: hard-coded number",
-             "outside": "From outside the package"}
-MAP_OUTLINE_MAX = 7          # Excel groups rows eight levels deep (outline levels 0 to 7); deeper rows are indented only
-MAP_ID_COLUMNS = 12          # the Map ID, one column per level, for filtering; a deeper level joins the last column
-
-def covering_unit(units, file, line):
-    """The most specific model unit whose lines hold a line of a file: a statement before its function."""
-    found = [u for u in units if u.get("file") == file and u.get("lines") and u["lines"][0] <= line <= u["lines"][-1]]
-    return min(found, key=lambda u: (u["lines"][-1] - u["lines"][0], u["ref"]))["ref"] if found else ""
-
-def implementation_map(store, settings=None):
-    """The rows of Model_Implementation_Map: one row per value the model computes, from each final output
-    down to the rawest inputs. A row says one thing: this variable, computed here, by this function, from
-    these arguments - and every argument is a row of its own beneath it, where it is the variable. A called
-    function is entered with that call's own arguments, and what it computes inside stands under the value
-    it produces. Nothing that is not part of a calculation appears: what no final output reaches is not a
-    row of this sheet, it is counted on Mapping_Coverage. Enforces: R2, R4, R14"""
-    flow = store.read("dataflow")
-    if not flow:
-        return []
-    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
-    units = store.read("model_units")
-    functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-    outputs, _, _ = decided_outputs(flow, {})
-    by_function = (settings or DEFAULT_SETTINGS)["map_granularity"] == "function"
-    rows_max = int((settings or DEFAULT_SETTINGS)["map_rows_max"])
-    rows, cut = [], []
-
-    def variable_of(node):
-        """The one variable a row is about. What a function returns is the function's own result: its row
-        is the function, and the value it returns - the last tie_outputs, say - is that row's child."""
-        return node.get("function", "") if node["kind"] == "return" else node["name"]
-
-    def ref_of(node):
-        if node["kind"] in ("stored data", "file"):
-            return node.get("unit_ref", "")
-        function = node.get("function")
-        if function in functions:
-            if node["kind"] == "argument":
-                return functions[function]["ref"]
-            return covering_unit(units, functions[function]["file"], node["line"]) or functions[function]["ref"]
-        return ""
-
-    def function_of(node):
-        """The function that defines this value: for what a function returns, that function; otherwise the
-        package function this value calls, else the function named in the code itself (a function of R or
-        of another package, which has no unit of its own). A raw input is defined by no function."""
-        if node["kind"] not in ("value", "column", "return"):
-            return "", ""
-        if node["kind"] == "return":
-            return node.get("function", ""), functions.get(node.get("function"), {}).get("ref", "")
-        calls = [nodes[s] for s in node["from"] if nodes.get(s, {}).get("kind") == "call"]
-        if calls:
-            callee = calls[0]["callee"]
-            return callee, functions.get(callee, {}).get("ref", "")
-        code = (node.get("code") or "").split("\n")[0]
-        written = re.sub(r"^\s*[A-Za-z._][\w.]*\s*(?:<-|=[^=])", "", code)
-        found = re.search(r"(?:([A-Za-z._][\w.]*)::)?([A-Za-z._][\w.]*)\s*\(", written)
-        return (found.group(2) if found else ""), ""
-
-    def expand(source, frames, depth=0):
-        """One source, resolved to the values that are rows: a call becomes what it was given and what the
-        called function computes inside from it; a parameter becomes the argument the call gave it, or its
-        default; and, asked for a map by function, a value becomes what it rests on. Everything else is a
-        row of its own."""
-        record = nodes.get(source)
-        if record is None or record["kind"] == "guard" or depth > 60:
-            return []
-        if record["kind"] == "call":
-            callee = record["callee"]
-            found = [pair for argument in record["from"] if argument != "%s:return" % callee
-                     for pair in expand(argument, frames, depth + 1)]
-            if callee in (name for name, _ in frames):
-                return found                                     # the function calls itself: its arguments stand, the descent stops
-            inner = frames + [(callee, record["bindings"])]
-            for inside in nodes.get("%s:return" % callee, {"from": []})["from"]:
-                kid = nodes.get(inside, {})
-                if kid.get("kind") == "argument" and kid.get("function") == callee:
-                    if record["bindings"].get(kid["name"], ["default"]) == ["default"]:
-                        found += [pair for value in kid.get("default_from") or [] for pair in expand(value, inner, depth + 1)]
-                    continue                                     # a parameter is the argument the call gave, already a row
-                found += expand(inside, inner, depth + 1)
-            return found
-        if record["kind"] == "argument" and record.get("function") == frames[-1][0] and frames[-1][1] is not None:
-            given = frames[-1][1].get(record["name"], ["default"])
-            if given == ["default"]:
-                return [pair for value in record.get("default_from") or [] for pair in expand(value, frames, depth + 1)]
-            return [pair for value in given for pair in expand(value, frames[:-1], depth + 1)]
-        if by_function and record["kind"] in ("value", "column") and record["from"]:
-            return [pair for value in record["from"] for pair in expand(value, frames, depth + 1)]
-        return [(source, frames)]
-
-    def children(node, frames):
-        """What this value is computed from, each a row of its own beneath it."""
-        seen, once = set(), []
-        for source in node["from"]:
-            for child, child_frames in expand(source, frames):
-                key = (child, tuple(name for name, _ in child_frames))
-                if key not in seen:                              # the same value twice under one step is one row
-                    seen.add(key)
-                    once.append((child, child_frames))
-        return once                                          # in the order the code gives them: c(overrides_and_caps, tie_outputs)
-
-    def emit(node_id, frames, map_id, level, path):
-        node = nodes.get(node_id)
-        if node is None or node["kind"] == "guard":
-            return
-        key = (node_id, tuple(name for name, _ in frames))
-        if key in path:                                          # a value that feeds itself: the descent stops
-            return
-        if len(rows) >= rows_max:
-            if not cut:
-                cut.append(True)
-                rows.append(dict(blank_row(), map_id=map_id, level=level, output_variable="the map was cut here",
-                                 arguments="the setting map_rows_max stopped the map; ask for a map by function (map_granularity) or raise it"))
-            return
-        kids = children(node, frames)
-        variable = variable_of(node)
-        name, ref = function_of(node)
-        row = dict(blank_row(), map_id=map_id, level=level, output_variable=variable, ov_ref=ref_of(node),
-                   ov_code=node.get("code") or node.get("file") or "", 
-                   function_name=name, fn_ref=ref, role=MAP_ROLES.get(node["kind"], node["kind"]),
-                   arguments="; ".join(dict.fromkeys(variable_of(nodes[child]) for child, _ in kids if child in nodes)))
-        if node["kind"] == "argument" and frames[-1][1] is None:
-            row["role"] = "Raw input: argument of the final output"
-        if node["kind"] == "column" and not node["from"]:
-            row["role"] = "Raw input: column of the data given"
-        if row["role"].startswith("Raw input"):                 # never calculated: where the calculation starts
-            row["output_variable"], row["ov_code"] = "%s (terminal input)" % variable, ""
-        elif node["kind"] == "return" and node.get("function") in functions:    # the function that assembles it all
-            text = functions[node["function"]]["text"].split("\n")
-            start = next((n for n, line in enumerate(text) if re.match(r"\s*`?%s`?\s*(<-|=)" % re.escape(node["function"]), line)), 0)
-            row["ov_code"] = "\n".join(text[start:]).strip()
-        for position, part in enumerate(map_id.split(".")[:MAP_ID_COLUMNS], start=1):
-            row["id%d" % position] = ".".join(map_id.split(".")[MAP_ID_COLUMNS - 1:]) if position == MAP_ID_COLUMNS else part
-        rows.append(row)
-        width = max(2, len(str(len(kids))))
-        for position, (child, child_frames) in enumerate(kids, start=1):
-            emit(child, child_frames, "%s.%0*d" % (map_id, width, position), level + 1, path | {key})
-
-    for position, output in enumerate(outputs, start=1):
-        emit("%s:return" % output, [(output, None)], "%02d" % position, 0, frozenset())
-    return rows
-
-def blank_row():
-    """Every column of the map, empty: a row fills the ones it has."""
-    row = {"map_id": "", "level": 0, "output_variable": "", "ov_ref": "", "ov_code": "",
-           "function_name": "", "fn_ref": "", "arguments": "", "role": ""}
-    row.update({"id%d" % number: "" for number in range(1, MAP_ID_COLUMNS + 1)})
-    return row
-
-def not_on_the_map(store, map_rows, settings=None):
-    """What no calculation reaches, counted for Mapping_Coverage and never shown on the map: the model
-    units no final output reaches, the methodology no step implements, and the documentation describing
-    nothing in the map. A methodology passage counts as implemented when a step of the map is linked to
-    it, or when every non-trivial number it states is a value the map uses - hard-coded in a step, or held
-    in a table or file it reads. Enforces: R2, R14"""
-    units, flow = store.read("model_units"), store.read("dataflow")
-    nodes = {r["node"]: r for r in flow if r["record_type"] == "node"}
-    functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
-    outputs, _, not_reached = decided_outputs(flow, {}) if flow else ([], {}, [])
-    reached = {name for name in functions if name not in not_reached}
-    on_map = {row["ov_ref"] for row in map_rows if row["ov_ref"]} | {row["fn_ref"] for row in map_rows if row["fn_ref"]}
-    links, generated = {}, []
-    for edge in store.read("graph_ledger"):
-        if edge["record_type"] != "edge":
-            continue
-        source, target = edge["source"], edge["target"]
-        if edge["kind"] == "corresponds":
-            unit = source if source.startswith("M-") else target
-            links.setdefault(unit, []).append(target if unit == source else source)
-        elif edge["kind"] in ("documents", "tested_by", "generated_from"):
-            generated.append((source, target))
-    for name in reached:                                          # the roxygen, help pages, tests and statements of a step
-        home = functions[name]
-        on_map |= {u["ref"] for u in units if u.get("file") == home["file"] and u.get("lines")
-                   and home["lines"][0] <= u["lines"][0] and u["lines"][-1] <= home["lines"][-1]}
-    for _ in range(3):                                            # what documents or tests a unit on the map belongs with it
-        on_map |= {other for pair in generated for other in pair if set(pair) & on_map}
-    linked = {other for unit in on_map for other in links.get(unit, [])}
-    trivial = {Decimal(str(number)) for number in (settings or DEFAULT_SETTINGS)["trivial_numbers"]}
-    used = {Decimal(node["name"]) for node in nodes.values() if node["kind"] == "number" and node.get("function") in reached}
-    tables_read = {node["name"] for node in nodes.values() if node["kind"] in ("stored data", "file")}
-    for table in store.read("parameter_tables"):
-        if table["object_name"] in tables_read:
-            used |= {Decimal(parse_number(str(cell))["value"]) for record in table["rows"] for cell in record
-                     if parse_number(str(cell))}
-    rules = load_tag_rules()
-    def by_values(chunk):
-        stated = {Decimal(number["value"]) for number in find_numbers(chunk["text"])} - trivial
-        return bool(stated) and stated <= used
-    checkable = lambda chunk: states_something_checkable(
-        {"type": chunk["kind"].lower(), "text": chunk["text"], "not_read_reason": chunk.get("not_read_reason", "")}, rules)
-    return {"model_units": [u["ref"] for u in units if u["ref"] not in on_map],
-            "methodology": [c["ref"] for c in store.read("chunks_canon") if c["ref"] not in linked and checkable(c) and not by_values(c)],
-            "documentation": [c["ref"] for c in store.read("chunks_doc") if c["ref"] not in linked],
-            "on_map": on_map, "linked": linked, "final_outputs": outputs,
-            "linked_units": {unit for unit in on_map if links.get(unit)}}
-
-def rows_chunks(chunks):
-    """The rows of Chunks_Canon and Chunks_Doc."""
-    return [{"ref": c["ref"], "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": c["text"],
-             "source_file": c["source_file"]} for c in chunks]
-
-
-def rows_model_units(units):
-    """The rows of Chunks_Model: each a whole piece of code, as written."""
-    return [{"ref": u["ref"], "kind": u["kind"], "file": u["file"], "text": u["text"],
-             "lines": "%d-%d" % tuple(u["lines"]) if u.get("lines") else ""} for u in units]
-
-
-
-def coverage_rows(store, map_rows, model_rows, doc_rows, settings=None):
-    """Mapping_Coverage, counted from the map and from what the map does not reach. One row per final
-    output: how many values it takes, how deep, and what it rests on by kind. Then one row per corner,
-    each read the way that corner needs: of the model units, how many a final output reaches; of the
-    methodology and the documentation, how many a unit on the map is linked to. Enforces: R2, R10"""
-    missing = not_on_the_map(store, map_rows, settings) if store.read("dataflow") else {
-        "model_units": [], "methodology": [], "documentation": [], "on_map": set(), "linked": set(),
-        "linked_units": set(), "final_outputs": []}
-    branches = {}
-    for row in map_rows:
-        branches.setdefault(row["map_id"].split(".")[0], []).append(row)
+def rows_chunks(chunks, slicer=None):
+    """The rows of Chunks_Methodology and Chunks_Documentation: a chunk in one row or, too long for one, in rows
+    C-0045-1, C-0045-2 and so on as `slicer` cuts it, each with the chunk's section, type and file. Enforces: R2, R13"""
     rows = []
-    for position, output in enumerate(missing["final_outputs"], start=1):
-        shown = branches.get("%02d" % position, [])
-        if not shown:
-            continue
-        role = lambda start: sum(1 for row in shown if row["role"].startswith(start))
-        rows.append({"row": "%02d %s (final output)" % (position, output), "counts_what": "values computed on the way to %s" % output,
-                     "total": len(shown), "covered": sum(1 for row in shown if row["ov_ref"] in missing["linked_units"]),
-                     "not_covered": sum(1 for row in shown if row["ov_ref"] not in missing["linked_units"]),
-                     "depth": max(row["level"] for row in shown), "in_arguments": role("Raw input: argument"),
-                     "in_columns": role("Raw input: column"), "in_tables": role("Raw input: stored data"),
-                     "in_files": role("Raw input: file"), "in_numbers": role("Raw input: hard-coded"),
-                     "how_to_read": "A row of the map is one variable, computed by one function from the arguments beneath it. "
-                                    "Covered = variables whose unit a methodology passage is linked to."})
-    model_units = {row["ref"] for row in model_rows}
-    canon, doc_refs = store.read("chunks_canon"), {row["ref"] for row in doc_rows}
-    for label, counts_what, total, covered, not_covered, how in (
-            ("Model units (one row each on Chunks_Model)", "units of the model package", len(model_units),
-             len(model_units) - len(missing["model_units"]), len(missing["model_units"]),
-             "Covered = units a final output reaches: a row of the map, or the roxygen, help page, test or statement "
-             "belonging to one; not covered = the units no final output reaches, which the map does not show."),
-            ("Methodology passages", "passages of the methodology", len(canon),
-             len({c["ref"] for c in canon} & missing["linked"]), len(missing["methodology"]),
-             "Covered = passages a unit on the map is linked to; not covered = passages that state a number, formula or "
-             "rule that no step implements. The rest state nothing to implement."),
-            ("Documentation passages", "passages of the model documentation", len(doc_refs),
-             len(doc_refs & missing["linked"]), len(missing["documentation"]),
-             "Covered = passages a unit on the map is linked to; not covered = passages describing nothing in the map.")):
-        rows.append({"row": label, "counts_what": counts_what, "total": total, "covered": covered,
-                     "not_covered": not_covered, "how_to_read": how})
+    for c in chunks:
+        slices = slicer(c) if slicer else [(c["text"], False)]
+        for number, (part, joined) in enumerate(slices, start=1):
+            rows.append({"ref": c["ref"] if len(slices) == 1 else "%s-%d" % (c["ref"], number), "chunk_ref": c["ref"],
+                         "joined": joined, "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": part,
+                         "source_file": c["source_file"]})
     return rows
+
+
+def interpretation_of(parts, said, unanswered, asked):
+    """What the organisation's model says of a unit: its answer, or, for a unit asked about in parts, the answers of
+    all its parts together, each under the part and the lines it explains."""
+    texts = []
+    for part in parts:
+        answer = said.get(part["ref"]) or (NO_ANSWER if part["ref"] in unanswered else "")
+        texts.append(answer or (NOT_ASKED if asked and not askable(part) else ""))
+    if len(parts) == 1:
+        return texts[0]
+    return "\n\n".join("Part %d of %d%s: %s" % (part["part"], part["parts"], ", lines %d-%d" % tuple(part["lines"]) if part.get("lines") else "", answer)
+                        for part, answer in zip(parts, texts) if answer)
+
+
+def spread_rows(ref, parts, columns):
+    """The rows a unit takes on Chunks_Model: its code down its parts, and each of its own columns from the first row
+    down, continued on the rows below where longer than a cell, never cut. A unit takes as many rows as the longest of
+    these needs; with more than one, they are numbered M-0003-1, M-0003-2 and so on. Enforces: R2, R13"""
+    cut = {field: ([value] if value is not None else []) if not isinstance(value, str) else
+                  [piece for piece, _ in text_slices(value, float("inf"), SLICE_CHARS)] if value else []
+           for field, value in columns.items()}
+    count = max([len(parts)] + [len(pieces) for pieces in cut.values()])
+    rows = []
+    for number in range(count):
+        part = parts[number] if number < len(parts) else None
+        lines = part.get("lines") if part else None
+        row = {"ref": ref if count == 1 else "%s-%d" % (ref, number + 1), "unit_ref": ref, "code_row": part is not None,
+               "joined": part["joined"] if part else False, "kind": parts[0]["kind"], "file": parts[0]["file"],
+               "text": part["text"] if part else "", "lines": "%d-%d" % tuple(lines) if lines else ""}
+        row.update({field: pieces[number] if number < len(pieces) else "" for field, pieces in cut.items()})
+        rows.append(row)
+    return rows
+
+
+def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
+    """The rows of Chunks_Model. `units` are the rows model_rows makes: a unit whole, or the parts of a long one. A unit
+    is one analytical chunk however many rows it takes: the units it takes something from and gives something to
+    (step 03), what the organisation's model says of it (step 04 - its parts' explanations together), and the chunks
+    of the methodology found for it with the potential deviations flagged (step 05) stand once, from its first row
+    down, and its code runs down its rows (spread_rows). Enforces: R2, R3"""
+    links, methodology = links or {}, (methodology or {}).get("units")
+    said, unanswered = {}, set()
+    for call in calls:
+        if call.get("question_type") == CODE_QUESTION:
+            if call.get("outcome") == "answered":
+                said[call["unit_ref"]] = call["answer"]
+                unanswered.discard(call["unit_ref"])
+            elif call["unit_ref"] not in said:
+                unanswered.add(call["unit_ref"])
+    was_asked, by_unit, questioned, rows = bool(said or unanswered), {}, {}, []
+    for row in units:
+        by_unit.setdefault(row["unit_ref"], []).append(row)
+    for row in asked if asked is not None else units:       # the rows the model was asked about: a dataset once
+        questioned.setdefault(row["unit_ref"], []).append(row)
+    for ref, parts in by_unit.items():
+        linked = links.get(ref) or {}
+        refs, deviations, count = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", "", None)
+        rows += spread_rows(ref, parts, {"interpretation": interpretation_of(questioned.get(ref, parts), said, unanswered, was_asked),
+                                         "methodology_refs": refs, "deviations": deviations, "flagged_count": count,
+                                         "upstream": "; ".join(linked.get("upstream") or ()),
+                                         "downstream": "; ".join(linked.get("downstream") or ())})
+    return rows
+
+def several_rows(rows, key):
+    """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)]."""
+    counts = {}
+    for row in rows:
+        counts[row[key]] = counts.get(row[key], 0) + 1
+    return [(ref, count) for ref, count in counts.items() if count > 1]
+
 
 def sheet_rows(store, paths, settings, progress):
-    """The rows of all six sheets, by sheet name."""
-    mapped = implementation_map(store, settings)
-    model_rows, doc_rows = rows_model_units(store.read("model_units")), rows_chunks(store.read("chunks_doc"))
-    return {"Model_Package_Info": rows_package_info(store, paths, settings, progress),
-            "Chunks_Canon": rows_chunks(store.read("chunks_canon")), "Chunks_Doc": doc_rows, "Chunks_Model": model_rows,
-            "Model_Implementation_Map": mapped, "Mapping_Coverage": coverage_rows(store, mapped, model_rows, doc_rows, settings)}
+    """The rows of all four sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
+    links = {r["ref"]: r for r in store.read("unit_links")}
+    whole, calls, canon = store.read("model_units"), store.read("llm_calls"), store.read("chunks_canon")
+    parts, asked = model_rows(whole, settings), asked_rows(whole, settings)
+    searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
+        call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
+    methodology = methodology_account(asked, canon, calls, settings) if searched else None
+    unit_rows = rows_model_units(parts, calls, links, methodology, asked)
+    cap = piece_cap(settings)
+    canon_rows = rows_chunks(canon, lambda chunk: methodology_slices(chunk, cap))
+    doc_rows = rows_chunks(store.read("chunks_doc"), lambda chunk: piece_slices(chunk["text"] or "", 0, float("inf"), SLICE_CHARS))
+    split = {"Package": several_rows(unit_rows, "unit_ref"), "Methodology files": several_rows(canon_rows, "chunk_ref"),
+             "Documentation files": several_rows(doc_rows, "chunk_ref")}
+    return {"Model_Package_Info": rows_package_info(store, paths, settings, progress, split),
+            "Chunks_Methodology": canon_rows, "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows}
 
 def check_written_totals(rows, store):
-    """The identity of the workbook: every unit read is one row of its sheet, and no row is anything
-    else. Raised as a fault of the tool, never as a remark about the model. Enforces: R2"""
-    for kind, sheet in (("model_units", "Chunks_Model"), ("chunks_doc", "Chunks_Doc"), ("chunks_canon", "Chunks_Canon")):
-        read = [record["ref"] for record in store.read(kind)]
-        written = [row["ref"] for row in rows[sheet]]
-        if sorted(read) != sorted(written) or len(set(written)) != len(written):
+    """The identity of the workbook: every unit read is one row of its sheet, or several, and no row is anything else;
+    a unit's rows, joined back, are its text exactly, character for character. Raised as a fault of the tool, never as
+    a remark about the model. Enforces: R2, R13"""
+    for kind, sheet, key in (("model_units", "Chunks_Model", "unit_ref"), ("chunks_doc", "Chunks_Documentation", "chunk_ref"),
+                             ("chunks_canon", "Chunks_Methodology", "chunk_ref")):
+        read, written, texts = {record["ref"]: record for record in store.read(kind)}, rows[sheet], {}
+        for row in written:
+            if row.get("code_row", True):
+                texts.setdefault(row[key], []).append(row)
+        refs = [row["ref"] for row in written]
+        if {row[key] for row in written} != set(read) or len(set(refs)) != len(refs) or \
+                any(joined_rows(texts.get(ref, [])) != (read[ref]["text"] or "") for ref in read):
             raise EngineFault(
                 "The workbook does not hold exactly what was read: %d unit(s) read for %s and %d row(s) written. "
                 "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
 
 # ---------------------------------------------------------------- the workbook layout
-# Every sheet of Output.xlsx in order, and every column of each: its header, its colour group, the
+# Every sheet of Output.xlsm in order, and every column of each: its header, its colour group, the
 # field of the row it shows, its width, and whether it is typed by a person (input_text). One line
 # per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
-WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7}
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC, links: D0E0E3}
 sheets:
 - name: Model_Package_Info
   columns:
   - {header: Group, group: identity, field: group, width: 26}
   - {header: Item, group: identity, field: item, width: 40}
   - {header: Value, group: assessments, field: value, width: 90}
-- name: Chunks_Canon
+- name: Chunks_Methodology
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
   - {header: Type, group: identity, field: kind, width: 11}
   - {header: Text, group: methodology, field: text, width: 90, input_text: true}
   - {header: Source file, group: identity, field: source_file, width: 28}
-- name: Chunks_Doc
+- name: Chunks_Documentation
   columns:
   - {header: Ref, group: identity, field: ref, width: 10}
   - {header: Section (heading chain), group: identity, field: section, width: 44}
@@ -7488,53 +6372,23 @@ sheets:
   - {header: File, group: identity, field: file, width: 30}
   - {header: Lines, group: identity, field: lines, width: 10}
   - {header: Text, group: code_text, field: text, width: 80, input_text: true}
-- name: Model_Implementation_Map
-  columns:
-  - {header: MapID1, group: identity, field: id1, width: 7}
-  - {header: MapID2, group: identity, field: id2, width: 7}
-  - {header: MapID3, group: identity, field: id3, width: 7}
-  - {header: MapID4, group: identity, field: id4, width: 7}
-  - {header: MapID5, group: identity, field: id5, width: 7}
-  - {header: MapID6, group: identity, field: id6, width: 7}
-  - {header: MapID7, group: identity, field: id7, width: 7}
-  - {header: MapID8, group: identity, field: id8, width: 7}
-  - {header: MapID9, group: identity, field: id9, width: 7}
-  - {header: MapID10, group: identity, field: id10, width: 7}
-  - {header: MapID11, group: identity, field: id11, width: 7}
-  - {header: MapID12, group: identity, field: id12, width: 7}
-  - {header: Level, group: identity, field: level, width: 7}
-  - {header: Output Variable, group: identity, field: output_variable, width: 28}
-  - {header: Output Variable - Model Code, group: code_text, field: ov_code, width: 60}
-  - {header: Function Name, group: identity, field: function_name, width: 24}
-  - {header: Function Name - Model Ref, group: assessments, field: fn_ref, width: 16, links_to: Chunks_Model}
-  - {header: Arguments, group: assessments, field: arguments, width: 46}
-- name: Mapping_Coverage
-  columns:
-  - {header: What is counted, group: identity, field: row, width: 40}
-  - {header: Each row counts, group: identity, field: counts_what, width: 34}
-  - {header: In total, group: assessments, field: total, width: 10}
-  - {header: Covered, group: assessments, field: covered, width: 10}
-  - {header: Not covered, group: assessments, field: not_covered, width: 12}
-  - {header: 'Rests on: arguments', group: assessments, field: in_arguments, width: 12}
-  - {header: 'Rests on: columns of the data', group: assessments, field: in_columns, width: 14}
-  - {header: 'Rests on: stored tables', group: assessments, field: in_tables, width: 12}
-  - {header: 'Rests on: files', group: assessments, field: in_files, width: 10}
-  - {header: 'Rests on: hard-coded numbers', group: assessments, field: in_numbers, width: 14}
-  - {header: Deepest level, group: assessments, field: depth, width: 10}
-  - {header: How to read this row, group: assessments, field: how_to_read, width: 70}
+  - {header: Immediate Upstream Model Chunk, group: links, field: upstream, width: 22}
+  - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
+  - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
+  - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
+  - {header: 'Flagged Items (by LLM, subject to human review)', group: model, field: deviations, width: 110}
+  - {header: Count of Flagged Items (by LLM), group: model, field: flagged_count, width: 14}
 '''
 
 def load_layout():
-    """The workbook layout: every sheet and every column of Output.xlsx."""
+    """The workbook layout: every sheet and every column of Output.xlsm."""
     return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
-def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None):
+def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     """One generic writer for every sheet: header row and first column frozen, filter on
     the header, wrapped text, no merged cells, reviewer columns yellow and unlocked."""
-    from openpyxl.styles import Alignment, Font, PatternFill, Protection
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.hyperlink import Hyperlink
-    from openpyxl.worksheet.datavalidation import DataValidation
     columns = sheet_layout["columns"]
     wrap = Alignment(wrap_text=True, vertical="top")
     for number, column in enumerate(columns, start=1):
@@ -7548,26 +6402,6 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
             value = row.get(column["field"])
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap
-    if sheet_layout["name"] == "Model_Implementation_Map":     # collapsible: each parent a summary row above its members
-        sheet.sheet_properties.outlinePr.summaryBelow = False
-        sheet.column_dimensions.group(get_column_letter(1), get_column_letter(MAP_ID_COLUMNS), outline_level=1)
-        at_variable = [c["field"] for c in columns].index("output_variable") + 1
-        for number, row in enumerate(rows, start=2):
-            level = int(row.get("level") or 0)
-            if level:
-                sheet.row_dimensions[number].outline_level = min(level, MAP_OUTLINE_MAX)
-            sheet.cell(row=number, column=at_variable).alignment = Alignment(wrap_text=True, vertical="top", indent=min(level, 15))
-    index = index or {}
-    for number, column in enumerate(columns, start=1):         # a reference is a link to the row that holds it
-        target = column.get("links_to")
-        if not target:
-            continue
-        for row_number, row in enumerate(rows, start=2):
-            where = (index.get(target) or {}).get(row.get(column["field"]))
-            if where:
-                cell = sheet.cell(row=row_number, column=number)
-                cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, where))
-                cell.style = "Hyperlink"
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
@@ -7577,7 +6411,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store, index=None)
         sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsx on local disk from the record of the run. All six sheets always
+    """Build Output.xlsm on local disk from the record of the run. All four sheets always
     exist; a sheet whose step has not run shows its header only."""
     import openpyxl
     layout = load_layout()
@@ -7585,14 +6419,51 @@ def build_workbook(store, paths, settings, progress, target):
     check_written_totals(rows, store)
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
-    index = {"Chunks_Model": {row["ref"]: number for number, row in enumerate(rows.get("Chunks_Model") or [], start=2)}}
     for sheet_layout in layout["sheets"]:
         sheet = workbook.create_sheet(sheet_layout["name"])
-        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store, index)
+        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
+    link_references(workbook, rows)
+    workbook.code_name = "ThisWorkbook"
+    for number, sheet in enumerate(workbook.worksheets, start=1):
+        sheet.sheet_properties.codeName = "Sheet%d" % number
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as parts:                 # openpyxl takes a macro from a workbook it read:
+        parts.writestr("xl/vbaProject.bin", vba_project(tuple(s.sheet_properties.codeName for s in workbook.worksheets)))
+        parts.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        parts.writestr("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+    workbook.vba_archive = zipfile.ZipFile(archive)              # the two empty parts say it declared nothing else
     workbook.properties.title = "the tool Output"
     workbook.properties.description = canonical_json(run_identity(store, paths))
     workbook.save(target)
     return rows
+
+
+def link_references(workbook, rows):
+    """A hyperlink on each cell of Chunks_Model that is a list of references - Relevant Chunks in Methodology, Immediate
+    Upstream Model Chunk and Immediate Downstream Model Chunk (LINK_COLUMNS) - leading to the first chunk it names,
+    where the workbook's macro then shows only the chunks named (WORKBOOK_MACRO). One link to a cell: Excel holds no
+    more. Enforces: R2"""
+    from openpyxl.styles import Font
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    first_row = {}
+    for name in {target for target, _ in LINK_COLUMNS.values()}:
+        at = first_row.setdefault(name, {})
+        for number, row in enumerate(rows[name], start=2):
+            at.setdefault(re.sub(r"^([CDM]-\d+)-\d+$", r"\1", str(row["ref"])), number)
+    layout = next(s for s in load_layout()["sheets"] if s["name"] == "Chunks_Model")
+    column_of = {column["field"]: number for number, column in enumerate(layout["columns"], start=1)}
+    sheet = workbook["Chunks_Model"]
+    for number, row in enumerate(rows["Chunks_Model"], start=2):
+        for field, (target, tip) in LINK_COLUMNS.items():
+            value = row.get(field) or ""
+            if not REF_LIST.match(value):
+                continue
+            first = value.split("; ")[0]
+            if first not in first_row[target]:
+                continue
+            cell = sheet.cell(row=number, column=column_of[field])
+            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, first_row[target][first]), tooltip=tip)
+            cell.font = Font(color=LINK_FONT, underline="single")
 
 # ---------------------------------------------------------------- rebuilding the outputs
 def file_sha256(path):
@@ -7600,30 +6471,10 @@ def file_sha256(path):
     with open(path, "rb") as handle:
         return sha256_bytes(handle.read())
 
-def call_statistics(store):
-    """The AI call statistics shown on Model_Package_Info and in the report's annex."""
-    calls = store.read_calls()
-    if not calls:
-        return [("Questions asked", "No question has been asked yet")]
-    final = [c for c in calls if c.get("final")]
-    rejected = {}
-    for call in final:
-        if call["outcome"].startswith("rejected"):
-            rejected[call["outcome"]] = rejected.get(call["outcome"], 0) + 1
-    with_planted = [c for c in final if c.get("planted")]
-    seconds = sorted(c["seconds"] for c in calls)
-    rows = [("Questions asked", len(final)), ("Attempts made", len(calls)),
-            ("Answers accepted", sum(1 for c in final if c["outcome"] == "accepted")),
-            ("Questions that stayed without an answer", sum(1 for c in final if c["outcome"].startswith("failed")))]
-    rows += [("Answers %s" % reason, count) for reason, count in sorted(rejected.items())]
-    planted = sum(1 for c in with_planted if c["outcome"] == "rejected: " + REJECTION_REASONS[3])
-    rows.append(("Answers that accepted a planted control passage", "%d of %d questions that held one" % (planted, len(with_planted))))
-    rows.append(("Median seconds per call", plain_number(seconds[len(seconds) // 2], 3)))
-    return rows
 
 def progress_text(store, waiting_message):
     """Where the run stands, in one or two plain sentences."""
-    records = store.read("step_records")
+    records = [record for record in store.read("step_records") if record.get("finished", True)]
     if not records:
         return "The run has been opened; no step has finished yet."
     last = records[-1]
@@ -7631,21 +6482,21 @@ def progress_text(store, waiting_message):
     return text + (" " + waiting_message if waiting_message else "")
 
 def rebuild_outputs(store, paths, settings, waiting_message):
-    """Rebuild Output.xlsx (and the report once flagged items exist) on local disk and copy
-    them whole into the run folder. The guard: a workbook in the run folder that differs from the last
+    """Rebuild Output.xlsm (and the report once flagged items exist) on local disk and copy
+    them whole into the project folder. The guard: a workbook there that differs from the last
     one the tool wrote is a reviewer's work in progress and is never overwritten before it has
-    been read in. Afterwards the run folder holds exactly the two files. Enforces: R6, R12"""
+    been read in. Afterwards the project folder holds the two files beside its Inputs. Enforces: R6, R12"""
     work = os.path.join(store.local_dir, "work")
     os.makedirs(work, exist_ok=True)
     progress = progress_text(store, waiting_message)
     manifest = (store.read("run_manifest") or [{}])[0]
-    target = os.path.join(paths.outputs_dir, "Output.xlsx")
+    target = os.path.join(paths.outputs_dir, OUTPUT_FILE)
     guarded = (os.path.exists(target) and manifest.get("last_workbook_sha256")
                and file_sha256(target) not in (manifest["last_workbook_sha256"], manifest.get("last_upload_sha256")))
-    local_workbook = os.path.join(work, "Output.xlsx")
+    local_workbook = os.path.join(work, OUTPUT_FILE)
     build_workbook(store, paths, settings, progress, local_workbook)
     if guarded:
-        log_line(store, "Output.xlsx in the run folder was edited and not yet read in: left untouched")
+        log_line(store, "Output.xlsm in the project folder was edited and not yet read in: left untouched")
     else:
         copy_whole(local_workbook, target)
         if manifest:
@@ -7653,7 +6504,7 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     store.sync()
     return not guarded
 
-# ---------------------------------------------------------------- determinations
+# ---------------------------------------------------------------- verification, and the steps' allow-list
 def contents_of(path):
     """Every byte string a file holds, looking INSIDE the compressed ones: the call log is gzip,
     and the workbook and the report are ZIP archives, so a token written into any of them would
@@ -7674,7 +6525,7 @@ def contents_of(path):
         return                                       # a damaged archive is caught by the other lines of the verification
 
 def verify_evidence_pack(paths, settings, live=None):
-    """Works from a run folder and the Inputs folder alone. Returns rows (what was checked,
+    """Works from the project's two files and its Inputs folder alone. Returns rows (what was checked,
     "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
     content hash is computed again from the input files and compared with the record."""
     store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
@@ -7697,25 +6548,25 @@ def verify_evidence_pack(paths, settings, live=None):
         fresh = {to_plain(r)["ref"]: to_plain(r)["content_hash"] for r in function(context).records.get(kind, [])}
         recorded = {r["ref"]: r["content_hash"] for r in store.read(kind)}
         differing = sorted(ref for ref in set(fresh) | set(recorded) if fresh.get(ref) != recorded.get(ref))
-        line("Re-reading the inputs gives the recorded content hashes (%s)" % kind, not differing, ", ".join(differing[:5]))
-    ledger_ok, position, _ = verify_chain(store.read("graph_ledger"), LEDGER_VOLATILE)
-    line("The graph ledger chain verifies", ledger_ok, "" if ledger_ok else "record %d no longer verifies" % (position + 1))
+        sheet = {"chunks_canon": "Chunks_Methodology", "chunks_doc": "Chunks_Documentation", "model_units": "Chunks_Model"}.get(kind, kind)
+        line("Re-reading the inputs gives the recorded content hashes (%s)" % sheet, not differing, ", ".join(differing[:5]))
     written = {kind: len(store.read(kind)) for kind in ("chunks_canon", "chunks_doc", "model_units")}
     line("Every unit read is in the record", all(written.values()),
          ", ".join("%s: %d" % pair for pair in sorted(written.items())))
     identity = run_identity(store, paths)
     try:
         import openpyxl
-        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, "Output.xlsx"), read_only=True).properties.description)
+        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, OUTPUT_FILE), read_only=True).properties.description)
         line("The workbook carries this run's ids and fingerprints", all(found.get(k) == v for k, v in identity.items()))
     except Exception:
-        line("The workbook carries this run's ids and fingerprints", False, "Output.xlsx could not be opened")
+        line("The workbook carries this run's ids and fingerprints", False, "Output.xlsm could not be opened")
     secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
     leaked = []
-    for folder, _, names in os.walk(paths.run_dir):
-        for name in names:
-            leaked += [name for data in contents_of(os.path.join(folder, name)) for value in secrets if value in data]
-    line("No access token was written into the run folder", not leaked, ", ".join(sorted(set(leaked))))
+    for name in (OUTPUT_FILE, AUDIT_FILE):                # the tool's own files; the Inputs are the project's
+        path = os.path.join(paths.outputs_dir, name)
+        if os.path.exists(path):
+            leaked += [name for data in contents_of(path) for value in secrets if value in data]
+    line("No access token was written into Output.xlsm or Audit_Log.xlsx", not leaked, ", ".join(sorted(set(leaked))))
     return rows
 
 def combine(ctx, *parts):
@@ -7741,36 +6592,15 @@ def read_inputs(ctx):
     into units, in that order. Enforces: R2, R7"""
     return combine(ctx, read_methodology, read_documentation, read_package)
 
-def build_map(ctx):
-    """Step 03, build-map: by code alone, before any model call - the graph of what the files say about
-    each other, and the data flow of the package. Enforces: R2, R4, R14"""
-    return combine(ctx, build_graph, trace_dataflow)
-
-def read_with_ai(ctx):
-    """Step 04, read-with-ai: the map's agents closing the gaps code named. Enforces: R3, R5"""
-    return combine(ctx, map_implementation)
-
-def link_units(ctx):
-    """Step 06, link-units: two passes of search and judgement - candidates by code, then the model's
-    judgement on each, twice, so that a link found in the first pass can carry the second. Enforces: R3"""
-    each = lambda number: (lambda inner: combine(dataclasses.replace(inner, options=dict(inner.options, **{"pass": number})),
-                                                 find_candidates, judge_links))
-    return combine(ctx, each(1), each(2))
-
-STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name. Enforces: R11
+STEP_FUNCTIONS = {        # the function that carries out each step of PIPELINE. Enforces: R11
     "read_methodology": read_methodology,
     "read_documentation": read_documentation,
     "read_package": read_package,
-    "build_graph": build_graph,
-    "trace_dataflow": trace_dataflow,
-    "map_implementation": map_implementation,
-    "find_candidates": find_candidates,
-    "judge_links": judge_links,
+    "interpret_code": interpret_code,
+    "search_methodology": search_methodology,
     "prepare_run": prepare_run,
     "read_inputs": read_inputs,
-    "build_map": build_map,
-    "read_with_ai": read_with_ai,
-    "link_units": link_units}
+    "link_chunks": link_chunks}
 
 # ---------------------------------------------------------------- the notebook: four cells, each one call
 # Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
@@ -7778,20 +6608,37 @@ STEP_FUNCTIONS = {        # every function that pipeline.yaml is allowed to name
 # widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
 REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
 WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
-           ("reviewer_id", "", "03 Your user id (reviewer id, and the id sent to the LLM)"),
-           ("model_id", "", "04 Model ID"), ("project", "", "05 Project date (empty = new project today)"),
-           ("jfrog_index_url", "", "06 Package index URL"), ("concurrency_limit", "4", "07 Concurrency limit"),
-           ("token_cap", "40000", "08 Token cap"))
-OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive")
-NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "live": None, "chat": None, "paths": None, "result": None}
+           ("project_name", "", "03 Project Name (can be a model ID)"))
+OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
+               "reviewer_id", "jfrog_index_url", "concurrency_limit", "token_cap", "model_id", "project")
+PYPI = "https://pypi.org/simple/"          # where every package comes from: named here, so no pip setting of the cluster redirects it
+NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": None, "chat": None, "paths": None, "result": None}
+
+def databricks_user(dbutils):
+    """Who runs the notebook, as Databricks knows them: the notebook context's user name; on a cluster that keeps
+    that context from Python, Spark's current_user(); outside Databricks, the system user."""
+    try:
+        return dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+    except Exception:
+        pass
+    try:
+        from pyspark.sql import SparkSession
+        session = SparkSession.getActiveSession()
+        if session is not None:
+            return session.sql("SELECT current_user()").first()[0]
+    except Exception:
+        pass
+    return getpass.getuser()
 
 def live(name):
-    """The endpoint, token or user id, read from the widgets at the moment chat() calls: a token pasted
-    into widget 02 while a run works is used by its next call. Enforces: R8"""
+    """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
+    while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8"""
     session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
+    if getattr(CHAT_WORKER, "active", False):       # a worker of step 04: the values its step last read
+        return session.get(name)
     try:
         widgets = NOTEBOOK["dbutils"].widgets
-        session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), widgets.get("reviewer_id"))
+        session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), NOTEBOOK["user"])
     except Exception:
         pass                                        # no notebook, or a widget read failed: the last values stand
     return session.get(name)
@@ -7803,29 +6650,33 @@ def notebook_folder(dbutils):
     except Exception:
         return os.getcwd()
 
-def setup(dbutils, home=None, projects=None, allow_default_index=False):
+def setup(dbutils, home=None, projects=None):
     """Cell 1: the widgets, the packages the engine needs (installed only if one is missing), flowR, and
     what to do next. Safe to run any number of times; run it again after anything restarts Python."""
     import importlib.util
     widgets = dbutils.widgets
+    carried = {}                                      # a project name typed into an earlier notebook's 03 Model ID stays
+    try:
+        carried["project_name"] = widgets.get("model_id")
+    except Exception:
+        pass
     for name, default, label in WIDGETS:              # made before anything is installed: a bare cluster works
         try:
             widgets.get(name)
         except Exception:
-            widgets.text(name, default, label)
+            widgets.text(name, carried.get(name, default), label)
     for name in OLD_WIDGETS:                          # widgets of an earlier notebook, no longer used
         try:
             widgets.remove(name)
         except Exception:
             pass
     home = home or notebook_folder(dbutils)
-    NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"))
+    NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"), user=databricks_user(dbutils))
     missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
     if missing:
-        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"),
-                widgets.get("jfrog_index_url").strip(), allow_default_index)
+        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
         return
-    print("Folder:", home, "| Python", sys.version.split()[0], "| engine", ENGINE_VERSION)
+    print("Folder:", home, "| Python", sys.version.split()[0])
     for name in REQUIRED_PACKAGES + ("pdfplumber", "pypdf"):
         found = importlib.util.find_spec(name)
         print("  %-11s %s" % (name, "installed" if found else "not installed" + ("" if name in ("pdfplumber", "pypdf") else " - run this cell again")))
@@ -7842,22 +6693,28 @@ def setup(dbutils, home=None, projects=None, allow_default_index=False):
     print("\nTHE ENGINE IS READY. What happens next:")
     print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
     print("  Cell 3  read the inputs and run the review; it prints what each step did.")
-    print("  Cell 4  check the finished run folder against its own record.")
-    print("Widgets 01 to 03 carry the endpoint, the token and your user id; 04 the model id; 05 the project date.")
-    print("Paste a fresh token into widget 02 at any time - it is read at the moment each call is made, so a run")
-    print("already working picks it up.")
+    print("  Cell 4  check the project's Output.xlsm and Audit_Log.xlsx against their own record.")
+    print("Widgets 01 and 02 carry the endpoint and the token; 03 the project's name, which names its folder in Projects.")
+    print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
+    print("at the moment it calls.")
     print("Next: cell 2.")
 
-def install(missing, dbutils, requirements, index_url, allow_default_index=False):
-    """Install what the engine needs from the index named in widget 06, the runtime's own packages pinned
-    as they are, and restart Python only if those still import together afterwards."""
+def pip_said(stderr):
+    """What pip said, without any credentials of an index URL, and what its most common failure means."""
+    text = re.sub(r"//[^/@\s]+@", "//...@", stderr or "")[-1500:]
+    missing = re.findall(r"satisfies the requirement ([\w.\-\[\]]+)", stderr or "")
+    if "from versions: none" in (stderr or ""):
+        text += ("\nPyPI offered no version of %s that fits this cluster's Python, or the cluster cannot reach %s: its network "
+                 "has to let the cluster reach PyPI." % (missing[0] if missing else "that package", PYPI))
+    elif "ResolutionImpossible" in (stderr or "") or "conflicting dependencies" in (stderr or ""):
+        text += "\nThe packages asked for cannot be installed together; the lines above say which."
+    return text
+
+def install(missing, dbutils, requirements):
+    """Install what the engine needs from PyPI, the runtime's own packages pinned as they are, and restart Python
+    only if those still import together afterwards."""
     import importlib.metadata
     hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")    # no credentials of an index URL are shown
-    if not index_url and not allow_default_index:
-        print("Packages missing:", ", ".join(missing), "- paste the package index URL into widget 06 and run this cell again.")
-        print("Nothing is installed from an index you did not name. To use pip's default index, call "
-              "verifier.setup(dbutils, allow_default_index=True).")
-        return
     pins = []
     for name in ("numpy", "pandas", "pyarrow", "scipy"):
         try:
@@ -7867,12 +6724,12 @@ def install(missing, dbutils, requirements, index_url, allow_default_index=False
     constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
     with open(constraints, "w") as handle:
         handle.write("\n".join(pins) + "\n")
-    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints] + (["--index-url", index_url] if index_url else [])
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints, "--index-url", PYPI]
     print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode:
-        print("The install did not finish. What pip said:\n" + hide(done.stderr)[-1500:])
-        print("Nothing the runtime needs was changed. Ask for the package pip names to be added to the index in widget 06.")
+        print("The install did not finish. What pip said:\n" + pip_said(done.stderr))
+        print("Nothing the runtime needs was changed.")
         return
     with open(requirements, encoding="utf-8") as handle:
         wanted = handle.read().split("# --- optional ---")
@@ -7881,7 +6738,7 @@ def install(missing, dbutils, requirements, index_url, allow_default_index=False
         with open(spare, "w", encoding="utf-8") as handle:
             handle.write(wanted[1])
         extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
-        print("Optional packages (words inside pictures):", "installed." if not extra.returncode else "not installed; pictures of text will say so.")
+        print("Optional packages (the PDF readers):", "installed." if not extra.returncode else "not installed; a PDF will say it could not be read.")
     probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
     if probe.returncode:
         print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip())[-300:])
@@ -7892,19 +6749,17 @@ def install(missing, dbutils, requirements, index_url, allow_default_index=False
         print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting would only bring "
               "this cell back here." % ", ".join(missing))
         print("What Python said:\n" + hide(still.stderr)[-600:])
-        print("Check that engine/requirements.txt names it, and that the index in widget 06 carries it.")
+        print("Check that engine/requirements.txt names it, and that PyPI carries it for this cluster's Python.")
         return
     print("Installed. Restarting Python; then run this cell once more.")
     dbutils.library.restartPython()
 
 def notebook_settings():
-    widgets = NOTEBOOK["dbutils"].widgets
-    return make_settings({"concurrency_limit": int(widgets.get("concurrency_limit") or 4),
-                          "token_cap": int(widgets.get("token_cap") or 40000), "reviewer_id": widgets.get("reviewer_id")})
+    return make_settings({"reviewer_id": NOTEBOOK["user"]})
 
 def check_chat(chat):
-    """Cell 2: ask the organisation's chat() one question and, once it answers, make the project's three
-    Inputs folders and say what belongs in each."""
+    """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's steps 04 and 05,
+    make the project's three Inputs folders and say what belongs in each."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
         return
@@ -7912,11 +6767,15 @@ def check_chat(chat):
     try:
         reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
         print("chat() answered:", str(reply)[:60])
+        print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
+        print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
+        print("(searched by LLM) and Flagged Items (by LLM, subject to human review), with their count.")
     except Exception as problem:
-        print("chat() did not answer (%s: %s). Check widgets 01, 02 and 03, then run this cell again." % (type(problem).__name__, problem))
+        print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
+              " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
         return
     widgets = NOTEBOOK["dbutils"].widgets
-    project_dir, missing = setup_project(NOTEBOOK["projects"], widgets.get("model_id"), widgets.get("project"))
+    project_dir, missing = setup_project(NOTEBOOK["projects"], widgets.get("project_name"))
     print("\nPUT YOUR FILES IN THESE THREE FOLDERS, then run cell 3:")
     for _, folder, note in INPUT_FOLDERS:
         print("  %s\n      %s" % (os.path.join(project_dir, "Inputs", folder), note))
@@ -7925,51 +6784,59 @@ def check_chat(chat):
     print("\nStill empty: " + "; ".join(missing) if missing else "\nAll three folders have files in them. Next: cell 3.")
 
 def open_current():
-    """The run the widgets name: the one this session opened, or a new one; None, with what to do, while the
-    project's folders are still empty."""
+    """The run of the project the widgets name, carried on or started anew as open_run decides - asked each time
+    cell 3 runs, so that an input changed meanwhile is noticed - and said in plain words when it is not the run
+    this session worked on already. None, with what to do, while a folder of Inputs is empty or while a new run
+    would replace an Output.xlsm a person has changed."""
     widgets = NOTEBOOK["dbutils"].widgets
-    model_id, project = widgets.get("model_id"), widgets.get("project")
-    _, missing = setup_project(NOTEBOOK["projects"], model_id, project)
+    project = widgets.get("project_name")
+    _, missing = setup_project(NOTEBOOK["projects"], project)
     if missing:
         print("\n".join(missing))
         print("Put the files in, then run cell 3.")
         return None
-    paths = NOTEBOOK["paths"]
-    if paths is None or paths.model_id != model_id or (project and paths.project_date != project):
-        paths = NOTEBOOK["paths"] = open_run(NOTEBOOK["projects"], model_id, project)   # a new session starts a new run
+    try:
+        paths = open_run(NOTEBOOK["projects"], project, settings=notebook_settings())
+    except OutputsEdited as problem:
+        print(problem)
+        return None
+    before = NOTEBOOK["paths"]
+    if before is None or (before.project_dir, before.run_id) != (paths.project_dir, paths.run_id):
+        print(paths.opened)
+    NOTEBOOK["paths"] = paths
     return paths
 
-def review(foreground_minutes=600):
-    """Cell 3: read the inputs, map how the model computes what it returns, and run the model steps, in
-    this cell; then say what each step did. A step already finished is never repeated."""
-    if NOTEBOOK["dbutils"] is None or NOTEBOOK["chat"] is None:
-        print("Run cell 1, then cell 2, first: this cell uses the chat() that cell 2 checked.")
+def review():
+    """Cell 3: read the inputs, link the units of the package and put them to the organisation's model, in this
+    cell; then say what each step did. A step already finished is never repeated."""
+    if NOTEBOOK["dbutils"] is None:
+        print("Run cell 1 first.")
         return
     paths = open_current()
     if paths is None:
         return
-    settings = dict(notebook_settings(), foreground_minutes=float(foreground_minutes))
-    state = AskState()
-    result = NOTEBOOK["result"] = run_pipeline(paths, settings, chat=NOTEBOOK["chat"], live=NOTEBOOK["live"] or LiveValues(), state=state)
+    settings = notebook_settings()
+    result = NOTEBOOK["result"] = run_pipeline(paths, settings)
     print(result["message"])
     store = open_store(paths, settings)
     print("\nWhat each step did:")
-    for record in store.read("step_records"):
+    latest = {}
+    for record in store.read("step_records"):                 # a step tried again says what its latest attempt did;
+        latest[record["step_id"]] = record                     # the audit log keeps every attempt
+    for record in (latest[step_id] for step_id in sorted(latest)):
         print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
         for message in record["messages"]:
             print("      " + message)
-    for label, value in call_statistics(store):
-        print("  %-52s %s" % (label, value))
-    if state.waiting_for_token:
-        print("\nWAITING FOR A FRESH TOKEN: the gateway refused the last call. Paste a new token into widget 02 and")
-        print("run this cell again; the steps already finished are not repeated.")
-    print("\nRun folder:", paths.run_dir)
-    print("Open Output.xlsx there: the three Chunks sheets show everything that was read, Model_Implementation_Map")
-    print("how the model computes what it returns, and Mapping_Coverage what is covered.")
-    print("Then run cell 4 to check the run folder against its own record.")
+    print("\nProject folder:", paths.project_dir)
+    print("Open Output.xlsm there, beside Inputs: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
+    print("organisation's model says of each piece, the chunks of the methodology it found for it, and the items it")
+    print("flagged, with their count.")
+    print("In Chunks_Model, a click on a reference shows only the chunks it names, once Excel lets the workbook's macro run;")
+    print("if it blocks it, unblock the file first (the manual, section 7: Letting the macro run).")
+    print("Then run cell 4 to check the project's two files against their own record.")
 
 def verify():
-    """Cell 4: check the run folder against its own record."""
+    """Cell 4: check the project's two files against their own record."""
     paths = NOTEBOOK["paths"]
     if paths is None:
         print("Cell 3 has not read the inputs yet. Run cell 3 first.")
@@ -7977,5 +6844,5 @@ def verify():
     print("Verifying the evidence pack:")
     for what, verdict, detail in verify_evidence_pack(paths, notebook_settings(), live=NOTEBOOK["live"] or LiveValues()):
         print("  %-62s %-16s %s" % (what, verdict, detail))
-    print("\nRun folder:", paths.run_dir, "- Output.xlsx is the deliverable; _audit/Audit_Log.xlsx is the record")
-    print("of the run: every step, every record, and every exchange with the model.")
+    print("\nProject folder:", paths.project_dir, "- Output.xlsm is the deliverable; Audit_Log.xlsx beside it is the")
+    print("record of the run: every step, every record, and every exchange with the model.")

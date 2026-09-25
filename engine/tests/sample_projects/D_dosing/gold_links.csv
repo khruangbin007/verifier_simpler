@@ -1,9 +1,0 @@
-unit_ref,unit,acceptable_methodology_refs
-M-0006,function dose_by_weight,C-0003;C-0004;C-0005
-M-0007,statement dose,C-0004;C-0003
-M-0008,statement dose_by_weight (last),C-0005
-M-0010,function adjusted_dose,C-0006;C-0008;C-0009
-M-0011,statement adjusted_dose,C-0006;C-0009;C-0008
-M-0012,parameter table band_factors,C-0007
-D-0002,documentation,C-0003;C-0005
-D-0005,documentation table,C-0007
