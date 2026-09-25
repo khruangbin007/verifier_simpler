@@ -3589,13 +3589,14 @@ def table_display(header, rows):
 
 def data_object_unit(name, value, path, settings):
     """One stored object to a unit: a table shown whole (table_display), or, when it has no tabular meaning, described
-    in a sentence. Too large to be a parameter table, it is marked not assessable: a dataset (asked_rows)."""
+    in a sentence - either opening with the object's name, its file and its size, so that every link to it can be
+    recognised. Too large to be a parameter table, it is marked not assessable: a dataset (asked_rows)."""
     found = table_of(value)
     if found is None:
         described = "An object of Python type %s after decoding; it has no tabular meaning, so it is described and not compared." % type(value).__name__
         detail = {"object_name": name, "container_file": path, "dims": (), "columns": (), "assessable": False,
                   "not_assessable_reason": "it is not a table, a vector or a list of short values"}
-        return draft(KIND_OBJECT, path, None, name, described, data=detail), None
+        return draft(KIND_OBJECT, path, None, name, "%s - %s: %s" % (name, path, described), data=detail), None
     header, rows, shape = found
     n_cells = len(rows) * len(header)
     too_large = n_cells > settings["max_parameter_cells"] or len(header) > settings["max_parameter_columns"]
@@ -3603,7 +3604,9 @@ def data_object_unit(name, value, path, settings):
     detail = {"object_name": name, "container_file": path, "dims": (len(rows), len(header)), "columns": tuple(header),
               "assessable": not too_large, "not_assessable_reason": reason}
     kind = KIND_OBJECT if shape == "list" else KIND_TABLE
-    unit = draft(kind, path, None, name, table_display(header, rows), data=detail)
+    named = "%s - %s: %d row%s, %d column%s" % (name, path, len(rows), "" if len(rows) == 1 else "s",
+                                                len(header), "" if len(header) == 1 else "s")
+    unit = draft(kind, path, None, name, named + "\n" + table_display(header, rows), data=detail)
     return unit
 
 def decode_data_file(path, data, settings):
@@ -4035,6 +4038,167 @@ def visible(definer, user):
         os.path.basename(home).startswith(("helper", "setup"))
 
 
+# Stored data, followed further. Beyond the names flowR leaves unresolved, code reaches a stored object in three
+# ways its names alone do not show: through a helper that takes the object's name as text and hands it to get(),
+# data(), readRDS() or load() - at any depth of helpers; through an environment the package keeps, where one unit
+# stores a value and another reads it back; and by a name put together at run time. The first two become links like
+# any other; the third names the stored objects the name could be, each marked "(possible)", or, when nothing of
+# the name is known, says so. flowR gives, within each reading, the syntax tree and which definition each symbol
+# reads - a parameter, a local variable, or nothing there; the engine binds a call's arguments to a package
+# function's parameters by R's rules, follows helpers to a fixed point, puts paste0() and its kind together from
+# known text, and matches names against the objects decoded from the package's .rda and .rds files. Enforces: R2, R7
+NAME_READERS = {"get": ("x",), "get0": ("x",), "exists": ("x",), "mget": ("x",), "data": ("list",),
+                "readRDS": ("file",), "load": ("file",)}
+FILE_READERS = ("readRDS", "load")
+PACKAGE_ENVIRONMENTS = ("topenv", "asNamespace", "getNamespace", "parent.env", "environment", "globalenv")
+TEMPLATE_DEPTH, TEMPLATE_PARTS = 6, 16
+POSSIBLE = " (possible)"
+UNKNOWN_NAME = "reads stored data by a name known only when it runs"
+READ_BY_NO_CODE = "None: no code of the package reads it."
+
+
+def call_name(node):
+    """The function a flowR call node calls, by name, or "" when the call is not by a plain name."""
+    function = (node or {}).get("functionName") or {}
+    return (function.get("lexeme") or "").strip("`") if function.get("type") == "RSymbol" else ""
+
+
+def call_arguments(node):
+    """A call's arguments, in order, as (name or None, value node); an empty argument is left out."""
+    out = []
+    for argument in (node or {}).get("arguments") or []:
+        if isinstance(argument, dict) and argument.get("type") == "RArgument" and argument.get("value"):
+            name = argument.get("name")
+            out.append(((name.get("lexeme") or "").strip("`") if isinstance(name, dict) else None, argument["value"]))
+    return out
+
+
+def merged(parts):
+    """Adjacent pieces of known text joined, and runs of the unknown made one; too long a name becomes unknown."""
+    out = []
+    for kind, value in parts:
+        if out and kind == "text" and out[-1][0] == "text":
+            out[-1] = ("text", out[-1][1] + value)
+        elif not (out and kind == "any" and out[-1][0] == "any"):
+            out.append((kind, value))
+    return out if len(out) <= TEMPLATE_PARTS else [("any", "")]
+
+
+def template_of(tree, edges, node, depth=0):
+    """What a name given to a reader is made of: ("text", s) known text, ("param", p) a parameter of the function it
+    is in, ("any", "") what is known only at run time. flowR's edges say what a symbol reads: a parameter, or a local
+    variable whose value is followed in turn. paste0(), paste(), sprintf(), file.path() and system.file() are put
+    together from their parts; nothing is run. Enforces: R7"""
+    if not node or depth > TEMPLATE_DEPTH:
+        return [("any", "")]
+    kind = node.get("type")
+    if kind == "RString":
+        return [("text", (node.get("lexeme") or "").strip("\"'"))]
+    if kind == "RNumber":
+        return [("text", node.get("lexeme") or "")]
+    if kind == "RSymbol":
+        for target, bits in edges.get(node_id(node), []):
+            if not bits & READS or target not in tree:
+                continue
+            definition = tree[target]
+            holder = tree.get(definition.get("up") or "", {})
+            if holder.get("type") == "RParameter":
+                return [("param", (definition.get("lexeme") or "").strip("`"))]
+            if holder.get("type") == "RBinaryOp" and holder.get("operator") in ASSIGNING and node_id(holder.get("lhs")) == target:
+                return template_of(tree, edges, holder.get("rhs"), depth + 1)
+        return [("any", "")]
+    if kind != "RFunctionCall":
+        return [("any", "")]
+    name, arguments = call_name(node), call_arguments(node)
+    def joined(values, separator):
+        parts = []
+        for number, value in enumerate(values):
+            parts += (separator if number else []) + template_of(tree, edges, value, depth + 1)
+        return merged(parts)
+    if name == "paste0":
+        return joined([v for n, v in arguments if n not in ("collapse", "recycle0")], [])
+    if name == "paste":
+        separator = next((v for n, v in arguments if n == "sep"), None)
+        return joined([v for n, v in arguments if n not in ("sep", "collapse", "recycle0")],
+                      template_of(tree, edges, separator, depth + 1) if separator else [("text", " ")])
+    if name in ("file.path", "system.file"):
+        dropped = ("fsep",) if name == "file.path" else ("package", "lib.loc", "mustWork")
+        return joined([v for n, v in arguments if n not in dropped], [("text", "/")])
+    if name == "sprintf" and arguments:
+        form = template_of(tree, edges, arguments[0][1], depth + 1)
+        if len(form) == 1 and form[0][0] == "text" and "%" not in form[0][1].replace("%s", ""):
+            pieces, values, parts = form[0][1].split("%s"), [v for _, v in arguments[1:]], []
+            for number, piece in enumerate(pieces):
+                parts.append(("text", piece))
+                if number < len(pieces) - 1:
+                    parts += template_of(tree, edges, values[number], depth + 1) if number < len(values) else [("any", "")]
+            return merged(parts)
+    return [("any", "")]
+
+
+def reader_calls(nodes):
+    """The calls among `nodes` that read stored data by a name or by a file's name: (reader, the node giving it).
+    data() takes its names as text or in list =, and mget() and data() a vector of them, c("a", "b")."""
+    for node in nodes:
+        reader = call_name(node) if node.get("type") == "RFunctionCall" else ""
+        if reader not in NAME_READERS:
+            continue
+        arguments = call_arguments(node)
+        if reader == "data":
+            values = [v for n, v in arguments if n in (None, "list") and v.get("type") != "RSymbol"]
+        else:
+            named = [v for n, v in arguments if n in NAME_READERS[reader]]
+            values = named[:1] or [v for n, v in arguments if n is None][:1]
+        for value in values:
+            if value.get("type") == "RFunctionCall" and call_name(value) == "c":
+                for _, inner in call_arguments(value):
+                    yield reader, inner
+            else:
+                yield reader, value
+
+
+def access_member(access):
+    """The member an access names - floors in cache$floors or cache[["floors"]] - or "" for anything else."""
+    items = [a.get("value") for a in access.get("access") or [] if isinstance(a, dict) and a.get("type") == "RArgument"]
+    if len(items) != 1 or not items[0]:
+        return ""
+    if access.get("operator") == "$" and items[0].get("type") == "RSymbol":
+        return (items[0].get("lexeme") or "").strip("`")
+    return (items[0].get("lexeme") or "").strip("\"'") if items[0].get("type") == "RString" else ""
+
+
+def bound_arguments(arguments, formals):
+    """Which argument of a call each parameter of the function called receives, as R matches them: by exact name,
+    then by position up to ..., after which only by name."""
+    bound, positional = {}, []
+    for name, value in arguments:
+        if name is not None and name in formals:
+            bound[name] = value
+        elif name is None:
+            positional.append(value)
+    for formal in formals:
+        if formal == "...":
+            break
+        if formal not in bound and positional:
+            bound[formal] = positional.pop(0)
+    return bound
+
+
+def name_candidates(reader, parts, data_names, data_files):
+    """The stored objects a name partly known could be: those whose name - or, for readRDS() and load(), whose file's
+    name - fits the known text, the rest being anything. None when too little of it is known to choose any."""
+    if reader in FILE_READERS:                         # only the file's own name counts, not the folders before it
+        last = max((i for i, (kind, value) in enumerate(parts) if kind == "text" and "/" in value), default=None)
+        if last is not None:
+            parts = [("text", parts[last][1].rsplit("/", 1)[1])] + parts[last + 1:]
+    known = "".join(value for kind, value in parts if kind == "text")
+    if len(re.sub(r"(?i)\.(rds|rda|rdata)$", "", known).strip("/._- ")) < 3:
+        return None
+    pattern = re.compile("".join(re.escape(value) if kind == "text" else ".*" for kind, value in parts), re.S)
+    pool = data_files if reader in FILE_READERS else data_names
+    return sorted({ref for name, refs in pool.items() if pattern.fullmatch(name) for ref in refs})
+
+
 def unit_links(units, parsed, folder, package):
     """The immediate upstream and downstream units of every unit, as records of kind unit_links, each with the
     names that make each link, and the units flowR could not read for their links. `parsed` holds flowR's
@@ -4086,18 +4250,41 @@ def unit_links(units, parsed, folder, package):
     for u in units:
         if u["kind"] in (KIND_TABLE, KIND_OBJECT):
             data_files.setdefault(os.path.basename(u["file"]), []).append(u["ref"])
+    data_names = {}                                       # a stored object's name -> its units
+    for u in units:
+        if (u.get("data") or {}).get("object_name"):
+            data_names.setdefault(u["data"]["object_name"], []).append(u["ref"])
     by_prefix = {}
     for key, node in parsed.tree.items():
         by_prefix.setdefault(key.split(":", 1)[0] + ":", []).append(node)
-    via = {}                                               # (definer, user) -> names
-    def link(definer, user, name):
-        via.setdefault((definer, user), set()).add(name)
-    for prefix, spans in readings:
+    def locator(spans):
         def unit_at(node):
             while node is not None and not node.get("location"):
                 node = parsed.tree.get(node.get("up") or "")
             line = node["location"][0] if node else 0
             return next((ref for first, last, ref in spans if first <= line <= last), None)
+        return unit_at
+    nodes_of = {}                                          # ref -> the nodes of its code, from every reading
+    for prefix, spans in readings:
+        unit_at = locator(spans)
+        for node in by_prefix.get(prefix, []):
+            ref = unit_at(node)
+            if ref:
+                nodes_of.setdefault(ref, []).append(node)
+    tree, edges = parsed.tree, parsed.edges
+    def local(symbol):                                     # flowR finds, in this reading, the definition it reads: a
+        return any(bits & READS and (tree.get(target) or {}).get("type") == "RSymbol"   # variable or a parameter,
+                   for target, bits in edges.get(node_id(symbol), []))                  # not a replacement's own access
+    env_writes, env_reads, namespace_writes = environment_members(nodes_of, by_ref, definers, tree, edges, local)
+    for name, writers in sorted(namespace_writes.items()): # a name stored in the package's own environment
+        for writer in sorted(writers):
+            if writer not in definers.setdefault(name, []):
+                definers[name].append(writer)
+    via = {}                                               # (definer, user) -> names
+    def link(definer, user, name):
+        via.setdefault((definer, user), set()).add(name)
+    for prefix, spans in readings:
+        unit_at = locator(spans)
         for node in by_prefix.get(prefix, []):
             if node["type"] == "RString":                  # a data file named in the code: read.csv(system.file(...))
                 written = (node.get("lexeme") or "").strip("\"'")
@@ -4130,14 +4317,156 @@ def unit_links(units, parsed, folder, package):
             for definer in definers.get(name, []):
                 if (by_ref[definer].get("data") or {}).get("object_name") == name and definer != u["ref"]:
                     link(definer, u["ref"], name)
-    upstream, downstream = {}, {}
+    possible, notes = follow_stored_data(units, by_ref, nodes_of, tree, edges, data_names, data_files, link)
+    for key, readers in sorted(env_reads.items()):         # a member of an environment, read where it was stored
+        for writer in sorted(env_writes.get(key, ())):
+            for reader in sorted(readers):
+                if writer != reader:
+                    link(writer, reader, "%s$%s" % key)
+    upstream, downstream, maybe_up, maybe_down = {}, {}, {}, {}
     for definer, user in via:
         upstream.setdefault(user, set()).add(definer)
         downstream.setdefault(definer, set()).add(user)
+    for definer, user in possible:
+        if (definer, user) not in via:
+            maybe_up.setdefault(user, set()).add(definer)
+            maybe_down.setdefault(definer, set()).add(user)
     return [{"record_type": "unit_links", "ref": u["ref"], "upstream": sorted(upstream.get(u["ref"], ())),
              "downstream": sorted(downstream.get(u["ref"], ())),
+             "possible_upstream": sorted(maybe_up.get(u["ref"], ())), "possible_downstream": sorted(maybe_down.get(u["ref"], ())),
+             "notes": sorted(notes.get(u["ref"], ())),
              "via": {definer: sorted(names) for (definer, user), names in sorted(via.items()) if user == u["ref"]},
              "not_read_by_flowr": u["ref"] in unread} for u in units]
+
+
+def environment_members(nodes_of, by_ref, definers, tree, edges, local):
+    """Who stores a member of an environment the package keeps, and who reads it: cache$floors <- x,
+    cache[["floors"]] <- x or assign("floors", x, envir = cache), read back as cache$floors, cache[["floors"]] or
+    get("floors", envir = cache). The environment is a variable the package defines at top level, which flowR finds
+    no definition of inside the reading. Also the names a function stores in the package's own environment -
+    assign("x", ..., envir = topenv()) and the like, or x <<- ... - which then define x for the whole package.
+    Returns (writes, reads, namespace writes): {(environment, member): refs}, the same, and {name: refs}."""
+    writes, reads, namespace = {}, {}, {}
+    def key_of(holder, member):
+        name = (holder.get("lexeme") or "").strip("`") if holder.get("type") == "RSymbol" and not local(holder) else ""
+        return (name, member) if name in definers and member else None
+    for ref, nodes in sorted(nodes_of.items()):
+        for node in nodes:
+            kind = node.get("type")
+            if kind == "RBinaryOp" and node.get("operator") in ("<-", "=", "<<-"):
+                lhs = node.get("lhs") or {}
+                if lhs.get("type") == "RAccess" and lhs.get("operator") in ("$", "[["):
+                    key = key_of(lhs.get("accessed") or {}, access_member(lhs))
+                    if key:
+                        writes.setdefault(key, set()).add(ref)
+                elif node.get("operator") == "<<-" and lhs.get("type") == "RSymbol" and by_ref[ref]["kind"] == KIND_FUNCTION:
+                    namespace.setdefault((lhs.get("lexeme") or "").strip("`"), set()).add(ref)
+            elif kind == "RAccess" and node.get("operator") in ("$", "[["):
+                holder = tree.get(node.get("up") or "", {})
+                if holder.get("type") == "RBinaryOp" and node_id(holder.get("lhs")) == node_id(node):
+                    continue                               # the target of an assignment: a write, above
+                key = key_of(node.get("accessed") or {}, access_member(node))
+                if key:
+                    reads.setdefault(key, set()).add(ref)
+            elif kind == "RFunctionCall" and call_name(node) in ("assign", "get", "get0", "exists"):
+                arguments = call_arguments(node)
+                named = {n: v for n, v in arguments if n}
+                positional = [v for n, v in arguments if n is None]
+                first = named.get("x") or (positional[0] if positional else None)
+                parts = template_of(tree, edges, first) if first is not None else [("any", "")]
+                member = parts[0][1] if len(parts) == 1 and parts[0][0] == "text" else ""
+                where = named.get("envir") or named.get("pos") or \
+                    (positional[2] if call_name(node) == "assign" and len(positional) > 2 else None)
+                if not member or where is None:
+                    continue
+                if where.get("type") == "RFunctionCall" and call_name(where) in PACKAGE_ENVIRONMENTS:
+                    if call_name(node) == "assign":
+                        namespace.setdefault(member, set()).add(ref)
+                    continue
+                key = key_of(where, member)
+                if key:
+                    (writes if call_name(node) == "assign" else reads).setdefault(key, set()).add(ref)
+    return writes, reads, namespace
+
+
+def follow_stored_data(units, by_ref, nodes_of, tree, edges, data_names, data_files, link):
+    """Stored data reached by a name given as text (2.12): at each call of get(), data(), readRDS() or load(), what
+    the name is made of (template_of). A name wholly known links the stored object it names. A name that holds a
+    parameter makes its function a helper, and every call of a helper - by a function or a script - puts its
+    arguments in the parameters' place, as R binds them, until no more is learnt: a name known in the end links the
+    object to the caller that gave it and to the helper whose code reads it. A name partly known at run time names
+    the objects it could be, as possible links (name_candidates); a name not known at all is a note on its row.
+    Returns (possible, notes): {(object, unit): patterns} and {unit: notes}."""
+    possible, notes, helpers, resolved = {}, {}, {}, set()
+    functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
+    formals = {name: [f for f, _ in (u.get("code") or {}).get("formals") or []] for name, u in functions.items()}
+    defaults = {}
+    for name, u in functions.items():
+        for node in nodes_of.get(u["ref"], []):
+            if node.get("type") == "RParameter":
+                parameter = ((node.get("name") or {}).get("lexeme") or "").strip("`")
+                defaults.setdefault(name, {}).setdefault(parameter, node.get("defaultValue"))
+    def unknown(parts):
+        return merged([("any", "") if kind == "param" else (kind, value) for kind, value in parts])
+    def settle(user, reader, parts, owner):
+        if any(kind == "param" for kind, _ in parts):
+            unit = by_ref[user]
+            if unit["kind"] == KIND_FUNCTION and not unit.get("inside"):
+                entry = (reader, tuple(parts), owner)
+                if entry in helpers.setdefault(unit["name"], []):
+                    return False
+                helpers[unit["name"]].append(entry)
+                return True
+            parts = unknown(parts)
+        if all(kind == "text" for kind, _ in parts):
+            written = "".join(value for _, value in parts)
+            named = data_files.get(written.rsplit("/", 1)[-1], []) if reader in FILE_READERS else data_names.get(written, [])
+            for definer in named:
+                for reading in sorted({user, owner}):
+                    if definer != reading:
+                        link(definer, reading, written)
+                if owner != user:
+                    resolved.add(owner)
+            return False
+        found = name_candidates(reader, parts, data_names, data_files)
+        if found is None:
+            notes.setdefault(user, set()).add(UNKNOWN_NAME)
+        for definer in found or ():
+            if definer != user:
+                possible.setdefault((definer, user), set()).add("".join(v if k == "text" else "*" for k, v in parts))
+        return False
+    for ref, nodes in sorted(nodes_of.items()):            # every call that reads stored data by a name
+        for reader, value in reader_calls(nodes):
+            settle(ref, reader, template_of(tree, edges, value), ref)
+    calls = {ref: [n for n in nodes if n.get("type") == "RFunctionCall"] for ref, nodes in nodes_of.items()}
+    for _ in range(len(functions) + 1):                    # every call of a helper, until no more is learnt
+        grown = False
+        for ref, nodes in sorted(calls.items()):
+            me = by_ref[ref]["name"] if by_ref[ref]["kind"] == KIND_FUNCTION else None
+            for node in nodes:
+                callee = call_name(node)
+                if callee not in helpers or callee == me or \
+                        any(bits & CALLS and target in tree for target, bits in edges.get(node_id(node), [])):
+                    continue                               # not a helper, itself, or a function defined in place
+                bound = bound_arguments(call_arguments(node), formals.get(callee, []))
+                for reader, parts, owner in list(helpers[callee]):
+                    filled = []
+                    for kind, value in parts:
+                        if kind != "param":
+                            filled.append((kind, value))
+                        elif value in bound:
+                            filled += template_of(tree, edges, bound[value])
+                        else:
+                            default = (defaults.get(callee) or {}).get(value)
+                            filled += unknown(template_of(tree, edges, default)) if default else [("any", "")]
+                    grown = settle(ref, reader, merged(filled), owner) or grown
+        if not grown:
+            break
+    for name, entries in sorted(helpers.items()):          # a helper no caller names an object to: its own reads
+        for reader, parts, owner in entries:
+            if owner == functions[name]["ref"] and owner not in resolved:
+                settle(owner, reader, unknown(parts), owner)
+    return possible, notes
 
 
 def link_chunks(ctx):
@@ -4150,9 +4479,21 @@ def link_chunks(ctx):
     links = unit_links(units, read_functions(units, folder), folder, package)
     unread = [r["ref"] for r in links if r["not_read_by_flowr"]]
     count = sum(len(r["upstream"]) for r in links)
+    maybe = sum(len(r["possible_upstream"]) for r in links)
+    unknown = [r["ref"] for r in links if r["notes"]]
+    data = {u["ref"] for u in units if u["kind"] in (KIND_TABLE, KIND_OBJECT)}
+    idle = [r["ref"] for r in links if r["ref"] in data and not r["downstream"] and not r["possible_downstream"]]
     notes = [("flowR could not read %s, so %s no links of %s own." % (", ".join(unread), "it has" if len(unread) == 1 else "they have",
                                                                      "its" if len(unread) == 1 else "their"))] if unread else []
-    return StepResult({"unit_links": links}, {"chunk links": count, "not read by flowR": len(unread)},
+    if maybe:
+        notes.append("%d possible links, where code reads stored data by a name put together when it runs: marked "
+                     "(possible) beside the stored objects the name could be." % maybe)
+    if unknown:
+        notes.append("%s read%s stored data by a name known only when it runs." % (", ".join(unknown), "s" if len(unknown) == 1 else ""))
+    if idle:
+        notes.append("No code of the package reads %d of its %d stored objects: %s." % (len(idle), len(data), ", ".join(idle)))
+    return StepResult({"unit_links": links}, {"chunk links": count, "possible links": maybe, "not read by flowR": len(unread),
+                                              "stored objects no code reads": len(idle)},
                       ["%d links between the units of Chunks_Model, read by flowR." % count] + notes)
 
 
@@ -5268,7 +5609,9 @@ def dataset_view(unit, tokens):
     count, width = (list(unit["data"]["dims"]) + [0, 0])[:2]
     head = ("A stored dataset of %d rows and %d columns - too large to be a parameter table, so it is shown here as a "
             "view: its columns and first rows. Chunks_Model shows it whole." % (count, width))
-    lines, shown = unit["text"].split("\n"), []
+    named, *lines = unit["text"].split("\n")                 # the first line names the object; then the table
+    head += "\n" + named
+    shown = []
     for line in lines[:DATASET_VIEW_ROWS + 1]:
         if estimate_tokens(head + "\n" + "\n".join(shown + [line])) > tokens:
             break
@@ -5886,7 +6229,8 @@ def input_fingerprints(inputs_dir, inputs=None):
 LINK_COLUMNS = {"methodology_refs": ("Chunks_Methodology", "Click: Chunks_Methodology shows only these chunks"),
                 "upstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one"),
                 "downstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one")}
-REF_LIST = re.compile(r"^[CDM]-\d{4,}(?:; [CDM]-\d{4,})*$")      # a cell that is a list of references, and nothing else
+REF_LIST = re.compile(r"^([CDM]-\d{4,})(?: \(possible\))?(?:; (?:[CDM]-\d{4,}(?: \(possible\))?|%s))*$" % re.escape(UNKNOWN_NAME))
+                                            # a cell of references - some possible - and at most the note of an unknown name
 LINK_FONT = "0563C1"                                            # the blue Excel gives a hyperlink
 
 WORKBOOK_MACRO = """Option Explicit
@@ -6201,6 +6545,23 @@ def run_identity(store, paths):
     """What ties a workbook to its run: also written into the workbook's properties."""
     return {"project": paths.project, "run_id": paths.run_id}
 
+def stored_data_rows(units, links):
+    """Model_Package_Info's account of the stored objects, once step 03 has linked them: how many the code reads, and
+    those no code reads - each of which says so in its own row of Immediate Downstream Model Chunk. Enforces: R2"""
+    if not links:
+        return []
+    linked = {record["ref"]: record for record in links}
+    data = [u for u in units if u["kind"] in (KIND_TABLE, KIND_OBJECT)]
+    unread = [u for u in data if not (linked.get(u["ref"]) or {}).get("downstream")
+              and not (linked.get(u["ref"]) or {}).get("possible_downstream")]
+    rows = [("Stored objects read by the code", "%d of %d" % (len(data) - len(unread), len(data)))] if data else []
+    if unread:
+        rows.append(("Stored objects no code reads", "; ".join("%s %s (%s)" % (u["ref"], u["name"], u["file"]) for u in unread)
+                     + ". The model's code reads them by no name, file, helper or environment the tool can see: each "
+                       "says so in Immediate Downstream Model Chunk."))
+    return rows
+
+
 def rows_package_info(store, paths, settings, progress, split=None):
     """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
     identity, rows = run_identity(store, paths), []
@@ -6222,6 +6583,9 @@ def rows_package_info(store, paths, settings, progress, split=None):
             add(row["group"], row["item"], row["value"])
     for row in store.read("info_rows"):
         add(row["group"], row["item"], row["value"])
+    stored = stored_data_rows(store.read("model_units"), store.read("unit_links"))
+    at = max((number for number, row in enumerate(rows) if row["group"] == "Package data"), default=len(rows) - 1) + 1
+    rows[at:at] = [{"group": "Package data", "item": item, "value": value} for item, value in stored]
     for group, several in (split or {}).items():          # beside the other rows of their group: what takes several rows
         if several:
             at = max((number for number, row in enumerate(rows) if row["group"] == group), default=len(rows) - 1) + 1
@@ -6311,9 +6675,24 @@ def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
         refs, deviations, count = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", "", None)
         rows += spread_rows(ref, parts, {"interpretation": interpretation_of(questioned.get(ref, parts), said, unanswered, was_asked),
                                          "methodology_refs": refs, "deviations": deviations, "flagged_count": count,
-                                         "upstream": "; ".join(linked.get("upstream") or ()),
-                                         "downstream": "; ".join(linked.get("downstream") or ())})
+                                         "upstream": link_cell(linked, "upstream", parts[0]),
+                                         "downstream": link_cell(linked, "downstream", parts[0])})
     return rows
+
+def link_cell(linked, side, unit):
+    """A unit's cell of Immediate Upstream or Immediate Downstream Model Chunk: the units the code shows it takes from
+    or gives to, then those a name known only in part could be, each marked (possible), then what could not be known.
+    A stored object no code reads says so. Empty before step 03 has run. Enforces: R2"""
+    if not linked:
+        return ""
+    proven = list(linked.get(side) or ())
+    items = proven + [ref + POSSIBLE for ref in linked.get("possible_" + side) or () if ref not in proven]
+    if side == "upstream":
+        items += list(linked.get("notes") or ())
+    elif not items and unit.get("kind") in (KIND_TABLE, KIND_OBJECT):
+        items = [READ_BY_NO_CODE]
+    return "; ".join(items)
+
 
 def several_rows(rows, key):
     """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)]."""
@@ -6475,7 +6854,7 @@ def link_references(workbook, rows):
             value = row.get(field) or ""
             if not REF_LIST.match(value):
                 continue
-            first = value.split("; ")[0]
+            first = REF_LIST.match(value).group(1)
             if first not in first_row[target]:
                 continue
             cell = sheet.cell(row=number, column=column_of[field])
