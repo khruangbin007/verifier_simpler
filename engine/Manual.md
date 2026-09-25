@@ -14,7 +14,7 @@ It does not run the model. It does not judge whether the methodology is sound. I
 
 Its reading and its accounts assume no field: the methodology can be about anything the package computes, and what the tool knows about a project comes from the project's own files. Its code interpretations are written for credit: step 04 asks the organisation's model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology. Step 05 then asks it, for each piece, which chunks of the methodology describe, explain or inform it, and where the code departs from them.
 
-**What comes out.** A run writes two files into the project's folder, beside its inputs:
+**What comes out.** A run writes `Output.xlsm` and an `_Audit` folder into the project's folder, beside its inputs:
 
 ```
 Projects/<project name>/
@@ -22,7 +22,11 @@ Projects/<project name>/
   2_Model_Package/          the model's R package
   3_Model_Documentation/    the model documentation
   Output.xlsm               five sheets: what was read, what the organisation's model says of the code, and each item it flags
-  Audit_Log.xlsx            the record: the run, every step, every record, every exchange with the model
+  _Audit/                   the record of the run (section 8):
+    Audit_Log.xlsx            the run, every step, every record, every exchange with the model, every file below
+    run_log.txt               the run's technical log
+    01_prepare-run/ ... 05_search-methodology/
+                              a JSON file for everything each step read, made or asked chat(), in the order written
 ```
 
 A project holds one run at a time. Cell 3 carries it on where it stopped - in the same session or a later one - while the input files, the engine and the settings are the ones it started with; when one of them has changed, it starts a new run, replaces both files, and `Model_Package_Info` lists what changed since the run before. An `Output.xlsm` you have edited is never replaced: cell 3 asks you to move it aside first.
@@ -36,7 +40,7 @@ The record is what makes the run an **evidence pack**: from that workbook alone,
 3. **Link.** The tool links each piece of the package to the pieces it takes something from and gives something to, with flowR reading the R code. No model is involved.
 4. **Ask.** Through your `chat()`, the organisation's model explains each piece of code (step 04), finds the chunks of the methodology that bear on it and flags where the code may depart from them (step 05). Its words fill three columns of Chunks_Model, each headed as the model's own.
 5. **Read.** `Output.xlsm` shows everything that was read, and what the model said.
-6. **Keep.** The two files, with the inputs beside them, are the evidence pack.
+6. **Keep.** `Output.xlsm` and the `_Audit` folder, with the inputs beside them, are the evidence pack.
 
 ## 3. Design rules
 
@@ -49,13 +53,13 @@ Thirteen rules, each enforced by named code: its docstring says so (`Enforces: R
 | R3 | The model's opinion is never the last word. What a language model writes is marked as its own - three columns, each headed "(... by LLM ...)" - and recorded, question and answer, in the audit log; code checks that every chunk the model names was shown to it; everything else the workbook shows is read and parsed by code, and nothing the code reads, links or checks depends on an answer. |
 | R4 | Every record carries its provenance - the run and the step - and every unit can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
-| R6 | Inputs are never modified. A run writes only its two files, beside the three input folders, and its scratch folder on the driver. The one move the tool makes is bringing a project laid out before, with its folders inside `Inputs`, to this layout: once, each folder whole, no file in it changed (section 6). |
+| R6 | Inputs are never modified. A run writes only `Output.xlsm` and its `_Audit` folder, beside the three input folders, and its scratch folder on the driver. The one move the tool makes is bringing a project laid out before, with its folders inside `Inputs`, to this layout: once, each folder whole, no file in it changed (section 6). |
 | R7 | Nothing taken from an input or from the model is ever executed or evaluated: no R, no evaluation of text, no unpickling, no string parsing by a symbolic library, safe reading of archives, safe loading of YAML only. |
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
 | R9 | Credit is the domain of the model's interpretations. Step 04 asks the model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology, and step 05 to find the methodology behind each piece and where the code departs from it; the reading and the accounts assume no field. |
 | R10 | Plain language outward. No internal names, no technical traces, whole numbers shown as whole numbers, in anything an analyst reads. |
 | R11 | One engine file, plain code. The notebook's four cells are calls into it and hold no code of their own but the organisation's `chat()`. |
-| R12 | Workspace discipline: build on local disk, copy whole files, keep the file count small, sync after every step. |
+| R12 | Workspace discipline: build on local disk, copy whole files - each file of the `_Audit` folder once - and sync after every step. |
 | R13 | Reading conserves content. Every smallest piece of text in an input ends in exactly one named class: kept in a unit, kept elsewhere in a unit's fields, read into another form, left out under a named rule, or reported as not read. Every character of a unit traces back to the input or to a named mark. Where the model helps decide how a file is sliced it chooses among options the code has already checked, and never supplies text. |
 
 **The wording rule.** The tool rates nothing. Words that grade how serious something is, and the two policy terms that classify an observation, never appear in anything the tool produces, because grading and classifying are decisions of the validation policy and of people, not of a tool. The tool says what it observed, where, and what a sensible next step would be. The list of words lives in one place in `verifier.py`, and a test scans the engine, the workbook, the report and this manual for them on every build.
@@ -114,9 +118,9 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 | **cell 1** | `verifier.setup(dbutils)`: makes the three widgets, takes your user id from Databricks, installs a package only if one the engine imports is missing (then restarts Python and asks for the cell once more), gets flowR ready, and prints what the other three cells do | whenever Python restarts |
 | **cell 2** | Your organisation's `chat()`, already filled in; it returns the model's reply under `"answer"` and reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Cell 3 calls it from many threads at once, up to 256, so it keeps nothing from one call to the next. Then `verifier.check_chat(chat)` asks it one question, makes the project's three input folders and prints their paths, bringing a project laid out before, with its folders inside `Inputs`, to the present layout (section 6) | whenever Python restarts, and when the gateway or your id changes |
 | **cell 3** | `verifier.review()`: reads every input file, links the units of the package, then asks your `chat()` to describe each piece of the model's code (step 04), and to find the methodology behind each piece and where the code departs from it (step 05), with a line of progress every minute. Prints what each step did and where the project folder is | when it says a step did not finish - after pasting a fresh token, if it ran out: finished steps are never repeated, and no answer received is asked for again, even after an interruption. After Python restarts, run cells 1 and 2 first: cell 3 carries the run on where it stopped |
-| **cell 4** | `verifier.verify()`: eight checks of the project's two files against their own record, each Confirmed or Not confirmed | after any run |
+| **cell 4** | `verifier.verify()`: nine checks of `Output.xlsm` and the `_Audit` folder against their own record, each Confirmed or Not confirmed | after any run |
 
-**The widgets.** Three: the endpoint and token for the model gateway (01, 02), and the project's name (03), which can be a model id and names the project's folder. Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<project name>`, with its three input folders and the two files a run writes beside them. A name holds at most 24 characters, from letters, digits, hyphen and underscore. A run is named by the minute it started, as `2026-09-22_1430`. Cell 3 carries the project's run on, in this session or a later one, until an input file, the engine or a setting changes; then it starts a new one.
+**The widgets.** Three: the endpoint and token for the model gateway (01, 02), and the project's name (03), which can be a model id and names the project's folder. Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<project name>`, with its three input folders, and `Output.xlsm` and the `_Audit` folder a run writes beside them. A name holds at most 24 characters, from letters, digits, hyphen and underscore. A run is named by the minute it started, as `2026-09-22_1430`. Cell 3 carries the project's run on, in this session or a later one, until an input file, the engine or a setting changes; then it starts a new one.
 
 **No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Packages come from PyPI, named in the engine (section 18).
 
@@ -126,7 +130,7 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 
 ## 6. What goes in
 
-Three folders in the project's folder, beside `Output.xlsm` and `Audit_Log.xlsx`:
+Three folders in the project's folder, beside `Output.xlsm` and the `_Audit` folder:
 
 | Folder | What | Formats |
 |---|---|---|
@@ -134,7 +138,7 @@ Three folders in the project's folder, beside `Output.xlsm` and `Audit_Log.xlsx`
 | `2_Model_Package` | the model | an R package as a `.tar.gz`, a `.zip` of it, or its source folder |
 | `3_Model_Documentation` | the model documentation | as for the methodology; `.docx` preferred |
 
-Only these three folders are read, and the optional `tag_rules.yaml` and `glossary.xlsx` beside them: anything else in the project's folder - `Output.xlsm`, `Audit_Log.xlsx`, a copy you saved there - is not an input.
+Only these three folders are read, and the optional `tag_rules.yaml` and `glossary.xlsx` beside them: anything else in the project's folder - `Output.xlsm`, the `_Audit` folder, a copy you saved there - is not an input.
 
 **A project laid out before.** Projects used to keep the three folders inside a folder named `Inputs`. The first time cell 2 or cell 3 meets such a project, it moves each folder up into the project's folder, whole, not a file in it changed, and says so; `Inputs` goes once nothing but hidden files is left in it, and anything of yours still in it stays, and is named. A folder above that holds only the tool's README gives way. If a folder stands in both places and both hold files, the tool moves neither, and cell 3 stops until you keep one. The inputs' fingerprints do not change: they name each file by its path inside its folder.
 
@@ -231,9 +235,21 @@ So a cell of Immediate Upstream or Immediate Downstream Model Chunk holds the li
 
 **Letting the macro run.** Excel blocks the macros of a file that came from the internet, which a file downloaded from Databricks is: it shows a red bar saying so, or opens it in Protected View. On Windows, close the file, right-click it, choose Properties, tick Unblock, and open it again; then choose Enable Editing and Enable Content if Excel asks. Where your organisation allows macros only in trusted locations, save the file in one. Excel for the web, LibreOffice and Google Sheets do not run it: there the links only take you to the first chunk.
 
-## 8. The project's two files as an evidence pack
+## 8. Output.xlsm and the _Audit folder as an evidence pack
 
-`Audit_Log.xlsx`, beside `Output.xlsm` and the three input folders, is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsm` carries this run's ids and fingerprints, and that no access token was written into either file.
+`_Audit/Audit_Log.xlsx` is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply; *Files* every file of the `_Audit` folder, in the order written, with what it holds, when it was written, its size and its SHA-256 - its path a link that opens the file. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsm` carries this run's ids and fingerprints, and that no access token was written into either file.
+
+**Reading the `_Audit` folder in order.** Beside `Audit_Log.xlsx` and `run_log.txt`, the run's technical log, is one folder for each step, numbered as the steps run: `01_prepare-run`, `02_read-inputs`, `03_link-chunks`, `04_interpret-code`, `05_search-methodology`. In each, the files are numbered in the order the step wrote them, and a step run again goes on with the next number, so the folders read top to bottom as the run happened:
+
+| Step | Its files |
+|---|---|
+| 01 | `run-manifest`: the run's identity, the fingerprints of its inputs and of the engine's files, the settings |
+| 02 | for each methodology and documentation file, how it was read, the repairs made to it and every chunk made of it; for each file of the package, every unit made of it; the package's account; the lines of Model_Package_Info |
+| 03 | `unit-links`: each unit's links, and how each was found |
+| 04, 05 | one file for each exchange with `chat()` - `M-0003_code-interpretation`, `M-0003_methodology-search_C-0001-C-0028`, `M-0003_methodology-comparison_C-0012` - holding the SystemPrompt and the MainPrompt exactly as sent (and any later MainPrompt, when an answer was asked for again), the answer as returned, when it was sent and returned, the outcome, and what went wrong if anything did |
+| every step | `step_attempt-1`, `-2` ...: what the attempt did, counted and said, and whether it finished; `fault_attempt-N` when it could not finish, with the fault inside the tool |
+
+The sheet *Files* of `Audit_Log.xlsx` lists every one of them, numbered across the whole run; an exchange's line also says when it was sent and returned. No file holds the access token. A new run replaces the whole folder, as it replaces `Output.xlsm`.
 
 ## 9. When something goes wrong
 
@@ -248,11 +264,11 @@ So a cell of Immediate Upstream or Immediate Downstream Model Chunk holds the li
 | "No question showing C-0012 has been answered" | Questions showing the rest of the methodology were answered, but none showing that chunk: the gateway may refuse what it holds. The rows of the pieces affected say which chunk is still to search. |
 | A deviation reads "The model's words for this one cannot be shown in plain words" | The model kept using words the workbook may not hold, three times running. Its answer is in the audit log's Model_Calls sheet; the Refs at the start of the line say which chunks it rests on. |
 | The cluster stopped, or the notebook detached | Start or reattach it and run `cell 1` to `cell 3` in order. Cell 3 carries the project's run on where it stopped: a finished step is not repeated, and no recorded answer is asked for again. |
-| An input changed | Run `cell 3`: it says the input files changed and starts a new run, replacing `Output.xlsm` and `Audit_Log.xlsx`; `Model_Package_Info` lists what changed since the run before. The same happens when the engine or a setting changes. |
+| An input changed | Run `cell 3`: it says the input files changed and starts a new run, replacing `Output.xlsm` and the `_Audit` folder; `Model_Package_Info` lists what changed since the run before. The same happens when the engine or a setting changes. |
 | "Output.xlsm ... has been changed since the tool wrote it" | A new run would replace an `Output.xlsm` you have edited, so cell 3 stopped. Move it to another folder or rename it, then run `cell 3` again. |
 | A unit of kind *File not read* | That file or expression could not be parsed. `Model_Package_Info` lists it with the reason; the rest of the package was still read. |
 | A cell reads "This text could not be shown in plain words" | The tool withheld a text that contained technical traces; the text is in `run_log.txt`, in the run's scratch folder on the driver. Please report it; it is a defect in the tool. |
-| "This is a defect in the tool, not in the model under review" | The coverage identity did not hold and the run stopped on purpose. Keep the project's two files and report it. |
+| "This is a defect in the tool, not in the model under review" | The coverage identity did not hold and the run stopped on purpose. Keep `Output.xlsm` and the `_Audit` folder and report it. |
 
 ## 10. Known limitations
 

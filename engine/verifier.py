@@ -145,6 +145,7 @@ class StepContext:
     """What every step function receives. It never contains the access token."""
     settings: dict; options: dict; read: Callable
     work_dir: str; note: Callable; provenance: Optional[Provenance] = None
+    exchanges: list = field(default_factory=list)  # each exchange with chat(), as sent and returned, for the audit folder
 
 @dataclass
 class StepResult:
@@ -4534,7 +4535,7 @@ PATH_BUDGET = 100
 
 @dataclass
 class RunPaths:
-    """Where a project's run lives: its two files, Output.xlsm and Audit_Log.xlsx, sit in the project folder
+    """Where a project's run lives: Output.xlsm sits in the project folder, and the record of the run in its _Audit folder,
     beside its three input folders - run_dir, outputs_dir, audit_dir and inputs_dir are that one folder, each name kept so that
     every reader says which file it means - and local_dir is scratch space on the driver. previous is the
     manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
@@ -4600,6 +4601,17 @@ def lift_inputs(project_dir):
     return said, blocking
 
 
+def lift_audit_log(project_dir):
+    """A project whose Audit_Log.xlsx stands in its own folder, as it did before, has it moved into _Audit, once - the
+    tool's own file, moved whole. Returns what was done, in plain words."""
+    old, new = os.path.join(project_dir, AUDIT_FILE), os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
+    if not os.path.isfile(old) or os.path.exists(new):
+        return []
+    os.makedirs(os.path.dirname(new), exist_ok=True)
+    os.rename(old, new)
+    return ["Audit_Log.xlsx was moved into %s, where the record of a run is kept." % AUDIT_FOLDER]
+
+
 def setup_project(projects_dir, project):
     """Create the project skeleton and say what is still missing: the three input folders, each with its README.txt,
     in the project's folder beside Output.xlsm and Audit_Log.xlsx. A project laid out before, with its folders inside
@@ -4608,9 +4620,10 @@ def setup_project(projects_dir, project):
     problem = check_project_name(project)
     if problem:
         raise ValueError(problem)
-    project_dir = os.path.join(projects_dir, project)          # the project's folder: its three input folders, and a run's two files
+    project_dir = os.path.join(projects_dir, project)          # the project's folder: its three input folders, Output.xlsm and _Audit
     os.makedirs(project_dir, exist_ok=True)
     said, missing = lift_inputs(project_dir)
+    said += lift_audit_log(project_dir)
     for _, folder, readme in INPUT_FOLDERS:
         path = os.path.join(project_dir, folder)
         os.makedirs(path, exist_ok=True)
@@ -4634,7 +4647,7 @@ def new_run_id(taken, now=None):
 def recorded_manifest(project_dir):
     """The manifest of the run the project's Audit_Log.xlsx records, read from its Run sheet alone; None when
     there is none, or the workbook cannot be read."""
-    target = os.path.join(project_dir, AUDIT_FILE)
+    target = os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
     if not os.path.exists(target):
         return None
     import openpyxl
@@ -4692,8 +4705,8 @@ def pick_scratch_root(preferred=""):
         "cluster." % "; ".join(refused))
 
 def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
-    """The project's run, and its local scratch folder. A project holds one run: its two files, Output.xlsm and
-    Audit_Log.xlsx, sit beside its three input folders. The run the audit log records is carried on - by this session
+    """The project's run, and its local scratch folder. A project holds one run: Output.xlsm and the _Audit folder, with
+    Audit_Log.xlsx and the files of every step, sit beside its three input folders. The run the audit log records is carried on - by this session
     or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
     run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
     changed since the tool wrote it is never replaced: OutputsEdited says so. Inputs are never touched.
@@ -4722,14 +4735,14 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
             os.remove(legacy)
         previous = record if record and record.get("inputs") else None
         run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run)), now)
-        opened = ("A new run, %s: %s since run %s, so Output.xlsm and Audit_Log.xlsx are replaced." % (run_id, why, record["run_id"])
+        opened = ("A new run, %s: %s since run %s, so Output.xlsm and the _Audit folder are replaced." % (run_id, why, record["run_id"])
                   if record and record.get("run_id") else "A new run, %s." % run_id)
         if replaced:
             opened += (" %s, which the tool wrote before, is replaced by %s: the same sheets, and a click on a reference "
                        "shows only the chunks it names." % (LEGACY_OUTPUT_FILE, OUTPUT_FILE))
     local_dir = local_of(run_id)
     paths = RunPaths(projects_dir, project, project_dir, inputs_dir, run_id, project_dir,
-                     project_dir, project_dir, local_dir, previous, opened)
+                     project_dir, os.path.join(project_dir, AUDIT_FOLDER), local_dir, previous, opened)
     longest = os.path.join(paths.project_dir, LONGEST_AUDIT_NAME)
     relative = os.path.relpath(longest, os.path.dirname(os.path.abspath(projects_dir)))
     if len(relative) > PATH_BUDGET:
@@ -4737,6 +4750,8 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
                          "Excel can still open downloaded files. Please use a shorter project name "
                          "or Projects folder." % (len(relative), PATH_BUDGET))
     os.makedirs(paths.local_dir, exist_ok=True)
+    if why and os.path.isdir(paths.audit_dir):              # a new run replaces the record of the one before, whole
+        shutil.rmtree(paths.audit_dir)
     if why:                                                 # a new run: the record of the one it replaces is not read back
         OPEN_STORES[(paths.local_dir, paths.audit_dir)] = AuditStore(paths.local_dir, paths.audit_dir, loaded=True)
     return paths
@@ -4779,7 +4794,8 @@ class LiveValues:
 
 # ---------------------------------------------------------------- the audit store
 AUDIT_OBJECTS = ("run_manifest", "package_info")
-AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsm and the three input folders
+AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, in the project's _Audit folder
+AUDIT_FOLDER = "_Audit"                   # the record of a run: Audit_Log.xlsx, run_log.txt, and a folder for each step
 CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
 
 def copy_whole(source, target):
@@ -4796,12 +4812,13 @@ def copy_whole(source, target):
 
 @dataclass
 class AuditStore:
-    """The record of a run, as one workbook a person can open: Audit_Log.xlsx, in the project folder.
+    """The record of a run, as one workbook a person can open: Audit_Log.xlsx, in the project's _Audit folder.
 
         Run            the run's manifest and account, one line per entry
         Steps          every step that ran, what it counted and what it said
         Records        every record of every kind, in the order written, each as its own JSON
         Model_Calls    every exchange with the model: the question, the answer and the outcome
+        Files          every file of the audit folder, in the order written, with its size and SHA-256
 
     Records are held in memory while a cell runs and the workbook is written whole at each
     sync, beside and then swapped in, so a reader never sees it half written. Text longer than
@@ -4812,6 +4829,30 @@ class AuditStore:
     calls: list = field(default_factory=list)
     account: dict = field(default_factory=dict)    # the manifest and the other single-object kinds
     loaded: bool = False
+    copied: set = field(default_factory=set)       # the files of the audit folder already in the project's _Audit
+
+    def write_file(self, step_id, step_name, label, payload, holds, about=""):
+        """One file of the audit folder: payload as JSON, in the step's own folder - 02_read-inputs - numbered after the
+        files the step wrote before it, so that a step's files, and a step tried again, read in the order written:
+        02_read-inputs/0003_methodology_capital_methodology.txt.json. Written on local disk with the token removed,
+        copied into _Audit at the next sync, and listed in the inventory (the record kind audit_files, the sheet
+        Files) with the time it was written, its size and its SHA-256. Enforces: R4, R5, R8, R12"""
+        self.restore()
+        inventory = self.read("audit_files")
+        number = 1 + sum(1 for entry in inventory if entry["step_id"] == step_id)
+        name = "%04d_%s.json" % (number, re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-")[:90])
+        relative = "%s_%s/%s" % (step_id, step_name, name)
+        data = ((NOTEBOOK["live"] or LiveValues()).redact(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+                + "\n").encode("utf-8")
+        local = os.path.join(self.local_dir, AUDIT_FOLDER, *relative.split("/"))
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+        with open(local, "wb") as handle:
+            handle.write(data)
+        self.append("audit_files", [{"number": len(inventory) + 1, "step_id": step_id, "step": step_name, "file": relative,
+                                     "holds": holds, "about": about,
+                                     "written_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                                     "bytes": len(data), "sha256": sha256_bytes(data)}])
+        return relative
 
     def target(self):
         return os.path.join(self.remote_dir, AUDIT_FILE)
@@ -4868,6 +4909,12 @@ class AuditStore:
             for part_number, part in parts_of(canonical_json(record)):
                 calls.append([number, record.get("question_id", ""), record.get("step", ""), record.get("question_type", ""),
                               record.get("attempt", ""), record.get("outcome", ""), part_number, part])
+        inventory = book.create_sheet("Files")          # every file of the audit folder, in the order written
+        inventory.append(["Number", "Step", "File", "What it holds", "About", "Written at", "Bytes", "SHA-256"])
+        for entry in self.read("audit_files"):
+            inventory.append([entry["number"], "%s %s" % (entry["step_id"], entry["step"]), entry["file"], entry["holds"],
+                              entry.get("about", ""), entry["written_at"], entry["bytes"], entry["sha256"]])
+            inventory.cell(row=inventory.max_row, column=3).hyperlink = entry["file"]     # opens the file beside the workbook
         for sheet in book.worksheets:
             sheet.freeze_panes = "A2"
         partial = os.path.join(self.local_dir, AUDIT_FILE + ".writing")
@@ -4875,7 +4922,18 @@ class AuditStore:
         book.save(partial)
         copy_whole(partial, self.target())
         os.remove(partial)
-        return [AUDIT_FILE]
+        written = [AUDIT_FILE]
+        for entry in self.read("audit_files"):          # each file of the audit folder copied once, whole
+            local = os.path.join(self.local_dir, AUDIT_FOLDER, *entry["file"].split("/"))
+            if entry["file"] in self.copied or not os.path.exists(local):
+                continue                                # copied before, or by the session that wrote it
+            copy_whole(local, os.path.join(self.remote_dir, *entry["file"].split("/")))
+            self.copied.add(entry["file"])
+            written.append(entry["file"])
+        log = os.path.join(self.local_dir, "run_log.txt")
+        if os.path.exists(log):                         # the technical log of the run, the token already removed
+            copy_whole(log, os.path.join(self.remote_dir, "run_log.txt"))
+        return written
 
     def restore(self):
         """On resume: read the project's Audit_Log.xlsx back, once."""
@@ -5051,12 +5109,14 @@ def ask_model(chat, system, main, check=None, halt=None):
     check = check or check_words
     halt = halt or threading.Event()
     CHAT_WORKER.active = True
-    started, plain, technical, question, failed_calls = time.time(), [], [], main, 0
+    started, plain, technical, question, failed_calls, sent = time.time(), [], [], main, 0, []
     for attempt in range(1, CHAT_ATTEMPTS + 1):
         if halt.is_set():
             plain.append("try %d: not made, because the cell had ended" % attempt)
             break
         try:
+            if not sent or sent[-1]["MainPrompt"] != question:  # what chat() was given, as the audit folder keeps it
+                sent.append({"try": attempt, "MainPrompt": question})
             reply = chat(system, question)
             answer = str(reply.get("answer") or "").strip() if isinstance(reply, dict) else ""
             if not answer:
@@ -5078,12 +5138,14 @@ def ask_model(chat, system, main, check=None, halt=None):
             if note:
                 plain.append("try %d: %s" % (attempt, note))
             return {"answer": answer, "reading": reading, "attempt": attempt, "plain": plain, "technical": technical,
-                    "failed calls": failed_calls, "seconds": time.time() - started}
+                    "failed calls": failed_calls, "seconds": time.time() - started, "started": started, "ended": time.time(),
+                    "system": system, "sent": sent}
         plain.append("try %d: %s" % (attempt, problem["plain"]))
         technical.append("try %d: the answer turned down began: %s" % (attempt, " ".join(answer.split())[:600]))
         question = main + ("\n\n" + problem["ask"] if problem["ask"] else "")
     return {"answer": "", "reading": None, "attempt": CHAT_ATTEMPTS, "plain": plain, "technical": technical,
-            "failed calls": failed_calls, "seconds": time.time() - started}
+            "failed calls": failed_calls, "seconds": time.time() - started, "started": started, "ended": time.time(),
+            "system": system, "sent": sent}
 
 
 def held_answers(ctx, types):
@@ -5214,6 +5276,16 @@ def call_record(ctx, asked, result, redact, **extra):
                    "reading": redacted(result["reading"], redact),
                    "prompt_hash": asked["id"], "response_hash": sha256_text(answer) if answer else "",
                    "what happened": [redact(line) for line in result["plain"]], "seconds": round(result["seconds"], 3)})
+    if isinstance(getattr(ctx, "exchanges", None), list):  # the exchange as chat() saw it, for the audit folder
+        stamp = lambda moment: datetime.datetime.fromtimestamp(moment).isoformat(timespec="milliseconds") if moment else ""
+        ctx.exchanges.append({"question_id": asked["id"], "attempt": result["attempt"], "unit_ref": asked["unit_ref"],
+                              "question_type": asked["type"], "sent_at": stamp(result.get("started")),
+                              "returned_at": stamp(result.get("ended")),
+                              "chat_input": {"SystemPrompt": result.get("system", ""),
+                                             "MainPrompt": (result.get("sent") or [{}])[0].get("MainPrompt", "")},
+                              "chat_input_on_later_tries": (result.get("sent") or [])[1:],
+                              "chat_output": {"answer": answer},
+                              "technical": [redact(line) for line in result.get("technical") or ()]})
     return record
 
 
@@ -6182,21 +6254,81 @@ def run_step(step, store, paths, settings):
     os.makedirs(work_dir, exist_ok=True)
     context = StepContext(settings, options, store.read, work_dir, notes.append, provenance)
     function = STEP_FUNCTIONS[step["carried_out_by"]]
-    started = time.time()
+    attempt = 1 + sum(1 for record in store.read("step_records") if record["step_id"] == step["id"])
+    started, fault = time.time(), ""
     try:
         result = function(context)
     except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
         result = StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
+        fault = "".join(traceback.format_exception(type(problem), problem, problem.__traceback__))
     for kind in sorted(result.records):
         if kind == "llm_calls":                      # exchanges with the model: the audit log's Model_Calls sheet
             store.append_calls(result.records[kind])
         else:
             store.append(kind, result.records[kind])
     result.messages = list(result.messages) + notes
+    audit_step_files(store, step, result, context.exchanges)
     record_step(store, step, result, time.time() - started)
+    store.write_file(step["id"], step["name"], "step_attempt-%d" % attempt, store.read("step_records")[-1],
+                     "What the step did: the records it made by kind, what it counted and said, whether it finished, "
+                     "when it ended and how long it took", "attempt %d" % attempt)
+    if fault:
+        store.write_file(step["id"], step["name"], "fault_attempt-%d" % attempt, {"trace": fault},
+                         "Why the step could not finish: the fault inside the tool, for whoever maintains it", "attempt %d" % attempt)
     rebuild_outputs(store, paths, settings, "")
     store.sync()
     return result.finished
+
+def audit_step_files(store, step, result, exchanges):
+    """The files a step leaves in the audit folder, before its own record: what it read and made - for each input file,
+    how it was read, the repairs made to it and every chunk made of it; for each file of the package, its units;
+    the package's account, the lines of Model_Package_Info and the links - and each exchange with chat(), the
+    SystemPrompt and MainPrompt as sent, the answer as returned, and what came of it. In the order the step made
+    them, which is the same for the same inputs. Enforces: R2, R4, R5"""
+    records = {kind: [to_plain(record) for record in items] for kind, items in result.records.items()}
+    def write(label, payload, holds, about=""):
+        store.write_file(step["id"], step["name"], label, payload, holds, about)
+    for manifest in records.get("run_manifest") or ():
+        write("run-manifest", manifest, "The run's identity, the fingerprints of its input files and of the engine's files, "
+                                        "the packages' versions, the settings, and what changed since the run before")
+    info, repairs = list(records.get("info_rows") or ()), list(records.get("read_repairs") or ())
+    for kind, corner in (("chunks_canon", "methodology"), ("chunks_doc", "documentation")):
+        by_file = {}
+        for chunk in records.get(kind) or ():
+            by_file.setdefault(chunk.get("source_file") or "", []).append(chunk)
+        for source, chunks in by_file.items():
+            write("%s_%s" % (corner, source.replace("/", "~")),
+                  {"input": source, "how it was read": [row for row in info if str(row.get("item", "")).split(":")[0] == source],
+                   "repairs made while reading": [row for row in repairs if row.get("file") == source], "chunks": chunks},
+                  "How one %s file was read, the repairs made to it, and every chunk made of it" % corner, source)
+    by_member = {}
+    for unit in records.get("model_units") or ():
+        by_member.setdefault(unit.get("file") or "", []).append(unit)
+    for member, units in by_member.items():
+        write("package_%s" % member.replace("/", "~"), {"package file": member, "units": units},
+              "Every unit made of one file of the model package", member)
+    for record in records.get("package_info") or ():
+        write("package-account", record, "What the package says of itself, and its content account")
+    if info:
+        write("model-package-info", info, "Every line the step wrote to Model_Package_Info")
+    if repairs:
+        write("repairs-made-while-reading", repairs, "Every repair made to a malformed file while reading it")
+    if records.get("unit_links"):
+        write("unit-links", records["unit_links"], "Each unit's links to the units it takes from and gives to, and how "
+                                                   "each was found")
+    sent = {(exchange["question_id"], exchange["attempt"]): exchange for exchange in exchanges}
+    for call in records.get("llm_calls") or ():
+        exchange = sent.get((call["question_id"], call["attempt"]), {})
+        pieces = [piece[0] if isinstance(piece, (list, tuple)) else piece for piece in call.get("pieces") or ()]
+        detail = ("_" + pieces[0] + ("-" + pieces[-1] if len(pieces) > 1 else "")) if pieces else ""
+        payload = {key: value for key, value in call.items() if key != "answer"}
+        payload.update({key: exchange[key] for key in ("sent_at", "returned_at", "chat_input", "chat_input_on_later_tries",
+                                                       "chat_output", "technical") if key in exchange})
+        write("%s_%s%s" % (call.get("unit_ref") or "", str(call.get("question_type") or "").replace(" ", "-"), detail), payload,
+              "One exchange with chat(): the SystemPrompt and MainPrompt sent, the answer returned, and what came of it",
+              "%s - sent %s, returned %s" % (call.get("unit_ref") or "", exchange.get("sent_at", "")[11:] or "not sent",
+                                             exchange.get("returned_at", "")[11:] or "-"))
+
 
 def step_failure(step, problem, work_dir):
     """What the analyst is told when a step could not finish, and where the details are kept for
@@ -7022,7 +7154,7 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     """Rebuild Output.xlsm (and the report once flagged items exist) on local disk and copy
     them whole into the project folder. The guard: a workbook there that differs from the last
     one the tool wrote is a reviewer's work in progress and is never overwritten before it has
-    been read in. Afterwards the project folder holds the two files beside its three input folders. Enforces: R6, R12"""
+    been read in. Afterwards the project folder holds Output.xlsm and the _Audit folder beside its three input folders. Enforces: R6, R12"""
     work = os.path.join(store.local_dir, "work")
     os.makedirs(work, exist_ok=True)
     progress = progress_text(store, waiting_message)
@@ -7062,7 +7194,7 @@ def contents_of(path):
         return                                       # a damaged archive is caught by the other lines of the verification
 
 def verify_evidence_pack(paths, settings, live=None):
-    """Works from the project's two files and its three input folders alone. Returns rows (what was checked,
+    """Works from Output.xlsm, the _Audit folder and the three input folders alone. Returns rows (what was checked,
     "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
     content hash is computed again from the input files and compared with the record."""
     store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
@@ -7098,12 +7230,19 @@ def verify_evidence_pack(paths, settings, live=None):
     except Exception:
         line("The workbook carries this run's ids and fingerprints", False, "Output.xlsm could not be opened")
     secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
-    leaked = []
-    for name in (OUTPUT_FILE, AUDIT_FILE):                # the tool's own files; the input folders are the project's
-        path = os.path.join(paths.outputs_dir, name)
+    leaked, written = [], [os.path.join(paths.outputs_dir, OUTPUT_FILE)]   # the tool's own files: Output.xlsm and _Audit
+    for folder, _, names in os.walk(paths.audit_dir):
+        written += [os.path.join(folder, name) for name in sorted(names)]
+    for path in written:
         if os.path.exists(path):
-            leaked += [name for data in contents_of(path) for value in secrets if value in data]
-    line("No access token was written into Output.xlsm or Audit_Log.xlsx", not leaked, ", ".join(sorted(set(leaked))))
+            leaked += [os.path.relpath(path, paths.project_dir) for data in contents_of(path) for value in secrets if value in data]
+    line("No access token was written into Output.xlsm or the audit folder", not leaked, ", ".join(sorted(set(leaked))[:5]))
+    inventory = store.read("audit_files")
+    missing = [entry["file"] for entry in inventory
+               if not os.path.exists(os.path.join(paths.audit_dir, *entry["file"].split("/")))
+               or file_sha256(os.path.join(paths.audit_dir, *entry["file"].split("/"))) != entry["sha256"]]
+    line("The audit folder holds every file its inventory lists, unchanged", not missing if inventory else None,
+         ", ".join(missing[:5]) if missing else "%d files" % len(inventory))
     return rows
 
 def combine(ctx, *parts):
@@ -7374,10 +7513,12 @@ def review():
     print("flagged; Flagged_Items lists every item, one to a row, with a column for your decision and one for your notes.")
     print("A click on a reference shows only the rows it names, once Excel lets the workbook's macro run;")
     print("if it blocks it, unblock the file first (the manual, section 7: Letting the macro run).")
-    print("Then run cell 4 to check the project's two files against their own record.")
+    print("Beside it, _Audit holds Audit_Log.xlsx and a folder for each step: a JSON file for everything the step read, made")
+    print("or asked chat(), numbered in the order written, each listed on Audit_Log.xlsx's sheet Files.")
+    print("Then run cell 4 to check Output.xlsm and the _Audit folder against their own record.")
 
 def verify():
-    """Cell 4: check the project's two files against their own record."""
+    """Cell 4: check Output.xlsm and the _Audit folder against their own record."""
     paths = NOTEBOOK["paths"]
     if paths is None:
         print("Cell 3 has not read the inputs yet. Run cell 3 first.")
