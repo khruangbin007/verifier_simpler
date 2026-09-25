@@ -398,6 +398,18 @@ def discover_table_shape(element, rules, is_table):
             families[name] = "header_cell" if any(word in name for word in rules["header_tag_words"]) else "cell"
     return {local_name(row.tag) for row in rows}, families
 
+def readable_elements(known, element):
+    """Every element the walker will actually read. Discovery stops where the walker
+    stops: the inside of an equation or a figure is read by its own reader, and what the
+    rules ignore is never read at all, so neither is catalogued here."""
+    yield element
+    if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
+        return
+    for child in element:
+        if local_name(child.tag):
+            yield from readable_elements(known, child)
+
+
 def discover_families(root, rules, report):
     """Work out a family for each tag this document uses that the rules do not name, from the
     way the tag behaves here. The rules always win, so a schema the tool already knows is read
@@ -414,18 +426,8 @@ def discover_families(root, rules, report):
 
     # A tag that sits in running text, never holding a block of its own, is read inline: its
     # words belong to the sentence around it, not to a paragraph of their own.
-    def readable_elements(element):
-        """Every element the walker will actually read. Discovery stops where the walker
-        stops: the inside of an equation or a figure is read by its own reader, and what the
-        rules ignore is never read at all, so neither is catalogued here."""
-        yield element
-        if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
-            return
-        for child in element:
-            if local_name(child.tag):
-                yield from readable_elements(child)
 
-    elements = list(readable_elements(root))
+    elements = list(readable_elements(known, root))
     inline_looking = set()
     for element in elements:
         for child in element:
@@ -989,6 +991,14 @@ LATEX_HEADINGS = (("part", 1), ("chapter", 1), ("section", 1), ("subsection", 2)
 
 
 
+def svg_number(value, fallback=0.0):
+    """An SVG coordinate or length as a number: its first figure, or `fallback` when it has none."""
+    try:
+        return float(re.split(r"[ ,]", (value or "").strip())[0])
+    except (ValueError, IndexError):
+        return fallback
+
+
 def svg_texts(root):
     """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
     a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
@@ -996,15 +1006,10 @@ def svg_texts(root):
     paragraphs - instead of SVG text. A transform is not applied, so a moved group keeps the order
     it was written in."""
     found = []
-    def number(value, fallback=0.0):
-        try:
-            return float(re.split(r"[ ,]", (value or "").strip())[0])
-        except (ValueError, IndexError):
-            return fallback
     for node in root.iter():
         name = local_name(node.tag)
         if name == "text":
-            x, y = number(node.get("x")), number(node.get("y"))
+            x, y = svg_number(node.get("x")), svg_number(node.get("y"))
             placed = [span for span in node.iter() if local_name(span.tag) == "tspan" and (span.get("x") or span.get("y") or span.get("dy"))]
             if not placed:
                 words = normalise_text("".join(node.itertext()))
@@ -1016,14 +1021,14 @@ def svg_texts(root):
                 found.append((x, y, lead))
             line_y = y
             for span in placed:
-                line_y = number(span.get("y"), line_y + number(span.get("dy"), 0.0))
+                line_y = svg_number(span.get("y"), line_y + svg_number(span.get("dy"), 0.0))
                 words = normalise_text("".join(span.itertext()))
                 if words:
-                    found.append((number(span.get("x"), x), line_y, words))
+                    found.append((svg_number(span.get("x"), x), line_y, words))
         elif name == "foreignobject":                    # local_name lower-cases: foreignObject
             words = normalise_text(" ".join(part for part in node.itertext() if part.strip()))
             if words:
-                found.append((number(node.get("x")), number(node.get("y")), words))
+                found.append((svg_number(node.get("x")), svg_number(node.get("y")), words))
     return found
 
 def svg_embedded_pictures(root):
@@ -1592,6 +1597,15 @@ def latex_to_linear(source):
 # ---------------------------------------------------------------- format from content, and repairs
 XML_ENTITIES = ("amp", "lt", "gt", "quot", "apos")
 
+def html_entity(found):
+    """An HTML entity such as &nbsp; as the numeric reference XML reads; XML's own five, and names HTML does not
+    know, stay as written. The callback of repair_markup's entity repair."""
+    name = found.group(1)
+    if name in XML_ENTITIES or name not in html.entities.name2codepoint:
+        return found.group(0)
+    return "&#%d;" % html.entities.name2codepoint[name]
+
+
 def repair_markup(text, file_name, repairs):
     """The repairs the tool makes before strict parsing. Each one is recorded with its position, its
     kind, and the text before and after, so that a reviewer can see exactly what was changed."""
@@ -1607,13 +1621,8 @@ def repair_markup(text, file_name, repairs):
         text = re.sub(pattern, change, text, flags=flags)
     fix(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "control character removed", "")
     fix(r"<!DOCTYPE[^>\[]*(\[.*?\])?\s*>", "document-type declaration removed", "", re.S | re.I)
-    def entity(found):
-        name = found.group(1)
-        if name in XML_ENTITIES or name not in html.entities.name2codepoint:
-            return found.group(0)
-        return "&#%d;" % html.entities.name2codepoint[name]
     before_entities = text
-    text = re.sub(r"&([A-Za-z][A-Za-z0-9]*);", entity, text)
+    text = re.sub(r"&([A-Za-z][A-Za-z0-9]*);", html_entity, text)
     if text != before_entities:
         named = sorted(set(re.findall(r"&([A-Za-z][A-Za-z0-9]*);", before_entities)) - set(XML_ENTITIES))
         record("named characters replaced by their numbers", 0, ", ".join("&%s;" % n for n in named), "")
@@ -3898,6 +3907,17 @@ def name_candidates(reader, parts, data_names, data_files):
     return sorted({ref for name, refs in pool.items() if pattern.fullmatch(name) for ref in refs})
 
 
+def unit_locator(parsed, spans):
+    """A function giving, for a node of flowR's tree, the ref of the unit whose lines hold it - spans are (first,
+    last, ref) - or None: the node's own line, or its nearest ancestor's that has one."""
+    def unit_at(node):
+        while node is not None and not node.get("location"):
+            node = parsed.tree.get(node.get("up") or "")
+        line = node["location"][0] if node else 0
+        return next((ref for first, last, ref in spans if first <= line <= last), None)
+    return unit_at
+
+
 def unit_links(units, parsed, folder, package):
     """The immediate upstream and downstream units of every unit, as records of kind unit_links, each with the
     names that make each link, and the units flowR could not read for their links. `parsed` holds flowR's
@@ -3956,16 +3976,9 @@ def unit_links(units, parsed, folder, package):
     by_prefix = {}
     for key, node in parsed.tree.items():
         by_prefix.setdefault(key.split(":", 1)[0] + ":", []).append(node)
-    def locator(spans):
-        def unit_at(node):
-            while node is not None and not node.get("location"):
-                node = parsed.tree.get(node.get("up") or "")
-            line = node["location"][0] if node else 0
-            return next((ref for first, last, ref in spans if first <= line <= last), None)
-        return unit_at
     nodes_of = {}                                          # ref -> the nodes of its code, from every reading
     for prefix, spans in readings:
-        unit_at = locator(spans)
+        unit_at = unit_locator(parsed, spans)
         for node in by_prefix.get(prefix, []):
             ref = unit_at(node)
             if ref:
@@ -3983,7 +3996,7 @@ def unit_links(units, parsed, folder, package):
     def link(definer, user, name):
         via.setdefault((definer, user), set()).add(name)
     for prefix, spans in readings:
-        unit_at = locator(spans)
+        unit_at = unit_locator(parsed, spans)
         for node in by_prefix.get(prefix, []):
             if node["type"] == "RString":                  # a data file named in the code: read.csv(system.file(...))
                 written = (node.get("lexeme") or "").strip("\"'")
