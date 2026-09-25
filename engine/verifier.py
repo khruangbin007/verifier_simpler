@@ -869,7 +869,14 @@ NOT_READ = {
            "save it as .docx, .xlsx or PDF and put that in its place",
     "image": "a picture, and the tool does not read words from a picture on its own; if it holds text, "
              "save it as a PDF with a text layer",
-    "binary": "binary data rather than a document"}
+    "binary": "binary data rather than a document",
+    "markdown": "Markdown, which the tool does not read as a document; save it as .docx or PDF and put that in its place",
+    "latex": "LaTeX source, which the tool does not read; put the typeset PDF in its place",
+    "rtf": "an RTF file, which the tool does not read; save it as .docx and put that in its place",
+    "xlsx": "a spreadsheet, which the tool does not read as a document; save it as PDF, or put its tables in a .docx, and put "
+            "that in its place",
+    "delimited": "rows of delimited values, which the tool does not read as a document; put the table in a .docx or save "
+                 "it as PDF, and put that in its place"}
 
 # The name a format goes by in what the analyst reads.
 FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "svg": "SVG picture", "mhtml": "web archive", "html": "web page",
@@ -993,98 +1000,13 @@ def element(tag, text):
     """One element of markup, its text escaped so that a < in a document is never a tag."""
     return "<%s>%s</%s>" % (tag, escape(text), tag)
 
-def markdown_inline(text):
-    """A line of Markdown without its inline marks: emphasis, code marks, and the target of a link
-    or a picture, whose words are kept and whose address is not what the document says."""
-    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", r"\2", text)
-    text = re.sub(r"(?<![\w*])\*(?=\S)(.+?)(?<=\S)\*(?![\w*])", r"\1", text)
-    return text.replace("`", "")
 
 TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 LIST_MARK = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
 
-def markdown_to_markup(text):
-    """Markdown as markup: # headings, paragraphs, lists, tables, fenced code and quotations. An
-    HTML comment is left out by the same rule in the markup and in the words: it is a note to
-    whoever edits the file, not what the document says."""
-    text = HTML_COMMENT.sub("", text)
-    out, paragraph, rows, fenced, items = [], [], [], None, []
-    def flush():
-        if paragraph:
-            out.append(element("p", " ".join(paragraph)))
-            paragraph.clear()
-        if items:
-            out.append("<ul>%s</ul>" % "".join(element("li", item) for item in items))
-            items.clear()
-        if rows:
-            cells = [[markdown_inline(cell.strip()) for cell in row.strip().strip("|").split("|")] for row in rows]
-            out.append("<table>%s</table>" % "".join(
-                "<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
-                for number, row in enumerate(cells)))
-            rows.clear()
-    lines = text.split("\n")
-    for position, line in enumerate(lines):
-        if fenced is not None:
-            if line.strip().startswith("```") or line.strip().startswith("~~~"):
-                out.append(element("pre", "\n".join(fenced)))
-                fenced = None
-            else:
-                fenced.append(line)
-            continue
-        if line.strip().startswith(("```", "~~~")):
-            flush()
-            fenced = []
-            continue
-        heading = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
-        underline = position + 1 < len(lines) and re.match(r"^(=+|-+)\s*$", lines[position + 1]) and line.strip() and not rows
-        if heading or underline:
-            flush()
-            level = len(heading.group(1)) if heading else (1 if lines[position + 1].strip()[0] == "=" else 2)
-            out.append(element("h%d" % min(level, 4), markdown_inline((heading.group(2) if heading else line).strip())))
-            continue
-        if re.match(r"^(=+|-+)\s*$", line) and position and out and out[-1].startswith("<h"):
-            continue                                 # the underline of a heading already read
-        if "|" in line and (rows or position + 1 < len(lines) and TABLE_RULE.match(lines[position + 1])):
-            if not rows:
-                flush()
-            if not TABLE_RULE.match(line):
-                rows.append(line)
-            continue
-        if LIST_MARK.match(line):
-            if paragraph or rows:
-                flush()
-            items.append(markdown_inline(LIST_MARK.sub("", line).strip()))
-            continue
-        if not line.strip():
-            flush()
-            continue
-        if items and line.startswith((" ", "\t")):
-            items[-1] += " " + markdown_inline(line.strip())
-            continue
-        if rows or items:
-            flush()
-        paragraph.append(markdown_inline(re.sub(r"^\s*>\s?", "", line).strip()))
-    if fenced is not None:
-        out.append(element("pre", "\n".join(fenced)))
-    flush()
-    return "<document>%s</document>" % "".join(out)
 
-def markdown_words(text):
-    """The words of a Markdown file, with its syntax taken away by rule rather than by reading its
-    structure: heading marks, list marks, table rules and bars, fence lines, quotation marks."""
-    kept = []
-    for line in HTML_COMMENT.sub("", text).split("\n"):
-        if TABLE_RULE.match(line) or line.strip().startswith(("```", "~~~")) or re.match(r"^(=+|-+)\s*$", line):
-            continue
-        line = re.sub(r"^\s*#{1,6}\s+|\s+#+\s*$", " ", line)
-        line = LIST_MARK.sub(" ", line)
-        line = re.sub(r"^\s*>\s?", " ", line)
-        kept.append(markdown_inline(line.replace("|", " ")))
-    return "\n".join(kept)
 
 def delimiter_of(text):
     """The separator of a file of delimited rows, where the first rows agree on one."""
@@ -1097,99 +1019,15 @@ def delimiter_of(text):
             return separator
     return ""
 
-def delimited_rows(text):
-    """The rows of a file of delimited values, read by the rules of that format."""
-    separator = delimiter_of(text) or ","
-    return [row for row in csv.reader(io.StringIO(text), delimiter=separator) if any(cell.strip() for cell in row)]
 
-def delimited_to_markup(text, file_name):
-    """Rows of values as a table, the first row naming the columns."""
-    rows = delimited_rows(text)
-    body = "".join("<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell.strip()) for cell in row)
-                   for number, row in enumerate(rows))
-    return "<document><table><caption>%s</caption>%s</table></document>" % (escape(os.path.basename(file_name)), body)
 
-def delimited_words(text, file_name):
-    """The words of a file of delimited values: its name, which heads its table, and its cells."""
-    return os.path.basename(file_name) + "\n" + "\n".join(" ".join(cell.strip() for cell in row) for row in delimited_rows(text))
 
-def spreadsheet_to_markup(data):
-    """A spreadsheet as one heading and one table for every sheet that holds anything. What a cell
-    shows is its stored value: a formula is never worked out, only the value the spreadsheet saved
-    with it is read. Enforces: R7"""
-    import openpyxl
-    book = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    parts, words = [], []
-    for sheet in book.worksheets:
-        rows = [[("" if value is None else str(value)).strip() for value in row] for row in sheet.iter_rows(values_only=True)]
-        rows = [row for row in rows if any(row)]
-        if not rows:
-            continue
-        width = max(len(row) for row in rows)
-        rows = [row + [""] * (width - len(row)) for row in rows]
-        parts.append(element("h1", sheet.title))
-        parts.append("<table>%s</table>" % "".join(
-            "<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
-            for number, row in enumerate(rows)))
-        words.append(sheet.title)
-        words.extend(" ".join(row) for row in rows)
-    return "<document>%s</document>" % "".join(parts), "\n".join(words)
 
-def rtf_to_text(text):
-    """The words of an RTF file: its tables of fonts, colours and styles, its pictures and its
-    control words taken away, a paragraph mark read as a new paragraph and an escaped character as
-    that character."""
-    text = re.sub(r"\{\\\*[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", "", text)
-    for group in ("fonttbl", "colortbl", "stylesheet", "info", "pict", "listtable", "listoverridetable"):
-        text = re.sub(r"\{\\%s[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*\}" % group, "", text)
-    text = re.sub(r"\\'([0-9a-fA-F]{2})", lambda found: bytes([int(found.group(1), 16)]).decode("cp1252", "replace"), text)
-    text = re.sub(r"\\u(-?\d+)\??", lambda found: chr(int(found.group(1)) % 65536), text)
-    text = re.sub(r"\\(par|line|sect|page)\b ?", "\n\n", text)
-    text = re.sub(r"\\tab\b ?", " ", text)
-    text = re.sub(r"\\([{}\\])", lambda found: "\x00" + found.group(1), text)
-    text = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", text)
-    text = text.replace("{", "").replace("}", "").replace("\x00", "")
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 LATEX_HEADINGS = (("part", 1), ("chapter", 1), ("section", 1), ("subsection", 2), ("subsubsection", 3), ("paragraph", 4))
 
-def latex_body(text):
-    """A LaTeX file without its comments and its preamble. What comes before \\begin{document} -
-    the class of the document and the packages it loads - sets the document up and is not what it
-    says, so it is left out by this rule, the same rule for the markup and for the words."""
-    text = re.sub(r"(?<!\\)%.*", "", text)
-    body = re.search(r"\\begin\{document\}(.*?)(\\end\{document\}|$)", text, re.S)
-    return body.group(1) if body else text
 
-def latex_words(text, whole=True):
-    """The words of a LaTeX file: comments, environments and the names of commands taken away,
-    the arguments of a command kept. Mathematics is kept as its words and symbols; it is not read
-    as an equation here."""
-    text = latex_body(text) if whole else text
-    text = re.sub(r"\\(begin|end)\{[^}]*\}", " ", text)
-    text = re.sub(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?", " ", text)
-    return re.sub(r"[{}$]", " ", text).replace("\\\\", " ")
 
-def latex_to_markup(text):
-    """LaTeX as markup: its sectioning commands as headings, its items as a list, and everything
-    between as paragraphs of its words."""
-    text = latex_body(text)
-    pattern = r"\\(%s)\*?\{([^}]*)\}" % "|".join(name for name, _ in LATEX_HEADINGS)
-    levels, out, cursor = dict(LATEX_HEADINGS), [], 0
-    for found in list(re.finditer(pattern, text)) + [None]:
-        chunk = text[cursor:found.start() if found else len(text)]
-        for part in re.split(r"\n\s*\n", chunk):
-            items = re.split(r"\\item\b", part)
-            lead = latex_words(items[0], whole=False).strip()
-            if lead:
-                out.append(element("p", re.sub(r"\s+", " ", lead)))
-            if len(items) > 1:
-                out.append("<ul>%s</ul>" % "".join(element("li", re.sub(r"\s+", " ", latex_words(item, whole=False)).strip())
-                                                  for item in items[1:] if latex_words(item, whole=False).strip()))
-        if found:
-            out.append(element("h%d" % levels[found.group(1)], re.sub(r"\s+", " ", latex_words(found.group(2), whole=False)).strip()))
-            cursor = found.end()
-    return "<document>%s</document>" % "".join(out)
 
 
 def svg_texts(root):
@@ -1300,26 +1138,7 @@ def svg_to_markup(data, file_name):
     markup = "<document><figure alt=\"%s\"><caption>%s</caption></figure></document>" % (escape(labels), escape(caption))
     return markup, "\n".join(words), "a picture, read by its own text: %d label(s)" % sum(len(row) for row in rows)
 
-def converted(found, data, file_name):
-    """A file in a format read by converting it: (markup, words, what was done, in plain words)."""
-    if found == "svg":
-        return svg_to_markup(data, file_name)
-    if found == "xlsx":
-        markup, words = spreadsheet_to_markup(data)
-        return markup, words, "read sheet by sheet, each sheet a heading over a table of its stored values"
-    text = decode_text(data)
-    if found == "markdown":
-        return markdown_to_markup(text), markdown_words(text), "read as Markdown: its headings, lists and tables kept as such"
-    if found == "delimited":
-        return (delimited_to_markup(text, file_name), delimited_words(text, file_name),
-                "read as a table of values, one row per line, the first line naming the columns")
-    if found == "latex":
-        return latex_to_markup(text), latex_words(text), "read as LaTeX: its sections as headings; its mathematics kept as words, not read as equations"
-    plain = rtf_to_text(text)
-    return ("<document>%s</document>" % "".join(element("p", part.strip()) for part in re.split(r"\n\s*\n", plain) if part.strip()),
-            plain, "read as RTF: its control words, font tables and pictures left out")
 
-CONVERTED = ("xlsx", "markdown", "delimited", "latex", "rtf", "svg")
 
 def reason_for(problem):
     """Why a reader failed on a file, in words an analyst can act on. Enforces: R2"""
@@ -2195,49 +2014,18 @@ def table_from_rows(rows, locator, caption=""):
     table = TableData(tuple(header), tuple(tuple(row) for row in body), row_key)
     return new_block("table", "", locator, table=table, caption=caption, display=display)
 
-PICTURE_READER = []                     # the OCR engine, looked for once: [engine] or [None]
-OCR_NOTE = "Words read from the picture by OCR (a machine reading: check it against the picture itself):"
+PICTURES_NOT_READ = "The words inside pictures were not read: the tool does not read pictures."
 
-def read_picture(data, state):
-    """The words in a picture, read by OCR, as lines to show under the Figure; "" when there are
-    none or no OCR package is installed (rapidocr-onnxruntime is optional; its models come inside
-    the package, so nothing is fetched when it runs). The words help a person find the
-    picture. They are never evidence: a machine misreads digits, so a Figure still ends
-    "for manual review" whatever was read. A missing reader is said once per file. Enforces: R2"""
-    if not PICTURE_READER:
-        try:
-            from rapidocr_onnxruntime import RapidOCR
-            PICTURE_READER.append(RapidOCR())
-        except Exception:                                # not installed, or its models cannot be loaded
-            PICTURE_READER.append(None)
-    missing = "The words inside pictures were not read: the optional OCR package rapidocr-onnxruntime is not installed."
-    if PICTURE_READER[0] is None and missing not in state.notes:
-        state.notes.append(missing)
-    if PICTURE_READER[0] is None or len(data) < 2048 or not state.rules.get("read_pictures", True):
-        return ""                                        # under 2 kB is an icon or a rule, not a picture with words
-    try:
-        found = sorted(PICTURE_READER[0](data)[0] or [], key=lambda item: (round(item[0][0][1] / 14), item[0][0][0]))
-    except Exception:                                    # a form the reader cannot open (.emf, .wmf)
-        unread = "The words inside one or more pictures were not read: the picture is in a form the reader cannot open."
-        if unread not in state.notes:
-            state.notes.append(unread)                   # the picture is still a unit; only its words are missing (R2)
-        return ""
-    rows = {}
-    for box, words, _ in found:                          # what stands on one line of the picture stays on one line
-        rows.setdefault(round(box[0][1] / 14), []).append(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", words))
-    return "\n%s\n%s" % (OCR_NOTE, "\n".join("  ".join(row) for row in rows.values())) if rows else ""
 
-def picture_words(page, box, state):
-    """PDF: the part of the page that a picture covers, drawn at 150 dpi and read by OCR."""
-    if box[2] - box[0] < 40 or box[3] - box[1] < 40:
-        return ""
-    try:
-        drawn = io.BytesIO()
-        area = (max(box[0], 0), max(box[1], 0), min(box[2], page.width), min(box[3], page.height))
-        page.crop(area).to_image(resolution=150).original.save(drawn, "PNG")
-    except Exception:
-        return ""
-    return read_picture(drawn.getvalue(), state)
+def pictures_not_read(state):
+    """A picture's words, which the tool does not read: none - said once for its file, in the file's notes. The picture
+    is still a unit (a Figure, for manual review); only its words are missing. Enforces: R2"""
+    if PICTURES_NOT_READ not in state.notes:
+        state.notes.append(PICTURES_NOT_READ)
+    return ""
+
+
+
 
 def figure_block(element, here, state):
     """A figure: never read, kept with its caption or alternative text and the fingerprint of the image."""
@@ -2283,9 +2071,8 @@ def svg_reference(element, state):
 
 def svg_blocks(data, name, here, state, caption=""):
     """The units of one SVG, read by the text it holds: a table where its text stands in a grid, a
-    figure of its labels otherwise. Where it holds no text, a picture stored inside it is read by
-    OCR when that is installed; and a figure that still gives no words says why, instead of standing
-    empty. The words counted are the SVG's own, so the content account closes. Enforces: R2, R13"""
+    figure of its labels otherwise. Where it holds no text - its words only in a picture stored
+    inside it, which the tool does not read - the figure says why, instead of standing empty. The words counted are the SVG's own, so the content account closes. Enforces: R2, R13"""
     import xml.etree.ElementTree as ElementTree
     try:
         root = ElementTree.fromstring(data)
@@ -2299,7 +2086,7 @@ def svg_blocks(data, name, here, state, caption=""):
         block["caption"] = caption or own_caption
         block["source"], block["image_sha256"] = name, sha256_bytes(data)
         if block["type"] == "figure" and not block["text"].strip():
-            seen = "".join(read_picture(picture, state) for picture in svg_embedded_pictures(root)).strip()
+            seen = "".join(pictures_not_read(state) for picture in svg_embedded_pictures(root)).strip()
             if seen:
                 block["text"] = seen                     # words read from a picture: shown, never evidence
             else:
@@ -2447,15 +2234,15 @@ def docx_paragraph_parts(paragraph):
     return "".join(pieces), formulas, pictures
 
 def docx_figure(picture, related, locator, state):
-    """A picture in a Word file as a figure block with the fingerprint of the embedded image,
-    and the words in it where OCR is installed."""
+    """A picture in a Word file as a figure block with the fingerprint of the embedded image; the words
+    inside the picture are not read."""
     description = next((n.get("descr") or n.get("title") or n.get("name") or "" for n in picture.iter()
                         if local_name(n.tag) == "docpr"), "")
     fingerprint, words = "", ""
     for node in picture.iter():
         for key, value in node.attrib.items():
             if key.startswith("{%s}" % WORD_NS["r"]) and value in related:
-                fingerprint, words = sha256_bytes(related[value]), read_picture(related[value], state)
+                fingerprint, words = sha256_bytes(related[value]), pictures_not_read(state)
     fingerprint = fingerprint or sha256_bytes(ElementTree.tostring(picture))
     said = (description or "Picture without a description") + words
     return new_block("figure", said, locator, image_sha256=fingerprint, display=said)
@@ -2598,8 +2385,8 @@ def blocks_from_pdf(data, file_name, state):
     both exist). With pdfplumber it works from where each line sits and how it is set: page
     headers and footers are left out; a heading is a short line set larger or bolder than the
     body, numbered or not; a line opening with a bullet is a list item; a sentence running over a
-    page break is joined again; tables are single blocks; pictures are Figure blocks, read by OCR
-    where installed; lines dense in mathematical characters are unread Equation blocks. A paragraph
+    page break is joined again; tables are single blocks; pictures are Figure blocks, their words not
+    read; lines dense in mathematical characters are unread Equation blocks. A paragraph
     is labelled with its page and place ("p.4 \u00b62"), which is how a person finds it in a PDF.
     With only pypdf: text and numbering alone. With neither: one block that could not be read."""
     try:
@@ -2617,7 +2404,7 @@ def blocks_from_pdf(data, file_name, state):
             if "table" in entry:
                 blocks.append(table_from_rows(entry["table"], locator))
             elif "figure" in entry:
-                words = picture_words(document.pages[entry["page"] - 1], entry["box"], state)
+                words = pictures_not_read(state)
                 said = "Picture on page %d" % entry["page"]
                 blocks.append(new_block("figure", said + words, locator, image_sha256=entry["figure"], display=said + words))
             if "size" not in entry:
@@ -2803,11 +2590,6 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
     if found == "svg":                               # read by the text it holds, as a table or a figure
         state.atoms = []
         return found, svg_blocks(data, file_name, file_name, state)
-    if found in CONVERTED:                   # read through markup the walker already reads
-        markup, words, how = converted(found, data, file_name)
-        state.atoms = atoms_of_plain_text(words, file_name)
-        state.notes.append("%s: %s." % (file_name, how))
-        return found, blocks_from_markup(markup, file_name, state, repairs)
     state.atoms = atoms_of_file(data, found, file_name, state, repairs)
     if found == "pdf":
         return found, blocks_from_pdf(data, file_name, state)
@@ -2844,7 +2626,7 @@ def read_corner(ctx, corner, input_key, label):
         if path in consumed:
             info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
             continue
-        state = WalkState(dict(rules, read_pictures=ctx.settings.get("read_pictures", True)), notation, {}, {}, [])
+        state = WalkState(dict(rules), notation, {}, {}, [])
         state.settings = ctx.settings
         state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
         try:
@@ -4497,7 +4279,7 @@ ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ---------------------------------------------------------------- settings (allow-list)
 DEFAULT_SETTINGS = {
     "max_parameter_cells": 5000, "max_parameter_columns": 50,
-    "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
+    "max_file_mb": 200.0, "reviewer_id": "",
     "parallel_chats": 256,
     "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
 

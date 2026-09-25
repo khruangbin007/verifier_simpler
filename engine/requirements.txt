@@ -11,5 +11,3 @@ rdata>=1.0
 # into a plain note, and nothing else changes.
 pdfplumber>=0.10          # text and tables from PDF; the manual recommends .docx where there is a choice
 pypdf>=4.0                # a second PDF reader, used where pdfplumber cannot read a page
-# Not installed: rapidocr-onnxruntime, which would read the words inside pictures. It brings OpenCV, whose
-# newest wheels carry an OpenSSL that a FIPS-mode cluster refuses by stopping the whole Python process.

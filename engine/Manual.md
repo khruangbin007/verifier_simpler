@@ -134,7 +134,7 @@ Three folders in the project's folder, beside `Output.xlsm` and the `_Audit` fol
 
 | Folder | What | Formats |
 |---|---|---|
-| `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv`/`.tsv`, `.xlsx`, `.rtf`, `.tex`, `.svg` |
+| `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, `.svg` |
 | `2_Model_Package` | the model | an R package as a `.tar.gz`, a `.zip` of it, or its source folder |
 | `3_Model_Documentation` | the model documentation | as for the methodology; `.docx` preferred |
 
@@ -279,12 +279,11 @@ The sheet *Files* of `Audit_Log.xlsx` lists every one of them, numbered across t
 
 - **Filtering on a click needs desktop Excel with macros enabled.** The links of Chunks_Model filter through a macro in `Output.xlsm`; Excel for the web, LibreOffice and Google Sheets do not run it, and there a click only takes you to the first chunk named. The macro was checked in LibreOffice's Excel mode, which loads and compiles it and runs it to the end, but filters on a list of values only in Excel.
 
-- The content of images is never evidence. A formula given only as a picture is kept as a figure and never read as a formula. Where the optional OCR package is installed, the words inside a picture are shown under it, headed *Words read from the picture by OCR*; a machine misreads digits, so check them against the picture itself.
+- The content of images is never evidence. A formula given only as a picture is kept as a figure and never read as a formula. The words inside a picture are not read: the figure's caption and description stand for it, and the file's notes say so.
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
 - A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
 - Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
-- the tool reads XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv` and `.tsv`, `.xlsx`, `.rtf` and `.tex`. It does not read slide decks, OpenDocument files, e-books, old Office files (`.doc`, `.xls`, `.ppt`) or pictures on their own; each of those becomes one row on the sheet saying so, with what to save it as instead. Folders inside an input folder are read, in name order; a Word lock file, Thumbs.db and a saved web page's support folder are left out and listed on `Model_Package_Info`.
-- A spreadsheet is read sheet by sheet, each sheet a heading over one table. A formula is never worked out: the value the spreadsheet saved with it is what is read, so save the workbook after it has calculated.
+- the tool reads XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf` and `.svg`. It does not read Markdown, LaTeX, RTF, spreadsheets or delimited text as documents, slide decks, OpenDocument files, e-books, old Office files (`.doc`, `.xls`, `.ppt`) or pictures on their own; each of those becomes one row on the sheet saying so, with what to save it as instead. Folders inside an input folder are read, in name order; a Word lock file, Thumbs.db and a saved web page's support folder are left out and listed on `Model_Package_Info`.
 - The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 - PDF input is read by position on the page, each line across its full width, from the top down: a page set in two or more columns is not split into them, so lines of different columns at the same height are read as one, and tables without ruling lines may be cut wrongly. The content account still closes - no word is lost - but the order can mix the columns. Check the chunks of such a file against the PDF, or give a `.docx` where there is one.
 - R code is never run. flowR reads it, for the package's units and for the links between them. Unusual syntax becomes a *File not read* unit for that expression only.
@@ -359,7 +358,6 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 | `parallel_chats` | 256 | The most questions steps 04 and 05 have out with the model at once. Asking starts at 32 and doubles while no call fails, then settles just under what the gateway takes (section 13); lower this only if the gateway must never see more than so many calls at once. |
 | `chat_token_limit` | 40000 | How many tokens your `chat()` holds, a question and its answer together. Every question is built to fit it. |
 | `methodology_batch_tokens` | 12000 | About how many tokens of the methodology go into one search question of step 05. Smaller batches mean more questions, each judged more closely; a batch never takes more than the question has room for. |
-| `read_pictures` | True | Read the words inside pictures by OCR when the optional package rapidocr-onnxruntime is installed. The words are shown under the Figure as a machine reading; a Figure still ends for manual review. |
 
 
 ## 17. Extending the tool safely
