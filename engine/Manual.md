@@ -78,6 +78,8 @@ Every wording the tool shows for a kind of unit, a kind of chunk or a piece that
 | File not read |
 | Other file |
 
+Two parts of the package are counted but not read into chunks. Its help pages (`man/*.Rd`) are generated from the roxygen comments in the R files, which are read. Its tests (`tests/`: testthat scripts, their helpers and setup, fixtures, snapshots) check the model rather than compute it, so for now they are left out: they are not model chunks, are not linked to the code, and are not asked about - no Test block is made. Model_Package_Info says how many of each there are, and the package's content account counts every line of them as left out under a named rule.
+
 The rows of Chunks_Model never overlap, and each is a whole piece of code - or one part of a piece too long for one row, shown as `M-0003-1`, `M-0003-2` and so on, cut at line ends, which joined back are the piece exactly, character for character; a chunk of the methodology or the documentation too long for one row is shown in parts the same way, and every such chunk is treated as one wherever it is used: a roxygen block is one row with the function or statement it documents, and what is written inside a function - its statements, a function defined within it - is part of the function's row. A help page (`man/*.Rd`) is not read: it is generated from the roxygen comments in the R files, which are; Model_Package_Info counts how many were left out.
 
 **Kinds of chunk**
@@ -247,7 +249,7 @@ Four sheets, always in this order; a sheet whose step has not run yet shows its 
 
 ## 11. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the reading floor, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the links between its units, the organisation's model and the two steps that ask it, the run, and `Output.xlsm`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool: the contracts and the words it may use, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the links between its units, the organisation's model and the two steps that ask it, the run, and `Output.xlsm`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
 
 ## 12. The pipeline
 

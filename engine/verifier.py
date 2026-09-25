@@ -810,8 +810,8 @@ def account_of_package(files, units, refused, is_text_file, dropped=()):
     picture, stored data in a binary form) is counted as one atom of its own, because its lines
     cannot be counted without reading it. Extends the line coverage that read_package already
     kept for parsed R files to every member of the tarball. A member left out on purpose (dropped: a help
-    page, generated from the roxygen comments in the R files, which are read) is a declared drop, every
-    line of it. Enforces: R13"""
+    page, generated from the roxygen comments in the R files, which are read; a file of the package's tests)
+    is a declared drop, every line of it, or one piece when it is not text. Enforces: R13"""
     inside, not_read, atoms, unaccounted, fenced, text_only, declared = 0, 0, 0, [], 0, 0, 0
     covered = {}
     for unit in units:
@@ -820,7 +820,7 @@ def account_of_package(files, units, refused, is_text_file, dropped=()):
             covered.setdefault(unit["file"], set()).update(range(int(lines[0]), int(lines[1]) + 1))
     for path in sorted(files):
         if path in dropped:                           # not read on purpose, under a named rule
-            lines = sum(1 for line in files[path].decode("utf-8", "replace").split("\n") if line.strip())
+            lines = 1 if not is_text_file(path) else sum(1 for line in files[path].decode("utf-8", "replace").split("\n") if line.strip())
             atoms, declared = atoms + lines, declared + lines
             continue
         if not is_text_file(path):
@@ -3687,6 +3687,14 @@ def is_data_file(path):
         return True
     return lowered.endswith((".csv", ".tsv")) and lowered.split("/")[0] in ("data", "inst")
 
+def is_test_path(path):
+    """Is this member one of the package's tests - a file anywhere under tests/: testthat scripts, their helpers
+    and setup, fixtures, snapshots? They check the model rather than compute it, so for now they are left out:
+    not read into units, and every line of them counted as left out under a named rule (account_of_package).
+    Enforces: R13"""
+    return path.split("/")[0].lower() == "tests"
+
+
 def is_parsed_r_file(path):
     """Is this an R source file in a folder whose code the tool parses?"""
     return path.lower().endswith(".r") and path.lower().split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo")
@@ -3695,6 +3703,9 @@ def is_parsed_r_file(path):
 def file_units(path, data, context, facts, reader=""):
     """The units of one file of the package, by where it lies and what it is. A reader chosen
     for this member overrides only where the built-in tests give none."""
+    if is_test_path(path):                       # left out for now: the package's tests check the model, not compute it
+        facts["tests"].append(path)
+        return []
     lowered = path.lower()
     if reader and not is_data_file(path) and not lowered.startswith("src/"):
         text = decode_text(data) if b"\x00" not in data[:4096] else None
@@ -3772,6 +3783,10 @@ def package_rows(description, namespace, units, facts, refused):
     if facts["help pages"]:
         rows.append(("Package", "Help pages not read", "%d in man/: generated from the roxygen comments in the R files, which are read"
                      % len(facts["help pages"])))
+    if facts["tests"]:
+        rows.append(("Package", "Tests not read", "%d in tests/: the package's tests check the model rather than compute it, so "
+                     "for now they are left out - not model chunks, not linked, not asked about; every line of them is "
+                     "counted as left out" % len(facts["tests"])))
     rows.extend(("Package data", "Data file", fact) for fact in facts["data"])
     rows.extend(("Package data", "Not assessed", "%s (%s): %s" % (u.ref, u.name, u.data.not_assessable_reason))
                 for u in units if u.data and not u.data.assessable)
@@ -3806,7 +3821,7 @@ def read_package(ctx):
         top = path.split("/")[0].lower()
         return (order.index(top) if top in order else len(order), path)
     chosen, plan_notes = {}, []
-    drafts, facts = [], {"data": [], "help pages": []}
+    drafts, facts = [], {"data": [], "help pages": [], "tests": []}
     for path in sorted(files, key=rank):
         drafts.extend(file_units(path, files[path], context, facts, chosen.get(path, "")))
     data_names = {unit["name"] for unit in drafts if unit["data"]}
@@ -3824,13 +3839,15 @@ def read_package(ctx):
     inventory = [{"file": path, "bytes": len(files[path]), "sha256": hashes[path], "swhid": swhid_content(files[path])}
                  for path in sorted(files)]
     for entry in inventory:                              # for identity part 3: the lines that must lie inside a unit
-        if is_parsed_r_file(entry["file"]):
+        if is_parsed_r_file(entry["file"]) and not is_test_path(entry["file"]):
             lines = decode_text(files[entry["file"]]).split("\n")
             entry["nonblank_lines"] = [number for number, line in enumerate(lines, start=1) if line.strip()]
     info = {"name": description.get("Package", ""), "version": description.get("Version", ""), "parser": PARSER_NAME,
             "tarball": os.path.basename(tarballs[0]), "files": inventory,
             "rows": package_rows(description, namespace, units, facts, refused)}
     messages = ["%d units read from %d files of the package." % (len(units), len(files))]
+    if facts["tests"]:
+        messages.append("%d files in tests/ - the package's tests - are left out for now, and counted as such." % len(facts["tests"]))
     r_files = sum(1 for path in files if path.lower().endswith(".r"))
     other_code = sum(1 for path in files if path.lower().endswith((".py", ".sas", ".m", ".jl", ".scala", ".java", ".cpp", ".c")))
     is_r_package = ("DESCRIPTION" in files and "Package:" in decode_text(files["DESCRIPTION"])) or (r_files and r_files >= other_code)
@@ -3849,7 +3866,7 @@ def read_package(ctx):
         messages.append("More than one tarball was found; only %s was read." % os.path.basename(tarballs[0]))
     plain_units = [to_plain(unit) for unit in units]
     account = account_of_package(files, plain_units, refused, lambda path: is_parsed_r_file(path) or os.path.splitext(path)[1].lower() in TEXT_MEMBERS or "/" not in path,
-                                 dropped=set(facts["help pages"]))
+                                 dropped=set(facts["help pages"]) | set(facts["tests"]))
     info["rows"].extend({"group": "The package", "item": "content account", "value": line}
                         for line in account_lines(account))
     if not account["closed"]:
