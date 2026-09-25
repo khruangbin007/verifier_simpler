@@ -6307,7 +6307,7 @@ WORKBOOK_MACRO = """Option Explicit
 ' Verifier: a reference, clicked, shows only the rows it names.
 '   Chunks_Model, Relevant Chunks in Methodology (searched by LLM): Chunks_Methodology, filtered to the chunks listed.
 '   Chunks_Model, Immediate Upstream and Immediate Downstream Model Chunk: Chunks_Model, filtered to the chunks listed
-'   and the row clicked.
+'   and the row clicked, the cell clicked staying the active cell.
 '   Chunks_Model, Count of Flagged Items (by LLM): Flagged_Items, filtered to the items of the row clicked.
 '   Flagged_Items, Location of Flagged Item: Chunks_Model, filtered to that chunk.
 '   Flagged_Items, Ref in Chunks_Methodology: Chunks_Methodology, filtered to the chunks listed.
@@ -6325,7 +6325,7 @@ Private Sub Workbook_SheetFollowHyperlink(ByVal Sh As Object, ByVal Target As Hy
         If heading = "Relevant Chunks in Methodology (searched by LLM)" Then
             ShowOnly ThisWorkbook.Worksheets("Chunks_Methodology"), refs, 1
         ElseIf heading = "Immediate Upstream Model Chunk" Or heading = "Immediate Downstream Model Chunk" Then
-            ShowOnly Sh, refs & "|" & rowRef, 1
+            ShowOnly Sh, refs & "|" & rowRef, 1, clicked
         ElseIf heading = "Count of Flagged Items (by LLM)" Then
             ShowOnly ThisWorkbook.Worksheets("Flagged_Items"), rowRef, 2
         End If
@@ -6374,8 +6374,9 @@ Private Function UnitOf(ByVal rowRef As String) As String
     If cut > 0 Then UnitOf = Left$(rowRef, cut - 1) Else UnitOf = rowRef
 End Function
 
-Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String, ByVal byColumn As Long)
+Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String, ByVal byColumn As Long, Optional ByVal returnTo As Range)
     ' Filter the sheet on one column - Ref, or Flagged_Items' Location - to the chunks named, each with every row it takes.
+    ' A filter of the sheet clicked on ends on the cell clicked (returnTo); a filter of another sheet, on its first row.
     Dim wanted As Variant, shown As String, cellRef As String, last As Long, rowNumber As Long, i As Long, locked As Boolean
     If Len(refs) = 0 Then Exit Sub
     wanted = Split(refs, "|")
@@ -6401,7 +6402,11 @@ Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String, ByVal byC
     If Not onSheet.AutoFilterMode Then onSheet.Range("A1").CurrentRegion.AutoFilter
     onSheet.AutoFilter.Range.AutoFilter Field:=byColumn, Criteria1:=Split(Mid$(shown, 2), "|"), Operator:=xlFilterValues
     onSheet.Activate
-    Application.Goto onSheet.Range("A1"), True
+    If returnTo Is Nothing Then
+        Application.Goto onSheet.Range("A1"), True
+    Else
+        returnTo.Select
+    End If
 Restore:
     If locked Then onSheet.Protect DrawingObjects:=False, Contents:=True, Scenarios:=False, AllowFormattingColumns:=True, AllowFiltering:=True
 End Sub
