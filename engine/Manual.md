@@ -18,7 +18,9 @@ Its reading and its accounts assume no field: the methodology can be about anyth
 
 ```
 Projects/<project name>/
-  Inputs/                   the methodology, the package and the documentation, as you put them there
+  1_Methodology/            the methodology, as you put it there
+  2_Model_Package/          the model's R package
+  3_Model_Documentation/    the model documentation
   Output.xlsm               five sheets: what was read, what the organisation's model says of the code, and each item it flags
   Audit_Log.xlsx            the record: the run, every step, every record, every exchange with the model
 ```
@@ -47,7 +49,7 @@ Thirteen rules, each enforced by named code: its docstring says so (`Enforces: R
 | R3 | The model's opinion is never the last word. What a language model writes is marked as its own - three columns, each headed "(... by LLM ...)" - and recorded, question and answer, in the audit log; code checks that every chunk the model names was shown to it; everything else the workbook shows is read and parsed by code, and nothing the code reads, links or checks depends on an answer. |
 | R4 | Every record carries its provenance - the run and the step - and every unit can be re-verified by hash. |
 | R5 | Everything except the model's answers is deterministic. Results never depend on thread timing. A run can be replayed from its recorded answers. |
-| R6 | Inputs are never modified. A run writes only its two files, beside the Inputs folder, and its scratch folder on the driver. |
+| R6 | Inputs are never modified. A run writes only its two files, beside the three input folders, and its scratch folder on the driver. The one move the tool makes is bringing a project laid out before, with its folders inside `Inputs`, to this layout: once, each folder whole, no file in it changed (section 6). |
 | R7 | Nothing taken from an input or from the model is ever executed or evaluated: no R, no evaluation of text, no unpickling, no string parsing by a symbolic library, safe reading of archives, safe loading of YAML only. |
 | R8 | The access token never persists: not in files, logs, manifests, workbooks or messages. |
 | R9 | Credit is the domain of the model's interpretations. Step 04 asks the model to explain each piece of code in the financial credit concepts it implements, for a CFA-level analyst checking it against the methodology, and step 05 to find the methodology behind each piece and where the code departs from it; the reading and the accounts assume no field. |
@@ -110,11 +112,11 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 | Cell | What it does | When to run it again |
 |---|---|---|
 | **cell 1** | `verifier.setup(dbutils)`: makes the three widgets, takes your user id from Databricks, installs a package only if one the engine imports is missing (then restarts Python and asks for the cell once more), gets flowR ready, and prints what the other three cells do | whenever Python restarts |
-| **cell 2** | Your organisation's `chat()`, already filled in; it returns the model's reply under `"answer"` and reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Cell 3 calls it from many threads at once, up to 256, so it keeps nothing from one call to the next. Then `verifier.check_chat(chat)` asks it one question, makes the project's `Inputs` folders and prints their paths | whenever Python restarts, and when the gateway or your id changes |
+| **cell 2** | Your organisation's `chat()`, already filled in; it returns the model's reply under `"answer"` and reads the endpoint, token and user id through `verifier.live()` at the moment it is called. Cell 3 calls it from many threads at once, up to 256, so it keeps nothing from one call to the next. Then `verifier.check_chat(chat)` asks it one question, makes the project's three input folders and prints their paths, bringing a project laid out before, with its folders inside `Inputs`, to the present layout (section 6) | whenever Python restarts, and when the gateway or your id changes |
 | **cell 3** | `verifier.review()`: reads every input file, links the units of the package, then asks your `chat()` to describe each piece of the model's code (step 04), and to find the methodology behind each piece and where the code departs from it (step 05), with a line of progress every minute. Prints what each step did and where the project folder is | when it says a step did not finish - after pasting a fresh token, if it ran out: finished steps are never repeated, and no answer received is asked for again, even after an interruption. After Python restarts, run cells 1 and 2 first: cell 3 carries the run on where it stopped |
 | **cell 4** | `verifier.verify()`: eight checks of the project's two files against their own record, each Confirmed or Not confirmed | after any run |
 
-**The widgets.** Three: the endpoint and token for the model gateway (01, 02), and the project's name (03), which can be a model id and names the project's folder. Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<project name>`, with its `Inputs` and the two files a run writes beside them. A name holds at most 24 characters, from letters, digits, hyphen and underscore. A run is named by the minute it started, as `2026-09-22_1430`. Cell 3 carries the project's run on, in this session or a later one, until an input file, the engine or a setting changes; then it starts a new one.
+**The widgets.** Three: the endpoint and token for the model gateway (01, 02), and the project's name (03), which can be a model id and names the project's folder. Your user id is not a widget: cell 1 takes it from Databricks - the notebook's own user - and `verifier.live("reviewer_id")` gives it to `chat()`, which sends it to the gateway; it is also recorded against the run. Packages come from PyPI, named in the engine. Projects live in `Projects` next to the notebook, each in its own folder, `<project name>`, with its three input folders and the two files a run writes beside them. A name holds at most 24 characters, from letters, digits, hyphen and underscore. A run is named by the minute it started, as `2026-09-22_1430`. Cell 3 carries the project's run on, in this session or a later one, until an input file, the engine or a setting changes; then it starts a new one.
 
 **No code of its own.** Every cell is one call into `engine/verifier.py`; the only code in the notebook is your organisation's `chat()` in cell 2. What a cell used to do - the widgets, the install, opening the run, printing what happened - is in the engine, where it is tested with the rest. Packages come from PyPI, named in the engine (section 18).
 
@@ -124,13 +126,17 @@ The notebook is `Verifier.ipynb`. Four cells, run in order.
 
 ## 6. What goes in
 
-Three folders under `Inputs/`:
+Three folders in the project's folder, beside `Output.xlsm` and `Audit_Log.xlsx`:
 
 | Folder | What | Formats |
 |---|---|---|
 | `1_Methodology` | the canonical methodology | XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv`/`.tsv`, `.xlsx`, `.rtf`, `.tex`, `.svg` |
 | `2_Model_Package` | the model | an R package as a `.tar.gz`, a `.zip` of it, or its source folder |
 | `3_Model_Documentation` | the model documentation | as for the methodology; `.docx` preferred |
+
+Only these three folders are read, and the optional `tag_rules.yaml` and `glossary.xlsx` beside them: anything else in the project's folder - `Output.xlsm`, `Audit_Log.xlsx`, a copy you saved there - is not an input.
+
+**A project laid out before.** Projects used to keep the three folders inside a folder named `Inputs`. The first time cell 2 or cell 3 meets such a project, it moves each folder up into the project's folder, whole, not a file in it changed, and says so; `Inputs` goes once nothing but hidden files is left in it, and anything of yours still in it stays, and is named. A folder above that holds only the tool's README gives way. If a folder stands in both places and both hold files, the tool moves neither, and cell 3 stops until you keep one. The inputs' fingerprints do not change: they name each file by its path inside its folder.
 
 Folders inside a corner are read too, in name order. A Word lock file, `Thumbs.db` and a saved web page's support folder are left out and listed. A format the tool does not read — a slide deck, an old `.doc`, a picture on its own — becomes one row on `Model_Package_Info` saying so and what to save it as instead. Nothing is decoded as text that is not text.
 
@@ -227,7 +233,7 @@ So a cell of Immediate Upstream or Immediate Downstream Model Chunk holds the li
 
 ## 8. The project's two files as an evidence pack
 
-`Audit_Log.xlsx`, beside `Output.xlsm` and the `Inputs` folder, is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsm` carries this run's ids and fingerprints, and that no access token was written into either file.
+`Audit_Log.xlsx`, beside `Output.xlsm` and the three input folders, is the record. Its sheet *Run* holds the run's identity and the fingerprint of every input and of every engine file that ran; *Steps* every step and what it did; *Records* every record of every kind, in the order written and never rewritten; *Model_Calls* every exchange with the model, prompt and reply. A text longer than a cell holds is split into numbered parts and joined again when read. Cell 4 verifies a pack from this workbook alone: that the inputs are the ones fingerprinted, that the engine files are the ones installed here, that re-reading the inputs gives the recorded content hashes, that every unit read is in the record, that `Output.xlsm` carries this run's ids and fingerprints, and that no access token was written into either file.
 
 ## 9. When something goes wrong
 
@@ -256,7 +262,7 @@ So a cell of Immediate Upstream or Immediate Downstream Model Chunk holds the li
 - The items of a list are shown inside the paragraph that introduces them, each on its own line behind `- ` or its number, and are not rows of their own. A list under a heading, with no paragraph before it, keeps its items as rows.
 - A table of sentences is shown with each cell on its own line under the heading of its column (`Very Strong: ...`); a table of short values is shown as a grid, cells joined by `; `.
 - Page headers, page footers and logos that repeat in the margins of a PDF are left out, and `Model_Package_Info` lists every one that was.
-- the tool reads XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv` and `.tsv`, `.xlsx`, `.rtf` and `.tex`. It does not read slide decks, OpenDocument files, e-books, old Office files (`.doc`, `.xls`, `.ppt`) or pictures on their own; each of those becomes one row on the sheet saying so, with what to save it as instead. Folders inside an Inputs corner are read, in name order; a Word lock file, Thumbs.db and a saved web page's support folder are left out and listed on `Model_Package_Info`.
+- the tool reads XML (also inside a `.txt`), `.mhtml`, `.docx`, `.pdf`, Markdown, `.csv` and `.tsv`, `.xlsx`, `.rtf` and `.tex`. It does not read slide decks, OpenDocument files, e-books, old Office files (`.doc`, `.xls`, `.ppt`) or pictures on their own; each of those becomes one row on the sheet saying so, with what to save it as instead. Folders inside an input folder are read, in name order; a Word lock file, Thumbs.db and a saved web page's support folder are left out and listed on `Model_Package_Info`.
 - A spreadsheet is read sheet by sheet, each sheet a heading over one table. A formula is never worked out: the value the spreadsheet saved with it is what is read, so save the workbook after it has calculated.
 - The model package may be a tarball, a `.zip` of it, or its source folder. Only R is read as code: a package in another language is said to be one, and its files are kept as running text that nothing can be linked to.
 - PDF input is read by position on the page, each line across its full width, from the top down: a page set in two or more columns is not split into them, so lines of different columns at the same height are read as one, and tables without ruling lines may be cut wrongly. The content account still closes - no word is lost - but the order can mix the columns. Check the chunks of such a file against the PDF, or give a `.docx` where there is one.
@@ -340,7 +346,7 @@ Settings are an allow-list: a name that is not in this table is refused. The not
 
 | You want to add | Where |
 |---|---|
-| a tag rule for a new XML schema | `Inputs/tag_rules.yaml` of the project; or, for every project, `verifier.TAG_RULES_YAML` |
+| a tag rule for a new XML schema | `tag_rules.yaml` in the project's folder, beside its three input folders; or, for every project, `verifier.TAG_RULES_YAML` |
 | a column or a sheet of `Output.xlsm` | `verifier.WORKBOOK_LAYOUT_YAML` and the row builder of that sheet in `verifier.py` |
 
 After any change, see section 19.
