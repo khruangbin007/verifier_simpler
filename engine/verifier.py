@@ -1,16 +1,19 @@
 """
-Verifier - verifier.py - the whole engine, in one file. For every reviewer.
+Verifier - verifier.py - the whole engine, in one file.
 
-Reads a model's methodology, its package of code and data, and its documentation into numbered units;
-links each unit of the package to the units it takes something from and gives something to; and asks the
-organisation's language model, through the chat() of cell 2, to explain each unit of code, to find the
-chunks of the methodology that bear on it, and to flag where the code may depart from them. One
-deliverable: Output.xlsm. Everything a run does is recorded in Audit_Log.xlsx, beside it and the three input folders.
+Reads a model's methodology, its package of code and data, and its documentation into numbered chunks; links each
+chunk of the package to the chunks it takes something from and gives something to; and asks the organisation's
+language model, through the chat() of cell 2, to explain each chunk of code, to find the chunks of the methodology
+that bear on it, and to flag where the code may depart from them. One deliverable: Output.xlsm. Everything a run
+does is recorded in the _Audit folder beside it.
 
-The file is one piece of engineering in three parts, in dependency order:
-  the contracts, the reading floor and the front door
-  reading the methodology, the documentation and the model package
-  the run: its folder, its record, the organisation's model and Output.xlsm
+The file is in four parts, in the order a run goes; each is one reviewer's contiguous share, and the contents below
+give each part's and each section's lines. Every function's and class's docstring ends with its signposts:
+  Used by - what calls it: a function, a notebook cell, or the runner by the name in STEP_FUNCTIONS;
+  Uses    - the functions and classes of this file it calls;
+  Holds   - the helpers written inside it, used only there.
+A name from another section carries that section's number. The signposts are generated from the code, never
+written by hand: a maintainer regenerates them after a change, and a check fails while any is stale.
 """
 import bz2
 import collections
@@ -55,13 +58,52 @@ from typing import Callable, Optional
 from xml.sax.saxutils import escape
 
 
-# ================================================================================================
-# the contracts, the reading floor and the front door
-# ================================================================================================
+# ======================================================================================================================
+# CONTENTS - four parts, in the order a run goes; each part is one reviewer's contiguous share of the file.
+#
+#   PART 1   lines   102-1751   foundations and the run   (reviewer 1)
+#     1.1    lines   110-223    the vocabulary, the records and the two exceptions
+#     1.2    lines   224-359    canonical JSON, digests and numbers
+#     1.3    lines   360-601    the content account: what every reading must close, and a document's smallest pieces
+#     1.4    lines   602-621    settings
+#     1.5    lines   622-906    the project: its folders, its runs, and the layout of before
+#     1.6    lines   907-945    live values: the notebook's widgets and the token
+#     1.7    lines   946-1138   the audit store and the _Audit folder
+#     1.8    lines  1139-1397   the pipeline, its runner, and step 01: prepare-run
+#     1.9    lines  1398-1476   cell 4: verification
+#     1.10   lines  1477-1751   the notebook's four cells
+#   PART 2   lines  1752-4004   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
+#     2.1    lines  1760-1899   which files are read, and what each file is
+#     2.2    lines  1900-2077   read_methodology and read_documentation: a folder read into chunks
+#     2.3    lines  2078-2660   markup: element helpers, repairs, tag rules, the block walker, schema discovery
+#     2.4    lines  2661-3196   equations: symbols, the expression tree, the linear-notation parser, reference data
+#     2.5    lines  3197-3392   Word (.docx)
+#     2.6    lines  3393-3498   PDF
+#     2.7    lines  3499-3706   MHTML and SVG
+#     2.8    lines  3707-4004   a document's shape: headings, levels, references and chunks
+#   PART 3   lines  4005-5721   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
+#     3.1    lines  4013-4085   the package: unpacking and inventory
+#     3.2    lines  4086-4465   flowR: fetching it, running it, and its syntax trees
+#     3.3    lines  4466-4645   units from R source; roxygen blocks and help pages
+#     3.4    lines  4646-4844   stored parameter data, and which code reads it
+#     3.5    lines  4845-5118   read_package, and the package's content account
+#     3.6    lines  5119-5721   step 03, link-chunks: which chunk feeds which
+#   PART 4   lines  5722-7885   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
+#     4.1    lines  5730-6162   asking the organisation's model: what a question may hold, and many at once
+#     4.2    lines  6163-6327   step 04, interpret-code
+#     4.3    lines  6328-7084   step 05, search-methodology
+#     4.4    lines  7085-7567   Output.xlsm: its rows, its layout, and how it is written
+#     4.5    lines  7568-7885   the workbook's macro
+#
+# Every docstring ends with its signposts - Used by, Uses, Holds - generated from the code (see the docstring above).
+# ======================================================================================================================
 
 
 # ======================================================================================================================
 # PART 1 of 4 - FOUNDATIONS AND THE RUN   (reviewer 1)
+# Runs in: cell 1 (setup), cell 2 (check_chat), cell 3 (review), cell 4 (verify).
+# Entry points: setup, check_chat, review, verify; run_pipeline and run_step; step 01, prepare_run.
+# Writes: the records run_manifest, step_records and audit_files; the _Audit folder. Reads them all back in cell 4.
 # ======================================================================================================================
 
 
@@ -78,18 +120,22 @@ CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
 
 @dataclass(frozen=True)
 class TableData:
-    """A table kept whole: header cells, body rows, and which column identifies a row."""
+    """A table kept whole: header cells, body rows, and which column identifies a row.
+    Used by: Chunk, table_from_rows (2.3)."""
     header: tuple = (); rows: tuple = (); row_key: str = ""
 
 @dataclass(frozen=True)
 class EquationData:
-    """An equation as found: its source form, whether the tool could read it, and its tree."""
+    """An equation as found: its source form, whether the tool could read it, and its tree.
+    Used by: Chunk, equation_block (2.3), read_equation (2.4), inline_formula (2.4), blocks_from_pdf (2.6)."""
     source_form: str = ""; linear: str = ""; readable: bool = False
     not_readable_reason: str = ""; image_sha256: str = ""
 
 @dataclass(frozen=True)
 class Chunk:
-    """One citable unit of a document: a paragraph, a table, a figure or an equation."""
+    """One citable unit of a document: a paragraph, a table, a figure or an equation.
+    Used by: blocks_to_chunks (2.8).
+    Uses: TableData, EquationData."""
     ref: str; corner: str; source_file: str; kind: str; level: int; heading_chain: tuple
     numbering: str; text: str; locator: str; content_hash: str
     table: Optional[TableData] = None; equation: Optional[EquationData] = None
@@ -98,25 +144,30 @@ class Chunk:
 
 @dataclass(frozen=True)
 class CodeDetail:
-    """What the R reader learned about a function or a statement, without running it."""
+    """What the R reader learned about a function or a statement, without running it.
+    Used by: ModelUnit, finalise_units (3.5)."""
     formals: tuple = (); calls: tuple = (); symbols_written: tuple = (); exported: Optional[bool] = None
     reads_data: tuple = ()
 
 @dataclass(frozen=True)
 class ParameterDataDetail:
-    """The profile of one stored data object."""
+    """The profile of one stored data object.
+    Used by: ModelUnit, finalise_units (3.5)."""
     object_name: str; container_file: str; dims: tuple = (); columns: tuple = ()
     assessable: bool = True; not_assessable_reason: Optional[str] = None
 
 @dataclass(frozen=True)
 class RoxygenDetail:
-    """A roxygen block: what it documents, and its tags with their lines."""
+    """A roxygen block: what it documents, and its tags with their lines.
+    Used by: ModelUnit, finalise_units (3.5)."""
     documents_ref: Optional[str] = None; documents_name: str = ""; tags: tuple = ()
 
 
 @dataclass(frozen=True)
 class ModelUnit:
-    """One citable unit of the package (see UNIT_KINDS)."""
+    """One citable unit of the package (see UNIT_KINDS).
+    Used by: finalise_units (3.5).
+    Uses: CodeDetail, ParameterDataDetail, RoxygenDetail."""
     ref: str; kind: str; file: str; lines: Optional[tuple]; name: str; inside: str; text: str
     parent_ref: Optional[str]; file_sha256: str; content_hash: str
     code: Optional[CodeDetail] = None; data: Optional[ParameterDataDetail] = None
@@ -125,7 +176,8 @@ class ModelUnit:
 
 @dataclass(frozen=True)
 class Provenance:
-    """Which run and step produced a record, and from which AI exchange if any."""
+    """Which run and step produced a record, and from which AI exchange if any.
+    Used by: StepContext, run_step (1.8)."""
     run_id: str; step_id: str; step: str
     prompt_hash: Optional[str] = None; response_hash: Optional[str] = None
 
@@ -133,31 +185,37 @@ class Provenance:
 
 @dataclass
 class StepContext:
-    """What every step function receives. It never contains the access token."""
+    """What every step function receives. It never contains the access token.
+    Used by: run_step (1.8), verify_evidence_pack (1.9).
+    Uses: Provenance."""
     settings: dict; options: dict; read: Callable
     work_dir: str; note: Callable; provenance: Optional[Provenance] = None
     exchanges: list = field(default_factory=list)  # each exchange with chat(), as sent and returned, for the audit folder
 
 @dataclass
 class StepResult:
-    """What every step function returns: records by kind, counts, and plain notes."""
+    """What every step function returns: records by kind, counts, and plain notes.
+    Used by: run_step (1.8), prepare_run (1.8), combine (1.8), read_corner (2.2), read_package (3.5),
+             link_chunks (3.6), interpret_code (4.2), search_methodology (4.3)."""
     records: dict = field(default_factory=dict); counts: dict = field(default_factory=dict)
     messages: list = field(default_factory=list); finished: bool = True
 
 
-# ================================================================================================
-# reading the methodology, the documentation and the model package
-# ================================================================================================
 class Unreadable(Exception):
     """What the tool could not read, with why in plain words: a formula it does not read, a data file that expands past
-    its limit, or a reply of chat() that holds no answer. Each is caught where it can arise; the reason is shown."""
+    its limit, or a reply of chat() that holds no answer. Each is caught where it can arise; the reason is shown.
+    Used by: equation_block (2.3), tokenize_formula (2.4), FormulaReader (2.4), parse_formula (2.4),
+             read_equation (2.4), inline_formula (2.4), latex_group (2.4), latex_to_linear (2.4), expand (3.4),
+             decode_data_file (3.4), ask_model (4.1)."""
 
 
 # ================================================================================================
 class RunStopped(Exception):
     """Why the run cannot go on, in plain words: a defect in the tool - rows that do not rebuild their text, a question
     too large for chat(), a workbook that does not match its records - or an Output.xlsm a person has changed, which a
-    new run would replace."""
+    new run would replace.
+    Used by: open_run (1.5), run_step (1.8), open_current (1.10), model_rows (4.3), search_methodology (4.3),
+             check_written_totals (4.4)."""
 
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -165,7 +223,9 @@ ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------- 1.2 canonical JSON, digests and numbers
 def to_plain(value):
-    """Turn dataclasses, tuples and Decimals into plain JSON-ready values."""
+    """Turn dataclasses, tuples and Decimals into plain JSON-ready values.
+    Used by: canonical_json, AuditStore (1.7), audit_step_files (1.8), combine (1.8), verify_evidence_pack (1.9),
+             read_corner (2.2), read_package (3.5), journal_answer (4.1)."""
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return {f.name: to_plain(getattr(value, f.name)) for f in dataclasses.fields(value)}
     if isinstance(value, dict):
@@ -177,29 +237,42 @@ def to_plain(value):
     return value
 
 def canonical_json(value):
-    """One JSON text per content: sorted keys, no spare white space. Enforces: R5"""
+    """One JSON text per content: sorted keys, no spare white space. Enforces: R5
+    Used by: AuditStore (1.7), rows_package_info (4.4), build_workbook (4.4).
+    Uses: to_plain."""
     return json.dumps(to_plain(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 def digest(value):
-    """SHA-256 in hexadecimal: of bytes as they are, of text in UTF-8."""
+    """SHA-256 in hexadecimal: of bytes as they are, of text in UTF-8.
+    Used by: content_hash, open_run (1.5), AuditStore (1.7), fingerprint_file (1.8), svg_blocks (2.3),
+             equation_block (2.3), docx_figure (2.5), pdf_lines (2.6), blocks_from_mhtml (2.7), read_package (3.5),
+             call_record (4.1), code_question (4.2), question_of (4.3), rows_package_info (4.4), file_sha256 (4.4)."""
     return hashlib.sha256(value.encode("utf-8") if isinstance(value, str) else value).hexdigest()
 
 
 def swhid_content(data):
-    """The ISO/IEC 18670 content identifier of a file; the same value Git computes."""
+    """The ISO/IEC 18670 content identifier of a file; the same value Git computes.
+    Used by: fingerprint_file (1.8), read_package (3.5)."""
     return "swh:1:cnt:" + hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 def normalise_text(text):
-    """Unicode NFC, one kind of line ending, runs of white space collapsed to one space."""
+    """Unicode NFC, one kind of line ending, runs of white space collapsed to one space.
+    Used by: content_hash, tokens (1.3), new_block (2.3), walk_element (2.3), walk_mixed (2.3), table_block (2.3),
+             figure_block (2.3), walk_svg_markup (2.3), equation_block (2.3), read_equation (2.4), note_blocks (2.5),
+             blocks_from_docx (2.5), pdf_lines (2.6), blocks_from_pdf (2.6), svg_texts (2.7), svg_to_markup (2.7),
+             blocks_from_mhtml (2.7)."""
     text = unicodedata.normalize("NFC", text or "").replace("\r\n", "\n").replace("\r", "\n")
     return re.sub(r"\s+", " ", text).strip()
 
 def content_hash(text):
     """The hash that makes a citation re-verifiable. It ignores white-space and
-    line-ending differences and nothing else. Enforces: R4"""
+    line-ending differences and nothing else. Enforces: R4
+    Used by: blocks_to_chunks (2.8), finalise_units (3.5).
+    Uses: digest, normalise_text."""
     return digest(normalise_text(text))
 
 def make_ref(prefix, number):
-    """make_ref("C", 9) gives "C-0009". Numbers follow reading order."""
+    """make_ref("C", 9) gives "C-0009". Numbers follow reading order.
+    Used by: blocks_to_chunks (2.8), finalise_units (3.5)."""
     return "%s-%04d" % (prefix, number)
 
 
@@ -220,7 +293,9 @@ def parse_number(as_written, unit=""):
     """Bring one written number to a decimal value and keep how it was written.
     Percent, basis points, scientific notation and "99.9th percentile" are converted
     first; `decimals` counts decimals after that conversion, because the value rule
-    (plan 2.8) compares at the precision the methodology states."""
+    (plan 2.8) compares at the precision the methodology states.
+    Used by: find_numbers.
+    Uses: plain_decimal."""
     text = as_written.replace("\u2212", "-").strip()
     if re.fullmatch(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?:[eE][-+]?\d+)?", text):
         text = text.replace(",", "")                 # the thousands grouping is how it was written, not part of the value
@@ -241,13 +316,16 @@ def parse_number(as_written, unit=""):
             "decimals": max(0, decimals - exponent + shift), "unit": kind}
 
 def plain_decimal(value):
-    """A Decimal as the shortest plain decimal text: no exponent, no trailing zeros."""
+    """A Decimal as the shortest plain decimal text: no exponent, no trailing zeros.
+    Used by: parse_number, plain_number, tokenize_formula (2.4), cell_text (3.4)."""
     text = format(value.normalize(), "f")
     return "0" if text in ("-0", "") else text
 
 def find_numbers(text):
     """All numbers written in a piece of prose, with their position. Numbers that only
-    label something ("Table 3", "section 4.2"), years and list numbering are left out."""
+    label something ("Table 3", "section 4.2"), years and list numbering are left out.
+    Used by: table_from_rows (2.3).
+    Uses: parse_number."""
     found = []
     for match in _NUMBER_RE.finditer(text or ""):
         before = text[:match.start()]
@@ -266,7 +344,9 @@ def find_numbers(text):
 
 def plain_number(value, digits=6):
     """How a computed value is shown to an analyst: whole numbers stay whole, other
-    values show at most six significant digits, never an exponent. Enforces: R10"""
+    values show at most six significant digits, never an exponent. Enforces: R10
+    Used by: plain_cell (4.4).
+    Uses: plain_decimal."""
     if isinstance(value, str):
         return value
     if value != value or value in (float("inf"), float("-inf")):
@@ -305,18 +385,24 @@ VACUOUS_BYTES = 1024
 def tokens(text):
     """The countable pieces of a text: runs without white space, after the same normalisation
     every chunk's text goes through. White space is not counted, because folding a list joins
-    its items with a space and collapsing runs of space is a declared transform."""
+    its items with a space and collapsing runs of space is a declared transform.
+    Used by: bag, account.
+    Uses: normalise_text (1.2)."""
     return [piece for piece in normalise_text(text or "").split(" ") if piece]
 
 def bag(text):
-    """The tokens of a text as counts, so that a word appearing twice must be found twice."""
+    """The tokens of a text as counts, so that a word appearing twice must be found twice.
+    Used by: bag_of.
+    Uses: tokens."""
     found = {}
     for piece in tokens(text):
         found[piece] = found.get(piece, 0) + 1
     return found
 
 def bag_of(texts):
-    """The tokens of several texts as one set of counts."""
+    """The tokens of several texts as one set of counts.
+    Used by: kept_and_relocated, account.
+    Uses: bag."""
     total = {}
     for text in texts:
         for piece, count in bag(text).items():
@@ -324,7 +410,8 @@ def bag_of(texts):
     return total
 
 def minus(left, right):
-    """What is left of `left` after taking away as much of `right` as it holds."""
+    """What is left of `left` after taking away as much of `right` as it holds.
+    Used by: account."""
     rest = {}
     for piece, count in left.items():
         keep = count - right.get(piece, 0)
@@ -333,7 +420,8 @@ def minus(left, right):
     return rest
 
 def atom(place, locator, text):
-    """One countable piece of an input: where in the file it came from, and what it says."""
+    """One countable piece of an input: where in the file it came from, and what it says.
+    Used by: atoms_of_markup, atoms_of_plain_text, atoms_of_file (2.2), read_file_blocks (2.2), read_corner (2.2)."""
     return {"place": place, "locator": locator, "text": text}
 
 MARKUP_METADATA = ("style", "script")
@@ -344,7 +432,10 @@ def atoms_of_markup(root, file_name, rules=None):
     into the tool's linear notation rather than kept word for word, an attribute the rules do not
     read is metadata about the document rather than something the document says, and the
     content of a style or script element is not prose at all. Naming the place is what lets
-    each of those be explained by a rule instead of counted as a loss."""
+    each of those be explained by a rule instead of counted as a loss.
+    Used by: atoms_of_file (2.2).
+    Uses: atom, local_name (2.3).
+    Holds: walk."""
     families = (rules or {}).get("family_of", {})
     carriers = set((rules or {}).get("heading_attributes", ())) | set((rules or {}).get("numbering_attributes", ()))
     found, position = [], 0
@@ -376,7 +467,9 @@ WORD_DELETED = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}de
 
 
 def atoms_of_plain_text(text, file_name):
-    """Every non-blank line of a plain text file."""
+    """Every non-blank line of a plain text file.
+    Used by: atoms_of_file (2.2), svg_blocks (2.3).
+    Uses: atom."""
     return [atom("body", "%s line %d" % (file_name, number), line)
             for number, line in enumerate(text.split("\n"), start=1) if line.strip()]
 
@@ -392,7 +485,9 @@ def kept_and_relocated(chunks):
     chain of every unit below it, and the file holds it once. So the fields that repeat by
     design - the heading chain and the section numbering - are counted once for each distinct
     text, while a caption, a table and an equation belong to their own unit and are counted
-    every time they occur."""
+    every time they occur.
+    Used by: account.
+    Uses: bag_of."""
     kept, moved, carried = [], [], set()
     for chunk in chunks:
         kept.append(chunk.get("text") or "")
@@ -413,7 +508,8 @@ def marks_of_rendering(chunks):
     """Marks every reader makes, whatever the format: the form the tool renders a table, a figure or
     an equation in; the markup an equation was read from, whose tags are not words the document
     says; a number a document did not write that the tool counted back; and the place label the tool
-    gives a paragraph of a PDF ("p.4 2") so that a person can find it again. Enforces: R13"""
+    gives a paragraph of a PDF ("p.4 2") so that a person can find it again. Enforces: R13
+    Used by: read_corner (2.2)."""
     found = []
     for chunk in chunks:
         if chunk.get("kind") in ("Table", "Figure", "Equation"):
@@ -434,7 +530,9 @@ def account(file_name, atoms, chunks, dropped=(), marks=(), file_bytes=0):
     is explained by WHERE it was found (EXPLAINED_BY_PLACE) before it is called a loss, so that
     an equation read into linear notation and an identifier in an attribute are each named
     rather than swept into the same silence. Returns the counts, what could not be placed with
-    where it was found, and what could not be explained. Enforces: R13"""
+    where it was found, and what could not be explained. Enforces: R13
+    Used by: read_corner (2.2).
+    Uses: tokens, bag_of, minus, kept_and_relocated."""
     source = bag_of([one["text"] for one in atoms if one["place"] not in EXPLAINED_BY_PLACE])
     kept, moved = kept_and_relocated(chunks)
     dropped_bag = bag_of(dropped)
@@ -477,7 +575,8 @@ def account(file_name, atoms, chunks, dropped=(), marks=(), file_bytes=0):
 
 def account_lines(found):
     """The account of one file in the plain words an analyst reads on Model_Package_Info.
-    Enforces: R10, R13"""
+    Enforces: R10, R13
+    Used by: read_corner (2.2), read_package (3.5)."""
     lines = ["%d smallest pieces of text counted: %d kept in a unit, %d kept in a unit's other fields, "
              "%d read into another form, %d left out under a named rule, %d in a part that could not be read."
              % (found["atoms"], found["in unit text"], found["relocated"], found["rewritten"],
@@ -510,7 +609,8 @@ DEFAULT_SETTINGS = {
 def make_settings(overrides=None):
     """The settings of a run. Only names on the allow-list above exist, so a new setting
     can never leak into the manifest by default, and no setting can hold the token.
-    Enforces: R8"""
+    Enforces: R8
+    Used by: open_run (1.5), notebook_settings (1.10)."""
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
     for name, value in (overrides or {}).items():
         if name not in DEFAULT_SETTINGS:
@@ -530,7 +630,9 @@ INPUT_FOLDERS = (
 def list_input_files(inputs_dir):
     """The input files of a project, by corner, walking into folders; the folder each corner is
     read from, so that a file can be named by its path inside it; and every file each corner left
-    out, with why. The optional glossary and tag rules sit beside the three folders. Enforces: R2"""
+    out, with why. The optional glossary and tag rules sit beside the three folders. Enforces: R2
+    Used by: run_step (1.8), input_fingerprints (1.8), verify_evidence_pack (1.9).
+    Uses: input_files (2.1)."""
     inputs = {"glossary": None, "tag_rules": None, "roots": {}, "skipped": {}}
     for corner, folder, _ in INPUT_FOLDERS:
         inputs["roots"][corner] = os.path.join(inputs_dir, folder)
@@ -551,7 +653,8 @@ class RunPaths:
     """Where a project's run lives: Output.xlsm sits in the project folder, and the record of the run in its _Audit folder,
     beside its three input folders - run_dir, outputs_dir, audit_dir and inputs_dir are that one folder, each name kept so that
     every reader says which file it means - and local_dir is scratch space on the driver. previous is the
-    manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
+    manifest of the run this one replaced, if any; opened says in plain words which run this is, and why.
+    Used by: open_run."""
     projects_dir: str; project: str; project_dir: str; inputs_dir: str
     run_id: str; run_dir: str; outputs_dir: str; audit_dir: str; local_dir: str
     previous: Optional[dict] = None; opened: str = ""
@@ -564,7 +667,8 @@ BESIDE_FOLDERS = ("glossary.xlsx", "tag_rules.yaml")   # the optional files that
 
 
 def holds_nothing(path):
-    """Does a folder hold nothing but the tool's README.txt and hidden files?"""
+    """Does a folder hold nothing but the tool's README.txt and hidden files?
+    Used by: lift_project, setup_project."""
     return not [n for n in os.listdir(path) if n != "README.txt" and not n.startswith(".")]
 
 
@@ -575,7 +679,9 @@ def lift_project(project_dir):
     then nothing of that folder is moved, and the run cannot start until a person keeps one. Inputs is removed when
     nothing but hidden files is left in it. Then its Audit_Log.xlsx, if it stands in the project's own folder, is moved
     into _Audit - the tool's own file, moved whole. Returns (what was done, what stops the run), in plain words.
-    Enforces: R6"""
+    Enforces: R6
+    Used by: setup_project.
+    Uses: holds_nothing."""
     said, blocking = [], []
     legacy = os.path.join(project_dir, LEGACY_INPUTS)
     if os.path.isdir(legacy):
@@ -620,7 +726,8 @@ def archive_run(project_dir, run_id):
     and the Output.xlsm, or the Output.xlsx of before, the tool wrote for it, moved into
     _Audit/previous_runs/<its run id>/. Nothing of it is deleted or changed; a run kept before stays where it is.
     An Output a person changed never comes here: open_run stops first (RunStopped). Returns the folder, or ""
-    when there was nothing to keep. Enforces: R4, R6"""
+    when there was nothing to keep. Enforces: R4, R6
+    Used by: open_run."""
     audit = os.path.join(project_dir, AUDIT_FOLDER)
     kept = [os.path.join(audit, name) for name in sorted(os.listdir(audit)) if name != PREVIOUS_RUNS] if os.path.isdir(audit) else []
     kept += [path for path in (os.path.join(project_dir, OUTPUT_FILE), os.path.join(project_dir, LEGACY_OUTPUT_FILE))
@@ -644,7 +751,9 @@ def setup_project(projects_dir, project):
     """Create the project skeleton and say what is still missing: the three input folders, each with its README.txt,
     in the project's folder beside Output.xlsm and Audit_Log.xlsx. A project laid out before, with its folders inside
     Inputs/, is first brought to this layout (lift_project). Returns (project folder, what stops the run, what was
-    done). The content of an input is never touched. Enforces: R6"""
+    done). The content of an input is never touched. Enforces: R6
+    Used by: open_run, check_chat (1.10), open_current (1.10).
+    Uses: holds_nothing, lift_project."""
     problem = "" if PROJECT_NAME_RE.match(project or "") else (
         "The project name may hold at most 24 characters from letters, digits, hyphen and underscore. Please shorten or "
         "change '%s'." % project)
@@ -666,7 +775,8 @@ def setup_project(projects_dir, project):
 
 def new_run_id(taken, now=None):
     """A run is named by the minute it started, <date>_<HHMM>, with a letter added while that name is taken:
-    the run it replaces, or a run this driver has opened already."""
+    the run it replaces, or a run this driver has opened already.
+    Used by: open_run."""
     base = (now or datetime.datetime.now()).strftime("%Y-%m-%d_%H%M")
     for suffix in [""] + list("bcdefghijklmnopqrstuvwxyz"):
         if not taken(base + suffix):
@@ -675,7 +785,8 @@ def new_run_id(taken, now=None):
 
 def recorded_manifest(project_dir):
     """The manifest of the run the project's Audit_Log.xlsx records, read from its Run sheet alone; None when
-    there is none, or the workbook cannot be read."""
+    there is none, or the workbook cannot be read.
+    Used by: open_run."""
     target = os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
     if not os.path.exists(target):
         return None
@@ -691,7 +802,9 @@ def recorded_manifest(project_dir):
 
 def run_changes(record, inputs_dir, settings):
     """Why the run a project records cannot be carried on, in plain words, or "" when it can: it is carried on
-    while its input files, the engine and the settings are the ones it started with. Who runs it does not count."""
+    while its input files, the engine and the settings are the ones it started with. Who runs it does not count.
+    Used by: open_run.
+    Uses: engine_file_hashes (1.8), input_fingerprints (1.8)."""
     if not record or not record.get("run_id") or "inputs" not in record:
         return "no earlier run"
     before = {f["file"]: f["sha256"] for f in record.get("inputs", [])}
@@ -712,7 +825,8 @@ def pick_scratch_root(preferred=""):
     (R12), so this folder is needed before anything else can happen. A cluster is shared, and
     a scratch folder made by one user cannot be written into by another; the folders tried
     here therefore carry the user's own name. Writing is tested, not assumed, because a
-    folder can exist and still refuse."""
+    folder can exist and still refuse.
+    Used by: open_run."""
     user = re.sub(r"[^A-Za-z0-9_.-]", "_", getpass.getuser() or "user")
     refused = []
     for root in ([preferred] if preferred else []) + [
@@ -739,7 +853,10 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
     or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
     run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
     changed since the tool wrote it is never replaced: RunStopped says so. Inputs are never touched.
-    Enforces: R6, R12"""
+    Enforces: R6, R12
+    Used by: open_current (1.10).
+    Uses: RunStopped (1.1), digest (1.2), make_settings (1.4), RunPaths, archive_run, setup_project, new_run_id,
+          recorded_manifest, run_changes, pick_scratch_root, AuditStore (1.7), file_sha256 (4.4)."""
     project_dir, _, _ = setup_project(projects_dir, project)
     inputs_dir = project_dir                                # the three input folders stand in the project's folder
     record = recorded_manifest(project_dir)
@@ -792,7 +909,9 @@ def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
 class LiveValues:
     """The three values chat() reads when it is CALLED: endpoint, token, user id. They live
     in memory only. `generation` goes up whenever a different token arrives, which is how
-    paused workers learn that a fresh one was pasted. Enforces: R8"""
+    paused workers learn that a fresh one was pasted. Enforces: R8
+    Used by: AuditStore (1.7), live (1.10), verify (1.10), journal_answer (4.1), ask_all (4.1), interpret_code (4.2),
+             search_methodology (4.3)."""
     values: dict = field(default_factory=dict); generation: int = 0; set_at: float = 0.0
     recent_tokens: list = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -832,7 +951,8 @@ CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a ce
 
 def copy_whole(source, target):
     """Copy one whole file: to a temporary name, then replace; a plain copy if the file
-    system does not support replace (probe P-5). Enforces: R12"""
+    system does not support replace (probe P-5). Enforces: R12
+    Used by: AuditStore, rebuild_outputs (4.4)."""
     os.makedirs(os.path.dirname(target), exist_ok=True)
     temporary = target + ".part"
     shutil.copyfile(source, temporary)
@@ -856,7 +976,9 @@ class AuditStore:
     Records are held in memory while a cell runs and the workbook is written whole at each
     sync, beside and then swapped in, so a reader never sees it half written. Text longer than
     a cell holds is written in numbered parts and joined again when read, so nothing is cut.
-    Enforces: R4, R5, R12"""
+    Enforces: R4, R5, R12
+    Used by: open_run (1.5), open_store, verify_evidence_pack (1.9).
+    Uses: to_plain (1.2), canonical_json (1.2), digest (1.2), LiveValues (1.6), copy_whole, parts_of."""
     local_dir: str; remote_dir: str
     rows: list = field(default_factory=list)       # {"kind", "record"}, in the order written
     calls: list = field(default_factory=list)
@@ -997,14 +1119,17 @@ class AuditStore:
         self.account = {key: json.loads("".join(parts)) for key, parts in entries.items() if key}
 
 def parts_of(text):
-    """One long text as numbered parts, each short enough for a cell."""
+    """One long text as numbered parts, each short enough for a cell.
+    Used by: AuditStore."""
     return [(number + 1, text[at:at + CELL_LIMIT]) for number, at in enumerate(range(0, max(len(text), 1), CELL_LIMIT))]
 
 OPEN_STORES = {}                         # one store per run: two of them would overwrite each other's records
 
 def open_store(paths, settings):
     """The audit store of a run, read back from the project's Audit_Log.xlsx when there is one and the run is
-    carried on. The same store is returned for the same run, so everything a run records goes into one account."""
+    carried on. The same store is returned for the same run, so everything a run records goes into one account.
+    Used by: run_pipeline (1.8), review (1.10).
+    Uses: AuditStore."""
     key = (paths.local_dir, paths.audit_dir)
     if key not in OPEN_STORES:
         OPEN_STORES[key] = AuditStore(paths.local_dir, paths.audit_dir)
@@ -1025,7 +1150,9 @@ def run_pipeline(paths, settings, stop_after=""):
     """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
     the run continues at the first step without one. A step that says it did not finish - step 04 or 05 with
     questions still unanswered - stops the run there, and is carried out again when cell 3 runs again.
-    Returns {"state", "message", "steps_run"}."""
+    Returns {"state", "message", "steps_run"}.
+    Used by: review (1.10).
+    Uses: open_store (1.7), run_step, rebuild_outputs (4.4)."""
     store = open_store(paths, settings)
     done = {record["step_id"] for record in store.read("step_records") if record.get("finished", True)}
     steps_run = []
@@ -1048,7 +1175,10 @@ def run_pipeline(paths, settings, stop_after=""):
 
 def run_step(step, store, paths, settings):
     """Build the context, call the step function, write what it returns, record the step,
-    rebuild the outputs and sync. Steps never touch the store themselves."""
+    rebuild the outputs and sync. Steps never touch the store themselves.
+    Used by: run_pipeline.
+    Uses: Provenance (1.1), StepContext (1.1), StepResult (1.1), RunStopped (1.1), list_input_files (1.5),
+          audit_step_files, step_failure, record_step, rebuild_outputs (4.4)."""
     notes = []
     provenance = Provenance(paths.run_id, step["id"], step["name"])
     options = dict(step.get("with") or {})
@@ -1091,7 +1221,10 @@ def audit_step_files(store, step, result, exchanges):
     how it was read, the repairs made to it and every chunk made of it; for each file of the package, its units;
     the package's account, the lines of Model_Package_Info and the links - and each exchange with chat(), the
     SystemPrompt and MainPrompt as sent, the answer as returned, and what came of it. In the order the step made
-    them, which is the same for the same inputs. Enforces: R2, R4, R5"""
+    them, which is the same for the same inputs. Enforces: R2, R4, R5
+    Used by: run_step.
+    Uses: to_plain (1.2).
+    Holds: write."""
     records = {kind: [to_plain(record) for record in items] for kind, items in result.records.items()}
     def write(label, payload, holds, about="", sent_at="", returned_at=""):
         store.write_file(step["id"], step["name"], label, payload, holds, about, sent_at, returned_at)
@@ -1140,7 +1273,8 @@ def step_failure(step, problem, work_dir):
     """What the analyst is told when a step could not finish, and where the details are kept for
     whoever maintains the tool. The run goes on: the steps after this one work with what there is, and
     each says what it could not do. The details go to the run's work folder, not to the evidence
-    pack, because they are about the tool and not about the model under review. Enforces: R2"""
+    pack, because they are about the tool and not about the model under review. Enforces: R2
+    Used by: run_step."""
     with open(os.path.join(work_dir, "step_%s_did_not_finish.txt" % step["id"]), "w", encoding="utf-8") as handle:
         handle.write("".join(traceback.format_exception(type(problem), problem, problem.__traceback__)))
     return ("Step %s (%s) could not finish, because of a fault inside the tool (%s). The steps after it ran on what there "
@@ -1148,7 +1282,8 @@ def step_failure(step, problem, work_dir):
             % (step["id"], step["name"], type(problem).__name__))
 
 def record_step(store, step, result, seconds):
-    """Leave the step record that makes a finished step visible and resume possible."""
+    """Leave the step record that makes a finished step visible and resume possible.
+    Used by: run_step."""
     produced = {kind: len(records) for kind, records in sorted(result.records.items())}
     store.append("step_records", [{
         "step_id": step["id"], "name": step["name"],
@@ -1158,7 +1293,8 @@ def record_step(store, step, result, seconds):
         "seconds": round(seconds, 3)}])
 
 def log_line(store, text):
-    """Technical text (exception messages, Python names) belongs in run_log.txt only."""
+    """Technical text (exception messages, Python names) belongs in run_log.txt only.
+    Used by: plain_cell (4.4), rebuild_outputs (4.4)."""
     with open(os.path.join(store.local_dir, "run_log.txt"), "a", encoding="utf-8") as handle:
         handle.write("%s  %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), text))
 
@@ -1166,7 +1302,9 @@ PACKAGES_RECORDED = ("PyYAML", "openpyxl", "python-docx", "numpy", "scipy", "sym
                      "pdfplumber", "pypdf", "pyreadr")
 
 def fingerprint_file(path, corner, inputs_dir):
-    """Name, corner, size, SHA-256 and content identifier of one input file."""
+    """Name, corner, size, SHA-256 and content identifier of one input file.
+    Used by: input_fingerprints.
+    Uses: digest (1.2), swhid_content (1.2)."""
     with open(path, "rb") as handle:
         data = handle.read()
     return {"corner": corner, "file": os.path.relpath(path, inputs_dir).replace(os.sep, "/"),
@@ -1174,7 +1312,9 @@ def fingerprint_file(path, corner, inputs_dir):
 
 def engine_file_hashes():
     """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts and reference
-    data, and its requirements - so that an evidence pack names exactly the code that produced it."""
+    data, and its requirements - so that an evidence pack names exactly the code that produced it.
+    Used by: run_changes (1.5), prepare_run, verify_evidence_pack (1.9).
+    Uses: file_sha256 (4.4)."""
     import glob
     found = {}
     for pattern in ("*.py", "requirements.txt"):
@@ -1185,7 +1325,9 @@ def engine_file_hashes():
 
 def prepare_run(ctx):
     """Step 01. Fingerprint every input, record the environment and the allow-listed
-    settings, and say what changed since the run of the project this one replaced."""
+    settings, and say what changed since the run of the project this one replaced.
+    Used by: the runner, by its name in STEP_FUNCTIONS.
+    Uses: StepResult (1.1), engine_file_hashes, input_fingerprints."""
     import importlib.metadata
     paths, inputs = ctx.options["paths"], ctx.options["inputs"]
     fingerprints = input_fingerprints(paths.inputs_dir, inputs)
@@ -1210,7 +1352,9 @@ def prepare_run(ctx):
                              ["%d input files fingerprinted." % len(fingerprints)])
 
 def input_fingerprints(inputs_dir, inputs=None):
-    """The fingerprint of every input file of a project, corner by corner, in the order they are read."""
+    """The fingerprint of every input file of a project, corner by corner, in the order they are read.
+    Used by: run_changes (1.5), prepare_run.
+    Uses: list_input_files (1.5), fingerprint_file."""
     inputs = inputs or list_input_files(inputs_dir)
     found = []
     for corner, _, _ in INPUT_FOLDERS:
@@ -1224,7 +1368,9 @@ def combine(ctx, *parts):
     """One step that carries out several: each part in order, everything they record kept, their counts
     and their messages side by side. A later part reads what the earlier ones have just recorded, as it
     would if each were still a step of its own - the records of a step reach the store only when the step
-    ends. Enforces: R2"""
+    ends. Enforces: R2
+    Used by: read_inputs.
+    Uses: StepResult (1.1), to_plain (1.2)."""
     records, counts, messages = {}, {}, []
     for part in parts:
         stored = ctx.read
@@ -1240,7 +1386,9 @@ def combine(ctx, *parts):
 
 def read_inputs(ctx):
     """Step 02, read-inputs: the methodology, the model documentation and the model package, each read
-    into units, in that order. Enforces: R2, R7"""
+    into units, in that order. Enforces: R2, R7
+    Used by: the runner, by its name in STEP_FUNCTIONS.
+    Uses: combine, read_methodology (2.2), read_documentation (2.2), read_package (3.5)."""
     return combine(ctx, read_methodology, read_documentation, read_package)
 
 STEP_FUNCTIONS = ("prepare_run", "read_inputs", "read_methodology", "read_documentation", "read_package",
@@ -1252,7 +1400,8 @@ def contents_of(path):
     """Every byte string a file holds, looking INSIDE the compressed ones: the call log is gzip,
     and the workbook and the report are ZIP archives, so a token written into any of them would
     be invisible to a search of the raw bytes. Yields the raw bytes first, then each member of a
-    ZIP and the decompressed stream of a gzip. Enforces: R8"""
+    ZIP and the decompressed stream of a gzip. Enforces: R8
+    Used by: verify_evidence_pack."""
     with open(path, "rb") as handle:
         raw = handle.read()
     yield raw
@@ -1270,7 +1419,12 @@ def contents_of(path):
 def verify_evidence_pack(paths, settings, live=None):
     """Works from Output.xlsm, the _Audit folder and the three input folders alone. Returns rows (what was checked,
     "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
-    content hash is computed again from the input files and compared with the record."""
+    content hash is computed again from the input files and compared with the record.
+    Used by: verify (1.10).
+    Uses: StepContext (1.1), to_plain (1.2), list_input_files (1.5), AuditStore (1.7), engine_file_hashes (1.8),
+          contents_of, read_methodology (2.2), read_documentation (2.2), read_package (3.5), run_identity (4.4),
+          file_sha256 (4.4).
+    Holds: line."""
     store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
     def line(what, good, detail=""):
         """good is True, False, or None for a check the run has not reached yet - which is not a failure
@@ -1336,7 +1490,8 @@ NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": Non
 
 def databricks_user(dbutils):
     """Who runs the notebook, as Databricks knows them: the notebook context's user name; on a cluster that keeps
-    that context from Python, Spark's current_user(); outside Databricks, the system user."""
+    that context from Python, Spark's current_user(); outside Databricks, the system user.
+    Used by: setup."""
     try:
         return dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
     except Exception:
@@ -1352,7 +1507,9 @@ def databricks_user(dbutils):
 
 def live(name):
     """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
-    while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8"""
+    while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8
+    Used by: setup, ask_all (4.1), the notebook's cell 2.
+    Uses: LiveValues (1.6)."""
     session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
     if getattr(CHAT_WORKER, "active", False):       # a worker of step 04: the values its step last read
         return session.get(name)
@@ -1364,6 +1521,8 @@ def live(name):
     return session.get(name)
 
 def notebook_folder(dbutils):
+    """The workspace folder the notebook sits in; the working folder when that cannot be found.
+    Used by: setup."""
     try:
         path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
         return os.path.dirname(path if path.startswith("/Workspace") else "/Workspace" + path)
@@ -1372,7 +1531,9 @@ def notebook_folder(dbutils):
 
 def setup(dbutils, home=None, projects=None):
     """Cell 1: the widgets, the packages the engine needs (installed only if one is missing), flowR, and
-    what to do next. Safe to run any number of times; run it again after anything restarts Python."""
+    what to do next. Safe to run any number of times; run it again after anything restarts Python.
+    Used by: the notebook's cell 1.
+    Uses: databricks_user, live, notebook_folder, install, flowr_ready (3.2)."""
     import importlib.util
     widgets = dbutils.widgets
     carried = {}                                      # a project name typed into an earlier notebook's 03 Model ID stays
@@ -1420,7 +1581,8 @@ def setup(dbutils, home=None, projects=None):
     print("Next: cell 2.")
 
 def pip_said(stderr):
-    """What pip said, without any credentials of an index URL, and what its most common failure means."""
+    """What pip said, without any credentials of an index URL, and what its most common failure means.
+    Used by: install."""
     text = re.sub(r"//[^/@\s]+@", "//...@", stderr or "")[-1500:]
     missing = re.findall(r"satisfies the requirement ([\w.\-\[\]]+)", stderr or "")
     if "from versions: none" in (stderr or ""):
@@ -1432,7 +1594,9 @@ def pip_said(stderr):
 
 def install(missing, dbutils, requirements):
     """Install what the engine needs from PyPI, the runtime's own packages pinned as they are, and restart Python
-    only if those still import together afterwards."""
+    only if those still import together afterwards.
+    Used by: setup.
+    Uses: pip_said."""
     import importlib.metadata
     hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")    # no credentials of an index URL are shown
     pins = []
@@ -1475,11 +1639,16 @@ def install(missing, dbutils, requirements):
     dbutils.library.restartPython()
 
 def notebook_settings():
+    """The run's settings as the notebook gives them: the defaults, with who is running it.
+    Used by: open_current, review, verify.
+    Uses: make_settings (1.4)."""
     return make_settings({"reviewer_id": NOTEBOOK["user"]})
 
 def check_chat(chat):
     """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's steps 04 and 05,
-    make the project's three input folders and say what belongs in each."""
+    make the project's three input folders and say what belongs in each.
+    Used by: the notebook's cell 2.
+    Uses: setup_project (1.5)."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
         return
@@ -1509,7 +1678,9 @@ def open_current():
     """The run of the project the widgets name, carried on or started anew as open_run decides - asked each time
     cell 3 runs, so that an input changed meanwhile is noticed - and said in plain words when it is not the run
     this session worked on already. None, with what to do, while an input folder is empty or while a new run
-    would replace an Output.xlsm a person has changed."""
+    would replace an Output.xlsm a person has changed.
+    Used by: review.
+    Uses: RunStopped (1.1), setup_project (1.5), open_run (1.5), notebook_settings."""
     widgets = NOTEBOOK["dbutils"].widgets
     project = widgets.get("project_name")
     _, missing, said = setup_project(NOTEBOOK["projects"], project)
@@ -1532,7 +1703,9 @@ def open_current():
 
 def review():
     """Cell 3: read the inputs, link the units of the package and put them to the organisation's model, in this
-    cell; then say what each step did. A step already finished is never repeated."""
+    cell; then say what each step did. A step already finished is never repeated.
+    Used by: the notebook's cell 3.
+    Uses: open_store (1.7), run_pipeline (1.8), notebook_settings, open_current."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
         return
@@ -1562,7 +1735,9 @@ def review():
     print("Then run cell 4 to check Output.xlsm and the _Audit folder against their own record.")
 
 def verify():
-    """Cell 4: check Output.xlsm and the _Audit folder against their own record."""
+    """Cell 4: check Output.xlsm and the _Audit folder against their own record.
+    Used by: the notebook's cell 4.
+    Uses: LiveValues (1.6), verify_evidence_pack (1.9), notebook_settings."""
     paths = NOTEBOOK["paths"]
     if paths is None:
         print("Cell 3 has not read the inputs yet. Run cell 3 first.")
@@ -1576,6 +1751,9 @@ def verify():
 
 # ======================================================================================================================
 # PART 2 of 4 - STEP 02, READ-INPUTS: THE METHODOLOGY AND THE DOCUMENTATION   (reviewer 2)
+# Runs in: cell 3, step 02 (read-inputs), for corners 1 and 3.
+# Entry points: read_methodology and read_documentation, both through read_corner.
+# Writes: the records chunks_canon (Chunks_Methodology), chunks_doc (Chunks_Documentation), info_rows, read_repairs.
 # ======================================================================================================================
 
 
@@ -1614,7 +1792,8 @@ FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "xlsx": "spreadsheet", "svg": "SVG
 
 
 def sniff_zip(data):
-    """What a ZIP archive holds, which is what it is. Enforces: R6"""
+    """What a ZIP archive holds, which is what it is. Enforces: R6
+    Used by: detect_format."""
     try:
         names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
     except (zipfile.BadZipFile, OSError):
@@ -1634,7 +1813,9 @@ def sniff_zip(data):
 def detect_format(data, file_name=""):
     """The format of a file from its content, whatever its name says. For the three text formats
     whose content cannot be told apart for certain - Markdown, delimited rows and LaTeX - the name
-    is taken as a hint and the content has to agree with it. Enforces: R6"""
+    is taken as a hint and the content has to agree with it. Enforces: R6
+    Used by: read_file_blocks (2.2).
+    Uses: sniff_zip, decode_text, delimiter_of (2.7)."""
     head = data[:4096].lstrip(b"\xef\xbb\xbf \t\r\n")
     if head.startswith(b"%PDF"):
         return "pdf"
@@ -1673,7 +1854,9 @@ def detect_format(data, file_name=""):
     return "text"
 
 def decode_text(data):
-    """Bytes to text: a byte-order mark or a declared encoding decides, then UTF-8, then Latin-1."""
+    """Bytes to text: a byte-order mark or a declared encoding decides, then UTF-8, then Latin-1.
+    Used by: detect_format, atoms_of_file (2.2), read_file_blocks (2.2), flowr_package (3.2), decode_data_file (3.4),
+             file_units (3.5), read_package (3.5)."""
     declared = re.search(rb'(?:encoding|charset)=["\']?([\w-]+)', data[:2048])
     for encoding in ([declared.group(1).decode("ascii")] if declared else []) + ["utf-8-sig", "utf-8"]:
         try:
@@ -1689,7 +1872,8 @@ def input_files(folder):
     file left out, with why. An operating system's and an editor's leavings (a Word lock file,
     Thumbs.db) are left out, and so is the support folder a browser writes beside a saved web
     page, whose pictures and style sheets are part of the page and not documents of their own.
-    Nothing is left out without being named. Enforces: R2"""
+    Nothing is left out without being named. Enforces: R2
+    Used by: list_input_files (1.5)."""
     found, skipped = [], []
     if not os.path.isdir(folder):
         return found, skipped
@@ -1717,7 +1901,10 @@ def input_files(folder):
 def atoms_of_file(data, found, file_name, state, repairs):
     """The smallest pieces of text the file holds, counted straight from the file and NOT from
     the blocks the reader made of it. That independence is the whole point: an account drawn
-    from the reader's own output could never show what the reader missed. Enforces: R13"""
+    from the reader's own output could never show what the reader missed. Enforces: R13
+    Used by: read_file_blocks.
+    Uses: atom (1.3), atoms_of_markup (1.3), atoms_of_plain_text (1.3), decode_text (2.1), repair_markup (2.3),
+          parse_markup (2.3), safe_xml (2.5)."""
     try:
         if found == "docx":                  # every text run of every part; footnotes, endnotes, comments, headers and
             archive, found = zipfile.ZipFile(io.BytesIO(data)), []   # footers are parts of their own, counted here even
@@ -1760,7 +1947,11 @@ def atoms_of_file(data, found, file_name, state, repairs):
         return []
 
 def read_file_blocks(path, file_name, state, repairs, max_bytes):
-    """One input file to blocks, by the format found in its content. Enforces: R6"""
+    """One input file to blocks, by the format found in its content. Enforces: R6
+    Used by: read_corner.
+    Uses: atom (1.3), detect_format (2.1), decode_text (2.1), atoms_of_file, new_block (2.3), not_read_block (2.3),
+          svg_blocks (2.3), blocks_from_markup (2.3), blocks_from_docx (2.5), blocks_from_pdf (2.6),
+          blocks_from_mhtml (2.7)."""
     if os.path.getsize(path) > max_bytes:
         return "too large", [not_read_block(file_name, "the file is larger than the size limit for one input file")]
     with open(path, "rb") as handle:
@@ -1787,7 +1978,11 @@ def read_file_blocks(path, file_name, state, repairs, max_bytes):
     return "plain text", blocks
 
 def read_corner(ctx, corner, input_key, label):
-    """Read every file of one corner, in file-name order, into chunks numbered in reading order."""
+    """Read every file of one corner, in file-name order, into chunks numbered in reading order.
+    Used by: read_methodology, read_documentation.
+    Uses: StepResult (1.1), to_plain (1.2), atom (1.3), marks_of_rendering (1.3), account (1.3), account_lines (1.3),
+          read_file_blocks, load_tag_rules (2.3), not_read_block (2.3), WalkState (2.3), reason_for (2.7),
+          blocks_to_chunks (2.8)."""
     options = ctx.options
     rules = load_tag_rules(options["inputs"].get("tag_rules"))
     notation = yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]   # names read as functions in a formula
@@ -1868,11 +2063,15 @@ def read_corner(ctx, corner, input_key, label):
                               "content account open on": len(open_accounts)}, messages)
 
 def read_methodology(ctx):
-    """Step 02, read-inputs, first part: the canonical methodology into chunks C-0001, C-0002, ..."""
+    """Step 02, read-inputs, first part: the canonical methodology into chunks C-0001, C-0002, ...
+    Used by: read_inputs (1.8), verify_evidence_pack (1.9), the runner, by its name in STEP_FUNCTIONS (1.8).
+    Uses: read_corner."""
     return read_corner(ctx, "canon", "methodology", "Methodology files")
 
 def read_documentation(ctx):
-    """Step 02, read-inputs, second part: the model documentation into chunks D-0001, D-0002, ..."""
+    """Step 02, read-inputs, second part: the model documentation into chunks D-0001, D-0002, ...
+    Used by: read_inputs (1.8), verify_evidence_pack (1.9), the runner, by its name in STEP_FUNCTIONS (1.8).
+    Uses: read_corner."""
     return read_corner(ctx, "doc", "documentation", "Documentation files")
 
 
@@ -1882,20 +2081,29 @@ def read_documentation(ctx):
 
 
 def local_name(tag):
-    """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
+    """'{namespace}oMath' and 'm:oMath' both become 'omath'.
+    Used by: atoms_of_markup (1.3), attribute, child_named, element_text, walk_element, walk_mixed, table_block,
+             figure_block, svg_reference, walk_svg_markup, equation_block, math_to_linear (2.4),
+             docx_paragraph_parts (2.5), docx_figure (2.5), blocks_from_docx (2.5), svg_texts (2.7),
+             svg_embedded_pictures (2.7), svg_why_no_text (2.7), svg_to_markup (2.7), table_rows (2.8),
+             discover_table_shape (2.8), readable_elements (2.8), discover_families (2.8)."""
     if not isinstance(tag, str):
         return ""
     return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
 
 def attribute(element, name):
-    """The value of an attribute, whatever namespace prefix it carries."""
+    """The value of an attribute, whatever namespace prefix it carries.
+    Used by: math_to_linear (2.4).
+    Uses: local_name."""
     for key, value in element.attrib.items():
         if local_name(key) == name:
             return value
     return ""
 
 def child_named(element, name):
-    """The first child with this local tag name, or None."""
+    """The first child with this local tag name, or None.
+    Used by: math_to_linear (2.4).
+    Uses: local_name."""
     for child in element:
         if local_name(child.tag) == name:
             return child
@@ -1905,7 +2113,8 @@ XML_ENTITIES = ("amp", "lt", "gt", "quot", "apos")
 
 def html_entity(found):
     """An HTML entity such as &nbsp; as the numeric reference XML reads; XML's own five, and names HTML does not
-    know, stay as written. The callback of repair_markup's entity repair."""
+    know, stay as written. The callback of repair_markup's entity repair.
+    Used by: repair_markup."""
     name = found.group(1)
     if name in XML_ENTITIES or name not in html.entities.name2codepoint:
         return found.group(0)
@@ -1914,7 +2123,10 @@ def html_entity(found):
 
 def repair_markup(text, file_name, repairs):
     """The repairs the tool makes before strict parsing. Each one is recorded with its position, its
-    kind, and the text before and after, so that a reviewer can see exactly what was changed."""
+    kind, and the text before and after, so that a reviewer can see exactly what was changed.
+    Used by: atoms_of_file (2.2), parse_markup.
+    Uses: html_entity.
+    Holds: record, fix."""
     def record(kind, position, before, after):
         repairs.append({"file": file_name, "position": position, "kind": kind,
                         "before": before[:200], "after": after[:200]})
@@ -1959,7 +2171,8 @@ class TolerantReader(html.parser.HTMLParser):
     events of the standard library's HTML parser. It forgives what real exports contain: tags
     never closed, tags closed in the wrong order, attributes without quotes. Equation markup
     that Word's web export hides inside conditional comments is read too. (This is the one
-    place where the tool subclasses: the standard parser offers no other way to receive events.)"""
+    place where the tool subclasses: the standard parser offers no other way to receive events.)
+    Used by: parse_markup."""
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.builder, self.open_tags = ElementTree.TreeBuilder(), []
@@ -2032,7 +2245,9 @@ class TolerantReader(html.parser.HTMLParser):
 
 def parse_markup(text, file_name, repairs, tolerant_only=False):
     """Strict XML parsing first; when that still fails after the repairs, the tolerant reader.
-    The path taken is recorded. Returns the root element."""
+    The path taken is recorded. Returns the root element.
+    Used by: atoms_of_file (2.2), svg_blocks, blocks_from_markup.
+    Uses: repair_markup, TolerantReader."""
     repaired = repair_markup(text, file_name, repairs)
     if not tolerant_only:
         try:
@@ -2045,7 +2260,8 @@ def parse_markup(text, file_name, repairs, tolerant_only=False):
     return reader.finish()
 
 def load_tag_rules(override_path=None):
-    """The shipped tag rules, with any part replaced by the project's own tag_rules.yaml."""
+    """The shipped tag rules, with any part replaced by the project's own tag_rules.yaml.
+    Used by: read_corner (2.2)."""
     rules = yaml.safe_load(TAG_RULES_YAML)
     rules["shipped_tags"] = sorted(str(tag).lower() for tags in rules["families"].values() for tag in tags)
     analyst_families = {}
@@ -2076,7 +2292,9 @@ def element_text(element, rules, skip=("figure", "equation", "ignore", "caption"
     A child that is a block of its own - a list item inside a table cell, say - is separated by
     a space rather than run straight onto what came before it. Without that, two items of a
     list in one cell arrive as one word that the document does not contain ("renewable twice" +
-    "no fine" giving "twiceno"), which is text the tool made up. Enforces: R13"""
+    "no fine" giving "twiceno"), which is text the tool made up. Enforces: R13
+    Used by: walk_element, walk_mixed, table_block, figure_block, equation_block.
+    Uses: local_name."""
     pieces = [element.text or ""]
     for child in element:
         if rules["family_of"].get(local_name(child.tag)) not in skip:
@@ -2087,7 +2305,11 @@ def element_text(element, rules, skip=("figure", "equation", "ignore", "caption"
     return "".join(pieces)
 
 def new_block(kind, text="", locator="", **more):
-    """One block of a document before numbering: kind, text, where it was found, and what its kind needs."""
+    """One block of a document before numbering: kind, text, where it was found, and what its kind needs.
+    Used by: read_file_blocks (2.2), not_read_block, walk_element, walk_mixed, table_from_rows, figure_block,
+             walk_svg_markup, equation_block, docx_figure (2.5), note_blocks (2.5), blocks_from_docx (2.5),
+             blocks_from_pdf (2.6), blocks_from_mhtml (2.7).
+    Uses: normalise_text (1.2)."""
     block = {"type": kind, "text": normalise_text(text), "locator": locator, "level_hint": None,
              "numbering": "", "caption": "", "table": None, "equation": None, "reconstructed": False,
              "not_read_reason": ""}
@@ -2096,13 +2318,17 @@ def new_block(kind, text="", locator="", **more):
 
 def not_read_block(file_name, reason):
     """A whole file, or a part, that could not be read still becomes one block: the "not read"
-    class of the content account, never a silent gap. Enforces: R2, R13"""
+    class of the content account, never a silent gap. Enforces: R2, R13
+    Used by: read_file_blocks (2.2), read_corner (2.2), svg_blocks, blocks_from_docx (2.5), blocks_from_pdf (2.6),
+             blocks_from_mhtml (2.7).
+    Uses: new_block."""
     return new_block("paragraph", "", file_name, not_read_reason=reason)
 
 @dataclass
 class WalkState:
     """What the walker carries along: the rules, the notation, images by name, the report of
-    tags it met that are in no family, and what discovery made of those tags in this document."""
+    tags it met that are in no family, and what discovery made of those tags in this document.
+    Used by: read_corner (2.2)."""
     rules: dict; notation: dict; images: dict; unknown_tags: dict; blocks: list
     skip_next_image: bool = False
     notes: list = field(default_factory=list)      # what was left out or read in a fallback way, in plain words
@@ -2127,7 +2353,10 @@ class WalkState:
         return self.rules["family_of"].get(tag)
 
 def walk_element(element, path, depth, state):
-    """Turn one element and everything below it into blocks, in reading order."""
+    """Turn one element and everything below it into blocks, in reading order.
+    Used by: walk_mixed, blocks_from_markup.
+    Uses: normalise_text (1.2), local_name, element_text, new_block, walk_mixed, table_block, figure_block,
+          svg_reference, svg_blocks, equation_block, attribute_text (2.8)."""
     name = local_name(element.tag)
     family = state.family(name)
     here = "%s/%s" % (path, name)
@@ -2202,7 +2431,9 @@ def walk_element(element, path, depth, state):
 
 def walk_mixed(element, here, depth, state, own_kind=None, numbering="", marker=""):
     """An element that may hold both running text and blocks. Its own text becomes one
-    paragraph; a formula that fills the paragraph alone becomes an Equation block instead."""
+    paragraph; a formula that fills the paragraph alone becomes an Equation block instead.
+    Used by: walk_element.
+    Uses: normalise_text (1.2), local_name, element_text, new_block, walk_element, math_to_linear (2.4)."""
     block_families = ("heading", "container", "list_container", "paragraph", "list_item", "table",
                       "figure", "equation", "caption", None)
     children = [c for c in element if local_name(c.tag) and
@@ -2232,7 +2463,9 @@ def table_block(element, here, state):
     number and title beside empty cells are the caption, kept in the order written; the rows
     they leave empty are dropped, so the first row with content is the header. A table whose
     rows cannot be found keeps its words as running text and says so: a table that is present
-    and empty misleads more than none."""
+    and empty misleads more than none.
+    Used by: walk_element, walk_svg_markup.
+    Uses: normalise_text (1.2), local_name, element_text, table_from_rows, table_rows (2.8)."""
     family = lambda node: state.family(local_name(node.tag))
     found = [node for node in element.iter() if family(node) == "row"] or table_rows(element, state.rules)
     rows, captions = [], []
@@ -2262,7 +2495,9 @@ def table_from_rows(rows, locator, caption=""):
     """The one-cell display form of a table. Short values are shown as a grid: cells joined by
     "; ", one row per line, header first. Sentences would be unreadable that way, so each cell
     goes on its own line under the heading of its column ("Very Strong: Airport that ..."); a row
-    with one filled cell (a sub-heading, a note) is shown as it stands. The grid is kept either way."""
+    with one filled cell (a sub-heading, a note) is shown as it stands. The grid is kept either way.
+    Used by: table_block, blocks_from_docx (2.5), blocks_from_pdf (2.6).
+    Uses: TableData (1.1), find_numbers (1.2), new_block."""
     width = max((len(row) for row in rows), default=0)
     rows = [list(row) + [""] * (width - len(row)) for row in rows]
     header, body = (rows[0], rows[1:]) if rows else ([], [])
@@ -2287,7 +2522,8 @@ PICTURES_NOT_READ = "The words inside pictures were not read: the tool does not 
 
 def pictures_not_read(state):
     """A picture's words, which the tool does not read: none - said once for its file, in the file's notes. The picture
-    is still a unit (a Figure, for manual review); only its words are missing. Enforces: R2"""
+    is still a unit (a Figure, for manual review); only its words are missing. Enforces: R2
+    Used by: svg_blocks, docx_figure (2.5), blocks_from_pdf (2.6)."""
     if PICTURES_NOT_READ not in state.notes:
         state.notes.append(PICTURES_NOT_READ)
     return ""
@@ -2296,7 +2532,9 @@ def pictures_not_read(state):
 
 
 def figure_block(element, here, state):
-    """A figure: never read, kept with its caption or alternative text and the fingerprint of the image."""
+    """A figure: never read, kept with its caption or alternative text and the fingerprint of the image.
+    Used by: walk_element.
+    Uses: normalise_text (1.2), local_name, element_text, new_block."""
     source = element.get("src") or element.get("href") or element.get("fileref") or ""
     inner = next((n for n in element.iter() if n is not element and (n.get("src") or n.get("fileref"))), None)
     if not source and inner is not None:
@@ -2317,7 +2555,9 @@ def svg_reference(element, state):
     matched to a file of the corner in any case, and without .svg only when it came from a link
     attribute; a path is followed only if it stays inside the document's folder. Found on review:
     matching any short text without .svg took the heading <title>Floors</title> for floors.svg and
-    replaced the heading with the chart. Enforces: R6"""
+    replaced the heading with the chart. Enforces: R6
+    Used by: walk_element.
+    Uses: local_name."""
     values = [value for key, value in element.attrib.items() if LINK_ATTRIBUTE.search(local_name(key))]
     text = (element.text or "").strip() if len(element) == 0 else ""
     if text.lower().endswith(".svg") and len(text) < 200:
@@ -2340,7 +2580,10 @@ def svg_reference(element, state):
 def svg_blocks(data, name, here, state, caption=""):
     """The units of one SVG, read by the text it holds: a table where its text stands in a grid, a
     figure of its labels otherwise. Where it holds no text - its words only in a picture stored
-    inside it, which the tool does not read - the figure says why, instead of standing empty. The words counted are the SVG's own, so the content account closes. Enforces: R2, R13"""
+    inside it, which the tool does not read - the figure says why, instead of standing empty. The words counted are the SVG's own, so the content account closes. Enforces: R2, R13
+    Used by: read_file_blocks (2.2), walk_element.
+    Uses: digest (1.2), atoms_of_plain_text (1.3), parse_markup, not_read_block, pictures_not_read, walk_svg_markup,
+          svg_embedded_pictures (2.7), svg_why_no_text (2.7), svg_to_markup (2.7)."""
     import xml.etree.ElementTree as ElementTree
     try:
         root = ElementTree.fromstring(data)
@@ -2363,7 +2606,9 @@ def svg_blocks(data, name, here, state, caption=""):
 
 def walk_svg_markup(root, here, state):
     """The blocks the SVG's markup gives: a table block, or one figure block carrying the
-    picture's labels as its text."""
+    picture's labels as its text.
+    Used by: svg_blocks.
+    Uses: normalise_text (1.2), local_name, new_block, table_block."""
     blocks = []
     for node in root:
         family = state.rules["family_of"].get(local_name(node.tag))
@@ -2379,7 +2624,10 @@ def walk_svg_markup(root, here, state):
 
 def equation_block(element, here, state):
     """An equation element: MathML or Office Math is converted; LaTeX or linear text is read as
-    written; an equation that is only a picture stays an Equation chunk that could not be read."""
+    written; an equation that is only a picture stays an Equation chunk that could not be read.
+    Used by: walk_element.
+    Uses: EquationData (1.1), Unreadable (1.1), digest (1.2), normalise_text (1.2), local_name, element_text,
+          new_block, read_equation (2.4), math_to_linear (2.4), latex_to_linear (2.4)."""
     markup = next((n for n in element.iter() if local_name(n.tag) in ("math", "omath")), None)
     picture = next((n for n in element.iter() if local_name(n.tag) in ("img", "image", "graphic", "imagedata")), None)
     if markup is not None:
@@ -2400,7 +2648,9 @@ def equation_block(element, here, state):
     return new_block("equation", text, here, equation=equation)
 
 def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
-    """XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules."""
+    """XML or HTML text to blocks: parse (repairing where needed), then walk the tree by the tag rules.
+    Used by: read_file_blocks (2.2), blocks_from_mhtml (2.7).
+    Uses: parse_markup, walk_element, discover_families (2.8)."""
     root = parse_markup(text, file_name, repairs, tolerant_only)
     discovered = discover_families(root, state.rules, state.unknown_tags)
     state.rules["family_of"].update(discovered)
@@ -2421,7 +2671,8 @@ _SUBSCRIPT_CHARS = str.maketrans("\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u20
 def normalise_symbol(symbol):
     """One form for a symbol however it was written: the Greek letter by name, by
     character or in LaTeX form; a subscript written PD_i, PD[i], PD_{i} or with a
-    subscript character. Case is kept for single letters and folded for words."""
+    subscript character. Case is kept for single letters and folded for words.
+    Used by: FormulaReader."""
     text = unicodedata.normalize("NFC", symbol or "").strip().strip("$`")
     text = re.sub(r"\\([A-Za-z]+)", r"\1", text)
     subscript = ""
@@ -2444,7 +2695,8 @@ def normalise_symbol(symbol):
 class Expr:
     """the tool's neutral tree for a formula. op is one of: num, sym, add, sub, mul, div,
     pow, neg, call, cmp, piecewise, eq. `name` is a symbol, a neutral function name
-    (call) or a comparison sign (cmp); `value` is a decimal text (num)."""
+    (call) or a comparison sign (cmp); `value` is a decimal text (num).
+    Used by: FormulaReader."""
     op: str; name: Optional[str] = None; value: Optional[str] = None; args: tuple = ()
     span: Optional[tuple] = None
 
@@ -2452,7 +2704,8 @@ class Expr:
 _INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
 
 def expr_to_text(expr, parent_rank=0):
-    """The tree in the tool's linear notation, the form shown to analysts and to the AI."""
+    """The tree in the tool's linear notation, the form shown to analysts and to the AI.
+    Used by: read_equation, inline_formula."""
     if expr.op == "num":
         return expr.value
     if expr.op == "sym":
@@ -2583,7 +2836,9 @@ domains:
 
 
 def tokenize_formula(text):
-    """Cut a written formula into numbers, names and signs. Anything else makes it unreadable."""
+    """Cut a written formula into numbers, names and signs. Anything else makes it unreadable.
+    Used by: parse_formula.
+    Uses: Unreadable (1.1), plain_decimal (1.2)."""
     for written, plain in list(SUPERSCRIPTS.items()) + list(SIGNS.items()):
         text = text.replace(written, plain)
     text = re.sub(r"_\{([^{}]*)\}", lambda found: "_" + re.sub(r"\W", "", found.group(1)), text)   # x_{i,j} -> x_ij
@@ -2607,7 +2862,9 @@ class FormulaReader:
     """A small recursive-descent reader over the tokens of one formula. Order of strength, from
     weakest: equals, comparison, plus and minus, times and divide, a leading minus, power.
     Two terms side by side are read as a product only when `implicit_product` is set, which
-    is done for equation markup (its extent is exact) and never for running text."""
+    is done for equation markup (its extent is exact) and never for running text.
+    Used by: parse_formula.
+    Uses: Unreadable (1.1), normalise_symbol, Expr."""
     def __init__(self, tokens, notation, implicit_product=False):
         self.tokens, self.position, self.notation = tokens, 0, notation
         self.functions, self.implicit_product = notation.get("functions", {}), implicit_product
@@ -2733,7 +2990,9 @@ class FormulaReader:
 
 def parse_formula(text, notation, implicit_product=False):
     """Read a formula written in linear notation into the tool's expression tree. Raises Unreadable
-    with a plain reason; it never guesses and never executes anything. Enforces: R7"""
+    with a plain reason; it never guesses and never executes anything. Enforces: R7
+    Used by: read_equation, inline_formula.
+    Uses: Unreadable (1.1), tokenize_formula, FormulaReader."""
     tokens = tokenize_formula(text)
     if not tokens:
         raise Unreadable("it is empty")
@@ -2744,7 +3003,9 @@ def parse_formula(text, notation, implicit_product=False):
     return tree
 
 def read_equation(source_form, linear, notation, image_sha256=""):
-    """Build the EquationData of a chunk: readable with its tree, or not readable with the reason."""
+    """Build the EquationData of a chunk: readable with its tree, or not readable with the reason.
+    Used by: equation_block (2.3), blocks_from_docx (2.5).
+    Uses: EquationData (1.1), Unreadable (1.1), normalise_text (1.2), expr_to_text, parse_formula."""
     linear = normalise_text(linear)
     if not linear:
         reason = UNDECIDED_REASONS[0] if image_sha256 or source_form == "image" else "no formula text was found"
@@ -2760,7 +3021,9 @@ _INLINE_FORMULA_RE = re.compile(r"(?<![\w.])([^\W\d_][\w.\[\]{}]*)\s*=\s*([^=;]+
 def inline_formula(text, notation):
     """A formula written inside running text, such as "K = LGD * N(x)". The right-hand side ends
     at a semicolon, at ", where", or at the end of the sentence. When the notation is ambiguous
-    the paragraph simply stays a paragraph (plan 2.8). Returns EquationData or None."""
+    the paragraph simply stays a paragraph (plan 2.8). Returns EquationData or None.
+    Used by: blocks_to_chunks (2.8).
+    Uses: EquationData (1.1), Unreadable (1.1), expr_to_text, parse_formula."""
     for match in _INLINE_FORMULA_RE.finditer(text or ""):
         right = re.split(r",?\s+(?:where|with|and where|for)\b|\.\s+[A-Z]|\.$|:\s", match.group(2))[0]
         right = right.strip().rstrip(".,")
@@ -2774,7 +3037,8 @@ def inline_formula(text, notation):
     return None
 
 def bracketed(text):
-    """Put brackets around a part unless it is one number, one symbol or one call."""
+    """Put brackets around a part unless it is one number, one symbol or one call.
+    Used by: math_to_linear."""
     text = text.strip()
     if re.fullmatch(r"[\w.]+|[\w.]+\([^()]*\)", text) or (text.startswith("(") and text.endswith(")") and
                                                          text.count("(") == 1):
@@ -2788,7 +3052,11 @@ MATH_PROPERTIES = ("rpr", "ctrlpr", "fpr", "dpr", "narypr", "radpr", "ssuppr", "
 def math_to_linear(element):
     """Office Math (OMML) and MathML to linear notation, by the local names of the elements:
     fractions, powers, subscripts, roots, brackets and function application. A sum is marked
-    as sum_over(...) and never expanded. Unknown elements contribute their text."""
+    as sum_over(...) and never expanded. Unknown elements contribute their text.
+    Used by: walk_mixed (2.3), equation_block (2.3), math_children, docx_paragraph_parts (2.5),
+             blocks_from_docx (2.5).
+    Uses: local_name (2.3), attribute (2.3), child_named (2.3), bracketed, math_children.
+    Holds: part."""
     name = local_name(element.tag)
     def part(child_name):
         child = child_named(element, child_name)
@@ -2844,7 +3112,9 @@ def math_to_linear(element):
 
 def math_children(element):
     """The linear text of all children, in order. An open "sum_over(a, b, " from MathML takes
-    the part that follows it as its body and is then closed."""
+    the part that follows it as its body and is then closed.
+    Used by: math_to_linear.
+    Uses: math_to_linear."""
     pieces = [(element.text or "").strip() if not len(element) else ""]
     for child in element:
         piece = math_to_linear(child)
@@ -2861,7 +3131,9 @@ LATEX_WORDS = {"cdot": "*", "times": "*", "div": "/", "le": "<=", "leq": "<=", "
 LATEX_WRAPPERS = ("text", "mathrm", "mathit", "mathbf", "operatorname", "mbox", "textit", "textbf", "code")
 
 def latex_group(source, position):
-    """The content of the {...} group that starts at `position`, and the position after it."""
+    """The content of the {...} group that starts at `position`, and the position after it.
+    Used by: latex_to_linear.
+    Uses: Unreadable (1.1)."""
     if position >= len(source):
         raise Unreadable("a LaTeX command lacks its argument")
     if source[position] != "{":
@@ -2877,7 +3149,9 @@ def latex_group(source, position):
 def latex_to_linear(source):
     """The LaTeX subset found in roxygen \\eqn{} and \\deqn{} and in some XML, to linear notation:
     \\frac, \\sqrt, ^{}, _{}, Greek letters, \\cdot, \\times, \\left, \\right, text wrappers.
-    An unknown command makes the formula unreadable; it is never skipped silently."""
+    An unknown command makes the formula unreadable; it is never skipped silently.
+    Used by: equation_block (2.3).
+    Uses: Unreadable (1.1), latex_group."""
     source, output, position = source.strip().strip("$"), [], 0
     while position < len(source):
         char = source[position]
@@ -2928,13 +3202,16 @@ WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
            "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
 
 def word_value(element, path, attribute_name="val"):
-    """The value of a Word property such as a style id or an outline level, or None."""
+    """The value of a Word property such as a style id or an outline level, or None.
+    Used by: docx_paragraph_facts, docx_number_formats."""
     found = element.find(path, WORD_NS)
     return found.get("{%s}%s" % (WORD_NS["w"], attribute_name)) if found is not None else None
 
 def docx_paragraph_facts(paragraph, styles):
     """Heading level (from the style name or the outline level, following based-on styles) and
-    whether Word numbers this paragraph automatically."""
+    whether Word numbers this paragraph automatically.
+    Used by: blocks_from_docx.
+    Uses: word_value."""
     style_id = word_value(paragraph, "w:pPr/w:pStyle") or ""
     level = word_value(paragraph, "w:pPr/w:outlineLvl")
     numbering = paragraph.find("w:pPr/w:numPr", WORD_NS)
@@ -2957,7 +3234,9 @@ def docx_paragraph_facts(paragraph, styles):
 
 def docx_number_formats(archive):
     """How each numbering of a Word file shows its items, by numbering id and level: "bullet",
-    "decimal", "lowerLetter" ... Word keeps this apart from the text, in word/numbering.xml."""
+    "decimal", "lowerLetter" ... Word keeps this apart from the text, in word/numbering.xml.
+    Used by: blocks_from_docx.
+    Uses: word_value, safe_xml."""
     if "word/numbering.xml" not in archive.namelist():
         return {}
     root, key = safe_xml(archive.read("word/numbering.xml")), "{%s}" % WORD_NS["w"]
@@ -2966,7 +3245,9 @@ def docx_number_formats(archive):
     return {n.get(key + "numId"): shapes.get(word_value(n, "w:abstractNumId"), {}) for n in root.findall("w:num", WORD_NS)}
 
 def docx_paragraph_parts(paragraph):
-    """The text of a paragraph with its formulas in place, its formulas, and its pictures."""
+    """The text of a paragraph with its formulas in place, its formulas, and its pictures.
+    Used by: blocks_from_docx.
+    Uses: local_name (2.3), math_to_linear (2.4)."""
     pieces, formulas, pictures = [], [], []
     for node in paragraph.iter():
         name = local_name(node.tag)
@@ -2983,7 +3264,9 @@ def docx_paragraph_parts(paragraph):
 
 def docx_figure(picture, related, locator, state):
     """A picture in a Word file as a figure block with the fingerprint of the embedded image; the words
-    inside the picture are not read."""
+    inside the picture are not read.
+    Used by: blocks_from_docx.
+    Uses: digest (1.2), local_name (2.3), new_block (2.3), pictures_not_read (2.3)."""
     description = next((n.get("descr") or n.get("title") or n.get("name") or "" for n in picture.iter()
                         if local_name(n.tag) == "docpr"), "")
     fingerprint, words = "", ""
@@ -2997,7 +3280,8 @@ def docx_figure(picture, related, locator, state):
 
 def safe_xml(data):
     """Parse one XML part of an Office file. Any document-type declaration is removed first,
-    so no entity can be defined inside the file (no entity expansion, no outside fetch)."""
+    so no entity can be defined inside the file (no entity expansion, no outside fetch).
+    Used by: atoms_of_file (2.2), docx_number_formats, note_blocks, blocks_from_docx."""
     text = re.sub(rb"<!DOCTYPE[^>\[]*(\[.*?\])?\s*>", b"", data, flags=re.S | re.I)
     return ElementTree.fromstring(text)
 
@@ -3006,7 +3290,9 @@ def note_blocks(archive, file_name):
     the run of paragraphs a plain reader walks. Real documentation puts definitions, caveats and
     parameter values in a footnote routinely, and a reader that takes the body and not the notes
     reports a statement as undocumented when its documentation is two lines below the text.
-    They are read after the body, each saying which note it is. Enforces: R13"""
+    They are read after the body, each saying which note it is. Enforces: R13
+    Used by: blocks_from_docx.
+    Uses: normalise_text (1.2), new_block (2.3), safe_xml."""
     found = []
     for part, kind in (("word/footnotes.xml", "footnote"), ("word/endnotes.xml", "endnote")):
         if part not in archive.namelist():
@@ -3028,7 +3314,11 @@ def note_blocks(archive, file_name):
 def blocks_from_docx(data, file_name, state):
     """Body elements in document order, so that tables stay where they are. Heading numbers that
     Word produces automatically are not stored in the file; they are reconstructed by counting
-    and marked as reconstructed."""
+    and marked as reconstructed.
+    Used by: read_file_blocks (2.2).
+    Uses: normalise_text (1.2), local_name (2.3), new_block (2.3), not_read_block (2.3), table_from_rows (2.3),
+          read_equation (2.4), math_to_linear (2.4), docx_paragraph_facts, docx_number_formats, docx_paragraph_parts,
+          docx_figure, safe_xml, note_blocks, first_numbering (2.8)."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
         body = safe_xml(archive.read("word/document.xml")).find("w:body", WORD_NS)
@@ -3107,7 +3397,9 @@ BULLET = re.compile(r"^(?:[\u2022\u25aa\u25cf\u25e6\u2023\u2043\u2013\u2014*o-]|
 
 def pdf_lines(document, file_name):
     """Every line, table and picture of a PDF in reading order, each with its page, its place on
-    the page, and whether it sits in the top or bottom margin ("edge")."""
+    the page, and whether it sits in the top or bottom margin ("edge").
+    Used by: blocks_from_pdf.
+    Uses: digest (1.2), normalise_text (1.2)."""
     lines = []
     for number, page in enumerate(document.pages, start=1):
         edge = lambda top, bottom: "top" if bottom < 0.12 * page.height else "bottom" if top > 0.88 * page.height else ""
@@ -3137,7 +3429,10 @@ def blocks_from_pdf(data, file_name, state):
     page break is joined again; tables are single blocks; pictures are Figure blocks, their words not
     read; lines dense in mathematical characters are unread Equation blocks. A paragraph
     is labelled with its page and place ("p.4 \u00b62"), which is how a person finds it in a PDF.
-    With only pypdf: text and numbering alone. With neither: one block that could not be read."""
+    With only pypdf: text and numbering alone. With neither: one block that could not be read.
+    Used by: read_file_blocks (2.2).
+    Uses: EquationData (1.1), normalise_text (1.2), new_block (2.3), not_read_block (2.3), table_from_rows (2.3),
+          pictures_not_read (2.3), pdf_lines, first_numbering (2.8), without_page_furniture (2.8)."""
     try:
         import pdfplumber
     except ImportError:                                  # without pdfplumber: pypdf's page texts, and numbering alone
@@ -3209,7 +3504,8 @@ def blocks_from_pdf(data, file_name, state):
 # the syntax rule, and says so. Enforces: R13
 
 def element(tag, text):
-    """One element of markup, its text escaped so that a < in a document is never a tag."""
+    """One element of markup, its text escaped so that a < in a document is never a tag.
+    Used by: svg_to_markup."""
     return "<%s>%s</%s>" % (tag, escape(text), tag)
 
 
@@ -3221,7 +3517,8 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
 
 
 def delimiter_of(text):
-    """The separator of a file of delimited rows, where the first rows agree on one."""
+    """The separator of a file of delimited rows, where the first rows agree on one.
+    Used by: detect_format (2.1)."""
     rows = [line for line in text.split("\n") if line.strip()][:6]
     if len(rows) < 2:
         return ""
@@ -3243,7 +3540,8 @@ LATEX_HEADINGS = (("part", 1), ("chapter", 1), ("section", 1), ("subsection", 2)
 
 
 def svg_number(value, fallback=0.0):
-    """An SVG coordinate or length as a number: its first figure, or `fallback` when it has none."""
+    """An SVG coordinate or length as a number: its first figure, or `fallback` when it has none.
+    Used by: svg_texts."""
     try:
         return float(re.split(r"[ ,]", (value or "").strip())[0])
     except (ValueError, IndexError):
@@ -3255,7 +3553,9 @@ def svg_texts(root):
     a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
     <a> inside it is read with it); and a <foreignObject>, where drawing tools put HTML - divs and
     paragraphs - instead of SVG text. A transform is not applied, so a moved group keeps the order
-    it was written in."""
+    it was written in.
+    Used by: svg_to_markup.
+    Uses: normalise_text (1.2), local_name (2.3), svg_number."""
     found = []
     for node in root.iter():
         name = local_name(node.tag)
@@ -3284,7 +3584,9 @@ def svg_texts(root):
 
 def svg_embedded_pictures(root):
     """The raster pictures an SVG carries inside itself as data: URIs - what a chart exported as an
-    image and wrapped in SVG looks like. Their words can only be read by OCR."""
+    image and wrapped in SVG looks like. Their words can only be read by OCR.
+    Used by: svg_blocks (2.3), svg_why_no_text.
+    Uses: local_name (2.3)."""
     import base64
     pictures = []
     for node in root.iter():
@@ -3300,7 +3602,9 @@ def svg_embedded_pictures(root):
     return pictures
 
 def svg_why_no_text(root):
-    """Why an SVG gave no text, in words an analyst can act on. Enforces: R2"""
+    """Why an SVG gave no text, in words an analyst can act on. Enforces: R2
+    Used by: svg_blocks (2.3).
+    Uses: local_name (2.3), svg_embedded_pictures."""
     if svg_embedded_pictures(root):
         return "the chart is a picture stored inside the SVG, so its words can only be read by OCR"
     glyphs = sum(1 for node in root.iter() if local_name(node.tag) == "use"
@@ -3313,7 +3617,8 @@ def svg_why_no_text(root):
 
 def svg_rows(texts, tolerance=None):
     """Texts grouped into rows by their y position, each row sorted by x. The tolerance is a
-    share of the median line height, so a chart's labels and a table's cells both group."""
+    share of the median line height, so a chart's labels and a table's cells both group.
+    Used by: svg_to_markup."""
     if not texts:
         return []
     ys = sorted({round(y, 1) for _, y, _ in texts})
@@ -3335,7 +3640,9 @@ def svg_to_markup(data, file_name):
     it stands in a grid of at least two rows of the same width, as a table with the first row
     as the header; otherwise as a figure whose words are the labels of the picture in reading
     order. An SVG holds text as text, so nothing is read from a picture by guesswork: every
-    word comes from a <text> element. Enforces: R7, R13"""
+    word comes from a <text> element. Enforces: R7, R13
+    Used by: svg_blocks (2.3).
+    Uses: normalise_text (1.2), local_name (2.3), element, svg_texts, svg_rows."""
     import xml.etree.ElementTree as ElementTree
     root = ElementTree.fromstring(data)
     caption = " ".join(normalise_text("".join(node.itertext())) for node in root
@@ -3356,7 +3663,8 @@ def svg_to_markup(data, file_name):
 
 
 def reason_for(problem):
-    """Why a reader failed on a file, in words an analyst can act on. Enforces: R2"""
+    """Why a reader failed on a file, in words an analyst can act on. Enforces: R2
+    Used by: read_corner (2.2), read_package (3.5)."""
     name, said = type(problem).__name__, str(problem).lower()
     if isinstance(problem, IsADirectoryError):
         return "it is a folder, not a file"
@@ -3370,7 +3678,9 @@ def reason_for(problem):
 
 def blocks_from_mhtml(data, file_name, state, repairs):
     """Parts are read with the standard `email` package. The HTML part goes through the tolerant
-    reader; every image part is fingerprinted so that a Figure chunk can name its content."""
+    reader; every image part is fingerprinted so that a Figure chunk can name its content.
+    Used by: read_file_blocks (2.2).
+    Uses: digest (1.2), normalise_text (1.2), new_block (2.3), not_read_block (2.3), blocks_from_markup (2.3)."""
     message = email.message_from_bytes(data)
     page = None
     for part in message.walk():
@@ -3397,7 +3707,8 @@ def blocks_from_mhtml(data, file_name, state, repairs):
 # ---------------------------------------------------------------- 2.8 a document's shape: headings, levels, references and chunks
 def attribute_text(element, names, digits_too=False):
     """The first of the named attributes that holds text worth reading, with its name. A bare
-    number is no heading, so it is passed over unless digits_too."""
+    number is no heading, so it is passed over unless digits_too.
+    Used by: walk_element (2.3), discover_families."""
     for name in names:
         value = (element.get(name) or "").strip()
         if value and (digits_too or not value.isdigit()):
@@ -3409,7 +3720,9 @@ BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_i
 
 def table_rows(element, rules):
     """The rows of a table: the children that hold cells, looked for directly below the table
-    and below the wrappers the rules know (thead, tbody, tgroup)."""
+    and below the wrappers the rules know (thead, tbody, tgroup).
+    Used by: table_block (2.3), discover_table_shape.
+    Uses: local_name (2.3)."""
     known = rules["family_of"]
     holders = [element] + [part for part in element if known.get(local_name(part.tag)) == "table_part"]
     return [row for holder in holders for row in holder
@@ -3425,7 +3738,9 @@ def discover_table_shape(element, rules, is_table):
     have rows of differing width (a note below, a heading that spans). An element NOT known to be
     a table has to make the case by its shape, and two guards keep the skeleton of a document,
     which repeats twice over as a table does, from being read as one: a cell holds words and
-    never a block, and most rows are the same width. Returns (row tags, {tag: family}) or None."""
+    never a block, and most rows are the same width. Returns (row tags, {tag: family}) or None.
+    Used by: discover_families.
+    Uses: local_name (2.3), table_rows."""
     known, rows = rules["family_of"], table_rows(element, rules)
     cells = [cell for row in rows for cell in row if local_name(cell.tag)]
     if not cells:
@@ -3448,7 +3763,9 @@ def discover_table_shape(element, rules, is_table):
 def readable_elements(known, element):
     """Every element the walker will actually read. Discovery stops where the walker
     stops: the inside of an equation or a figure is read by its own reader, and what the
-    rules ignore is never read at all, so neither is catalogued here."""
+    rules ignore is never read at all, so neither is catalogued here.
+    Used by: discover_families.
+    Uses: local_name (2.3)."""
     yield element
     if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
         return
@@ -3463,7 +3780,10 @@ def discover_families(root, rules, report):
     exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
     table; an element carrying its own heading in an attribute; one holding other blocks (a
     container); one holding text (a paragraph). Every decision is recorded with its reason in
-    plain words, shown on Model_Package_Info, and can be overridden by the project's tag_rules.yaml, beside its three input folders."""
+    plain words, shown on Model_Package_Info, and can be overridden by the project's tag_rules.yaml, beside its three input folders.
+    Used by: blocks_from_markup (2.3).
+    Uses: local_name (2.3), attribute_text, discover_table_shape, readable_elements.
+    Holds: note."""
     known, found = rules["family_of"], {}
 
     def note(tag, family, reason):
@@ -3520,7 +3840,8 @@ def discover_families(root, rules, report):
     return found
 
 def first_numbering(text, rules):
-    """The numbering at the start of a heading as written, and the name of its scheme."""
+    """The numbering at the start of a heading as written, and the name of its scheme.
+    Used by: blocks_from_docx (2.5), blocks_from_pdf (2.6), infer_levels."""
     for scheme in rules["numbering_schemes"]:
         match = re.match(scheme["pattern"], text)
         if match:
@@ -3531,7 +3852,9 @@ def infer_levels(blocks, rules):
     """Give every heading its level. When the file nests its sections, the nesting decides.
     When nesting is flat, numbering decides: a dotted number gives its depth directly
     (relative to the level of plain numbers); any other scheme seen for the first time is one
-    level deeper than the heading before it, and a scheme seen before returns to its level."""
+    level deeper than the heading before it, and a scheme seen before returns to its level.
+    Used by: blocks_to_chunks.
+    Uses: first_numbering."""
     headings = [b for b in blocks if b["type"] == "heading"]
     hints = sorted({b["level_hint"] for b in headings if b["level_hint"] is not None})
     nested = len(hints) > 1
@@ -3565,7 +3888,8 @@ def without_page_furniture(lines, pages, state, file_name):
     comes back on most pages, the same but for its digits. It is not part of what the document
     says, and left in it cuts a list or a sentence in two wherever a page ends. What was left
     out is reported, so nothing goes missing unseen: this is the "declared drop" class of the
-    content account, and the note is what declares it. Enforces: R2, R13"""
+    content account, and the note is what declares it. Enforces: R2, R13
+    Used by: blocks_from_pdf (2.6)."""
     same = lambda entry: (entry["edge"], re.sub(r"\d+", "#", entry["text"]))
     on_pages = {}
     for entry in lines:
@@ -3595,7 +3919,8 @@ def fold_lists(blocks):
     the items of a list that follows a paragraph are folded into it, each on its own line behind
     its marker, and are not units. Done here, where blocks become chunks, so that it holds alike
     for XML, Word and PDF. A list that follows anything else (a heading, a table) has no
-    paragraph to belong to; its items are whole statements and stay units of their own."""
+    paragraph to belong to; its items are whole statements and stay units of their own.
+    Used by: blocks_to_chunks."""
     folded = []
     for block in blocks:
         into = folded[-1] if folded else None
@@ -3608,7 +3933,10 @@ def fold_lists(blocks):
 
 def blocks_to_chunks(blocks, corner, source_file, first_number, state):
     """Blocks to chunks. A heading is not a chunk of its own: it becomes part of the heading
-    chain of everything below it. Paragraph numbers restart under every heading. Enforces: R2, R4"""
+    chain of everything below it. Paragraph numbers restart under every heading. Enforces: R2, R4
+    Used by: read_corner (2.2).
+    Uses: Chunk (1.1), content_hash (1.2), make_ref (1.2), inline_formula (2.4), infer_levels, fold_lists,
+          block_is_under_reconstructed."""
     prefix = "C" if corner == "canon" else "D"
     chunks, chain, levels, section_numbering = [], [], [], ""
     carried, empty = [], []                          # (heading block, anything under it yet), and those with nothing
@@ -3663,7 +3991,8 @@ def blocks_to_chunks(blocks, corner, source_file, first_number, state):
     return chunks
 
 def block_is_under_reconstructed(blocks, block):
-    """Was the numbering of the heading directly above this block reconstructed by counting?"""
+    """Was the numbering of the heading directly above this block reconstructed by counting?
+    Used by: blocks_to_chunks."""
     above = None
     for candidate in blocks:
         if candidate is block:
@@ -3675,6 +4004,9 @@ def block_is_under_reconstructed(blocks, block):
 
 # ======================================================================================================================
 # PART 3 of 4 - STEP 02, READ-INPUTS: THE MODEL PACKAGE; STEP 03, LINK-CHUNKS   (reviewer 3)
+# Runs in: cell 3, step 02 (read-inputs) for corner 2, and step 03 (link-chunks).
+# Entry points: read_package; link_chunks.
+# Writes: the records model_units (Chunks_Model), package_info and info_rows; unit_links.
 # ======================================================================================================================
 
 
@@ -3691,7 +4023,8 @@ ARCHIVE_NAMES = (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tbz2", ".tar.xz", ".tx
 def loose_package(paths, root, max_member_bytes):
     """A package put in the folder unpacked - its source folder rather than a built tarball -
     read file by file, under the same size limit. People very often have the one and not the
-    other."""
+    other.
+    Used by: read_package (3.5)."""
     files, refused = {}, []
     for path in paths:
         name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
@@ -3706,7 +4039,8 @@ def unpack_package(path, max_member_bytes):
     """The package's archive - a tarball, or a ZIP of it - read member by member, into memory, never onto disk by path.
     A member whose path is absolute or climbs out with "..", a link, anything but a regular file, a member over the
     size cap - the size the archive declares, before anything is expanded - or one protected by a password is refused
-    and reported; everything else is returned as {path: bytes}. Enforces: R6"""
+    and reported; everything else is returned as {path: bytes}. Enforces: R6
+    Used by: read_package (3.5)."""
     if path.lower().endswith(".zip") and zipfile.is_zipfile(path):
         archive = zipfile.ZipFile(path)
         members = [(m.filename, m.filename.endswith("/"), (m.external_attr >> 16) & 0o170000 == 0o120000, True,
@@ -3737,7 +4071,8 @@ def unpack_package(path, max_member_bytes):
 
 
 def read_description(text):
-    """The fields of DESCRIPTION (name: value, continuation lines start with white space)."""
+    """The fields of DESCRIPTION (name: value, continuation lines start with white space).
+    Used by: read_package (3.5)."""
     fields, current = {}, None
     for line in text.split("\n"):
         if line[:1] in (" ", "\t") and current:
@@ -3755,7 +4090,8 @@ class Node:
     unary, dollar, ns, function, block, if, for, while, repeat, paren, missing.
     For a call, args[0] is what is called and `names` holds the argument names ("" when the
     argument is positional). For a function, `names` are the formals, args[:-1] their
-    defaults (kind "missing" when there is none) and args[-1] the body."""
+    defaults (kind "missing" when there is none) and args[-1] the body.
+    Used by: flowr_node, namespaced."""
     kind: str; value: str = ""; args: tuple = (); names: tuple = (); line: int = 0; end_line: int = 0
 
 ASSIGNMENT_SIGNS = ("<-", "<<-", "=", "->", "->>")
@@ -3767,7 +4103,8 @@ PARSED = {}                               # R source text -> its top-level expre
 
 def flowr_answer(folder, target, queries, work, *flags):
     """flowR's answer to `queries` about `target` - an R file or a folder of them - read from a file: a pipe
-    can lose the end of a large answer. An answer too large to read safely is refused before it is read."""
+    can lose the end of a large answer. An answer too large to read safely is refused before it is read.
+    Used by: flowr_package, parse_r_sources, flowr_read."""
     answer = os.path.join(work, "answer.json")
     with open(answer, "w", encoding="utf-8") as sink:
         subprocess.run([os.path.join(folder, "flowr"), "--no-ansi", *flags, "--default-engine", "tree-sitter",
@@ -3783,12 +4120,15 @@ def flowr_answer(folder, target, queries, work, *flags):
     return json.JSONDecoder().raw_decode(said[said.index("{"):])[0]
 
 def flowr_files(found):
-    """The syntax tree of every file in a flowR answer, by path."""
+    """The syntax tree of every file in a flowR answer, by path.
+    Used by: flowr_package, parse_r_sources."""
     tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
     return {os.path.normpath(entry["filePath"]): entry["root"] for entry in tree.get("files", [])}
 
 def top_level(root, text):
-    """The top-level expressions of one file; one flowR could not give in the tool's shape is 'not read'. Enforces: R2"""
+    """The top-level expressions of one file; one flowR could not give in the tool's shape is 'not read'. Enforces: R2
+    Used by: flowr_package, parse_r_sources.
+    Uses: flowr_node."""
     found = []
     for child in (root or {}).get("children", []):
         try:
@@ -3801,7 +4141,9 @@ def top_level(root, text):
 def flowr_package(files, folder=None):
     """ONE flowR run over the package's R files and NAMESPACE: every R file's syntax tree is kept for
     parse_r_source, and the NAMESPACE is returned as flowR reads it - exported names and export patterns -
-    or None when the package has none."""
+    or None when the package has none.
+    Used by: read_package (3.5).
+    Uses: decode_text (2.1), flowr_answer, flowr_files, top_level, flowr_ready."""
     folder = folder or flowr_ready()
     with tempfile.TemporaryDirectory(prefix="pkg-") as work:
         root, texts = os.path.join(work, "package"), {}
@@ -3827,7 +4169,9 @@ def flowr_package(files, folder=None):
     return {"exports": set(namespace["exportedSymbols"]), "patterns": list(namespace["exportedPatterns"])} if namespace else None
 
 def parse_r_sources(sources, folder=None):
-    """Read in ONE flowR run every source not read yet this session."""
+    """Read in ONE flowR run every source not read yet this session.
+    Used by: parse_r_source.
+    Uses: flowr_answer, flowr_files, top_level, flowr_ready."""
     todo = [text for text in dict.fromkeys(sources) if text not in PARSED]
     if not todo:
         return
@@ -3853,7 +4197,9 @@ def parse_r_sources(sources, folder=None):
 
 def parse_r_source(source):
     """The top-level expressions of one R source, as flowR reads them; one that cannot be read becomes
-    ("not read", first line, last line, reason) and the rest are still read. Enforces: R2, R7"""
+    ("not read", first line, last line, reason) and the rest are still read. Enforces: R2, R7
+    Used by: units_from_r_source (3.3).
+    Uses: parse_r_sources."""
     parse_r_sources([source])
     return PARSED[source]
 
@@ -3861,7 +4207,9 @@ ARITHMETIC_SIGNS = ("+", "-", "*", "/", "^", "%%", "%/%")
 COMPARISON_SIGNS = ("==", "!=", "<", ">", "<=", ">=")
 
 def flowr_node(n):
-    """One flowR node as the tool's Node. Kinds and argument order are those Node documents."""
+    """One flowR node as the tool's Node. Kinds and argument order are those Node documents.
+    Used by: top_level.
+    Uses: Node, namespaced."""
     kind = n["type"]
     token = kind in ("RSymbol", "RLogical", "RNumber", "RString", "RBreak", "RNext")
     rng = (n.get("location") if token else None) or (n.get("info") or {}).get("fullRange") or n.get("location") or [0, 0, 0, 0]
@@ -3947,24 +4295,29 @@ def flowr_node(n):
 
 
 def namespaced(package, sign, name, line, end):
-    """pkg::name as the tool's parser made it: the package, then the name, which carries no end line."""
+    """pkg::name as the tool's parser made it: the package, then the name, which carries no end line.
+    Used by: flowr_node.
+    Uses: Node."""
     return Node("ns", sign, (Node("name", package, line=line, end_line=line), Node("name", name, line=line)), line=line, end_line=end)
 
 def walk(node):
-    """Every node of a tree, parents first."""
+    """Every node of a tree, parents first.
+    Used by: has_arithmetic, data_reads (3.4)."""
     yield node
     for child in node.args:
         yield from walk(child)
 
 def callee_name(node):
-    """The name of the function a call node calls: f(...) and pkg::f(...) both give "f"."""
+    """The name of the function a call node calls: f(...) and pkg::f(...) both give "f".
+    Used by: has_arithmetic, code_facts, statement_units (3.3), data_reads (3.4)."""
     target = node.args[0]
     if target.kind == "ns":
         target = target.args[1]
     return target.value if target.kind in ("name", "str") else ""
 
 def assignment_parts(node):
-    """(target, value) when the node is an assignment, whichever arrow it uses; else None."""
+    """(target, value) when the node is an assignment, whichever arrow it uses; else None.
+    Used by: code_facts, statement_units (3.3), roxygen_units (3.3)."""
     if node.kind != "binary" or node.value not in ASSIGNMENT_SIGNS:
         return None
     left, right = node.args
@@ -3972,7 +4325,8 @@ def assignment_parts(node):
 
 
 def unparse(node):
-    """The tree back as short R-like text: used to show defaults and conditions as written."""
+    """The tree back as short R-like text: used to show defaults and conditions as written.
+    Used by: function_units (3.3)."""
     kind, args = node.kind, node.args
     if kind in ("num", "name"):
         return node.value
@@ -4001,7 +4355,9 @@ def has_arithmetic(node, function_map):
     """Does this code compute something: arithmetic, a mathematical function, a comparison with
     a number, or a number? Every number counts, whatever its value; only a position inside [ ]
     does not. What this decides is a label - Formula statement or Top-level statement - and both
-    are read, shown, linked and asked about alike."""
+    are read, shown, linked and asked about alike.
+    Used by: statement_units (3.3).
+    Uses: walk, callee_name."""
     positions = set()
     for inner in walk(node):
         if inner.kind == "index":
@@ -4022,7 +4378,10 @@ def has_arithmetic(node, function_map):
     return False
 
 def code_facts(node, skip_inner_functions=True):
-    """The functions a piece of code calls and the names it assigns, in order of appearance."""
+    """The functions a piece of code calls and the names it assigns, in order of appearance.
+    Used by: code_detail (3.3), data_reads (3.4).
+    Uses: callee_name, assignment_parts.
+    Holds: visit."""
     calls, written = [], []
     def visit(inner, top):
         if inner.kind == "function" and not top and skip_inner_functions:
@@ -4052,7 +4411,9 @@ def flowr_ready(source=""):
     """flowR's folder, fetched once from source - a staged archive, such as one in a Volume - or from the
     pinned release, refused unless its SHA-256 is the pinned one, and run once: ready means it runs here.
     The folder is this system user's own: a shared cluster runs every notebook session as a user of its
-    own, and a folder another session made can be neither read nor written. Enforces: R12"""
+    own, and a folder another session made can be neither read nor written. Enforces: R12
+    Used by: setup (1.10), flowr_package, parse_r_sources, link_chunks (3.6).
+    Uses: flowr_read, file_sha256 (4.4)."""
     import tarfile, urllib.request
     if source in FLOWR_FOLDERS:
         return FLOWR_FOLDERS[source]
@@ -4078,7 +4439,9 @@ def flowr_ready(source=""):
 def flowr_read(folder, text, prefix=""):
     """flowR's syntax tree of one R source, indexed by id, and its edges as {id: [(target, bits)]}; every
     id carries the prefix, so that the answers for several sources can stand side by side. An answer too
-    large to read safely is refused before it is read: loading it would take the driver's memory."""
+    large to read safely is refused before it is read: loading it would take the driver's memory.
+    Used by: flowr_ready, read_functions (3.6), unit_links (3.6).
+    Uses: flowr_answer."""
     with tempfile.TemporaryDirectory() as work:
         source = os.path.join(work, "package.R")
         with open(source, "w", encoding="utf-8") as handle:
@@ -4102,7 +4465,9 @@ def flowr_read(folder, text, prefix=""):
 
 # ---------------------------------------------------------------- 3.3 units from R source; roxygen blocks and help pages
 def draft(kind, path, lines, name, text, **more):
-    """A unit before it has its reference. References are given at the end, in reading order."""
+    """A unit before it has its reference. References are given at the end, in reading order.
+    Used by: function_units, statement_units, units_from_r_source, roxygen_units, vignette_units,
+             data_object_unit (3.4), decode_data_file (3.4), file_units (3.5)."""
     unit = {"kind": kind, "file": path, "lines": lines, "name": name, "inside": "", "text": text,
             "parent_key": None, "key": "%s:%s:%s:%s" % (path, lines[0] if lines else 0, kind, name),
             "code": None, "data": None, "roxygen": None, "read_problem": None, "node": None}
@@ -4110,13 +4475,17 @@ def draft(kind, path, lines, name, text, **more):
     return unit
 
 def code_detail(node, function_map, settings, **more):
-    """The facts about a piece of code that later steps use: its calls, what it assigns, what it reads."""
+    """The facts about a piece of code that later steps use: its calls, what it assigns, what it reads.
+    Used by: function_units, statement_units.
+    Uses: code_facts (3.2)."""
     facts = code_facts(node)
     return dict(facts, formals=(), exported=None, reads_data=(), **more)
 
 
 def function_units(name, function_node, lines, path, source_lines, context, inside="", parent_key=None):
-    """A function, as one unit: what is written inside it is part of it."""
+    """A function, as one unit: what is written inside it is part of it.
+    Used by: statement_units.
+    Uses: unparse (3.2), draft, code_detail."""
     function_map = context["function_map"]
     formals = tuple((formal, unparse(default)) for formal, default in zip(function_node.names, function_node.args[:-1]))
     detail = code_detail(function_node, function_map, context["settings"], )
@@ -4129,7 +4498,9 @@ def function_units(name, function_node, lines, path, source_lines, context, insi
     return [unit]
 
 def statement_units(node, path, source_lines, context, in_tests):
-    """The unit(s) of one top-level expression."""
+    """The unit(s) of one top-level expression.
+    Used by: units_from_r_source.
+    Uses: callee_name (3.2), assignment_parts (3.2), has_arithmetic (3.2), draft, code_detail, function_units."""
     function_map, lines = context["function_map"], (node.line, node.end_line)
     text = "\n".join(source_lines[lines[0] - 1:lines[1]])
     parts = assignment_parts(node)
@@ -4149,7 +4520,9 @@ def units_from_r_source(path, source, context, line_offset=0):
     """All units of one R file: roxygen blocks, functions, formula statements, test blocks,
     top-level statements, and a "File not read" unit for each expression that could not be
     parsed. Comment lines are attached to the unit that follows them (or, at the end of the
-    file, to the unit before), so every non-blank line lies inside a unit. Enforces: R2"""
+    file, to the unit before), so every non-blank line lies inside a unit. Enforces: R2
+    Used by: vignette_units, file_units (3.5).
+    Uses: parse_r_source (3.2), draft, statement_units, self_contained, roxygen_units."""
     source_lines = source.split("\n")
     units, in_tests = [], path.startswith("tests/")
     parsed = parse_r_source(source)
@@ -4184,7 +4557,8 @@ def units_from_r_source(path, source, context, line_offset=0):
 def self_contained(units):
     """Rows that never overlap, each a whole piece of code: what is written inside a function is the
     function's; a roxygen block is one row with what it documents; and two rows over the same lines are
-    one row."""
+    one row.
+    Used by: units_from_r_source."""
     kept = []
     for unit in sorted((u for u in units if not u["parent_key"]), key=lambda u: (u["lines"][0], -u["lines"][1])):
         last = kept[-1] if kept else None
@@ -4204,7 +4578,9 @@ def self_contained(units):
 
 def roxygen_units(path, source_lines, parsed, context):
     """Consecutive #' lines form one block. It documents the object that follows: a function,
-    a quoted name (a data object), or NULL together with an @name tag."""
+    a quoted name (a data object), or NULL together with an @name tag.
+    Used by: units_from_r_source.
+    Uses: assignment_parts (3.2), draft."""
     units, number = [], 0
     while number < len(source_lines):
         if not re.match(r"\s*#'", source_lines[number]):
@@ -4244,7 +4620,10 @@ def roxygen_units(path, source_lines, parsed, context):
 
 def vignette_units(path, text, context):
     """A vignette: prose becomes "Vignette text" units, one per stretch between code chunks;
-    code chunks are read as R code (and never run)."""
+    code chunks are read as R code (and never run).
+    Used by: file_units (3.5).
+    Uses: draft, units_from_r_source.
+    Holds: close_prose."""
     units, lines, prose_start, number = [], text.split("\n"), 0, 0
     def close_prose(end):
         prose = "\n".join(lines[prose_start:end]).strip()
@@ -4269,7 +4648,9 @@ COMPRESSION = ((b"\x1f\x8b", "gzip"), (b"BZh", "bzip2"), (b"\xfd7zXZ\x00", "xz")
 
 def expand(data, cap):
     """Undo gzip, bzip2 or xz compression, recognised from the first bytes and never from the
-    extension, and stop when the content grows beyond the cap."""
+    extension, and stop when the content grows beyond the cap.
+    Used by: decode_data_file.
+    Uses: Unreadable (1.1)."""
     method = next((name for magic, name in COMPRESSION if data.startswith(magic)), "none")
     if method == "none":
         return data, method
@@ -4281,7 +4662,9 @@ def expand(data, cap):
 
 def cell_text(value):
     """One stored value as its canonical text: numbers as the shortest decimal that gives the
-    same stored value back, missing values as NA, logical values as TRUE/FALSE, dates in ISO form."""
+    same stored value back, missing values as NA, logical values as TRUE/FALSE, dates in ISO form.
+    Used by: table_of.
+    Uses: plain_decimal (1.2)."""
     import numpy
     import pandas
     if value is None or value is pandas.NA or value is pandas.NaT:
@@ -4307,7 +4690,9 @@ def table_of(value):
     """A decoded object as a table: (header, rows of canonical cell texts, column types, R-side
     description), or None when the object has no tabular meaning. A data frame keeps its
     columns; a named vector becomes name and value; a matrix keeps its row and column names;
-    a list of short values becomes rows of path and value."""
+    a list of short values becomes rows of path and value.
+    Used by: data_object_unit.
+    Uses: cell_text."""
     import numpy
     import pandas
     if isinstance(value, pandas.DataFrame):
@@ -4363,7 +4748,9 @@ def table_of(value):
 def data_object_unit(name, value, path, settings):
     """One stored object to a unit: a table shown whole (table_display), or, when it has no tabular meaning, described
     in a sentence - either opening with the object's name, its file and its size, so that every link to it can be
-    recognised. Too large to be a parameter table, it is marked not assessable: a dataset (asked_rows)."""
+    recognised. Too large to be a parameter table, it is marked not assessable: a dataset (asked_rows).
+    Used by: decode_data_file.
+    Uses: draft (3.3), table_of."""
     found = table_of(value)
     if found is None:
         described = "An object of Python type %s after decoding; it has no tabular meaning, so it is described and not compared." % type(value).__name__
@@ -4386,7 +4773,9 @@ def data_object_unit(name, value, path, settings):
 def decode_data_file(path, data, settings):
     """Decode one stored-data file without R. The file is parsed by `rdata`, which evaluates
     nothing; a function or another language object inside it is described, never called.
-    Returns (units, the fact for Model_Package_Info). Enforces: R7"""
+    Returns (units, the fact for Model_Package_Info). Enforces: R7
+    Used by: file_units (3.5).
+    Uses: Unreadable (1.1), decode_text (2.1), draft (3.3), expand, data_object_unit."""
     cap = int(settings["max_file_mb"] * 1024 * 1024)
     stem = os.path.splitext(os.path.basename(path))[0]
     if path.lower().endswith((".csv", ".tsv")):
@@ -4421,7 +4810,10 @@ def data_reads(function_node, formals, data_names, data_files):
     """Where a function reads stored data, and how the code shows it: a bare symbol that is
     neither an argument nor assigned in the function; data("x"); readRDS(...) or load(...) with
     a literal file name; pkg::x; get("x"). Column and row key are recorded when the syntax
-    shows them, as in floors$lgd_floor or floors[floors$segment == "Retail", "lgd_floor"]."""
+    shows them, as in floors$lgd_floor or floors[floors$segment == "Retail", "lgd_floor"].
+    Used by: read_package (3.5).
+    Uses: walk (3.2), callee_name (3.2), code_facts (3.2).
+    Holds: note."""
     written = set(code_facts(function_node)["symbols_written"]) | set(formals)
     reads = {}
     def note(name, how, column="", row_key=""):
@@ -4459,7 +4851,8 @@ def account_of_package(files, units, refused, is_text_file, dropped=()):
     cannot be counted without reading it. Extends the line coverage that read_package already
     kept for parsed R files to every member of the tarball. A member left out on purpose (dropped: a help
     page, generated from the roxygen comments in the R files, which are read; a file of the package's tests)
-    is a declared drop, every line of it, or one piece when it is not text. Enforces: R13"""
+    is a declared drop, every line of it, or one piece when it is not text. Enforces: R13
+    Used by: read_package."""
     inside, not_read, atoms, unaccounted, fenced, text_only, declared = 0, 0, 0, [], 0, 0, 0
     covered = {}
     for unit in units:
@@ -4517,18 +4910,23 @@ def is_test_path(path):
     """Is this member one of the package's tests - a file anywhere under tests/: testthat scripts, their helpers
     and setup, fixtures, snapshots? They check the model rather than compute it, so for now they are left out:
     not read into units, and every line of them counted as left out under a named rule (account_of_package).
-    Enforces: R13"""
+    Enforces: R13
+    Used by: file_units, read_package."""
     return path.split("/")[0].lower() == "tests"
 
 
 def is_parsed_r_file(path):
-    """Is this an R source file in a folder whose code the tool parses?"""
+    """Is this an R source file in a folder whose code the tool parses?
+    Used by: file_units, read_package."""
     return path.lower().endswith(".r") and path.lower().split("/")[0] in ("r", "tests", "data", "inst", "data-raw", "demo")
 
 
 def file_units(path, data, context, facts, reader=""):
     """The units of one file of the package, by where it lies and what it is. A reader chosen
-    for this member overrides only where the built-in tests give none."""
+    for this member overrides only where the built-in tests give none.
+    Used by: read_package.
+    Uses: decode_text (2.1), draft (3.3), units_from_r_source (3.3), vignette_units (3.3), decode_data_file (3.4),
+          is_test_path, is_parsed_r_file."""
     if is_test_path(path):                       # left out for now: the package's tests check the model, not compute it
         facts["tests"].append(path)
         return []
@@ -4569,7 +4967,8 @@ def file_units(path, data, context, facts, reader=""):
     return [draft(KIND_OTHER, path, (1, text.count("\n") + 1), os.path.basename(path), text)]
 
 def link_documentation_units(units):
-    """Tie each roxygen block to the object it documents."""
+    """Tie each roxygen block to the object it documents.
+    Used by: read_package."""
     by_name = {}
     for unit in units:
         if unit["kind"] in (KIND_FUNCTION, KIND_TABLE, KIND_OBJECT) and not unit["inside"]:
@@ -4580,7 +4979,10 @@ def link_documentation_units(units):
             unit["roxygen"]["documents_ref"] = target["key"] if target else None
 
 def finalise_units(drafts, file_hashes):
-    """Give every draft its reference, in reading order, and turn keys into references."""
+    """Give every draft its reference, in reading order, and turn keys into references.
+    Used by: read_package.
+    Uses: CodeDetail (1.1), ParameterDataDetail (1.1), RoxygenDetail (1.1), ModelUnit (1.1), content_hash (1.2),
+          make_ref (1.2)."""
     refs = {unit["key"]: make_ref("M", number) for number, unit in enumerate(drafts, start=1)}
     units = []
     for unit in drafts:
@@ -4597,7 +4999,8 @@ def finalise_units(drafts, file_hashes):
     return units, refs
 
 def package_rows(description, namespace, units, facts, refused):
-    """The package lines of Model_Package_Info."""
+    """The package lines of Model_Package_Info.
+    Used by: read_package."""
     rows = [("Package", "Name", description.get("Package", "not stated")),
             ("Package", "Version", description.get("Version", "not stated")),
             ("Package", "Title", description.get("Title", "")), ("Package", "Parser", PARSER_NAME)]
@@ -4626,7 +5029,13 @@ def package_rows(description, namespace, units, facts, refused):
 def read_package(ctx):
     """Step 02, read-inputs, third part: the package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
     data, man/, tests/, vignettes/, the rest; by name inside each), so references are stable
-    for an unchanged tarball. Enforces: R2, R5"""
+    for an unchanged tarball. Enforces: R2, R5
+    Used by: read_inputs (1.8), verify_evidence_pack (1.9), the runner, by its name in STEP_FUNCTIONS (1.8).
+    Uses: StepResult (1.1), to_plain (1.2), digest (1.2), swhid_content (1.2), account_lines (1.3), decode_text (2.1),
+          reason_for (2.7), loose_package (3.1), unpack_package (3.1), read_description (3.1), flowr_package (3.2),
+          data_reads (3.4), account_of_package, is_test_path, is_parsed_r_file, file_units, link_documentation_units,
+          finalise_units, package_rows.
+    Holds: rank."""
     tarballs = ctx.options["inputs"]["package"]
     if not tarballs:
         return StepResult({}, {"units": 0}, ["No package was found in 2_Model_Package."])
@@ -4724,14 +5133,17 @@ FLOWR_FOLDERS = {}                      # once ready in a session, ready for the
 class FunctionReadings:
     """flowR's readings of a package's functions, each read alone: the function each prefix stands for, the
     functions themselves, those flowR could not read and why, and the syntax tree and edges of the rest, every id
-    carrying its reading's prefix. The chunk links add the readings of the package's scripts to the same tree."""
+    carrying its reading's prefix. The chunk links add the readings of the package's scripts to the same tree.
+    Used by: read_functions."""
     functions: dict; unit_of: dict = field(default_factory=dict); unread: dict = field(default_factory=dict)
     tree: dict = field(default_factory=dict); edges: dict = field(default_factory=dict)
 
 
 def read_functions(units, folder):
     """Every function of the package read by flowR, one at a time: memory is then bounded by the largest function,
-    not by the package - the whole package at once once took a driver down. Enforces: R7"""
+    not by the package - the whole package at once once took a driver down. Enforces: R7
+    Used by: link_chunks.
+    Uses: flowr_read (3.2), FunctionReadings."""
     readings = FunctionReadings({u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")})
     for number, unit in enumerate(sorted(readings.functions.values(), key=lambda u: u["ref"])):
         prefix = "%d:" % number
@@ -4761,13 +5173,17 @@ BASE_OPERATORS = ("%%", "%/%", "%in%", "%o%", "%*%", "%x%")
 
 
 def node_id(node):
+    """The id flowR gave a node of its syntax tree, or None.
+    Used by: symbol_read, template_of, unit_links, environment_members, follow_stored_data."""
     return ((node or {}).get("info") or {}).get("id")
 
 
 def symbol_read(tree, node, package):
     """The name a flowR syntax node reads or calls, and whether it names this package outright
     (package::name), or None when the node reads nothing: an assignment's target, a parameter, the name
-    of a named argument, a field after $ or @, a brace, or a name of another package."""
+    of a named argument, a field after $ or @, a brace, or a name of another package.
+    Used by: unit_links.
+    Uses: node_id."""
     if node["type"] in ("RBinaryOp", "RUnaryOp"):     # a %op% of the package's own, used in place
         operator = node.get("operator") or ""
         if operator.startswith("%") and operator.endswith("%") and operator not in BASE_OPERATORS:
@@ -4803,7 +5219,8 @@ def symbol_read(tree, node, package):
 def visible(definer, user):
     """Can code in `user` see what `definer` defines? The package's R files and its stored data are seen
     everywhere; what a test or vignette sets is seen later in the same file only, and a test helper by
-    every test."""
+    every test.
+    Used by: unit_links."""
     if definer["ref"] == user["ref"]:
         return False
     home = definer["file"]
@@ -4835,13 +5252,15 @@ READ_BY_NO_CODE = "None: no code of the package reads it."
 
 
 def call_name(node):
-    """The function a flowR call node calls, by name, or "" when the call is not by a plain name."""
+    """The function a flowR call node calls, by name, or "" when the call is not by a plain name.
+    Used by: template_of, reader_calls, environment_members, follow_stored_data."""
     function = (node or {}).get("functionName") or {}
     return (function.get("lexeme") or "").strip("`") if function.get("type") == "RSymbol" else ""
 
 
 def call_arguments(node):
-    """A call's arguments, in order, as (name or None, value node); an empty argument is left out."""
+    """A call's arguments, in order, as (name or None, value node); an empty argument is left out.
+    Used by: template_of, reader_calls, environment_members, follow_stored_data."""
     out = []
     for argument in (node or {}).get("arguments") or []:
         if isinstance(argument, dict) and argument.get("type") == "RArgument" and argument.get("value"):
@@ -4851,7 +5270,8 @@ def call_arguments(node):
 
 
 def merged(parts):
-    """Adjacent pieces of known text joined, and runs of the unknown made one; too long a name becomes unknown."""
+    """Adjacent pieces of known text joined, and runs of the unknown made one; too long a name becomes unknown.
+    Used by: template_of, follow_stored_data."""
     out = []
     for kind, value in parts:
         if out and kind == "text" and out[-1][0] == "text":
@@ -4865,7 +5285,10 @@ def template_of(tree, edges, node, depth=0):
     """What a name given to a reader is made of: ("text", s) known text, ("param", p) a parameter of the function it
     is in, ("any", "") what is known only at run time. flowR's edges say what a symbol reads: a parameter, or a local
     variable whose value is followed in turn. paste0(), paste(), sprintf(), file.path() and system.file() are put
-    together from their parts; nothing is run. Enforces: R7"""
+    together from their parts; nothing is run. Enforces: R7
+    Used by: environment_members, follow_stored_data.
+    Uses: node_id, call_name, call_arguments, merged.
+    Holds: joined."""
     if not node or depth > TEMPLATE_DEPTH:
         return [("any", "")]
     kind = node.get("type")
@@ -4915,7 +5338,9 @@ def template_of(tree, edges, node, depth=0):
 
 def reader_calls(nodes):
     """The calls among `nodes` that read stored data by a name or by a file's name: (reader, the node giving it).
-    data() takes its names as text or in list =, and mget() and data() a vector of them, c("a", "b")."""
+    data() takes its names as text or in list =, and mget() and data() a vector of them, c("a", "b").
+    Used by: follow_stored_data.
+    Uses: call_name, call_arguments."""
     for node in nodes:
         reader = call_name(node) if node.get("type") == "RFunctionCall" else ""
         if reader not in NAME_READERS:
@@ -4935,7 +5360,8 @@ def reader_calls(nodes):
 
 
 def access_member(access):
-    """The member an access names - floors in cache$floors or cache[["floors"]] - or "" for anything else."""
+    """The member an access names - floors in cache$floors or cache[["floors"]] - or "" for anything else.
+    Used by: environment_members."""
     items = [a.get("value") for a in access.get("access") or [] if isinstance(a, dict) and a.get("type") == "RArgument"]
     if len(items) != 1 or not items[0]:
         return ""
@@ -4946,7 +5372,8 @@ def access_member(access):
 
 def bound_arguments(arguments, formals):
     """Which argument of a call each parameter of the function called receives, as R matches them: by exact name,
-    then by position up to ..., after which only by name."""
+    then by position up to ..., after which only by name.
+    Used by: follow_stored_data."""
     bound, positional = {}, []
     for name, value in arguments:
         if name is not None and name in formals:
@@ -4963,7 +5390,8 @@ def bound_arguments(arguments, formals):
 
 def name_candidates(reader, parts, data_names, data_files):
     """The stored objects a name partly known could be: those whose name - or, for readRDS() and load(), whose file's
-    name - fits the known text, the rest being anything. None when too little of it is known to choose any."""
+    name - fits the known text, the rest being anything. None when too little of it is known to choose any.
+    Used by: follow_stored_data."""
     if reader in FILE_READERS:                         # only the file's own name counts, not the folders before it
         last = max((i for i, (kind, value) in enumerate(parts) if kind == "text" and "/" in value), default=None)
         if last is not None:
@@ -4978,7 +5406,9 @@ def name_candidates(reader, parts, data_names, data_files):
 
 def unit_locator(parsed, spans):
     """A function giving, for a node of flowR's tree, the ref of the unit whose lines hold it - spans are (first,
-    last, ref) - or None: the node's own line, or its nearest ancestor's that has one."""
+    last, ref) - or None: the node's own line, or its nearest ancestor's that has one.
+    Used by: unit_links.
+    Holds: unit_at."""
     def unit_at(node):
         while node is not None and not node.get("location"):
             node = parsed.tree.get(node.get("up") or "")
@@ -4990,7 +5420,10 @@ def unit_locator(parsed, spans):
 def unit_links(units, parsed, folder, package):
     """The immediate upstream and downstream units of every unit, as records of kind unit_links, each with the
     names that make each link, and the units flowR could not read for their links. `parsed` holds flowR's
-    readings of the functions (read_functions); the scripts are read here."""
+    readings of the functions (read_functions); the scripts are read here.
+    Used by: link_chunks.
+    Uses: flowr_read (3.2), node_id, symbol_read, visible, unit_locator, environment_members, follow_stored_data.
+    Holds: read, local, link."""
     by_ref = {u["ref"]: u for u in units}
     definers = {}                                          # name -> the units that define it
     for u in units:
@@ -5126,7 +5559,10 @@ def environment_members(nodes_of, by_ref, definers, tree, edges, local):
     get("floors", envir = cache). The environment is a variable the package defines at top level, which flowR finds
     no definition of inside the reading. Also the names a function stores in the package's own environment -
     assign("x", ..., envir = topenv()) and the like, or x <<- ... - which then define x for the whole package.
-    Returns (writes, reads, namespace writes): {(environment, member): refs}, the same, and {name: refs}."""
+    Returns (writes, reads, namespace writes): {(environment, member): refs}, the same, and {name: refs}.
+    Used by: unit_links.
+    Uses: node_id, call_name, call_arguments, template_of, access_member.
+    Holds: key_of."""
     writes, reads, namespace = {}, {}, {}
     def key_of(holder, member):
         name = (holder.get("lexeme") or "").strip("`") if holder.get("type") == "RSymbol" and not local(holder) else ""
@@ -5177,7 +5613,10 @@ def follow_stored_data(units, by_ref, nodes_of, tree, edges, data_names, data_fi
     arguments in the parameters' place, as R binds them, until no more is learnt: a name known in the end links the
     object to the caller that gave it and to the helper whose code reads it. A name partly known at run time names
     the objects it could be, as possible links (name_candidates); a name not known at all is a note on its row.
-    Returns (possible, notes): {(object, unit): patterns} and {unit: notes}."""
+    Returns (possible, notes): {(object, unit): patterns} and {unit: notes}.
+    Used by: unit_links.
+    Uses: node_id, call_name, call_arguments, merged, template_of, reader_calls, bound_arguments, name_candidates.
+    Holds: unknown, settle."""
     possible, notes, helpers, resolved = {}, {}, {}, set()
     functions = {u["name"]: u for u in units if u["kind"] == KIND_FUNCTION and not u.get("inside")}
     formals = {name: [f for f, _ in (u.get("code") or {}).get("formals") or []] for name, u in functions.items()}
@@ -5253,7 +5692,9 @@ def follow_stored_data(units, by_ref, nodes_of, tree, edges, data_names, data_fi
 def link_chunks(ctx):
     """Step 03, link-chunks: for every unit of Chunks_Model, the units it takes something from and the units that
     take something from it, read by flowR - each function alone, each script whole - and resolved as R resolves a
-    name. Enforces: R2, R4, R7"""
+    name. Enforces: R2, R4, R7
+    Used by: the runner, by its name in STEP_FUNCTIONS (1.8).
+    Uses: StepResult (1.1), flowr_ready (3.2), read_functions, unit_links."""
     units = ctx.read("model_units")
     folder = flowr_ready()
     package = ((ctx.read("package_info") or [{}])[0] or {}).get("name", "")
@@ -5280,6 +5721,9 @@ def link_chunks(ctx):
 
 # ======================================================================================================================
 # PART 4 of 4 - STEP 04, INTERPRET-CODE; STEP 05, SEARCH-METHODOLOGY; THE DELIVERABLE   (reviewer 4)
+# Runs in: cell 3, steps 04 (interpret-code) and 05 (search-methodology), and after every step.
+# Entry points: interpret_code; search_methodology; rebuild_outputs, which writes Output.xlsm after each step.
+# Writes: the records llm_calls; Output.xlsm, with its five sheets and its macro.
 # ======================================================================================================================
 
 
@@ -5299,7 +5743,8 @@ TOKEN_PIECES = re.compile(r"[A-Za-z]+|[0-9]|\n|[^\S\n]+|[^A-Za-z0-9\s]")
 def token_costs(text):
     """Each piece of a text with the tokens it is counted as: a run of letters one for every six letters; a digit, a
     sign or a line break one; a space one unless it leads into a word; a character outside ASCII one for each of its
-    UTF-8 bytes. Yields (where the piece ends, its tokens)."""
+    UTF-8 bytes. Yields (where the piece ends, its tokens).
+    Used by: estimate_tokens, cut_to_tokens."""
     size = len(text)
     for match in TOKEN_PIECES.finditer(text):
         piece, end = match.group(0), match.end()
@@ -5316,20 +5761,29 @@ def token_costs(text):
 
 
 def estimate_tokens(text):
-    """About how many tokens a text takes a model, erring high (see token_costs)."""
+    """About how many tokens a text takes a model, erring high (see token_costs).
+    Used by: shown_cut, context_block (4.2), code_question (4.2), interpret_code (4.2), search_shares (4.3),
+             compare_shares (4.3), piece_slices (4.3), methodology_slices (4.3), methodology_pieces (4.3),
+             text_slices (4.3), model_rows (4.3), dataset_view (4.3), unit_part (4.3), question_of (4.3),
+             search_question (4.3), compare_question (4.3).
+    Uses: token_costs."""
     return sum(cost for _, cost in token_costs(text or ""))
 
 
 def question_room(settings, question_type):
     """How many tokens a question of this type may take: the limit, less the share kept for its answer and a margin
-    for the gateway's own wrapping. A low limit keeps a quarter of itself for the answer at most."""
+    for the gateway's own wrapping. A low limit keeps a quarter of itself for the answer at most.
+    Used by: code_question (4.2), interpret_code (4.2), search_shares (4.3), compare_shares (4.3),
+             search_methodology (4.3)."""
     limit = int((settings or {}).get("chat_token_limit") or DEFAULT_SETTINGS["chat_token_limit"])
     return limit - min(ANSWER_TOKENS[question_type], limit // 4) - min(QUESTION_MARGIN, limit // 20)
 
 
 def cut_to_tokens(text, tokens):
     """The longest start of `text` that takes at most `tokens`, ended at a line end when one is near; and whether
-    anything was cut."""
+    anything was cut.
+    Used by: shown_cut, text_slices (4.3).
+    Uses: token_costs."""
     total, end = 0, 0
     for at, cost in token_costs(text):
         if total + cost > tokens:
@@ -5349,7 +5803,9 @@ def cut_to_tokens(text, tokens):
 
 
 def shown_cut(text, tokens):
-    """A text cut to `tokens`, saying so at its end when it was cut."""
+    """A text cut to `tokens`, saying so at its end when it was cut.
+    Used by: context_block (4.2), code_question (4.2), unit_part (4.3).
+    Uses: estimate_tokens, cut_to_tokens."""
     if estimate_tokens(text) <= tokens:
         return text
     kept, _ = cut_to_tokens(text, max(1, tokens - 20))
@@ -5381,13 +5837,16 @@ JOURNAL = "answers.jsonl"    # in the run's work folder: every answer, as it arr
 
 
 def sent_stamp(moment):
-    """When a question was sent, as the records and the files of the audit folder give it."""
+    """When a question was sent, as the records and the files of the audit folder give it.
+    Used by: restore_answers, call_record."""
     return datetime.datetime.fromtimestamp(moment).isoformat(timespec="milliseconds") if moment else ""
 
 
 def journal_answer(local_dir, question, result):
     """One answer, appended to the run's journal on local scratch the moment it arrives - the token removed - so that a
-    restart of Python loses none: restore_answers reads it back. Appended only, never rewritten. Enforces: R8"""
+    restart of Python loses none: restore_answers reads it back. Appended only, never rewritten. Enforces: R8
+    Used by: ask_all.
+    Uses: to_plain (1.2), LiveValues (1.6), redacted."""
     redact = (NOTEBOOK["live"] or LiveValues()).redact
     line = json.dumps({"question": redacted(to_plain(question), redact), "result": redacted(to_plain(result), redact)},
                       default=str, ensure_ascii=False)
@@ -5401,7 +5860,9 @@ def journal_answer(local_dir, question, result):
 def restore_answers(ctx):
     """Once in a Python process, the answers of this run's journal that no record holds yet - those that arrived before
     Python restarted - held again as if they had just arrived. A record holds an answer when it names the same question
-    and the same moment it was sent. Enforces: R2"""
+    and the same moment it was sent. Enforces: R2
+    Used by: held_answers, ask_all.
+    Uses: sent_stamp."""
     local = ctx.options["paths"].local_dir
     with ANSWERS_LOCK:
         if local in RESTORED:
@@ -5429,24 +5890,29 @@ def restore_answers(ctx):
 
 def unwelcome_words(text):
     """The technical text of an answer - a Python trace, an internal name - that no cell of the workbook shows, as it
-    was written. Enforces: R10"""
+    was written. Enforces: R10
+    Used by: check_words, compare_check (4.3)."""
     return sorted(set(match.group(0) for match in PYTHON_TRACES.finditer(text)), key=str.lower)
 
 
 def own_words(text):
-    """A text without what it quotes inside curly double quotes: the words it says itself."""
+    """A text without what it quotes inside curly double quotes: the words it says itself.
+    Used by: compare_check (4.3), plain_cell (4.4)."""
     return re.sub(r"\u201c.*?\u201d", "", text or "", flags=re.S)
 
 
 def ask_again(plain, ask):
     """What a check returns for an answer it turns down: nothing read, the question to be asked again with `ask` added
-    to it, and `plain` - what was wrong, in plain words - for the record."""
+    to it, and `plain` - what was wrong, in plain words - for the record.
+    Used by: check_words, search_check (4.3), compare_check (4.3)."""
     return None, {"plain": plain, "ask": ask}, ""
 
 
 def check_words(answer, last):
     """Step 04's check of an answer: technical text the workbook does not show - a Python trace, an internal name - is
-    asked about again, and kept on the last try. Returns (what was read, what to ask again or None, a note)."""
+    asked about again, and kept on the last try. Returns (what was read, what to ask again or None, a note).
+    Used by: ask_model.
+    Uses: unwelcome_words, ask_again."""
     unwelcome = unwelcome_words(answer)
     if not unwelcome:
         return None, None, ""
@@ -5464,7 +5930,9 @@ def ask_model(chat, system, main, check=None, halt=None):
     is asked for again, saying what was wrong. Once `halt` is set - the cell that asked has ended, or was stopped - no
     further try is made: the question stays open for the next time cell 3 runs. Returns what happened, in plain words
     and in technical ones, and what check read from the answer; it never raises and never writes, because only the
-    step's own thread writes. Enforces: R5, R8"""
+    step's own thread writes. Enforces: R5, R8
+    Used by: ask_all.
+    Uses: Unreadable (1.1), check_words."""
     check = check or check_words
     halt = halt or threading.Event()
     CHAT_WORKER.active = True
@@ -5509,7 +5977,9 @@ def ask_model(chat, system, main, check=None, halt=None):
 
 def held_answers(ctx, types):
     """The answers of this run that arrived but are not yet written, as call records without their provenance: those
-    of a cell that was interrupted, for instance. Read, not taken: ask_all takes them when it hands them over."""
+    of a cell that was interrupted, for instance. Read, not taken: ask_all takes them when it hands them over.
+    Used by: interpret_code (4.2), search_methodology (4.3).
+    Uses: restore_answers."""
     restore_answers(ctx)
     held = ANSWERS.get(ctx.options["paths"].local_dir) or {}
     with ANSWERS_LOCK:
@@ -5528,7 +5998,10 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     thread that received it; so an interrupted cell loses none, and an answer a step has taken is never held again. When the questions already out,
     and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
     Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
-    questions that were out at once. Enforces: R2, R5, R8"""
+    questions that were out at once. Enforces: R2, R5, R8
+    Used by: interpret_code (4.2), search_methodology (4.3).
+    Uses: LiveValues (1.6), live (1.10), journal_answer, restore_answers, ask_model, stop_message.
+    Holds: hold, keep, progress."""
     restore_answers(ctx)
     held = ANSWERS.setdefault(ctx.options["paths"].local_dir, {})
     most = max(1, int(ctx.settings.get("parallel_chats") or 1))
@@ -5625,7 +6098,8 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
 def stop_message(failures, answered, last_problem=""):
     """Why a step stopped asking, in plain words: the calls failed - the token may have run out, or the gateway be
     down - or the answers came back in a form that could not be read. `last_problem` is what the last failed call
-    returned, the token removed."""
+    returned, the token removed.
+    Used by: ask_all."""
     if all(failures):
         return ("The model stopped answering: the last %d questions got no answer, so no more were sent.%s If the access token "
                 "has run out, paste a new one into widget 02; if the gateway is down, wait until it is back. Then run cell 3 "
@@ -5640,7 +6114,9 @@ def stop_message(failures, answered, last_problem=""):
 def call_record(ctx, asked, result, redact, **extra):
     """The record of one exchange with the model, as the audit log's Model_Calls sheet holds it: the token removed
     from everything the model wrote, the technical account of what went wrong left to run_log.txt. `extra` may hold
-    the question itself, as step 04 keeps it. Enforces: R4, R8, R10"""
+    the question itself, as step 04 keeps it. Enforces: R4, R8, R10
+    Used by: interpret_code (4.2), search_methodology (4.3).
+    Uses: digest (1.2), sent_stamp, redacted."""
     answer = redact(result["answer"])
     record = {"run_id": ctx.provenance.run_id, "step_id": ctx.provenance.step_id, "step": ctx.provenance.step,
               "question_id": asked["id"], "question_type": asked["type"], "unit_ref": asked["unit_ref"]}
@@ -5665,7 +6141,8 @@ def call_record(ctx, asked, result, redact, **extra):
 
 
 def redacted(value, redact):
-    """Every text inside a value, the token removed. Enforces: R8"""
+    """Every text inside a value, the token removed. Enforces: R8
+    Used by: journal_answer, call_record."""
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, list):
@@ -5676,7 +6153,8 @@ def redacted(value, redact):
 
 
 def log_technical(ctx, step_id, lines):
-    """Technical text of a step - what a failed call said - goes to run_log.txt only. Enforces: R10"""
+    """Technical text of a step - what a failed call said - goes to run_log.txt only. Enforces: R10
+    Used by: interpret_code (4.2), search_methodology (4.3)."""
     if lines:
         with open(os.path.join(os.path.dirname(ctx.work_dir), "run_log.txt"), "a", encoding="utf-8") as handle:
             handle.write("".join("step %s, %s\n" % (step_id, line) for line in lines))
@@ -5712,18 +6190,21 @@ NOT_ASKED = "Not asked: nothing was read from this file."
 
 
 def askable(unit):
-    """Does this unit have text worth putting to the model? A file that could not be read has not."""
+    """Does this unit have text worth putting to the model? A file that could not be read has not.
+    Used by: interpret_code, methodology_account (4.3), search_methodology (4.3), interpretation_of (4.4)."""
     return unit["kind"] != KIND_NOT_READ and bool(unit["text"].strip())
 
 
 def unit_place(unit):
-    """Where a unit is: its kind, its file and its lines."""
+    """Where a unit is: its kind, its file and its lines.
+    Used by: context_block, unit_part (4.3)."""
     return "%s, %s%s" % (unit["kind"], unit["file"], ", lines %d-%d" % tuple(unit["lines"]) if unit.get("lines") else "")
 
 
 def linked_units(unit, links, by_ref):
     """The units a unit takes something from, each with the names it takes, and the units that take something from it:
-    step 03's links, as [(unit, names)] twice."""
+    step 03's links, as [(unit, names)] twice.
+    Used by: interpret_code, search_methodology (4.3)."""
     linked = links.get(unit.get("unit_ref", unit["ref"])) or {}
     upstream = [(by_ref[ref], (linked.get("via") or {}).get(ref, [])) for ref in linked.get("upstream") or () if ref in by_ref]
     downstream = [(by_ref[ref], []) for ref in linked.get("downstream") or () if ref in by_ref]
@@ -5733,7 +6214,9 @@ def linked_units(unit, links, by_ref):
 def context_block(upstream, downstream, room):
     """For context, the units a unit takes something from - each with the names it takes - and the units that take
     something from it, each cut to CONTEXT_PIECE_TOKENS and all of them to `room` tokens. A piece past that is named,
-    not shown; once even the names do not fit, how many more there are is said instead. Returns the two blocks."""
+    not shown; once even the names do not fit, how many more there are is said instead. Returns the two blocks.
+    Used by: code_question, compare_question (4.3).
+    Uses: estimate_tokens (4.1), shown_cut (4.1), unit_place."""
     blocks = []
     for title, pieces in (("CONTEXT: THE PIECES IT TAKES SOMETHING FROM", upstream),
                           ("CONTEXT: THE PIECES THAT TAKE SOMETHING FROM IT", downstream)):
@@ -5761,7 +6244,9 @@ def context_block(upstream, downstream, room):
 def code_question(unit, upstream=(), downstream=(), room=None):
     """The question about one unit, exactly as sent: (system half, main half, question id). The main half is the
     unit itself, cut to CODE_TOKENS_MAX, then, for context, the units it takes something from - each with the names
-    it takes - and the units that take something from it (step 03's links), in whatever room the question has left."""
+    it takes - and the units that take something from it (step 03's links), in whatever room the question has left.
+    Used by: interpret_code.
+    Uses: digest (1.2), estimate_tokens (4.1), question_room (4.1), shown_cut (4.1), context_block, part_note (4.3)."""
     room = room or question_room(DEFAULT_SETTINGS, CODE_QUESTION)
     text = shown_cut(unit["text"], min(CODE_TOKENS_MAX, room // 2))
     first = "THE PIECE TO EXPLAIN\nKind: %s\nFile: %s%s\nName: %s%s\n\n%s" % (
@@ -5777,7 +6262,11 @@ def interpret_code(ctx):
     concepts it implements, for a CFA-level analyst, through the chat() of cell 2 - with the units it takes from and
     the units that take from it (step 03's links) as context, and at the length the model judges it needs. Questions
     go out parallel_chats at a time (ask_all); a question already answered in this run is not asked again, and while
-    any is left unanswered the step does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8"""
+    any is left unanswered the step does not finish: running cell 3 again asks only for those. Enforces: R2, R3, R5, R8
+    Used by: the runner, by its name in STEP_FUNCTIONS (1.8).
+    Uses: StepResult (1.1), LiveValues (1.6), estimate_tokens (4.1), question_room (4.1), held_answers (4.1),
+          ask_all (4.1), call_record (4.1), log_technical (4.1), askable, linked_units, code_question,
+          is_dataset (4.3), asked_rows (4.3)."""
     whole = ctx.read("model_units")
     units, by_ref = asked_rows(whole, ctx.settings), {u["ref"]: u for u in whole}
     datasets = [unit["ref"] for unit in whole if is_dataset(unit)]
@@ -5934,7 +6423,9 @@ COMPARE_SYSTEM_PROMPT = (
 
 def search_shares(settings):
     """(tokens of the methodology, tokens of the unit) in one search question: methodology_batch_tokens, or less
-    when the question would not otherwise leave the unit its room."""
+    when the question would not otherwise leave the unit its room.
+    Used by: piece_cap, slice_limits, methodology_account, search_methodology.
+    Uses: estimate_tokens (4.1), question_room (4.1)."""
     room = question_room(settings, METHODOLOGY_SEARCH) - estimate_tokens(SEARCH_SYSTEM_PROMPT) - 300
     unit = min(UNIT_TOKENS_MAX, room // 2)
     wanted = int(settings.get("methodology_batch_tokens") or DEFAULT_SETTINGS["methodology_batch_tokens"])
@@ -5942,7 +6433,9 @@ def search_shares(settings):
 
 
 def compare_shares(settings):
-    """(tokens of the methodology's chunks, of the unit, of the context) in one comparison question."""
+    """(tokens of the methodology's chunks, of the unit, of the context) in one comparison question.
+    Used by: piece_cap, slice_limits, search_methodology.
+    Uses: estimate_tokens (4.1), question_room (4.1)."""
     room = question_room(settings, METHODOLOGY_COMPARISON) - estimate_tokens(COMPARE_SYSTEM_PROMPT) - 300
     unit, context = min(UNIT_TOKENS_MAX, room // 2), min(COMPARE_CONTEXT_TOKENS, room // 6)
     return max(200, room - unit - context), unit, context
@@ -5950,7 +6443,9 @@ def compare_shares(settings):
 
 def piece_cap(settings):
     """The most tokens one piece of the methodology may take in a question of step 05: small enough for a batch of
-    its own, and for a comparison."""
+    its own, and for a comparison.
+    Used by: methodology_account, sheet_rows (4.4).
+    Uses: search_shares, compare_shares."""
     batch, _ = search_shares(settings)
     chunk_room, _, _ = compare_shares(settings)
     return min(batch, chunk_room)
@@ -5958,20 +6453,25 @@ def piece_cap(settings):
 
 def piece_slices(text, head_tokens, tokens, chars):
     """How a chunk's text is cut into rows: whole when it fits `chars` characters and, beside a head line of
-    `head_tokens`, `tokens` tokens; otherwise text_slices, with room for a part's head line."""
+    `head_tokens`, `tokens` tokens; otherwise text_slices, with room for a part's head line.
+    Used by: methodology_slices, sheet_rows (4.4).
+    Uses: estimate_tokens (4.1), text_slices."""
     if len(text) <= chars and head_tokens + estimate_tokens(text) + 1 <= tokens:
         return [(text, False)]
     return text_slices(text, max(100, tokens - head_tokens - 30), chars)
 
 
 def chunk_where(chunk):
-    """The headings a chunk of the methodology sits under, and its type, as a question shows them."""
+    """The headings a chunk of the methodology sits under, and its type, as a question shows them.
+    Used by: methodology_slices, methodology_pieces."""
     return "%s | %s" % (" > ".join(chunk.get("heading_chain") or ()) or "(no heading)", chunk["kind"])
 
 
 def methodology_slices(chunk, cap):
     """The rows a chunk of the methodology takes - on Chunks_Methodology and in the questions of step 05 alike: whole,
-    or cut at line ends into parts small enough for a cell of Excel and for a batch of their own. Enforces: R2, R13"""
+    or cut at line ends into parts small enough for a cell of Excel and for a batch of their own. Enforces: R2, R13
+    Used by: methodology_pieces, sheet_rows (4.4).
+    Uses: estimate_tokens (4.1), piece_slices, chunk_where."""
     return piece_slices(chunk["text"] or "", estimate_tokens("[%s] %s" % (chunk["ref"], chunk_where(chunk))), cap, SLICE_CHARS)
 
 
@@ -5980,7 +6480,9 @@ def methodology_pieces(chunks, cap):
     text - whole, or, when too long, in the parts it takes as rows of Chunks_Methodology, each headed as the part it is
     ([C-0045-2, part 2 of 3 of C-0045]), so that nothing of a long chunk goes unsearched and a part is the same row in
     the sheet and in a question. The parts stay one chunk: what the model finds in any of them counts for the whole.
-    Enforces: R2"""
+    Enforces: R2
+    Used by: methodology_account.
+    Uses: estimate_tokens (4.1), chunk_where, methodology_slices."""
     pieces = []
     for chunk in chunks:
         slices = methodology_slices(chunk, cap)
@@ -5995,7 +6497,8 @@ def methodology_pieces(chunks, cap):
 
 def methodology_batches(pieces, cap):
     """The pieces in reading order, packed into batches of at most cap tokens: every piece in exactly one batch, and
-    the batches the same for every unit, so a batch comes to the model as the same words each time."""
+    the batches the same for every unit, so a batch comes to the model as the same words each time.
+    Used by: methodology_account."""
     batches, current, used = [], [], 0
     for piece in pieces:
         if current and used + piece["tokens"] + 2 > cap:
@@ -6011,7 +6514,8 @@ def methodology_batches(pieces, cap):
 
 
 def neighbours_line(upstream, downstream):
-    """The units a unit takes something from and gives something to, named: what orients a search."""
+    """The units a unit takes something from and gives something to, named: what orients a search.
+    Used by: search_methodology."""
     lines = []
     for title, pieces in (("It takes something from", upstream), ("It gives something to", downstream)):
         if pieces:
@@ -6028,7 +6532,9 @@ SLICE_CHARS = 30000          # the most characters one row of Chunks_Model shows
 def slice_limits(settings):
     """(tokens, characters) one row of Chunks_Model may hold: few enough characters for a cell of Excel, and few
     enough tokens for every question of steps 04 and 05 to show the row whole, beside what the model wrote about
-    it, which takes at most a third of the unit's room (unit_part)."""
+    it, which takes at most a third of the unit's room (unit_part).
+    Used by: model_rows, asked_rows.
+    Uses: search_shares, compare_shares."""
     _, search_unit = search_shares(settings)
     _, compare_unit, _ = compare_shares(settings)
     return max(500, min(search_unit, compare_unit) * 2 // 3 - 600), SLICE_CHARS
@@ -6037,7 +6543,9 @@ def slice_limits(settings):
 def text_slices(text, tokens, chars):
     """A text in consecutive slices of at most `tokens` and `chars` each, cut at line ends; a line too long for a slice
     of its own is cut inside. Returns [(slice, joined)]: joined where a slice ends inside a line, which the next one
-    continues. Joined back - a line break after each slice that is not joined - the slices are the text exactly."""
+    continues. Joined back - a line break after each slice that is not joined - the slices are the text exactly.
+    Used by: piece_slices, model_rows, spread_rows (4.4).
+    Uses: estimate_tokens (4.1), cut_to_tokens (4.1)."""
     slices, part, size, cost = [], [], 0, 0
     for line in text.split("\n"):
         line_cost, line_size = estimate_tokens(line) + 1, len(line) + 1
@@ -6056,7 +6564,8 @@ def text_slices(text, tokens, chars):
 
 
 def joined_rows(rows):
-    """The text of a unit, rebuilt from its rows in order."""
+    """The text of a unit, rebuilt from its rows in order.
+    Used by: model_rows, check_written_totals (4.4)."""
     return "".join(row["text"] + ("" if row.get("joined") or number == len(rows) - 1 else "\n")
                    for number, row in enumerate(rows))
 
@@ -6065,7 +6574,9 @@ def model_rows(units, settings):
     """The rows of Chunks_Model. A unit is one row, or - when its text is too long for a cell of Excel, or for the
     questions of steps 04 and 05 to show whole - several: M-0003-1, M-0003-2 and so on, cut at line ends, each with
     its own lines. They stay one analytical chunk: they are sliced so that nothing of the piece is cut, in the
-    workbook or in a question, and every character of it is in exactly one of its rows. Enforces: R2, R13"""
+    workbook or in a question, and every character of it is in exactly one of its rows. Enforces: R2, R13
+    Used by: asked_rows, sheet_rows (4.4).
+    Uses: RunStopped (1.1), estimate_tokens (4.1), slice_limits, text_slices, joined_rows."""
     tokens, chars = slice_limits(settings)
     rows = []
     for unit in units:
@@ -6092,14 +6603,17 @@ DATASET_VIEW_ROWS = 50       # the rows of a stored dataset a question shows; th
 
 def is_dataset(unit):
     """A stored table too large to be a parameter table - more cells than max_parameter_cells, or more columns than
-    max_parameter_columns: a dataset."""
+    max_parameter_columns: a dataset.
+    Used by: interpret_code (4.2), asked_rows."""
     data = unit.get("data") or {}
     return data.get("assessable") is False and bool(data.get("dims"))
 
 
 def dataset_view(unit, tokens):
     """What a question shows of a stored dataset: what it is, its size, and its columns and first rows - as many of the
-    first DATASET_VIEW_ROWS as fit in `tokens` - saying that this is a view, and that the workbook shows it whole."""
+    first DATASET_VIEW_ROWS as fit in `tokens` - saying that this is a view, and that the workbook shows it whole.
+    Used by: asked_rows.
+    Uses: estimate_tokens (4.1)."""
     count, width = (list(unit["data"]["dims"]) + [0, 0])[:2]
     head = ("A stored dataset of %d rows and %d columns - too large to be a parameter table, so it is shown here as a "
             "view: its columns and first rows. Chunks_Model shows it whole." % (count, width))
@@ -6118,7 +6632,9 @@ def asked_rows(units, settings):
     """The rows steps 04 and 05 ask about: every part of every unit, as model_rows cuts it - so that no piece of code
     is cut in a question - except a stored dataset, which is asked about once, from dataset_view, the question saying
     that it is a view: the model is told what the data is, not asked to read every row. What it says stands for the
-    whole unit (rows_model_units). Enforces: R3, R13"""
+    whole unit (rows_model_units). Enforces: R3, R13
+    Used by: interpret_code (4.2), search_methodology, sheet_rows (4.4).
+    Uses: slice_limits, model_rows, is_dataset, dataset_view."""
     tokens, _ = slice_limits(settings)
     rows = []
     for unit in units:
@@ -6131,7 +6647,8 @@ def asked_rows(units, settings):
 
 
 def part_note(row, comparing=False):
-    """What a question says of a row that is one part of a long unit, or "" for a whole one."""
+    """What a question says of a row that is one part of a long unit, or "" for a whole one.
+    Used by: code_question (4.2), unit_part."""
     if row.get("parts", 1) < 2:
         return ""
     whole = " (lines %d-%d)" % tuple(row["unit_lines"]) if row.get("unit_lines") else ""
@@ -6143,7 +6660,9 @@ def part_note(row, comparing=False):
 
 def unit_part(unit, said, neighbours, room, comparing=False):
     """One unit as a question of step 05 shows it: what and where it is, what it takes from and gives to, its text as
-    written, and what step 04's model wrote about it - cut to `room` tokens, the code keeping two thirds of it or more."""
+    written, and what step 04's model wrote about it - cut to `room` tokens, the code keeping two thirds of it or more.
+    Used by: search_question, compare_question.
+    Uses: estimate_tokens (4.1), shown_cut (4.1), unit_place (4.2), part_note."""
     head = "THE PIECE: %s, %s%s" % (unit["ref"], unit_place(unit), " - %s" % unit["name"] if unit.get("name") else "")
     head += "\n" + part_note(unit, comparing) if part_note(unit) else ""
     head += "\n" + neighbours if neighbours else ""
@@ -6158,7 +6677,9 @@ def unit_part(unit, said, neighbours, room, comparing=False):
 
 def question_of(kind, unit, pieces, system, parts, **extra):
     """A question of step 05 as sent - its two halves, its id, the pieces of the methodology it shows - and the
-    tokens it takes, counted part by part, each join counted too. A question over its room is a fault of the tool."""
+    tokens it takes, counted part by part, each join counted too. A question over its room is a fault of the tool.
+    Used by: search_question, compare_question.
+    Uses: digest (1.2), estimate_tokens (4.1)."""
     main = "\n\n\n".join(text for text, _ in parts)
     tokens = estimate_tokens(system) + sum(count for _, count in parts) + 3 * len(parts)
     question = {"type": kind, "unit_ref": unit["ref"], "pieces": [[p["ref"], p["part"], p["parts"]] for p in pieces],
@@ -6168,7 +6689,9 @@ def question_of(kind, unit, pieces, system, parts, **extra):
 
 
 def search_question(unit, said, neighbours, batch, room):
-    """The search question about one unit and one batch of the methodology: the batch first, then the unit."""
+    """The search question about one unit and one batch of the methodology: the batch first, then the unit.
+    Used by: search_methodology.
+    Uses: estimate_tokens (4.1), unit_part, question_of."""
     title = "THE METHODOLOGY: A PART OF IT, IN READING ORDER\n\n"
     chunks = title + "\n\n".join(piece["text"] for piece in batch)
     piece = unit_part(unit, said, neighbours, room)
@@ -6181,7 +6704,9 @@ def search_question(unit, said, neighbours, batch, room):
 
 def compare_question(unit, said, upstream, downstream, chosen, room, context_room):
     """The comparison question about one unit: the chunks found to bear on it, the units it takes from and gives to,
-    then the unit and what step 04's model wrote about it."""
+    then the unit and what step 04's model wrote about it.
+    Used by: search_methodology.
+    Uses: estimate_tokens (4.1), context_block (4.2), unit_part, question_of."""
     title = "THE METHODOLOGY: THE CHUNKS FOUND TO BEAR ON THIS PIECE\n\n"
     chunks = title + "\n\n".join(piece["text"] for piece in chosen)
     blocks = context_block(upstream, downstream, context_room)
@@ -6202,7 +6727,8 @@ UNREADABLE = {"plain": "the answer was not the JSON object asked for",
 
 def json_object(answer):
     """The one JSON object an answer holds, whatever fences or words stand around it; None when it holds none. Parsed,
-    never evaluated. Enforces: R7"""
+    never evaluated. Enforces: R7
+    Used by: search_check, compare_check."""
     decoder, start = json.JSONDecoder(), answer.find("{")
     for _ in range(20):                                  # the first brace may open words, not the object
         if start < 0:
@@ -6218,19 +6744,24 @@ def json_object(answer):
 
 
 def chunk_ref(value):
-    """A chunk's reference as the model wrote it, made regular: [C-0012], c-12 and C-0012 are all C-0012."""
+    """A chunk's reference as the model wrote it, made regular: [C-0012], c-12 and C-0012 are all C-0012.
+    Used by: search_check, compare_check."""
     found = re.search(r"\bC\s*-?\s*(\d{1,6})\b", str(value or ""), re.I)
     return "C-%04d" % int(found.group(1)) if found else str(value or "").strip()
 
 
 def plain_text(value):
-    """A text field of an answer, on one line."""
+    """A text field of an answer, on one line.
+    Used by: search_check, compare_check."""
     return " ".join(str(value or "").split()) if isinstance(value, (str, int, float)) else ""
 
 
 def search_check(question):
     """The check a search answer passes: the JSON object asked for, naming only chunks the question showed. On the last
-    try, chunks it named that were not shown are left out, and said so. Enforces: R3"""
+    try, chunks it named that were not shown are left out, and said so. Enforces: R3
+    Used by: search_methodology.
+    Uses: ask_again (4.1), json_object, chunk_ref, plain_text.
+    Holds: check."""
     shown = [ref for ref, _, _ in question["pieces"]]
 
     def check(answer, last):
@@ -6258,7 +6789,10 @@ def search_check(question):
 def compare_check(question):
     """The check a comparison answer passes: the JSON object asked for, every deviation resting on chunks the question
     showed, and no words outside quotations that the workbook cannot hold. On the last try, chunks it named that were
-    not shown are left out, and said so. Enforces: R1, R3, R10"""
+    not shown are left out, and said so. Enforces: R1, R3, R10
+    Used by: search_methodology.
+    Uses: unwelcome_words (4.1), own_words (4.1), ask_again (4.1), json_object, chunk_ref, plain_text.
+    Holds: check."""
     order = {ref: number for number, (ref, _, _) in enumerate(question["pieces"])}
 
     def check(answer, last):
@@ -6307,7 +6841,9 @@ def methodology_account(units, chunks, calls, settings):
     agree. A unit is one chunk however many rows it takes: each row is searched against every piece of the methodology;
     a chunk of the methodology any row finds counts for the whole unit; once every row is searched, each row is
     compared with every chunk found for the unit, in all its parts; the deviations named for any row are the unit's, in
-    the order of its rows. A question answered twice counts once. Enforces: R2, R3"""
+    the order of its rows. A question answered twice counts once. Enforces: R2, R3
+    Used by: search_methodology, sheet_rows (4.4).
+    Uses: askable (4.2), search_shares, piece_cap, methodology_pieces, methodology_batches."""
     batch_tokens, _ = search_shares(settings)            # the methodology as step 05 puts it to the model: its pieces,
     pieces = methodology_pieces(chunks, piece_cap(settings))   # and the batches they go in
     batches = methodology_batches(pieces, batch_tokens)
@@ -6363,7 +6899,9 @@ def methodology_cells(state):
     """A unit's two cells of step 05 on Chunks_Model: the chunks of the methodology found to bear on it, as refs
     joined with "; "; and how many items it has on Flagged_Items - 0 when nothing was flagged or nothing found to
     compare, None before the methodology is searched in full, and, while comparisons are open, the number so far and
-    which chunks are still to compare. What is not finished says so, and says what to do. Enforces: R2, R10"""
+    which chunks are still to compare. What is not finished says so, and says what to do. Enforces: R2, R10
+    Used by: rows_model_units (4.4).
+    Uses: methodology_texts."""
     refs = methodology_texts(state)
     if not state["askable"] or state["open batches"]:
         return refs, None
@@ -6375,7 +6913,8 @@ def methodology_cells(state):
 
 
 def methodology_texts(state):
-    """The chunks found, as the cell Relevant Chunks in Methodology shows them: the references, or why not yet."""
+    """The chunks found, as the cell Relevant Chunks in Methodology shows them: the references, or why not yet.
+    Used by: methodology_cells."""
     if not state["askable"]:
         return NOT_SEARCHED
     refs = "; ".join(dict.fromkeys(item["ref"] for item in state["relevant"]))
@@ -6395,7 +6934,13 @@ def search_methodology(ctx):
     is asked again split in two, when it shows more than one piece of the methodology; a batch taken up again asks
     only for its pieces not yet searched. A question already answered in this run is not
     asked again, and while any unit is not searched and compared in full the step does not finish:
-    running cell 3 again asks only for what is open. Enforces: R2, R3, R5, R8"""
+    running cell 3 again asks only for what is open. Enforces: R2, R3, R5, R8
+    Used by: the runner, by its name in STEP_FUNCTIONS (1.8).
+    Uses: StepResult (1.1), RunStopped (1.1), LiveValues (1.6), question_room (4.1), held_answers (4.1),
+          ask_all (4.1), call_record (4.1), log_technical (4.1), askable (4.2), linked_units (4.2), search_shares,
+          compare_shares, neighbours_line, asked_rows, search_question, compare_question, search_check, compare_check,
+          methodology_account.
+    Holds: comparisons, compare_whole, build, after."""
     whole, chunks, calls = ctx.read("model_units"), ctx.read("chunks_canon"), ctx.read("llm_calls")
     units = asked_rows(whole, ctx.settings)
     types = (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON)
@@ -6547,7 +7092,9 @@ PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |obje
 def plain_cell(value, input_text, store):
     """The last gate before a cell is written. the tool's own words must be free of Python
     traces and of words the wording rule rejects; otherwise the text goes to run_log.txt
-    and the cell gets one fixed, plain sentence. Enforces: R1, R10"""
+    and the cell gets one fixed, plain sentence. Enforces: R1, R10
+    Used by: write_sheet.
+    Uses: plain_number (1.2), log_line (1.8), own_words (4.1)."""
     if value is None or value == "":
         return ""
     if isinstance(value, bool):
@@ -6566,12 +7113,14 @@ def plain_cell(value, input_text, store):
 
 
 def run_identity(store, paths):
-    """What ties a workbook to its run: also written into the workbook's properties."""
+    """What ties a workbook to its run: also written into the workbook's properties.
+    Used by: verify_evidence_pack (1.9), rows_package_info, build_workbook."""
     return {"project": paths.project, "run_id": paths.run_id}
 
 def stored_data_rows(units, links):
     """Model_Package_Info's account of the stored objects, once step 03 has linked them: how many the code reads, and
-    those no code reads - each of which says so in its own row of Immediate Downstream Model Chunk. Enforces: R2"""
+    those no code reads - each of which says so in its own row of Immediate Downstream Model Chunk. Enforces: R2
+    Used by: rows_package_info."""
     if not links:
         return []
     linked = {record["ref"]: record for record in links}
@@ -6587,7 +7136,10 @@ def stored_data_rows(units, links):
 
 
 def rows_package_info(store, paths, settings, progress, split=None):
-    """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
+    """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading.
+    Used by: sheet_rows.
+    Uses: canonical_json (1.2), digest (1.2), run_identity, stored_data_rows.
+    Holds: add."""
     identity, rows = run_identity(store, paths), []
     def add(group, item, value):
         rows.append({"group": group, "item": item, "value": value})
@@ -6630,7 +7182,8 @@ def rows_package_info(store, paths, settings, progress, split=None):
 
 def rows_chunks(chunks, slicer=None):
     """The rows of Chunks_Methodology and Chunks_Documentation: a chunk in one row or, too long for one, in rows
-    C-0045-1, C-0045-2 and so on as `slicer` cuts it, each with the chunk's section, type and file. Enforces: R2, R13"""
+    C-0045-1, C-0045-2 and so on as `slicer` cuts it, each with the chunk's section, type and file. Enforces: R2, R13
+    Used by: sheet_rows."""
     rows = []
     for c in chunks:
         slices = slicer(c) if slicer else [(c["text"], False)]
@@ -6643,7 +7196,9 @@ def rows_chunks(chunks, slicer=None):
 
 def interpretation_of(parts, said, unanswered, asked):
     """What the organisation's model says of a unit: its answer, or, for a unit asked about in parts, the answers of
-    all its parts together, each under the part and the lines it explains."""
+    all its parts together, each under the part and the lines it explains.
+    Used by: rows_model_units.
+    Uses: askable (4.2)."""
     texts = []
     for part in parts:
         answer = said.get(part["ref"]) or (NO_ANSWER if part["ref"] in unanswered else "")
@@ -6657,7 +7212,9 @@ def interpretation_of(parts, said, unanswered, asked):
 def spread_rows(ref, parts, columns):
     """The rows a unit takes on Chunks_Model: its code down its parts, and each of its own columns from the first row
     down, continued on the rows below where longer than a cell, never cut. A unit takes as many rows as the longest of
-    these needs; with more than one, they are numbered M-0003-1, M-0003-2 and so on. Enforces: R2, R13"""
+    these needs; with more than one, they are numbered M-0003-1, M-0003-2 and so on. Enforces: R2, R13
+    Used by: rows_model_units.
+    Uses: text_slices (4.3)."""
     cut = {field: ([value] if value is not None else []) if not isinstance(value, str) else
                   [piece for piece, _ in text_slices(value, float("inf"), SLICE_CHARS)] if value else []
            for field, value in columns.items()}
@@ -6679,7 +7236,9 @@ def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
     is one analytical chunk however many rows it takes: the units it takes something from and gives something to
     (step 03), what the organisation's model says of it (step 04 - its parts' explanations together), and the chunks
     of the methodology found for it with the potential deviations flagged (step 05) stand once, from its first row
-    down, and its code runs down its rows (spread_rows). Enforces: R2, R3"""
+    down, and its code runs down its rows (spread_rows). Enforces: R2, R3
+    Used by: sheet_rows.
+    Uses: methodology_cells (4.3), interpretation_of, spread_rows, link_cell."""
     links, methodology = links or {}, (methodology or {}).get("units")
     said, unanswered = {}, set()
     for call in calls:
@@ -6706,7 +7265,8 @@ def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
 def link_cell(linked, side, unit):
     """A unit's cell of Immediate Upstream or Immediate Downstream Model Chunk: the units the code shows it takes from
     or gives to, then those a name known only in part could be, each marked (possible), then what could not be known.
-    A stored object no code reads says so. Empty before step 03 has run. Enforces: R2"""
+    A stored object no code reads says so. Empty before step 03 has run. Enforces: R2
+    Used by: rows_model_units."""
     if not linked:
         return ""
     proven = list(linked.get(side) or ())
@@ -6722,7 +7282,8 @@ def rows_flagged_items(unit_rows, methodology):
     """Flagged_Items: one row per item the model flagged, numbered F-0001, F-0002 ... in the order of Chunks_Model and,
     within a piece, in the order the model gave them; with the piece it was found in, the chunks of the methodology
     it rests on, each of its parts in a column of its own, and the reviewer's decision and notes, left empty. The
-    items of a piece shown in several rows, or compared in several questions, are one list. Enforces: R2, R3"""
+    items of a piece shown in several rows, or compared in several questions, are one list. Enforces: R2, R3
+    Used by: sheet_rows."""
     states = (methodology or {}).get("units") or {}          # methodology_account: its state of each piece
     rows = []
     for ref in dict.fromkeys(row["unit_ref"] for row in unit_rows):
@@ -6737,7 +7298,8 @@ def rows_flagged_items(unit_rows, methodology):
 
 
 def several_rows(rows, key):
-    """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)]."""
+    """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)].
+    Used by: sheet_rows."""
     counts = {}
     for row in rows:
         counts[row[key]] = counts.get(row[key], 0) + 1
@@ -6745,7 +7307,11 @@ def several_rows(rows, key):
 
 
 def sheet_rows(store, paths, settings, progress):
-    """The rows of all five sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
+    """The rows of all five sheets, by sheet name. A chunk too long for one row takes several, on every sheet.
+    Used by: build_workbook.
+    Uses: piece_cap (4.3), piece_slices (4.3), methodology_slices (4.3), model_rows (4.3), asked_rows (4.3),
+          methodology_account (4.3), rows_package_info, rows_chunks, rows_model_units, rows_flagged_items,
+          several_rows."""
     links = {r["ref"]: r for r in store.read("unit_links")}
     whole, calls, canon = store.read("model_units"), store.read("llm_calls"), store.read("chunks_canon")
     parts, asked = model_rows(whole, settings), asked_rows(whole, settings)
@@ -6765,7 +7331,9 @@ def sheet_rows(store, paths, settings, progress):
 def check_written_totals(rows, store):
     """The identity of the workbook: every unit read is one row of its sheet, or several, and no row is anything else;
     a unit's rows, joined back, are its text exactly, character for character. Raised as a fault of the tool, never as
-    a remark about the model. Enforces: R2, R13"""
+    a remark about the model. Enforces: R2, R13
+    Used by: build_workbook.
+    Uses: RunStopped (1.1), joined_rows (4.3)."""
     for kind, sheet, key in (("model_units", "Chunks_Model", "unit_ref"), ("chunks_doc", "Chunks_Documentation", "chunk_ref"),
                              ("chunks_canon", "Chunks_Methodology", "chunk_ref")):
         read, written, texts = {record["ref"]: record for record in store.read(kind)}, rows[sheet], {}
@@ -6843,14 +7411,17 @@ sheets:
 '''
 
 def load_layout():
-    """The workbook layout: every sheet and every column of Output.xlsm."""
+    """The workbook layout: every sheet and every column of Output.xlsm.
+    Used by: build_workbook, link_references."""
     return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     """One generic writer for every sheet: header row and first column frozen, filter on
     the header, wrapped text, no merged cells; a column a person fills in (editable) shaded in the reviewer's colour,
     with a dropdown of its choices where the layout gives them, and unlocked, should a person protect the sheet. No
-    sheet is protected: Excel greys out Data > Clear on a protected sheet, whatever it allows."""
+    sheet is protected: Excel greys out Data > Clear on a protected sheet, whatever it allows.
+    Used by: build_workbook.
+    Uses: plain_cell."""
     from openpyxl.styles import Alignment, Font, PatternFill, Protection
     from openpyxl.worksheet.datavalidation import DataValidation
     from openpyxl.utils import get_column_letter
@@ -6886,7 +7457,10 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
 
 def build_workbook(store, paths, settings, progress, target):
     """Build Output.xlsm on local disk from the record of the run. All five sheets always
-    exist; a sheet whose step has not run shows its header only."""
+    exist; a sheet whose step has not run shows its header only.
+    Used by: rebuild_outputs.
+    Uses: canonical_json (1.2), run_identity, sheet_rows, check_written_totals, load_layout, write_sheet,
+          link_references, vba_project (4.5)."""
     import openpyxl
     layout = load_layout()
     rows = sheet_rows(store, paths, settings, progress)
@@ -6917,7 +7491,9 @@ def link_references(workbook, rows):
     Immediate Upstream and Immediate Downstream Model Chunk, and the count of a piece's flagged items; on
     Flagged_Items, the location of each item and the chunks of the methodology it rests on. Each leads to the first
     row it names, where the workbook's macro then shows only the rows named (WORKBOOK_MACRO); a count leads to the
-    piece's first item. One link to a cell: Excel holds no more. Enforces: R2"""
+    piece's first item. One link to a cell: Excel holds no more. Enforces: R2
+    Used by: build_workbook.
+    Uses: load_layout."""
     from openpyxl.styles import Font
     from openpyxl.worksheet.hyperlink import Hyperlink
     first_row = {}
@@ -6944,13 +7520,16 @@ def link_references(workbook, rows):
 
 
 def file_sha256(path):
-    """SHA-256 of a file's bytes."""
+    """SHA-256 of a file's bytes.
+    Used by: open_run (1.5), engine_file_hashes (1.8), verify_evidence_pack (1.9), flowr_ready (3.2), rebuild_outputs.
+    Uses: digest (1.2)."""
     with open(path, "rb") as handle:
         return digest(handle.read())
 
 
 def progress_text(store, waiting_message):
-    """Where the run stands, in one or two plain sentences."""
+    """Where the run stands, in one or two plain sentences.
+    Used by: rebuild_outputs."""
     records = [record for record in store.read("step_records") if record.get("finished", True)]
     if not records:
         return "The run has been opened; no step has finished yet."
@@ -6962,7 +7541,9 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     """Rebuild Output.xlsm (and the report once flagged items exist) on local disk and copy
     them whole into the project folder. The guard: a workbook there that differs from the last
     one the tool wrote is a reviewer's work in progress and is never overwritten before it has
-    been read in. Afterwards the project folder holds Output.xlsm and the _Audit folder beside its three input folders. Enforces: R6, R12"""
+    been read in. Afterwards the project folder holds Output.xlsm and the _Audit folder beside its three input folders. Enforces: R6, R12
+    Used by: run_pipeline (1.8), run_step (1.8).
+    Uses: copy_whole (1.7), log_line (1.8), build_workbook, file_sha256, progress_text."""
     work = os.path.join(store.local_dir, "work")
     os.makedirs(work, exist_ok=True)
     progress = progress_text(store, waiting_message)
@@ -7116,7 +7697,8 @@ VBA_STDOLE = b"*\\G{00020430-0000-0000-C000-000000000046}#2.0#0#C:\\WINDOWS\\sys
 
 def ovba_compress(data):
     """[MS-OVBA] 2.4.1 compression: chunks of 4,096 bytes, each a run of tokens - a literal byte, or a copy of bytes
-    met earlier in the chunk. A chunk that would not shrink is kept as it is."""
+    met earlier in the chunk. A chunk that would not shrink is kept as it is.
+    Used by: vba_project."""
     out = bytearray(b"\x01")
     for start in range(0, len(data), 4096):
         chunk = data[start:start + 4096]
@@ -7160,7 +7742,8 @@ def ovba_compress(data):
 def ovba_encrypt(project_id, data, seed):
     """[MS-OVBA] 2.4.3.2 data encryption, for the project's protection, password and visibility: a seed, the version,
     the project's key - the sum of its id's bytes - then the data's length and the data, each byte folded into the
-    ones before it. Returned as the hexadecimal text the PROJECT stream holds."""
+    ones before it. Returned as the hexadecimal text the PROJECT stream holds.
+    Used by: vba_project."""
     key = sum(project_id.encode("latin-1")) & 0xFF
     version_enc, key_enc = seed ^ 2, seed ^ key
     out = [seed, version_enc, key_enc]
@@ -7173,14 +7756,17 @@ def ovba_encrypt(project_id, data, seed):
 
 
 def vba_record(record_id, payload=b""):
-    """One record of the project's dir stream: its id, its size, what it holds."""
+    """One record of the project's dir stream: its id, its size, what it holds.
+    Used by: vba_project."""
     return struct.pack("<HI", record_id, len(payload)) + payload
 
 
 @functools.lru_cache(maxsize=None)
 def vba_project(sheets):
     """The bytes of xl/vbaProject.bin: the workbook's module holding WORKBOOK_MACRO, and a module for each sheet,
-    `sheets` giving their code names in order. [MS-OVBA] 2.2 and 2.3; the same bytes on every call."""
+    `sheets` giving their code names in order. [MS-OVBA] 2.2 and 2.3; the same bytes on every call.
+    Used by: build_workbook (4.4).
+    Uses: ovba_compress, ovba_encrypt, vba_record, cfb_file."""
     project_id = "{%s}" % str(uuid.UUID(bytes=hashlib.sha256(b"Verifier workbook macro").digest()[:16])).upper()
     attributes = ('Attribute VB_Name = "%s"\r\nAttribute VB_Base = "%s"\r\nAttribute VB_GlobalNameSpace = False\r\n'
                   'Attribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = True\r\n'
@@ -7222,7 +7808,9 @@ def cfb_file(streams):
     """A compound file, [MS-CFB] version 3, holding `streams` - a path of names, "VBA/dir", to its bytes; the storages
     are those the paths name. Streams under 4,096 bytes live in the mini stream, in sectors of 64 bytes; the rest,
     and the file's own tables, in sectors of 512. The entries of each storage form a balanced tree in the order the
-    format sets - shorter names first, then by their capitals - coloured so that it is a red-black tree."""
+    format sets - shorter names first, then by their capitals - coloured so that it is a red-black tree.
+    Used by: vba_project.
+    Holds: allocate."""
     SECTOR, MINI, CUTOFF, FREE, END, FATSECT = 512, 64, 4096, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD
     nodes = [{"name": "Root Entry", "type": 5, "children": {}, "data": b""}]
     for path in streams:
