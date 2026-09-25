@@ -5358,7 +5358,11 @@ COMPARE_CONTEXT_TOKENS = 5000   # tokens of context code in a comparison; a cont
 NEIGHBOURS_NAMED = 20           # units named on the line of what a unit takes from, and on the line of what it gives to
 DEVIATION_KINDS = {"differs": "The code differs", "omits": "Not done in the code",
                    "adds": "Not described in the methodology", "ambiguous": "The methodology can be read more than one way"}
-DEVIATION_PARTS = (("methodology", "Methodology"), ("code", "Code"), ("why", "Why it potentially deviates"), ("effect", "Effect"))
+DEVIATION_PARTS = (("methodology", "Methodology"), ("code", "Code"), ("why", "Why it potentially deviates"), ("effect", "Effect"),
+                   ("example", "Concrete example"))
+NO_EXAMPLE = "The model gave no example."
+FLAGGED_DECISIONS = ("True Positive", "False Positive", "True Negative", "False Negative", "For further discussion",
+                     "Other Case (see notes)")
 NOT_SEARCHED = "Not searched: nothing was read from this file."
 NOT_COMPARED = "Not compared: nothing was read from this file."
 SEARCH_SYSTEM_PROMPT = (
@@ -5405,9 +5409,10 @@ COMPARE_SYSTEM_PROMPT = (
     "by compounding\u201d; the methodology - what the chunks require, quoting them word for word where the wording "
     "matters; the code - what the piece does instead, naming its variables, functions and line numbers and quoting it "
     "where that helps; why - the precise mechanism by which the code's result departs from what the methodology "
-    "prescribes, step by step where it takes several; and the effect - which inputs or cases are affected, in which "
-    "direction the result moves, by how much where the code shows it, with a short worked example in numbers where "
-    "that makes it clearer. Be specific and direct: name the quantities, give the numbers, say which cases are "
+    "prescribes, step by step where it takes several; the effect - which inputs or cases are affected, in which "
+    "direction the result moves, and by how much where the code shows it; and a concrete example - one case followed "
+    "through in clear prose, with numbers where the chunks and the code give them: what the methodology gives, what "
+    "the code gives instead, and why the two part. Be specific and direct: name the quantities, give the numbers, say which cases are "
     "affected. Write nothing that would fit any code, such as \u201cthis may affect the results\u201d or \u201cthis "
     "should be reviewed\u201d, and do not repeat yourself. State what the code does and what follows from it as fact; "
     "where the code leaves something undetermined, say exactly what. Do not rate how important a deviation is, "
@@ -5416,7 +5421,8 @@ COMPARE_SYSTEM_PROMPT = (
     "\u201clike this\u201d - never straight ones, which would break the JSON. The explanation of the piece can be wrong: "
     "where it and the code disagree, the code counts. Answer with one JSON object and nothing else, in this form: "
     "{\"deviations\": [{\"refs\": [\"C-0012\"], \"kind\": \"differs\", \"title\": \"...\", \"methodology\": \"...\", "
-    "\"code\": \"...\", \"why\": \"...\", \"effect\": \"...\"}]}. The kind is differs (the piece does what the chunks "
+    "\"code\": \"...\", \"why\": \"...\", \"effect\": \"...\", \"example\": \"...\"}]}. The kind is differs (the piece does "
+    "what the chunks "
     "describe, differently), omits (the chunks require something the piece does not do), adds (the piece does something "
     "to its result that the chunks do not describe) or ambiguous (the chunks can be read in more than one way, and the "
     "code follows one reading). The depth wanted, shown on another model: {\"refs\": [\"C-0047\"], \"kind\": "
@@ -5425,7 +5431,11 @@ COMPARE_SYSTEM_PROMPT = (
     "\u201d.\", \"code\": \"monthly_pd() returns \u201cpd_annual / 12\u201d (line 4).\", \"why\": \"Dividing by 12 "
     "spreads defaults evenly over the year; the methodology compounds survival month by month, which gives a higher "
     "monthly PD for the same annual PD.\", \"effect\": \"Every monthly PD is lower than the methodology's, and more so "
-    "as the annual PD rises: at an annual PD of 20% the code gives 1.667% a month, the methodology 1.842%.\"}. If the "
+    "as the annual PD rises: at an annual PD of 20% the code gives 1.667% a month, the methodology 1.842%.\", "
+    "\"example\": \"Take a borrower with an annual PD of 20%. The methodology gives a monthly PD of 1 - (1 - 0.20)^(1/12) = "
+    "1.842%; the code gives 0.20 / 12 = 1.667%. Compounded over the twelve months, the code\u2019s figure is an annual PD of "
+    "18.3%, not 20%: the borrower\u2019s chance of default comes out 1.7 points lower than the methodology intends.\"}. If "
+    "the "
     "piece does what the chunks say, answer {\"deviations\": []}. Outside quotations, never use the words finding, "
     "error, severity, severe, critical, major or minor, and never call anything high, medium or low in risk, rating, "
     "priority or impact.")
@@ -5884,17 +5894,22 @@ def methodology_account(units, chunks, calls, settings):
 
 
 def methodology_cells(state):
-    """A unit's three cells of step 05: the chunks of the methodology found to bear on it, as refs joined with "; ";
-    the items flagged, each opening with the refs it rests on; and how many items that cell holds - None where it
-    holds no result yet, because the methodology is not searched in full. What is not finished says so, and says what
-    to do. Enforces: R2, R10"""
-    refs, flagged = methodology_texts(state)
-    ready = state["askable"] and not state["open batches"]
-    return refs, flagged, len(state["deviations"]) if ready else None
+    """A unit's two cells of step 05 on Chunks_Model: the chunks of the methodology found to bear on it, as refs
+    joined with "; "; and how many items it has on Flagged_Items - 0 when nothing was flagged or nothing found to
+    compare, None before the methodology is searched in full, and, while comparisons are open, the number so far and
+    which chunks are still to compare. What is not finished says so, and says what to do. Enforces: R2, R10"""
+    refs, _ = methodology_texts(state)
+    if not state["askable"] or state["open batches"]:
+        return refs, None
+    found = len(state["deviations"])
+    if state["relevant"] and state["to compare"]:
+        open_refs = "; ".join(dict.fromkeys(key[0] for _, key in state["to compare"]))
+        return refs, "%d so far - not compared in full with %s; run cell 3 again" % (found, open_refs)
+    return refs, found
 
 
 def methodology_texts(state):
-    """The first two cells of methodology_cells."""
+    """The chunks found, as methodology_cells shows them, and what the items flagged say in words (the words check)."""
     if not state["askable"]:
         return NOT_SEARCHED, NOT_COMPARED
     refs = "; ".join(dict.fromkeys(item["ref"] for item in state["relevant"]))
@@ -6226,33 +6241,50 @@ def input_fingerprints(inputs_dir, inputs=None):
 # writer: Excel compiles it when it opens the workbook. It is the same for every run, and nothing in it comes from an
 # input. Without macros, each link still leads to the first chunk it names. Enforces: R5, R7
 
-LINK_COLUMNS = {"methodology_refs": ("Chunks_Methodology", "Click: Chunks_Methodology shows only these chunks"),
-                "upstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one"),
-                "downstream": ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one")}
+LINK_COLUMNS = {("Chunks_Model", "methodology_refs"): ("Chunks_Methodology", "Click: Chunks_Methodology shows only these chunks"),
+                ("Chunks_Model", "upstream"): ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one"),
+                ("Chunks_Model", "downstream"): ("Chunks_Model", "Click: Chunks_Model shows only these chunks and this one"),
+                ("Chunks_Model", "flagged_count"): ("Flagged_Items", "Click: Flagged_Items shows only this chunk's items"),
+                ("Flagged_Items", "location"): ("Chunks_Model", "Click: Chunks_Model shows only this chunk"),
+                ("Flagged_Items", "methodology_refs"): ("Chunks_Methodology", "Click: Chunks_Methodology shows only these chunks")}
+LINK_KEYS = {"Chunks_Methodology": "ref", "Chunks_Model": "ref", "Flagged_Items": "location"}   # what a link finds a row by
 REF_LIST = re.compile(r"^([CDM]-\d{4,})(?: \(possible\))?(?:; (?:[CDM]-\d{4,}(?: \(possible\))?|%s))*$" % re.escape(UNKNOWN_NAME))
                                             # a cell of references - some possible - and at most the note of an unknown name
 LINK_FONT = "0563C1"                                            # the blue Excel gives a hyperlink
 
 WORKBOOK_MACRO = """Option Explicit
 
-' Verifier: a reference in Chunks_Model, clicked, shows only the chunks it names.
-'   Relevant Chunks in Methodology (searched by LLM): Chunks_Methodology, filtered to the chunks listed.
-'   Immediate Upstream Model Chunk and Immediate Downstream Model Chunk: Chunks_Model, filtered to the
-'   chunks listed and the row clicked.
+' Verifier: a reference, clicked, shows only the rows it names.
+'   Chunks_Model, Relevant Chunks in Methodology (searched by LLM): Chunks_Methodology, filtered to the chunks listed.
+'   Chunks_Model, Immediate Upstream and Immediate Downstream Model Chunk: Chunks_Model, filtered to the chunks listed
+'   and the row clicked.
+'   Chunks_Model, Count of Flagged Items (by LLM): Flagged_Items, filtered to the items of the row clicked.
+'   Flagged_Items, Location of Flagged Item: Chunks_Model, filtered to that chunk.
+'   Flagged_Items, Ref in Chunks_Methodology: Chunks_Methodology, filtered to the chunks listed.
 ' A chunk shown in several rows (C-0012-1, C-0012-2 ...) is shown whole. Nothing else is changed:
 ' Data > Clear shows every row again. Without macros, a link still leads to the first chunk it names.
 
 Private Sub Workbook_SheetFollowHyperlink(ByVal Sh As Object, ByVal Target As Hyperlink)
-    Dim clicked As Range, heading As String, refs As String
+    Dim clicked As Range, heading As String, refs As String, rowRef As String
     On Error GoTo Finish
-    If Sh.Name <> "Chunks_Model" Then Exit Sub
     Set clicked = Target.Range.Cells(1, 1)
     heading = CStr(Sh.Cells(1, clicked.Column).Value)
     refs = RefsIn(CStr(clicked.Value))
-    If heading = "Relevant Chunks in Methodology (searched by LLM)" Then
-        ShowOnly ThisWorkbook.Worksheets("Chunks_Methodology"), refs
-    ElseIf heading = "Immediate Upstream Model Chunk" Or heading = "Immediate Downstream Model Chunk" Then
-        ShowOnly Sh, refs & "|" & UnitOf(CStr(Sh.Cells(clicked.Row, 1).Value))
+    rowRef = UnitOf(CStr(Sh.Cells(clicked.Row, 1).Value))
+    If Sh.Name = "Chunks_Model" Then
+        If heading = "Relevant Chunks in Methodology (searched by LLM)" Then
+            ShowOnly ThisWorkbook.Worksheets("Chunks_Methodology"), refs, 1
+        ElseIf heading = "Immediate Upstream Model Chunk" Or heading = "Immediate Downstream Model Chunk" Then
+            ShowOnly Sh, refs & "|" & rowRef, 1
+        ElseIf heading = "Count of Flagged Items (by LLM)" Then
+            ShowOnly ThisWorkbook.Worksheets("Flagged_Items"), rowRef, 2
+        End If
+    ElseIf Sh.Name = "Flagged_Items" Then
+        If heading = "Location of Flagged Item" Then
+            ShowOnly ThisWorkbook.Worksheets("Chunks_Model"), refs, 1
+        ElseIf heading = "Ref in Chunks_Methodology" Then
+            ShowOnly ThisWorkbook.Worksheets("Chunks_Methodology"), refs, 1
+        End If
     End If
 Finish:
 End Sub
@@ -6292,14 +6324,14 @@ Private Function UnitOf(ByVal rowRef As String) As String
     If cut > 0 Then UnitOf = Left$(rowRef, cut - 1) Else UnitOf = rowRef
 End Function
 
-Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String)
-    ' Filter the sheet on its Ref column to the chunks named, each with every row it takes.
+Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String, ByVal byColumn As Long)
+    ' Filter the sheet on one column - Ref, or Flagged_Items' Location - to the chunks named, each with every row it takes.
     Dim wanted As Variant, shown As String, cellRef As String, last As Long, rowNumber As Long, i As Long, locked As Boolean
     If Len(refs) = 0 Then Exit Sub
     wanted = Split(refs, "|")
     last = onSheet.UsedRange.Row + onSheet.UsedRange.Rows.Count - 1
     For rowNumber = 2 To last
-        cellRef = CStr(onSheet.Cells(rowNumber, 1).Value)
+        cellRef = CStr(onSheet.Cells(rowNumber, byColumn).Value)
         For i = LBound(wanted) To UBound(wanted)
             If Len(wanted(i)) > 0 Then
                 If cellRef = wanted(i) Or Left$(cellRef, Len(wanted(i)) + 1) = wanted(i) & "-" Then
@@ -6317,7 +6349,7 @@ Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String)
     onSheet.ShowAllData                                ' clears any filter; with none on, there is nothing to clear
     On Error GoTo Restore
     If Not onSheet.AutoFilterMode Then onSheet.Range("A1").CurrentRegion.AutoFilter
-    onSheet.AutoFilter.Range.AutoFilter Field:=1, Criteria1:=Split(Mid$(shown, 2), "|"), Operator:=xlFilterValues
+    onSheet.AutoFilter.Range.AutoFilter Field:=byColumn, Criteria1:=Split(Mid$(shown, 2), "|"), Operator:=xlFilterValues
     onSheet.Activate
     Application.Goto onSheet.Range("A1"), True
 Restore:
@@ -6672,9 +6704,9 @@ def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
         questioned.setdefault(row["unit_ref"], []).append(row)
     for ref, parts in by_unit.items():
         linked = links.get(ref) or {}
-        refs, deviations, count = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", "", None)
+        refs, count = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", None)
         rows += spread_rows(ref, parts, {"interpretation": interpretation_of(questioned.get(ref, parts), said, unanswered, was_asked),
-                                         "methodology_refs": refs, "deviations": deviations, "flagged_count": count,
+                                         "methodology_refs": refs, "flagged_count": count,
                                          "upstream": link_cell(linked, "upstream", parts[0]),
                                          "downstream": link_cell(linked, "downstream", parts[0])})
     return rows
@@ -6694,6 +6726,24 @@ def link_cell(linked, side, unit):
     return "; ".join(items)
 
 
+def rows_flagged_items(unit_rows, methodology):
+    """Flagged_Items: one row per item the model flagged, numbered F-0001, F-0002 ... in the order of Chunks_Model and,
+    within a piece, in the order the model gave them; with the piece it was found in, the chunks of the methodology
+    it rests on, each of its parts in a column of its own, and the reviewer's decision and notes, left empty. The
+    items of a piece shown in several rows, or compared in several questions, are one list. Enforces: R2, R3"""
+    states = (methodology or {}).get("units") or {}          # methodology_account: its state of each piece
+    rows = []
+    for ref in dict.fromkeys(row["unit_ref"] for row in unit_rows):
+        for item in (states.get(ref) or {}).get("deviations") or ():
+            head, title = DEVIATION_KINDS.get(item.get("kind"), "Flagged"), item.get("title") or ""
+            rows.append({"ref": "F-%04d" % (len(rows) + 1), "location": ref, "methodology_refs": "; ".join(item.get("refs") or ()),
+                         "type": "%s: %s" % (head, title) if title else head + ".",
+                         "methodology": item.get("methodology") or "", "code": item.get("code") or "",
+                         "why": item.get("why") or "", "effect": item.get("effect") or "",
+                         "example": item.get("example") or NO_EXAMPLE, "decision": "", "notes": ""})
+    return rows
+
+
 def several_rows(rows, key):
     """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)]."""
     counts = {}
@@ -6703,7 +6753,7 @@ def several_rows(rows, key):
 
 
 def sheet_rows(store, paths, settings, progress):
-    """The rows of all four sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
+    """The rows of all five sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
     links = {r["ref"]: r for r in store.read("unit_links")}
     whole, calls, canon = store.read("model_units"), store.read("llm_calls"), store.read("chunks_canon")
     parts, asked = model_rows(whole, settings), asked_rows(whole, settings)
@@ -6717,7 +6767,8 @@ def sheet_rows(store, paths, settings, progress):
     split = {"Package": several_rows(unit_rows, "unit_ref"), "Methodology files": several_rows(canon_rows, "chunk_ref"),
              "Documentation files": several_rows(doc_rows, "chunk_ref")}
     return {"Model_Package_Info": rows_package_info(store, paths, settings, progress, split),
-            "Chunks_Methodology": canon_rows, "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows}
+            "Chunks_Methodology": canon_rows, "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows,
+            "Flagged_Items": rows_flagged_items(unit_rows, methodology)}
 
 def check_written_totals(rows, store):
     """The identity of the workbook: every unit read is one row of its sheet, or several, and no row is anything else;
@@ -6735,12 +6786,24 @@ def check_written_totals(rows, store):
             raise EngineFault(
                 "The workbook does not hold exactly what was read: %d unit(s) read for %s and %d row(s) written. "
                 "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
+    flagged, counted, pieces = {}, {}, {row["unit_ref"] for row in rows["Chunks_Model"]}
+    for row in rows.get("Flagged_Items") or ():
+        flagged[row["location"]] = flagged.get(row["location"], 0) + 1
+    for row in rows["Chunks_Model"]:
+        value = row.get("flagged_count")
+        if isinstance(value, int) or (isinstance(value, str) and value[:1].isdigit()):
+            counted[row["unit_ref"]] = int(str(value).split()[0])
+    ids = [row["ref"] for row in rows.get("Flagged_Items") or ()]
+    if set(flagged) - pieces or set(flagged) - set(counted) or len(set(ids)) != len(ids) or \
+            any(flagged.get(ref, 0) != number for ref, number in counted.items()):
+        raise EngineFault("The workbook's flagged items do not match the counts of Chunks_Model: %d item(s) on "
+                          "Flagged_Items. This is a defect in the tool, not in the model under review." % len(ids))
 
 # ---------------------------------------------------------------- the workbook layout
 # Every sheet of Output.xlsm in order, and every column of each: its header, its colour group, the
 # field of the row it shows, its width, and whether it is typed by a person (input_text). One line
 # per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
-WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC, links: D0E0E3}
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC, links: D0E0E3, reviewer: C6EFCE}
 sheets:
 - name: Model_Package_Info
   columns:
@@ -6772,8 +6835,20 @@ sheets:
   - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
   - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
   - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
-  - {header: 'Flagged Items (by LLM, subject to human review)', group: model, field: deviations, width: 110}
   - {header: Count of Flagged Items (by LLM), group: model, field: flagged_count, width: 14}
+- name: Flagged_Items
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Location of Flagged Item, group: links, field: location, width: 14}
+  - {header: Ref in Chunks_Methodology, group: links, field: methodology_refs, width: 20}
+  - {header: Type, group: model, field: type, width: 36}
+  - {header: Methodology Says, group: model, field: methodology, width: 50}
+  - {header: Code Does, group: model, field: code, width: 50}
+  - {header: Why Potential Flagged Item, group: model, field: why, width: 50}
+  - {header: Effect, group: model, field: effect, width: 40}
+  - {header: Concrete Example of Potential Deviation, group: model, field: example, width: 55}
+  - {header: Decision (by Human Reviewer), group: reviewer, field: decision, width: 22, editable: true, choices: ['True Positive', 'False Positive', 'True Negative', 'False Negative', 'For further discussion', 'Other Case (see notes)']}
+  - {header: "Human Reviewer's Notes", group: reviewer, field: notes, width: 45, editable: true}
 '''
 
 def load_layout():
@@ -6782,8 +6857,10 @@ def load_layout():
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     """One generic writer for every sheet: header row and first column frozen, filter on
-    the header, wrapped text, no merged cells, reviewer columns yellow and unlocked."""
-    from openpyxl.styles import Alignment, Font, PatternFill
+    the header, wrapped text, no merged cells; a column a person fills in (editable) unlocked and shaded in the
+    reviewer's colour, with a dropdown of its choices where the layout gives them."""
+    from openpyxl.styles import Alignment, Font, PatternFill, Protection
+    from openpyxl.worksheet.datavalidation import DataValidation
     from openpyxl.utils import get_column_letter
     columns = sheet_layout["columns"]
     wrap = Alignment(wrap_text=True, vertical="top")
@@ -6798,6 +6875,19 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
             value = row.get(column["field"])
             cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
             cell.alignment = wrap
+    for number, column in enumerate(columns, start=1):     # a column a person fills in: unlocked, shaded, its choices
+        if not column.get("editable"):
+            continue
+        letter = get_column_letter(number)
+        for row_number in range(2, len(rows) + 2):
+            cell = sheet.cell(row=row_number, column=number)
+            cell.protection = Protection(locked=False)
+            cell.fill = PatternFill("solid", start_color=colours[column["group"]])
+        if column.get("choices") and rows:
+            check = DataValidation(type="list", formula1='"%s"' % ",".join(column["choices"]), allow_blank=True,
+                                   showErrorMessage=True, errorTitle=column["header"], error="Choose one of the listed values.")
+            check.add("%s2:%s%d" % (letter, letter, len(rows) + 1))
+            sheet.add_data_validation(check)
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
@@ -6807,7 +6897,7 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
         sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsm on local disk from the record of the run. All four sheets always
+    """Build Output.xlsm on local disk from the record of the run. All five sheets always
     exist; a sheet whose step has not run shows its header only."""
     import openpyxl
     layout = load_layout()
@@ -6835,33 +6925,36 @@ def build_workbook(store, paths, settings, progress, target):
 
 
 def link_references(workbook, rows):
-    """A hyperlink on each cell of Chunks_Model that is a list of references - Relevant Chunks in Methodology, Immediate
-    Upstream Model Chunk and Immediate Downstream Model Chunk (LINK_COLUMNS) - leading to the first chunk it names,
-    where the workbook's macro then shows only the chunks named (WORKBOOK_MACRO). One link to a cell: Excel holds no
-    more. Enforces: R2"""
+    """A hyperlink on each cell that names chunks (LINK_COLUMNS): on Chunks_Model, Relevant Chunks in Methodology,
+    Immediate Upstream and Immediate Downstream Model Chunk, and the count of a piece's flagged items; on
+    Flagged_Items, the location of each item and the chunks of the methodology it rests on. Each leads to the first
+    row it names, where the workbook's macro then shows only the rows named (WORKBOOK_MACRO); a count leads to the
+    piece's first item. One link to a cell: Excel holds no more. Enforces: R2"""
     from openpyxl.styles import Font
     from openpyxl.worksheet.hyperlink import Hyperlink
     first_row = {}
-    for name in {target for target, _ in LINK_COLUMNS.values()}:
+    for name, key in LINK_KEYS.items():
         at = first_row.setdefault(name, {})
-        for number, row in enumerate(rows[name], start=2):
-            at.setdefault(re.sub(r"^([CDM]-\d+)-\d+$", r"\1", str(row["ref"])), number)
-    layout = next(s for s in load_layout()["sheets"] if s["name"] == "Chunks_Model")
-    column_of = {column["field"]: number for number, column in enumerate(layout["columns"], start=1)}
-    sheet = workbook["Chunks_Model"]
-    for number, row in enumerate(rows["Chunks_Model"], start=2):
-        for field, (target, tip) in LINK_COLUMNS.items():
-            value = row.get(field) or ""
-            if not REF_LIST.match(value):
+        for number, row in enumerate(rows.get(name) or (), start=2):
+            at.setdefault(re.sub(r"^([CDM]-\d+)-\d+$", r"\1", str(row.get(key) or "")), number)
+    column_of = {s["name"]: {c["field"]: n for n, c in enumerate(s["columns"], start=1)} for s in load_layout()["sheets"]}
+    for (name, field), (target, tip) in LINK_COLUMNS.items():
+        sheet = workbook[name]
+        for number, row in enumerate(rows.get(name) or (), start=2):
+            value = row.get(field)
+            if field == "flagged_count":                    # a count leads to the piece's items, if it has any
+                shown = int(str(value).split()[0]) if isinstance(value, int) or (isinstance(value, str) and value[:1].isdigit()) else 0
+                first = row.get("unit_ref") if shown else None
+            else:
+                matched = REF_LIST.match(value) if isinstance(value, str) else None
+                first = matched.group(1) if matched else None
+            if not first or first not in first_row[target]:
                 continue
-            first = REF_LIST.match(value).group(1)
-            if first not in first_row[target]:
-                continue
-            cell = sheet.cell(row=number, column=column_of[field])
+            cell = sheet.cell(row=number, column=column_of[name][field])
             cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, first_row[target][first]), tooltip=tip)
             cell.font = Font(color=LINK_FONT, underline="single")
 
-# ---------------------------------------------------------------- rebuilding the outputs
+
 def file_sha256(path):
     """SHA-256 of a file's bytes."""
     with open(path, "rb") as handle:
@@ -7165,7 +7258,7 @@ def check_chat(chat):
         print("chat() answered:", str(reply)[:60])
         print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
         print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
-        print("(searched by LLM) and Flagged Items (by LLM, subject to human review), with their count.")
+        print("(searched by LLM), its count of flagged items, and the sheet Flagged_Items, one row per item.")
     except Exception as problem:
         print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
               " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
@@ -7225,9 +7318,9 @@ def review():
             print("      " + message)
     print("\nProject folder:", paths.project_dir)
     print("Open Output.xlsm there, beside Inputs: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
-    print("organisation's model says of each piece, the chunks of the methodology it found for it, and the items it")
-    print("flagged, with their count.")
-    print("In Chunks_Model, a click on a reference shows only the chunks it names, once Excel lets the workbook's macro run;")
+    print("organisation's model says of each piece, the chunks of the methodology it found for it, and how many items it")
+    print("flagged; Flagged_Items lists every item, one to a row, with a column for your decision and one for your notes.")
+    print("A click on a reference shows only the rows it names, once Excel lets the workbook's macro run;")
     print("if it blocks it, unblock the file first (the manual, section 7: Letting the macro run).")
     print("Then run cell 4 to check the project's two files against their own record.")
 
