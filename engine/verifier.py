@@ -58,8 +58,14 @@ from xml.sax.saxutils import escape
 # ================================================================================================
 # the contracts, the reading floor and the front door
 # ================================================================================================
-# ---------------------------------------------------------------- vocabulary
 
+
+# ======================================================================================================================
+# PART 1 of 4 - FOUNDATIONS AND THE RUN   (reviewer 1)
+# ======================================================================================================================
+
+
+# ---------------------------------------------------------------- 1.1 the vocabulary, the records and the two exceptions
 UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
 
 KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL = "Function", "Formula statement", "Top-level statement"
@@ -70,7 +76,6 @@ UNIT_KINDS = (KIND_FUNCTION, KIND_FORMULA, KIND_TOPLEVEL, KIND_TEST, KIND_TABLE,
               KIND_ROXYGEN, KIND_VIGNETTE, KIND_COMPILED, KIND_NOT_READ, KIND_OTHER)
 CHUNK_KINDS = ("Paragraph", "Table", "Figure", "Equation")
 
-# ---------------------------------------------------------------- data contracts: the records (plan 2.7)
 @dataclass(frozen=True)
 class TableData:
     """A table kept whole: header cells, body rows, and which column identifies a row."""
@@ -139,7 +144,26 @@ class StepResult:
     records: dict = field(default_factory=dict); counts: dict = field(default_factory=dict)
     messages: list = field(default_factory=list); finished: bool = True
 
-# ---------------------------------------------------------------- canonical JSON and hashes
+
+# ================================================================================================
+# reading the methodology, the documentation and the model package
+# ================================================================================================
+class Unreadable(Exception):
+    """What the tool could not read, with why in plain words: a formula it does not read, a data file that expands past
+    its limit, or a reply of chat() that holds no answer. Each is caught where it can arise; the reason is shown."""
+
+
+# ================================================================================================
+class RunStopped(Exception):
+    """Why the run cannot go on, in plain words: a defect in the tool - rows that do not rebuild their text, a question
+    too large for chat(), a workbook that does not match its records - or an Output.xlsm a person has changed, which a
+    new run would replace."""
+
+
+ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# ---------------------------------------------------------------- 1.2 canonical JSON, digests and numbers
 def to_plain(value):
     """Turn dataclasses, tuples and Decimals into plain JSON-ready values."""
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
@@ -180,7 +204,6 @@ def make_ref(prefix, number):
 
 
 
-# ---------------------------------------------------------------- numbers
 # A number as prose writes it. Thousands may be grouped with commas in groups of exactly three
 # ("1,000", "250,000.5"): that grouping is unambiguous, so it is read as one number. A comma
 # between other digit counts ("1,5") is not a grouping and stays two numbers, because in some
@@ -253,287 +276,8 @@ def plain_number(value, digits=6):
     text = "%.*g" % (digits, float(value))
     return plain_decimal(Decimal(text)) if "e" in text else text
 
-# ---------------------------------------------------------------- symbols
-GREEK = {"alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3", "delta": "\u03b4",
-         "epsilon": "\u03b5", "theta": "\u03b8", "kappa": "\u03ba", "lambda": "\u03bb",
-         "mu": "\u03bc", "nu": "\u03bd", "pi": "\u03c0", "rho": "\u03c1", "sigma": "\u03c3",
-         "tau": "\u03c4", "phi": "\u03c6", "omega": "\u03c9", "Phi": "\u03a6", "Sigma": "\u03a3",
-         "Delta": "\u0394", "Omega": "\u03a9"}
-_GREEK_BY_CHAR = {char: name for name, char in GREEK.items()}
-_SUBSCRIPT_CHARS = str.maketrans("\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089"
-                                 "\u1d62\u2c7c\u2096\u2099\u209c", "0123456789ijknt")
 
-def normalise_symbol(symbol):
-    """One form for a symbol however it was written: the Greek letter by name, by
-    character or in LaTeX form; a subscript written PD_i, PD[i], PD_{i} or with a
-    subscript character. Case is kept for single letters and folded for words."""
-    text = unicodedata.normalize("NFC", symbol or "").strip().strip("$`")
-    text = re.sub(r"\\([A-Za-z]+)", r"\1", text)
-    subscript = ""
-    match = re.fullmatch(r"(.+?)(?:_\{?([^{}]+)\}?|\[([^\]]+)\])", text)
-    if match:
-        text, subscript = match.group(1), match.group(2) or match.group(3)
-    else:
-        tail = re.search(r"[\u2080-\u2089\u1d62\u2c7c\u2096\u2099\u209c]+$", text)
-        if tail and tail.start() > 0:
-            text, subscript = text[:tail.start()], tail.group(0).translate(_SUBSCRIPT_CHARS)
-    parts = []
-    for part in (text, subscript):
-        part = "".join(_GREEK_BY_CHAR.get(char, char) for char in part)
-        if len(part) > 1 and part not in GREEK:
-            part = part.lower()
-        parts.append(part)
-    return parts[0] + ("_" + parts[1] if parts[1] else "")
-
-# ---------------------------------------------------------------- the expression tree
-@dataclass(frozen=True)
-class Expr:
-    """the tool's neutral tree for a formula. op is one of: num, sym, add, sub, mul, div,
-    pow, neg, call, cmp, piecewise, eq. `name` is a symbol, a neutral function name
-    (call) or a comparison sign (cmp); `value` is a decimal text (num)."""
-    op: str; name: Optional[str] = None; value: Optional[str] = None; args: tuple = ()
-    span: Optional[tuple] = None
-
-
-_INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
-
-def expr_to_text(expr, parent_rank=0):
-    """The tree in the tool's linear notation, the form shown to analysts and to the AI."""
-    if expr.op == "num":
-        return expr.value
-    if expr.op == "sym":
-        return expr.name
-    if expr.op == "neg":
-        text, rank = "-" + expr_to_text(expr.args[0], 3), 3
-    elif expr.op in _INFIX:
-        sign, rank = _INFIX[expr.op]
-        left = expr_to_text(expr.args[0], rank + (1 if expr.op == "pow" else 0))
-        text = left + sign + expr_to_text(expr.args[1], rank + (0 if expr.op == "pow" else 1))
-    elif expr.op == "call":
-        return "%s(%s)" % (expr.name, ", ".join(expr_to_text(arg) for arg in expr.args))
-    elif expr.op == "cmp":
-        text, rank = (" %s " % expr.name).join(expr_to_text(arg, 1) for arg in expr.args), 0
-    elif expr.op == "eq":
-        return "%s = %s" % (expr_to_text(expr.args[0]), expr_to_text(expr.args[1]))
-    elif expr.op == "piecewise":
-        return "piecewise(%s)" % ", ".join(expr_to_text(arg) for arg in expr.args)
-    else:
-        return "?"
-    return "(%s)" % text if rank < parent_rank else text
-
-
-# ================================================================================================
-
-
-
-# ---------------------------------------------------------------- element helpers
-def local_name(tag):
-    """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
-    if not isinstance(tag, str):
-        return ""
-    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
-
-def attribute(element, name):
-    """The value of an attribute, whatever namespace prefix it carries."""
-    for key, value in element.attrib.items():
-        if local_name(key) == name:
-            return value
-    return ""
-
-def child_named(element, name):
-    """The first child with this local tag name, or None."""
-    for child in element:
-        if local_name(child.tag) == name:
-            return child
-    return None
-
-# ---------------------------------------------------------------- baseline slicing: what a document's shape says
-def attribute_text(element, names, digits_too=False):
-    """The first of the named attributes that holds text worth reading, with its name. A bare
-    number is no heading, so it is passed over unless digits_too."""
-    for name in names:
-        value = (element.get(name) or "").strip()
-        if value and (digits_too or not value.isdigit()):
-            return value, name
-    return "", ""
-
-BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_item", "table")
-
-
-def table_rows(element, rules):
-    """The rows of a table: the children that hold cells, looked for directly below the table
-    and below the wrappers the rules know (thead, tbody, tgroup)."""
-    known = rules["family_of"]
-    holders = [element] + [part for part in element if known.get(local_name(part.tag)) == "table_part"]
-    return [row for holder in holders for row in holder
-            if local_name(row.tag) and len(row) and known.get(local_name(row.tag)) in (None, "row")]
-
-def discover_table_shape(element, rules, is_table):
-    """Give a family to every tag used inside a table, whatever the tags are called. Everything
-    in a row is a cell. Two kinds are told apart by name, since only the name says what they are
-    for: a tag holding the table's number or title (<tablenumber>, <tabletitle>) is the caption,
-    one holding a column heading (<tablecolhead>) a header cell. A tag nobody anticipated
-    (<tablesub>, <tabletext>) is simply a cell and keeps its text.
-    An element the rules already name as a table (is_table) needs no more than that: real tables
-    have rows of differing width (a note below, a heading that spans). An element NOT known to be
-    a table has to make the case by its shape, and two guards keep the skeleton of a document,
-    which repeats twice over as a table does, from being read as one: a cell holds words and
-    never a block, and most rows are the same width. Returns (row tags, {tag: family}) or None."""
-    known, rows = rules["family_of"], table_rows(element, rules)
-    cells = [cell for row in rows for cell in row if local_name(cell.tag)]
-    if not cells:
-        return None
-    if not is_table:
-        widths = [sum(1 for cell in row if local_name(cell.tag)) for row in rows]
-        usual = max(set(widths), key=widths.count)
-        if (len(rows) < 2 or len({local_name(row.tag) for row in rows}) > 1 or usual < 2 or widths.count(usual) * 2 <= len(rows)
-                or any(known.get(local_name(cell.tag)) for cell in cells)
-                or any(known.get(local_name(below.tag)) in BLOCK_FAMILIES for cell in cells for below in cell)):
-            return None
-    families = {}
-    for name in {local_name(cell.tag) for cell in cells}:
-        if any(word in name for word in rules["caption_tag_words"]):
-            families[name] = "caption"
-        else:
-            families[name] = "header_cell" if any(word in name for word in rules["header_tag_words"]) else "cell"
-    return {local_name(row.tag) for row in rows}, families
-
-def readable_elements(known, element):
-    """Every element the walker will actually read. Discovery stops where the walker
-    stops: the inside of an equation or a figure is read by its own reader, and what the
-    rules ignore is never read at all, so neither is catalogued here."""
-    yield element
-    if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
-        return
-    for child in element:
-        if local_name(child.tag):
-            yield from readable_elements(known, child)
-
-
-def discover_families(root, rules, report):
-    """Work out a family for each tag this document uses that the rules do not name, from the
-    way the tag behaves here. The rules always win, so a schema the tool already knows is read
-    exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
-    table; an element carrying its own heading in an attribute; one holding other blocks (a
-    container); one holding text (a paragraph). Every decision is recorded with its reason in
-    plain words, shown on Model_Package_Info, and can be overridden by the project's tag_rules.yaml, beside its three input folders."""
-    known, found = rules["family_of"], {}
-
-    def note(tag, family, reason):
-        if tag not in known and tag not in found:
-            found[tag] = family
-            report[tag] = {"family": family, "reason": reason, "count": 1 if tag == name else 0}
-
-    # A tag that sits in running text, never holding a block of its own, is read inline: its
-    # words belong to the sentence around it, not to a paragraph of their own.
-
-    elements = list(readable_elements(known, root))
-    inline_looking = set()
-    for element in elements:
-        for child in element:
-            if (child.tail or "").strip() or (element.text or "").strip():
-                inline_looking.add(local_name(child.tag))
-
-    for element in elements:
-        name = local_name(element.tag)
-        if not name:
-            continue
-        if name in report:
-            report[name]["count"] += 1
-        # Table shape is looked for under a known table too: the element may be named in the
-        # rules while the row and cell tags inside it are not.
-        if known.get(name) == "table" or name not in known:
-            shape = discover_table_shape(element, rules, known.get(name) == "table")
-            if shape:
-                row_tags, families = shape
-                note(name, "table", "holds rows of cells")
-                for row_tag in sorted(row_tags):
-                    note(row_tag, "row", "holds the cells of <%s>" % name)
-                reasons = {"caption": "holds the number or the title of <%s>" % name,
-                           "header_cell": "holds a column heading of <%s>" % name,
-                           "cell": "sits in a row of <%s>" % name}
-                for tag in sorted(families):
-                    note(tag, families[tag], reasons[families[tag]])
-                continue
-        if name in known or name in found:
-            continue
-        blocks_below = any(local_name(child.tag) and known.get(local_name(child.tag)) not in ("inline", "ignore")
-                           for child in element)
-        heading, attribute = attribute_text(element, rules["heading_attributes"])
-        if heading and blocks_below:
-            note(name, "container", "carries its own heading in the %s attribute" % attribute)
-        elif blocks_below:
-            note(name, "container", "holds other blocks")
-        elif name in inline_looking and not len(element):
-            note(name, "inline", "appears inside running text")
-        elif (element.text or "").strip() or len(element):
-            note(name, "paragraph", "holds text")
-        else:
-            note(name, "paragraph", "empty")
-    return found
-
-def first_numbering(text, rules):
-    """The numbering at the start of a heading as written, and the name of its scheme."""
-    for scheme in rules["numbering_schemes"]:
-        match = re.match(scheme["pattern"], text)
-        if match:
-            return match.group(0).strip(), scheme["name"]
-    return "", ""
-
-def infer_levels(blocks, rules):
-    """Give every heading its level. When the file nests its sections, the nesting decides.
-    When nesting is flat, numbering decides: a dotted number gives its depth directly
-    (relative to the level of plain numbers); any other scheme seen for the first time is one
-    level deeper than the heading before it, and a scheme seen before returns to its level."""
-    headings = [b for b in blocks if b["type"] == "heading"]
-    hints = sorted({b["level_hint"] for b in headings if b["level_hint"] is not None})
-    nested = len(hints) > 1
-    scheme_level, current, run_hint, run_schemes = {}, 0, None, {}
-    for block in headings:
-        written, scheme = first_numbering(block["text"], rules)
-        if block["numbering"] and not scheme:
-            written, scheme = first_numbering(block["numbering"] + " ", rules)
-        block["numbering"] = block["numbering"] or written
-        if nested:                                       # a flat-numbered stretch inside a nested file (an annex)
-            if block["level_hint"] != run_hint:
-                run_hint, run_schemes = block["level_hint"], {}
-            if scheme and scheme != "dotted":
-                run_schemes.setdefault(scheme, len(run_schemes))
-            block["level"] = hints.index(block["level_hint"]) + 1 + run_schemes.get(scheme, 0)
-        elif scheme == "dotted":
-            depth = block["numbering"].strip(".").count(".") + 1
-            block["level"] = scheme_level.get("number", 1) + depth - 1
-        elif scheme:
-            if scheme not in scheme_level:
-                scheme_level[scheme] = current + 1
-            block["level"] = scheme_level[scheme]
-        else:
-            block["level"] = max(1, current) if current else 1
-        current = block["level"]
-    return blocks
-
-def without_page_furniture(lines, pages, state, file_name):
-    """Leave out what a page carries only because it is a page: the running title, the footer
-    with its date and page number, the logo. Such a line sits in the top or bottom margin and
-    comes back on most pages, the same but for its digits. It is not part of what the document
-    says, and left in it cuts a list or a sentence in two wherever a page ends. What was left
-    out is reported, so nothing goes missing unseen: this is the "declared drop" class of the
-    content account, and the note is what declares it. Enforces: R2, R13"""
-    same = lambda entry: (entry["edge"], re.sub(r"\d+", "#", entry["text"]))
-    on_pages = {}
-    for entry in lines:
-        if entry["edge"] and "text" in entry:
-            on_pages.setdefault(same(entry), set()).add(entry["page"])
-    furniture = {key for key, found in on_pages.items() if pages >= 3 and len(found) >= max(3, pages // 2)}
-    for entry in lines:                              # a declared drop: named, counted, and shown in the account
-        if entry.get("edge") and "text" in entry and same(entry) in furniture:
-            state.dropped.append(entry["text"])
-    for edge, text in sorted(furniture):
-        state.notes.append("%s: left out as a page header or footer, because it repeats in the %s margin of %d of %d pages: '%s'"
-                           % (file_name, edge, len(on_pages[(edge, text)]), pages, text))
-    return [entry for entry in lines if not (entry["edge"] and "text" in entry and same(entry) in furniture)]
-
-# ---------------------------------------------------------------- the fidelity ledger
+# ---------------------------------------------------------------- 1.3 the content account: what every reading must close, and a document's smallest pieces
 # Enforces: R13. A reader may decide HOW a file is sliced. It may not add a word the file does
 # not contain, and it may not lose a word the file does contain. Neither is taken on trust: the
 # smallest countable pieces of the file are counted independently of the reader that read it,
@@ -756,68 +500,1087 @@ def account_lines(found):
     return lines
 
 
-def account_of_package(files, units, refused, is_text_file, dropped=()):
-    """The content account of a package tarball. The atom of a package is a line: every
-    non-blank line of every member that holds text has to lie inside a unit, be refused with a
-    reason, or be named as not read. A member the tool cannot read as text (a compiled object, a
-    picture, stored data in a binary form) is counted as one atom of its own, because its lines
-    cannot be counted without reading it. Extends the line coverage that read_package already
-    kept for parsed R files to every member of the tarball. A member left out on purpose (dropped: a help
-    page, generated from the roxygen comments in the R files, which are read; a file of the package's tests)
-    is a declared drop, every line of it, or one piece when it is not text. Enforces: R13"""
-    inside, not_read, atoms, unaccounted, fenced, text_only, declared = 0, 0, 0, [], 0, 0, 0
-    covered = {}
-    for unit in units:
-        lines = unit.get("lines")
-        if unit.get("file") and lines:
-            covered.setdefault(unit["file"], set()).update(range(int(lines[0]), int(lines[1]) + 1))
-    for path in sorted(files):
-        if path in dropped:                           # not read on purpose, under a named rule
-            lines = 1 if not is_text_file(path) else sum(1 for line in files[path].decode("utf-8", "replace").split("\n") if line.strip())
-            atoms, declared = atoms + lines, declared + lines
-            continue
-        if not is_text_file(path):
-            atoms += 1
-            if any(unit.get("file") == path for unit in units):
-                inside += 1
-            else:
-                not_read += 1
-            continue
+# ---------------------------------------------------------------- 1.4 settings
+DEFAULT_SETTINGS = {
+    "max_parameter_cells": 5000, "max_parameter_columns": 50,
+    "max_file_mb": 200.0, "reviewer_id": "",
+    "parallel_chats": 256,
+    "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
+
+def make_settings(overrides=None):
+    """The settings of a run. Only names on the allow-list above exist, so a new setting
+    can never leak into the manifest by default, and no setting can hold the token.
+    Enforces: R8"""
+    settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+    for name, value in (overrides or {}).items():
+        if name not in DEFAULT_SETTINGS:
+            raise ValueError("'%s' is not a setting the tool knows" % name)
+        settings[name] = value
+    return settings
+
+
+# ---------------------------------------------------------------- 1.5 the project: its folders, its runs, and the layout of before
+INPUT_FOLDERS = (
+    ("methodology", "1_Methodology", "Put the canonical methodology here: XML (also inside a .txt), .mhtml, .docx, "
+     ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything the tool cannot read is named."),
+    ("package", "2_Model_Package", "Put the R package here: its tarball (.tar.gz), a .zip of it, or its source folder."),
+    ("documentation", "3_Model_Documentation", "Put the model documentation here (.docx is preferred; .pdf, .mhtml, "
+     "XML, Markdown, .csv, .xlsx, .rtf and .tex are read too). Folders are read too, in name order."))
+
+def list_input_files(inputs_dir):
+    """The input files of a project, by corner, walking into folders; the folder each corner is
+    read from, so that a file can be named by its path inside it; and every file each corner left
+    out, with why. The optional glossary and tag rules sit beside the three folders. Enforces: R2"""
+    inputs = {"glossary": None, "tag_rules": None, "roots": {}, "skipped": {}}
+    for corner, folder, _ in INPUT_FOLDERS:
+        inputs["roots"][corner] = os.path.join(inputs_dir, folder)
+        inputs[corner], inputs["skipped"][corner] = input_files(inputs["roots"][corner])
+    for key, name in (("glossary", "glossary.xlsx"), ("tag_rules", "tag_rules.yaml")):
+        if os.path.exists(os.path.join(inputs_dir, name)):
+            inputs[key] = os.path.join(inputs_dir, name)
+    return inputs
+
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
+OUTPUT_FILE = "Output.xlsm"               # the deliverable: a workbook with one macro (the workbook's macro)
+LEGACY_OUTPUT_FILE = "Output.xlsx"        # what the tool wrote before its workbook held the macro
+LONGEST_AUDIT_NAME = OUTPUT_FILE
+PATH_BUDGET = 100
+
+@dataclass
+class RunPaths:
+    """Where a project's run lives: Output.xlsm sits in the project folder, and the record of the run in its _Audit folder,
+    beside its three input folders - run_dir, outputs_dir, audit_dir and inputs_dir are that one folder, each name kept so that
+    every reader says which file it means - and local_dir is scratch space on the driver. previous is the
+    manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
+    projects_dir: str; project: str; project_dir: str; inputs_dir: str
+    run_id: str; run_dir: str; outputs_dir: str; audit_dir: str; local_dir: str
+    previous: Optional[dict] = None; opened: str = ""
+
+
+
+
+LEGACY_INPUTS = "Inputs"                   # where the three folders were kept before they stood beside Output.xlsm
+BESIDE_FOLDERS = ("glossary.xlsx", "tag_rules.yaml")   # the optional files that sit beside the three folders
+
+
+def holds_nothing(path):
+    """Does a folder hold nothing but the tool's README.txt and hidden files?"""
+    return not [n for n in os.listdir(path) if n != "README.txt" and not n.startswith(".")]
+
+
+def lift_project(project_dir):
+    """A project laid out before brought to the present layout, once. Its three folders, if inside Inputs/: each folder,
+    and each optional file beside them, moved up into the project's folder whole, not a file of it changed. A folder
+    above that holds only its README.txt gives way to the one it replaces; one that holds more is never overwritten:
+    then nothing of that folder is moved, and the run cannot start until a person keeps one. Inputs is removed when
+    nothing but hidden files is left in it. Then its Audit_Log.xlsx, if it stands in the project's own folder, is moved
+    into _Audit - the tool's own file, moved whole. Returns (what was done, what stops the run), in plain words.
+    Enforces: R6"""
+    said, blocking = [], []
+    legacy = os.path.join(project_dir, LEGACY_INPUTS)
+    if os.path.isdir(legacy):
+        done = []
+        for name in [folder for _, folder, _ in INPUT_FOLDERS] + list(BESIDE_FOLDERS):
+            old, new = os.path.join(legacy, name), os.path.join(project_dir, name)
+            if not os.path.exists(old):
+                continue
+            if os.path.isdir(new) and os.path.isdir(old) and holds_nothing(new):
+                shutil.rmtree(new)                             # only the tool's README: the older folder takes its place
+            if os.path.exists(new):
+                blocking.append("%s is both in %s and beside it, and both hold files. Keep one: move what the one in Inputs "
+                                "holds into %s, or delete it, then remove Inputs and run cell 3 again." % (name, legacy, new))
+                continue
+            try:
+                os.rename(old, new)
+                done.append(name)
+            except OSError as problem:
+                blocking.append("%s could not be moved up out of %s (%s). Move it beside Output.xlsm yourself, then run "
+                                "cell 3 again." % (name, legacy, problem))
+        left = [n for n in os.listdir(legacy) if not n.startswith(".")]
+        said += (["Moved up out of Inputs, into the project's folder beside Output.xlsm: %s; no file in them was changed."
+                  % ", ".join(done)] if done else [])
+        if not left and not blocking:
+            shutil.rmtree(legacy)
+            said.append("Inputs, now empty, was removed.")
+        elif left and not blocking:
+            said.append("Inputs still holds %s, which the tool does not read; left as it is." % ", ".join(sorted(left)))
+    old, new = os.path.join(project_dir, AUDIT_FILE), os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
+    if os.path.isfile(old) and not os.path.exists(new):
+        os.makedirs(os.path.dirname(new), exist_ok=True)
+        os.rename(old, new)
+        said.append("Audit_Log.xlsx was moved into %s, where the record of a run is kept." % AUDIT_FOLDER)
+    return said, blocking
+
+
+PREVIOUS_RUNS = "previous_runs"            # in _Audit: each run a new run replaced, kept whole
+
+
+def archive_run(project_dir, run_id):
+    """The run a new run replaces, kept whole: everything in _Audit - Audit_Log.xlsx, run_log.txt, the step folders -
+    and the Output.xlsm, or the Output.xlsx of before, the tool wrote for it, moved into
+    _Audit/previous_runs/<its run id>/. Nothing of it is deleted or changed; a run kept before stays where it is.
+    An Output a person changed never comes here: open_run stops first (RunStopped). Returns the folder, or ""
+    when there was nothing to keep. Enforces: R4, R6"""
+    audit = os.path.join(project_dir, AUDIT_FOLDER)
+    kept = [os.path.join(audit, name) for name in sorted(os.listdir(audit)) if name != PREVIOUS_RUNS] if os.path.isdir(audit) else []
+    kept += [path for path in (os.path.join(project_dir, OUTPUT_FILE), os.path.join(project_dir, LEGACY_OUTPUT_FILE))
+             if os.path.exists(path)]
+    if not kept:
+        return ""
+    base = os.path.join(audit, PREVIOUS_RUNS, re.sub(r"[^A-Za-z0-9_.-]+", "-", run_id) or "run-before")
+    target, number = base, 1
+    while os.path.exists(target):
+        number += 1
+        target = "%s-%d" % (base, number)
+    os.makedirs(target)
+    for path in kept:
+        os.rename(path, os.path.join(target, os.path.basename(path)))
+    return target
+
+
+
+
+def setup_project(projects_dir, project):
+    """Create the project skeleton and say what is still missing: the three input folders, each with its README.txt,
+    in the project's folder beside Output.xlsm and Audit_Log.xlsx. A project laid out before, with its folders inside
+    Inputs/, is first brought to this layout (lift_project). Returns (project folder, what stops the run, what was
+    done). The content of an input is never touched. Enforces: R6"""
+    problem = "" if PROJECT_NAME_RE.match(project or "") else (
+        "The project name may hold at most 24 characters from letters, digits, hyphen and underscore. Please shorten or "
+        "change '%s'." % project)
+    if problem:
+        raise ValueError(problem)
+    project_dir = os.path.join(projects_dir, project)          # the project's folder: its three input folders, Output.xlsm and _Audit
+    os.makedirs(project_dir, exist_ok=True)
+    said, missing = lift_project(project_dir)
+    for _, folder, readme in INPUT_FOLDERS:
+        path = os.path.join(project_dir, folder)
+        os.makedirs(path, exist_ok=True)
+        readme_path = os.path.join(path, "README.txt")
+        if not os.path.exists(readme_path):
+            with open(readme_path, "w", encoding="utf-8") as handle:
+                handle.write(readme + "\n")
+        if holds_nothing(path):
+            missing.append("%s is still empty. %s" % (folder, readme))
+    return project_dir, missing, said
+
+def new_run_id(taken, now=None):
+    """A run is named by the minute it started, <date>_<HHMM>, with a letter added while that name is taken:
+    the run it replaces, or a run this driver has opened already."""
+    base = (now or datetime.datetime.now()).strftime("%Y-%m-%d_%H%M")
+    for suffix in [""] + list("bcdefghijklmnopqrstuvwxyz"):
+        if not taken(base + suffix):
+            return base + suffix
+    raise ValueError("Too many runs were started in the same minute; please wait a minute.")
+
+def recorded_manifest(project_dir):
+    """The manifest of the run the project's Audit_Log.xlsx records, read from its Run sheet alone; None when
+    there is none, or the workbook cannot be read."""
+    target = os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
+    if not os.path.exists(target):
+        return None
+    import openpyxl
+    try:
+        book = openpyxl.load_workbook(target, read_only=True)
+        parts = [row[1] or "" for row in book["Run"].iter_rows(min_row=2, values_only=True)
+                 if re.sub(r" \(part \d+\)$", "", str(row[0] or "")) == "run_manifest"]
+        book.close()
+        return json.loads("".join(parts)) if parts else None
+    except Exception:
+        return None
+
+def run_changes(record, inputs_dir, settings):
+    """Why the run a project records cannot be carried on, in plain words, or "" when it can: it is carried on
+    while its input files, the engine and the settings are the ones it started with. Who runs it does not count."""
+    if not record or not record.get("run_id") or "inputs" not in record:
+        return "no earlier run"
+    before = {f["file"]: f["sha256"] for f in record.get("inputs", [])}
+    now = {f["file"]: f["sha256"] for f in input_fingerprints(inputs_dir)}
+    if before != now:
+        return "the input files changed"
+    if record.get("engine_files") != engine_file_hashes():
+        return "the engine changed"
+    ignore = lambda values: {k: v for k, v in (values or {}).items() if k != "reviewer_id"}
+    if ignore(record.get("settings")) != ignore(json.loads(json.dumps(settings))):
+        return "the settings changed"
+    return ""
+
+def pick_scratch_root(preferred=""):
+    """The first folder on the driver the tool can actually write in, tried in order.
+
+    A run is built on the driver's own disk and copied whole into the Workspace afterwards
+    (R12), so this folder is needed before anything else can happen. A cluster is shared, and
+    a scratch folder made by one user cannot be written into by another; the folders tried
+    here therefore carry the user's own name. Writing is tested, not assumed, because a
+    folder can exist and still refuse."""
+    user = re.sub(r"[^A-Za-z0-9_.-]", "_", getpass.getuser() or "user")
+    refused = []
+    for root in ([preferred] if preferred else []) + [
+            os.path.join(tempfile.gettempdir(), "verifier_scratch_" + user),
+            os.path.join("/local_disk0", "verifier_scratch_" + user)]:
         try:
-            lines = files[path].decode("utf-8", "replace").split("\n")
-        except Exception:
-            atoms += 1
-            not_read += 1
+            os.makedirs(root, exist_ok=True)
+            probe = os.path.join(root, ".verifier_write_test")
+            with open(probe, "w") as handle:
+                handle.write("x")
+            os.remove(probe)
+            return root
+        except OSError as problem:
+            refused.append("%s (%s)" % (root, problem.strerror or problem))
+    raise PermissionError(
+        "the tool builds each run on the driver's own disk and copies the finished files into the "
+        "Workspace, so it needs one folder it may write in. These were refused: %s. Put a "
+        "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
+        "cluster." % "; ".join(refused))
+
+def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
+    """The project's run, and its local scratch folder. A project holds one run: Output.xlsm and the _Audit folder, with
+    Audit_Log.xlsx and the files of every step, sit beside its three input folders. The run the audit log records is carried on - by this session
+    or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
+    run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
+    changed since the tool wrote it is never replaced: RunStopped says so. Inputs are never touched.
+    Enforces: R6, R12"""
+    project_dir, _, _ = setup_project(projects_dir, project)
+    inputs_dir = project_dir                                # the three input folders stand in the project's folder
+    record = recorded_manifest(project_dir)
+    why = run_changes(record, inputs_dir, settings or make_settings({}))
+    scratch_root = pick_scratch_root(scratch_root)
+    place = digest(os.path.abspath(project_dir))[:8]   # two Projects folders never share scratch space
+    local_of = lambda run: os.path.join(scratch_root, "%s_%s_%s" % (project, run, place))
+    previous = None
+    if not why:
+        run_id = record["run_id"]
+        opened = "Carrying on run %s, which Audit_Log.xlsx records: a finished step is not repeated." % run_id
+    else:
+        for name in (OUTPUT_FILE, LEGACY_OUTPUT_FILE):
+            workbook = os.path.join(project_dir, name)
+            if os.path.exists(workbook) and file_sha256(workbook) != (record or {}).get("last_workbook_sha256"):
+                raise RunStopped(
+                    "%s in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
+                    "Move it to another folder or rename it, then run cell 3 again." % (name, project_dir, why))
+        replaced = os.path.exists(os.path.join(project_dir, LEGACY_OUTPUT_FILE))
+        kept = archive_run(project_dir, (record or {}).get("run_id") or "")   # the run before, kept whole: never deleted
+        previous = record if record and record.get("inputs") else None
+        archived = os.path.join(project_dir, AUDIT_FOLDER, PREVIOUS_RUNS)     # a run id is never used twice in a project
+        run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run))
+                            or os.path.exists(os.path.join(archived, run)), now)
+        opened = ("A new run, %s: %s since run %s." % (run_id, why, record["run_id"])
+                  if record and record.get("run_id") else "A new run, %s." % run_id)
+        if kept:
+            opened += (" The run before - its Output.xlsm and its _Audit folder - is kept, whole, in %s."
+                       % os.path.relpath(kept, project_dir).replace(os.sep, "/"))
+        if replaced:
+            opened += (" %s, which the tool wrote before, is kept with it; %s takes its place: the same sheets, and a click "
+                       "on a reference shows only the chunks it names." % (LEGACY_OUTPUT_FILE, OUTPUT_FILE))
+    local_dir = local_of(run_id)
+    paths = RunPaths(projects_dir, project, project_dir, inputs_dir, run_id, project_dir,
+                     project_dir, os.path.join(project_dir, AUDIT_FOLDER), local_dir, previous, opened)
+    longest = os.path.join(paths.project_dir, LONGEST_AUDIT_NAME)
+    relative = os.path.relpath(longest, os.path.dirname(os.path.abspath(projects_dir)))
+    if len(relative) > PATH_BUDGET:
+        raise ValueError("The folder path is %d characters long and the limit is %d, so that "
+                         "Excel can still open downloaded files. Please use a shorter project name "
+                         "or Projects folder." % (len(relative), PATH_BUDGET))
+    os.makedirs(paths.local_dir, exist_ok=True)
+    if why:                                                 # a new run: the record of the one it replaces is not read back
+        OPEN_STORES[(paths.local_dir, paths.audit_dir)] = AuditStore(paths.local_dir, paths.audit_dir, loaded=True)
+    return paths
+
+
+# ---------------------------------------------------------------- 1.6 live values: the notebook's widgets and the token
+@dataclass
+class LiveValues:
+    """The three values chat() reads when it is CALLED: endpoint, token, user id. They live
+    in memory only. `generation` goes up whenever a different token arrives, which is how
+    paused workers learn that a fresh one was pasted. Enforces: R8"""
+    values: dict = field(default_factory=dict); generation: int = 0; set_at: float = 0.0
+    recent_tokens: list = field(default_factory=list)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def update(self, llm_endpoint="", llm_token="", llm_user_id=""):
+        """Take the latest widget values; a different token starts a new generation."""
+        with self.lock:
+            if llm_token and llm_token != self.values.get("llm_token"):
+                self.generation += 1
+                self.set_at = time.time()
+                self.recent_tokens = ([llm_token] + self.recent_tokens)[:5]
+            self.values = {"llm_endpoint": llm_endpoint, "llm_token": llm_token, "llm_user_id": llm_user_id}
+
+    def get(self, name):
+        """One of the three values, read now. The user id is one value under two names: the widget is
+        called reviewer_id, because the same id records who made a decision and is sent to the LLM."""
+        with self.lock:
+            return self.values.get("llm_user_id" if name == "reviewer_id" else name, "")
+
+    def token_age_minutes(self):
+        """Minutes since the current token was pasted."""
+        return (time.time() - self.set_at) / 60.0 if self.set_at else 0.0
+
+    def redact(self, text):
+        """Remove the current and recent token strings from any text before it is kept."""
+        for token in list(self.recent_tokens):
+            if token:
+                text = text.replace(token, "[token removed]")
+        return text
+
+
+# ---------------------------------------------------------------- 1.7 the audit store and the _Audit folder
+AUDIT_OBJECTS = ("run_manifest", "package_info")
+AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, in the project's _Audit folder
+AUDIT_FOLDER = "_Audit"                   # the record of a run: Audit_Log.xlsx, run_log.txt, and a folder for each step
+CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
+
+def copy_whole(source, target):
+    """Copy one whole file: to a temporary name, then replace; a plain copy if the file
+    system does not support replace (probe P-5). Enforces: R12"""
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    temporary = target + ".part"
+    shutil.copyfile(source, temporary)
+    try:
+        os.replace(temporary, target)
+    except OSError:
+        shutil.copyfile(source, target)
+        os.remove(temporary)
+
+@dataclass
+class AuditStore:
+    """The record of a run, as one workbook a person can open: Audit_Log.xlsx, in the project's _Audit folder.
+
+        Run            the run's manifest and account, one line per entry
+        Steps          every step that ran, what it counted and what it said
+        Records        every record of every kind, in the order written, each as its own JSON
+        Model_Calls    every exchange with the model: the question, the answer and the outcome
+        Files          every file of the audit folder, in the order written, with when an exchange was sent and
+                       returned, its size and its SHA-256
+
+    Records are held in memory while a cell runs and the workbook is written whole at each
+    sync, beside and then swapped in, so a reader never sees it half written. Text longer than
+    a cell holds is written in numbered parts and joined again when read, so nothing is cut.
+    Enforces: R4, R5, R12"""
+    local_dir: str; remote_dir: str
+    rows: list = field(default_factory=list)       # {"kind", "record"}, in the order written
+    calls: list = field(default_factory=list)
+    account: dict = field(default_factory=dict)    # the manifest and the other single-object kinds
+    loaded: bool = False
+    copied: set = field(default_factory=set)       # the files of the audit folder already in the project's _Audit
+
+    def write_file(self, step_id, step_name, label, payload, holds, about="", sent_at="", returned_at=""):
+        """One file of the audit folder: payload as JSON, in the step's own folder - 02_read-inputs - numbered after the
+        files the step wrote before it, so that a step's files, and a step tried again, read in the order written:
+        02_read-inputs/0003_methodology_capital_methodology.txt.json. Written on local disk with the token removed,
+        copied into _Audit at the next sync, and listed in the inventory (the record kind audit_files, the sheet
+        Files) with the time it was written, its size and its SHA-256. Enforces: R4, R5, R8, R12"""
+        self.restore()
+        inventory = self.read("audit_files")
+        number = 1 + sum(1 for entry in inventory if entry["step_id"] == step_id)
+        name = "%04d_%s.json" % (number, re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-")[:90])
+        relative = "%s_%s/%s" % (step_id, step_name, name)
+        data = ((NOTEBOOK["live"] or LiveValues()).redact(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+                + "\n").encode("utf-8")
+        local = os.path.join(self.local_dir, AUDIT_FOLDER, *relative.split("/"))
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+        with open(local, "wb") as handle:
+            handle.write(data)
+        self.append("audit_files", [{"number": len(inventory) + 1, "step_id": step_id, "step": step_name, "file": relative,
+                                     "holds": holds, "about": about, "sent_at": sent_at, "returned_at": returned_at,
+                                     "written_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                                     "bytes": len(data), "sha256": digest(data)}])
+        return relative
+
+    def target(self):
+        return os.path.join(self.remote_dir, AUDIT_FILE)
+
+    def read(self, kind):
+        """Every record of one kind, in the order written."""
+        self.restore()
+        if kind == "llm_calls":
+            return list(self.calls)
+        if kind in AUDIT_OBJECTS:
+            found = self.account.get(kind)
+            return [found] if found is not None else []
+        return [row["record"] for row in self.rows if row["kind"] == kind]
+
+    def append(self, kind, records):
+        """Add records of one kind; the single-object kinds are replaced whole."""
+        self.restore()
+        if kind in AUDIT_OBJECTS:
+            self.account[kind] = to_plain(records[-1])
+            return
+        self.rows += [{"kind": kind, "record": to_plain(record)} for record in records]
+
+    def append_calls(self, records):
+        self.restore()
+        self.calls += [to_plain(record) for record in records]
+
+    def read_calls(self):
+        return self.read("llm_calls")
+
+    def sync(self):
+        """Write the whole workbook, beside and then swapped in. Returns what was written."""
+        import openpyxl
+        os.makedirs(self.remote_dir, exist_ok=True)
+        book = openpyxl.Workbook()
+        book.remove(book.active)
+        run = book.create_sheet("Run")
+        run.append(["Entry", "Value"])
+        for key in sorted(self.account):
+            for line, part in parts_of(canonical_json(self.account[key])):
+                run.append([key if line == 1 else "%s (part %d)" % (key, line), part])
+        steps = book.create_sheet("Steps")
+        steps.append(["Step", "Name", "Seconds", "What it counted", "What it said"])
+        for record in self.read("step_records"):
+            steps.append([record.get("step_id", ""), record.get("name") or record.get("step", ""), record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
+                          "\n".join(record.get("messages") or [])[:CELL_LIMIT]])
+        records = book.create_sheet("Records")
+        records.append(["Kind", "Number", "Part", "Record (JSON)"])
+        for number, row in enumerate(self.rows, start=1):
+            for part_number, part in parts_of(canonical_json(row["record"])):
+                records.append([row["kind"], number, part_number, part])
+        calls = book.create_sheet("Model_Calls")
+        calls.append(["Number", "Question", "Step", "Question type", "Attempt", "Outcome", "Part", "Exchange (JSON)"])
+        for number, record in enumerate(self.calls, start=1):    # a question asked twice has two records: each its own number
+            for part_number, part in parts_of(canonical_json(record)):
+                calls.append([number, record.get("question_id", ""), record.get("step", ""), record.get("question_type", ""),
+                              record.get("attempt", ""), record.get("outcome", ""), part_number, part])
+        inventory = book.create_sheet("Files")          # every file of the audit folder, in the order written
+        inventory.append(["Number", "Step", "File", "What it holds", "About", "Sent at", "Returned at", "Written at", "Bytes",
+                          "SHA-256"])
+        for entry in self.read("audit_files"):
+            inventory.append([entry["number"], "%s %s" % (entry["step_id"], entry["step"]), entry["file"], entry["holds"],
+                              entry.get("about", ""), entry.get("sent_at", ""), entry.get("returned_at", ""), entry["written_at"],
+                              entry["bytes"], entry["sha256"]])
+            inventory.cell(row=inventory.max_row, column=3).hyperlink = entry["file"]     # opens the file beside the workbook
+        for sheet in book.worksheets:
+            sheet.freeze_panes = "A2"
+        written = []
+        for entry in self.read("audit_files"):          # each file of the audit folder copied once, whole - before the
+            local = os.path.join(self.local_dir, AUDIT_FOLDER, *entry["file"].split("/"))   # inventory that lists it
+            if entry["file"] in self.copied or not os.path.exists(local):
+                continue                                # copied before, or by the session that wrote it
+            copy_whole(local, os.path.join(self.remote_dir, *entry["file"].split("/")))
+            self.copied.add(entry["file"])
+            written.append(entry["file"])
+        partial = os.path.join(self.local_dir, AUDIT_FILE + ".writing")
+        os.makedirs(self.local_dir, exist_ok=True)
+        book.save(partial)
+        copy_whole(partial, self.target())
+        os.remove(partial)
+        written.insert(0, AUDIT_FILE)
+        log = os.path.join(self.local_dir, "run_log.txt")
+        if os.path.exists(log):                         # the technical log of the run, the token already removed
+            copy_whole(log, os.path.join(self.remote_dir, "run_log.txt"))
+        return written
+
+    def restore(self):
+        """On resume: read the project's Audit_Log.xlsx back, once."""
+        if self.loaded:
+            return
+        self.loaded = True
+        if not os.path.exists(self.target()):
+            return
+        import openpyxl
+        book = openpyxl.load_workbook(self.target(), read_only=True)
+        joined = {}
+        for row in book["Records"].iter_rows(min_row=2, values_only=True):
+            kind, number, _, part = row[0], row[1], row[2], row[3] or ""
+            joined.setdefault((kind, number), []).append(part)
+        self.rows = [{"kind": kind, "record": json.loads("".join(parts))}
+                     for (kind, number), parts in sorted(joined.items(), key=lambda pair: pair[0][1])]
+        whole = {}
+        for row in book["Model_Calls"].iter_rows(min_row=2, values_only=True):
+            whole.setdefault(row[0], []).append((row[6] or 1, row[7] or ""))
+        self.calls = [json.loads("".join(part for _, part in sorted(parts))) for _, parts in sorted(whole.items())]
+        entries = {}
+        for row in book["Run"].iter_rows(min_row=2, values_only=True):
+            key = re.sub(r" \(part \d+\)$", "", str(row[0] or ""))
+            entries.setdefault(key, []).append(row[1] or "")
+        self.account = {key: json.loads("".join(parts)) for key, parts in entries.items() if key}
+
+def parts_of(text):
+    """One long text as numbered parts, each short enough for a cell."""
+    return [(number + 1, text[at:at + CELL_LIMIT]) for number, at in enumerate(range(0, max(len(text), 1), CELL_LIMIT))]
+
+OPEN_STORES = {}                         # one store per run: two of them would overwrite each other's records
+
+def open_store(paths, settings):
+    """The audit store of a run, read back from the project's Audit_Log.xlsx when there is one and the run is
+    carried on. The same store is returned for the same run, so everything a run records goes into one account."""
+    key = (paths.local_dir, paths.audit_dir)
+    if key not in OPEN_STORES:
+        OPEN_STORES[key] = AuditStore(paths.local_dir, paths.audit_dir)
+    return OPEN_STORES[key]
+
+
+# ---------------------------------------------------------------- 1.8 the pipeline, its runner, and step 01: prepare-run
+PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. Enforces: R11
+    {"id": "01", "name": "prepare-run", "carried_out_by": "prepare_run"},
+    {"id": "02", "name": "read-inputs", "carried_out_by": "read_inputs"},
+    {"id": "03", "name": "link-chunks", "carried_out_by": "link_chunks"},
+    {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"},
+    {"id": "05", "name": "search-methodology", "carried_out_by": "search_methodology"})
+
+
+
+def run_pipeline(paths, settings, stop_after=""):
+    """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
+    the run continues at the first step without one. A step that says it did not finish - step 04 or 05 with
+    questions still unanswered - stops the run there, and is carried out again when cell 3 runs again.
+    Returns {"state", "message", "steps_run"}."""
+    store = open_store(paths, settings)
+    done = {record["step_id"] for record in store.read("step_records") if record.get("finished", True)}
+    steps_run = []
+    for step in PIPELINE:
+        if stop_after and step["id"] > stop_after:
+            break
+        if step["id"] in done:
             continue
-        numbers = [number for number, line in enumerate(lines, start=1) if line.strip()]
-        # A fence that opens or closes a block of code in a vignette separates content from
-        # content and says nothing itself. It is a declared drop, named here, rather than a
-        # line that lies in no unit for no stated reason. Enforces: R13
-        fences = {number for number in numbers if lines[number - 1].strip().startswith("```")}
-        numbers = [number for number in numbers if number not in fences]
-        atoms += len(numbers) + len(fences)
-        fenced += len(fences)
-        held = covered.get(path, set())
-        whole_file = any(unit.get("file") == path and not unit.get("lines") for unit in units)
-        if any(unit.get("file") == path and unit.get("kind") == "Other file" for unit in units):
-            text_only += len(numbers)
-        for number in numbers:
-            if number in held or whole_file:
-                inside += 1
-            elif any(unit.get("file") == path and unit.get("read_problem") for unit in units):
-                not_read += 1
-            else:
-                unaccounted.append("%s line %d" % (path, number))
-    found = {"file": "the package", "atoms": atoms + len(refused), "in unit text": inside, "relocated": 0,
-             "rewritten": 0, "declared drop": len(refused) + fenced + declared, "not read": not_read,
-             "unaccounted": len(unaccounted), "injected": 0, "where unaccounted": sorted(unaccounted)[:12],
-             "what unaccounted": [], "what injected": [], "held as text only": text_only}
-    found["closed"] = found["unaccounted"] == 0
+        finished = run_step(step, store, paths, settings)
+        steps_run.append(step["name"])
+        if not finished:
+            message = "Step %s (%s) did not finish. Run cell 3 again to carry on from it." % (step["id"], step["name"])
+            rebuild_outputs(store, paths, settings, message)
+            return {"state": "unfinished", "message": message, "steps_run": steps_run}
+        if stop_after and step["id"] == stop_after:
+            break
+    message = "Every step has run." if not stop_after else "Stopped after step %s as asked." % stop_after
+    rebuild_outputs(store, paths, settings, message)
+    return {"state": "finished", "message": message, "steps_run": steps_run}
+
+def run_step(step, store, paths, settings):
+    """Build the context, call the step function, write what it returns, record the step,
+    rebuild the outputs and sync. Steps never touch the store themselves."""
+    notes = []
+    provenance = Provenance(paths.run_id, step["id"], step["name"])
+    options = dict(step.get("with") or {})
+    options.update({"inputs": list_input_files(paths.inputs_dir), "paths": paths,
+                    "run": {"project": paths.project, "run_id": paths.run_id}})
+    work_dir = os.path.join(paths.local_dir, "work")
+    os.makedirs(work_dir, exist_ok=True)
+    context = StepContext(settings, options, store.read, work_dir, notes.append, provenance)
+    if step["carried_out_by"] not in STEP_FUNCTIONS:     # only a function the allow-list names, looked up here
+        raise RunStopped("Step %s names %s, which the pipeline's allow-list does not hold. This is a defect in the tool, "
+                         "not in the model under review." % (step["id"], step["carried_out_by"]))
+    function = globals()[step["carried_out_by"]]
+    attempt = 1 + sum(1 for record in store.read("step_records") if record["step_id"] == step["id"])
+    started, fault = time.time(), ""
+    try:
+        result = function(context)
+    except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
+        result = StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
+        fault = "".join(traceback.format_exception(type(problem), problem, problem.__traceback__))
+    for kind in sorted(result.records):
+        if kind == "llm_calls":                      # exchanges with the model: the audit log's Model_Calls sheet
+            store.append_calls(result.records[kind])
+        else:
+            store.append(kind, result.records[kind])
+    result.messages = list(result.messages) + notes
+    audit_step_files(store, step, result, context.exchanges)
+    record_step(store, step, result, time.time() - started)
+    store.write_file(step["id"], step["name"], "step_attempt-%d" % attempt, store.read("step_records")[-1],
+                     "What the step did: the records it made by kind, what it counted and said, whether it finished, "
+                     "when it ended and how long it took", "attempt %d" % attempt)
+    if fault:
+        store.write_file(step["id"], step["name"], "fault_attempt-%d" % attempt, {"trace": fault},
+                         "Why the step could not finish: the fault inside the tool, for whoever maintains it", "attempt %d" % attempt)
+    rebuild_outputs(store, paths, settings, "")
+    store.sync()
+    return result.finished
+
+def audit_step_files(store, step, result, exchanges):
+    """The files a step leaves in the audit folder, before its own record: what it read and made - for each input file,
+    how it was read, the repairs made to it and every chunk made of it; for each file of the package, its units;
+    the package's account, the lines of Model_Package_Info and the links - and each exchange with chat(), the
+    SystemPrompt and MainPrompt as sent, the answer as returned, and what came of it. In the order the step made
+    them, which is the same for the same inputs. Enforces: R2, R4, R5"""
+    records = {kind: [to_plain(record) for record in items] for kind, items in result.records.items()}
+    def write(label, payload, holds, about="", sent_at="", returned_at=""):
+        store.write_file(step["id"], step["name"], label, payload, holds, about, sent_at, returned_at)
+    for manifest in records.get("run_manifest") or ():
+        write("run-manifest", manifest, "The run's identity, the fingerprints of its input files and of the engine's files, "
+                                        "the packages' versions, the settings, and what changed since the run before")
+    info, repairs = list(records.get("info_rows") or ()), list(records.get("read_repairs") or ())
+    for kind, corner in (("chunks_canon", "methodology"), ("chunks_doc", "documentation")):
+        by_file = {}
+        for chunk in records.get(kind) or ():
+            by_file.setdefault(chunk.get("source_file") or "", []).append(chunk)
+        for source, chunks in by_file.items():
+            write("%s_%s" % (corner, source.replace("/", "~")),
+                  {"input": source, "how it was read": [row for row in info if str(row.get("item", "")).split(":")[0] == source],
+                   "repairs made while reading": [row for row in repairs if row.get("file") == source], "chunks": chunks},
+                  "How one %s file was read, the repairs made to it, and every chunk made of it" % corner, source)
+    by_member = {}
+    for unit in records.get("model_units") or ():
+        by_member.setdefault(unit.get("file") or "", []).append(unit)
+    for member, units in by_member.items():
+        write("package_%s" % member.replace("/", "~"), {"package file": member, "units": units},
+              "Every unit made of one file of the model package", member)
+    for record in records.get("package_info") or ():
+        write("package-account", record, "What the package says of itself, and its content account")
+    if info:
+        write("model-package-info", info, "Every line the step wrote to Model_Package_Info")
+    if repairs:
+        write("repairs-made-while-reading", repairs, "Every repair made to a malformed file while reading it")
+    if records.get("unit_links"):
+        write("unit-links", records["unit_links"], "Each unit's links to the units it takes from and gives to, and how "
+                                                   "each was found")
+    sent = {(exchange["question_id"], exchange["attempt"]): exchange for exchange in exchanges}
+    for call in records.get("llm_calls") or ():
+        exchange = sent.get((call["question_id"], call["attempt"]), {})
+        pieces = [piece[0] if isinstance(piece, (list, tuple)) else piece for piece in call.get("pieces") or ()]
+        detail = ("_" + pieces[0] + ("-" + pieces[-1] if len(pieces) > 1 else "")) if pieces else ""
+        payload = {key: value for key, value in call.items() if key != "answer"}
+        payload.update({key: exchange[key] for key in ("sent_at", "returned_at", "chat_input", "chat_input_on_later_tries",
+                                                       "chat_output", "technical") if key in exchange})
+        write("%s_%s%s" % (call.get("unit_ref") or "", str(call.get("question_type") or "").replace(" ", "-"), detail), payload,
+              "One exchange with chat(): the SystemPrompt and MainPrompt sent, the answer returned, and what came of it",
+              call.get("unit_ref") or "", exchange.get("sent_at", ""), exchange.get("returned_at", ""))
+
+
+def step_failure(step, problem, work_dir):
+    """What the analyst is told when a step could not finish, and where the details are kept for
+    whoever maintains the tool. The run goes on: the steps after this one work with what there is, and
+    each says what it could not do. The details go to the run's work folder, not to the evidence
+    pack, because they are about the tool and not about the model under review. Enforces: R2"""
+    with open(os.path.join(work_dir, "step_%s_did_not_finish.txt" % step["id"]), "w", encoding="utf-8") as handle:
+        handle.write("".join(traceback.format_exception(type(problem), problem, problem.__traceback__)))
+    return ("Step %s (%s) could not finish, because of a fault inside the tool (%s). The steps after it ran on what there "
+            "was, and say what they could not do. The details are in the run's work folder, for whoever maintains the tool."
+            % (step["id"], step["name"], type(problem).__name__))
+
+def record_step(store, step, result, seconds):
+    """Leave the step record that makes a finished step visible and resume possible."""
+    produced = {kind: len(records) for kind, records in sorted(result.records.items())}
+    store.append("step_records", [{
+        "step_id": step["id"], "name": step["name"],
+        "carried_out_by": step["carried_out_by"], "produced": produced, "counts": result.counts,
+        "messages": result.messages, "finished": result.finished,
+        "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "seconds": round(seconds, 3)}])
+
+def log_line(store, text):
+    """Technical text (exception messages, Python names) belongs in run_log.txt only."""
+    with open(os.path.join(store.local_dir, "run_log.txt"), "a", encoding="utf-8") as handle:
+        handle.write("%s  %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), text))
+
+PACKAGES_RECORDED = ("PyYAML", "openpyxl", "python-docx", "numpy", "scipy", "sympy", "rdata",
+                     "pdfplumber", "pypdf", "pyreadr")
+
+def fingerprint_file(path, corner, inputs_dir):
+    """Name, corner, size, SHA-256 and content identifier of one input file."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    return {"corner": corner, "file": os.path.relpath(path, inputs_dir).replace(os.sep, "/"),
+            "bytes": len(data), "sha256": digest(data), "swhid": swhid_content(data)}
+
+def engine_file_hashes():
+    """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts and reference
+    data, and its requirements - so that an evidence pack names exactly the code that produced it."""
+    import glob
+    found = {}
+    for pattern in ("*.py", "requirements.txt"):
+        for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
+            if os.path.isfile(path):
+                found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
     return found
 
+def prepare_run(ctx):
+    """Step 01. Fingerprint every input, record the environment and the allow-listed
+    settings, and say what changed since the run of the project this one replaced."""
+    import importlib.metadata
+    paths, inputs = ctx.options["paths"], ctx.options["inputs"]
+    fingerprints = input_fingerprints(paths.inputs_dir, inputs)
+    versions = {"python": sys.version.split()[0]}
+    for name in PACKAGES_RECORDED:
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = "not installed"
+    previous, changes = paths.previous, []
+    if previous is not None:
+        before = {f["file"]: f["sha256"] for f in previous["inputs"]}
+        now = {f["file"]: f["sha256"] for f in fingerprints}
+        changes = ["%s: changed" % n for n in sorted(now) if n in before and before[n] != now[n]]
+        changes += ["%s: new" % n for n in sorted(now) if n not in before]
+        changes += ["%s: no longer present" % n for n in sorted(before) if n not in now]
+    manifest = dict(ctx.options["run"], versions=versions, engine_files=engine_file_hashes(),
+                    settings=ctx.settings, inputs=fingerprints, changes_since_previous_run=changes,
+                    previous_run=previous["run_id"] if previous else "",
+                    started_at=datetime.datetime.now().isoformat(timespec="seconds"))
+    return StepResult({"run_manifest": [manifest]}, {"input files": len(fingerprints)},
+                             ["%d input files fingerprinted." % len(fingerprints)])
 
+def input_fingerprints(inputs_dir, inputs=None):
+    """The fingerprint of every input file of a project, corner by corner, in the order they are read."""
+    inputs = inputs or list_input_files(inputs_dir)
+    found = []
+    for corner, _, _ in INPUT_FOLDERS:
+        found.extend(fingerprint_file(path, corner, inputs_dir) for path in inputs[corner])
+    for key in ("glossary", "tag_rules"):
+        if inputs[key]:
+            found.append(fingerprint_file(inputs[key], key, inputs_dir))
+    return found
+
+def combine(ctx, *parts):
+    """One step that carries out several: each part in order, everything they record kept, their counts
+    and their messages side by side. A later part reads what the earlier ones have just recorded, as it
+    would if each were still a step of its own - the records of a step reach the store only when the step
+    ends. Enforces: R2"""
+    records, counts, messages = {}, {}, []
+    for part in parts:
+        stored = ctx.read
+        so_far = {kind: [to_plain(row) for row in rows] for kind, rows in records.items()}   # as the store would hand them back
+        reading = dataclasses.replace(ctx, read=lambda kind, stored=stored, so_far=so_far: list(stored(kind)) + so_far.get(kind, []))
+        found = part(reading)
+        for kind, rows in (found.records or {}).items():
+            records.setdefault(kind, []).extend(rows)
+        for name, value in (found.counts or {}).items():     # two parts that count the same thing add up
+            counts[name] = counts.get(name, 0) + value if isinstance(value, (int, float)) and isinstance(counts.get(name, 0), (int, float)) else value
+        messages += found.messages or []
+    return StepResult(records, counts, messages)
+
+def read_inputs(ctx):
+    """Step 02, read-inputs: the methodology, the model documentation and the model package, each read
+    into units, in that order. Enforces: R2, R7"""
+    return combine(ctx, read_methodology, read_documentation, read_package)
+
+STEP_FUNCTIONS = ("prepare_run", "read_inputs", "read_methodology", "read_documentation", "read_package",
+                  "link_chunks", "interpret_code", "search_methodology")
+
+
+# ---------------------------------------------------------------- 1.9 cell 4: verification
+def contents_of(path):
+    """Every byte string a file holds, looking INSIDE the compressed ones: the call log is gzip,
+    and the workbook and the report are ZIP archives, so a token written into any of them would
+    be invisible to a search of the raw bytes. Yields the raw bytes first, then each member of a
+    ZIP and the decompressed stream of a gzip. Enforces: R8"""
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    yield raw
+    try:
+        if raw.startswith(b"\x1f\x8b"):
+            yield gzip.decompress(raw)
+        elif raw.startswith(b"PK\x03\x04"):
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                for member in archive.namelist():
+                    yield archive.read(member)
+    except Exception:
+        return                                       # a damaged archive is caught by the other lines of the verification
+
+def verify_evidence_pack(paths, settings, live=None):
+    """Works from Output.xlsm, the _Audit folder and the three input folders alone. Returns rows (what was checked,
+    "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
+    content hash is computed again from the input files and compared with the record."""
+    store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
+    def line(what, good, detail=""):
+        """good is True, False, or None for a check the run has not reached yet - which is not a failure
+        and must not read as one. Found on a real run that stopped after step 06: the coverage line said
+        Not confirmed, as if the pack had been tampered with."""
+        rows.append((what, "Confirmed" if good else "Not reached yet" if good is None else "Not confirmed", detail))
+    manifest = (store.read("run_manifest") or [{}])[0]
+    changed = [e["file"] for e in manifest.get("inputs", []) if not os.path.exists(os.path.join(paths.inputs_dir, e["file"]))
+               or file_sha256(os.path.join(paths.inputs_dir, e["file"])) != e["sha256"]]
+    line("Input files have the recorded fingerprints", not changed, ", ".join(changed))
+    installed, recorded = engine_file_hashes(), manifest.get("engine_files", {})
+    other = sorted(name for name in set(installed) | set(recorded) if installed.get(name) != recorded.get(name))
+    line("The engine files that produced this run are the ones installed here", not other, ", ".join(other[:5]))
+    options = {"inputs": list_input_files(paths.inputs_dir)}
+    context = StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
+    for kind, function in (("chunks_canon", read_methodology), ("chunks_doc", read_documentation),
+                           ("model_units", read_package)):
+        fresh = {to_plain(r)["ref"]: to_plain(r)["content_hash"] for r in function(context).records.get(kind, [])}
+        recorded = {r["ref"]: r["content_hash"] for r in store.read(kind)}
+        differing = sorted(ref for ref in set(fresh) | set(recorded) if fresh.get(ref) != recorded.get(ref))
+        sheet = {"chunks_canon": "Chunks_Methodology", "chunks_doc": "Chunks_Documentation", "model_units": "Chunks_Model"}.get(kind, kind)
+        line("Re-reading the inputs gives the recorded content hashes (%s)" % sheet, not differing, ", ".join(differing[:5]))
+    written = {kind: len(store.read(kind)) for kind in ("chunks_canon", "chunks_doc", "model_units")}
+    line("Every unit read is in the record", all(written.values()),
+         ", ".join("%s: %d" % pair for pair in sorted(written.items())))
+    identity = run_identity(store, paths)
+    try:
+        import openpyxl
+        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, OUTPUT_FILE), read_only=True).properties.description)
+        line("The workbook carries this run's ids and fingerprints", all(found.get(k) == v for k, v in identity.items()))
+    except Exception:
+        line("The workbook carries this run's ids and fingerprints", False, "Output.xlsm could not be opened")
+    secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
+    leaked, written = [], [os.path.join(paths.outputs_dir, OUTPUT_FILE)]   # the tool's own files: Output.xlsm and _Audit
+    for folder, _, names in os.walk(paths.audit_dir):
+        written += [os.path.join(folder, name) for name in sorted(names)]
+    for path in written:
+        if os.path.exists(path):
+            leaked += [os.path.relpath(path, paths.project_dir) for data in contents_of(path) for value in secrets if value in data]
+    line("No access token was written into Output.xlsm or the audit folder", not leaked, ", ".join(sorted(set(leaked))[:5]))
+    inventory = store.read("audit_files")
+    missing = [entry["file"] for entry in inventory
+               if not os.path.exists(os.path.join(paths.audit_dir, *entry["file"].split("/")))
+               or file_sha256(os.path.join(paths.audit_dir, *entry["file"].split("/"))) != entry["sha256"]]
+    line("The audit folder holds every file its inventory lists, unchanged", not missing if inventory else None,
+         ", ".join(missing[:5]) if missing else "%d files" % len(inventory))
+    return rows
+
+
+# ---------------------------------------------------------------- 1.10 the notebook's four cells
+# The functions a step may name: each looked up in this module by its name, never loaded by path. Enforces: R11
+
+# Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
+# cell 1 is setup(dbutils), cell 2 check_chat(chat), cell 3 review(), cell 4 verify(). The session - the
+# widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
+REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
+WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
+           ("project_name", "", "03 Project Name (can be a model ID)"))
+OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
+               "reviewer_id", "jfrog_index_url", "concurrency_limit", "token_cap", "model_id", "project")
+PYPI = "https://pypi.org/simple/"          # where every package comes from: named here, so no pip setting of the cluster redirects it
+NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": None, "chat": None, "paths": None, "result": None}
+
+def databricks_user(dbutils):
+    """Who runs the notebook, as Databricks knows them: the notebook context's user name; on a cluster that keeps
+    that context from Python, Spark's current_user(); outside Databricks, the system user."""
+    try:
+        return dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+    except Exception:
+        pass
+    try:
+        from pyspark.sql import SparkSession
+        session = SparkSession.getActiveSession()
+        if session is not None:
+            return session.sql("SELECT current_user()").first()[0]
+    except Exception:
+        pass
+    return getpass.getuser()
+
+def live(name):
+    """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
+    while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8"""
+    session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
+    if getattr(CHAT_WORKER, "active", False):       # a worker of step 04: the values its step last read
+        return session.get(name)
+    try:
+        widgets = NOTEBOOK["dbutils"].widgets
+        session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), NOTEBOOK["user"])
+    except Exception:
+        pass                                        # no notebook, or a widget read failed: the last values stand
+    return session.get(name)
+
+def notebook_folder(dbutils):
+    try:
+        path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+        return os.path.dirname(path if path.startswith("/Workspace") else "/Workspace" + path)
+    except Exception:
+        return os.getcwd()
+
+def setup(dbutils, home=None, projects=None):
+    """Cell 1: the widgets, the packages the engine needs (installed only if one is missing), flowR, and
+    what to do next. Safe to run any number of times; run it again after anything restarts Python."""
+    import importlib.util
+    widgets = dbutils.widgets
+    carried = {}                                      # a project name typed into an earlier notebook's 03 Model ID stays
+    try:
+        carried["project_name"] = widgets.get("model_id")
+    except Exception:
+        pass
+    for name, default, label in WIDGETS:              # made before anything is installed: a bare cluster works
+        try:
+            widgets.get(name)
+        except Exception:
+            widgets.text(name, carried.get(name, default), label)
+    for name in OLD_WIDGETS:                          # widgets of an earlier notebook, no longer used
+        try:
+            widgets.remove(name)
+        except Exception:
+            pass
+    home = home or notebook_folder(dbutils)
+    NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"), user=databricks_user(dbutils))
+    missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
+    if missing:
+        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
+        return
+    print("Folder:", home, "| Python", sys.version.split()[0])
+    for name in REQUIRED_PACKAGES + ("pdfplumber", "pypdf"):
+        found = importlib.util.find_spec(name)
+        print("  %-11s %s" % (name, "installed" if found else "not installed" + ("" if name in ("pdfplumber", "pypdf") else " - run this cell again")))
+    token = live("llm_token")
+    print("Endpoint set:", bool(live("llm_endpoint")), "| token:", ("%d characters" % len(token)) if token else "not set")
+    staged = os.path.join(home, FLOWR_URL.format(FLOWR_VERSION).rsplit("/", 1)[-1])
+    try:                                              # flowR reads the R code: fetched once, checked against its SHA-256
+        print("flowR %s ready in %s" % (FLOWR_VERSION, flowr_ready(staged if os.path.exists(staged) else "")))
+    except Exception as problem:
+        print("flowR IS NOT READY: %s" % problem)
+        if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by putting it here
+            print("The cluster could not download it. Download %s on an approved machine and put it in %s, next to this"
+                  " notebook." % (FLOWR_URL.format(FLOWR_VERSION), home))
+    print("\nTHE ENGINE IS READY. What happens next:")
+    print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
+    print("  Cell 3  read the inputs and run the review; it prints what each step did.")
+    print("  Cell 4  check the project's Output.xlsm and Audit_Log.xlsx against their own record.")
+    print("Widgets 01 and 02 carry the endpoint and the token; 03 the project's name, which names its folder in Projects.")
+    print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
+    print("at the moment it calls.")
+    print("Next: cell 2.")
+
+def pip_said(stderr):
+    """What pip said, without any credentials of an index URL, and what its most common failure means."""
+    text = re.sub(r"//[^/@\s]+@", "//...@", stderr or "")[-1500:]
+    missing = re.findall(r"satisfies the requirement ([\w.\-\[\]]+)", stderr or "")
+    if "from versions: none" in (stderr or ""):
+        text += ("\nPyPI offered no version of %s that fits this cluster's Python, or the cluster cannot reach %s: its network "
+                 "has to let the cluster reach PyPI." % (missing[0] if missing else "that package", PYPI))
+    elif "ResolutionImpossible" in (stderr or "") or "conflicting dependencies" in (stderr or ""):
+        text += "\nThe packages asked for cannot be installed together; the lines above say which."
+    return text
+
+def install(missing, dbutils, requirements):
+    """Install what the engine needs from PyPI, the runtime's own packages pinned as they are, and restart Python
+    only if those still import together afterwards."""
+    import importlib.metadata
+    hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")    # no credentials of an index URL are shown
+    pins = []
+    for name in ("numpy", "pandas", "pyarrow", "scipy"):
+        try:
+            pins.append("%s==%s" % (name, importlib.metadata.version(name)))
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
+    with open(constraints, "w") as handle:
+        handle.write("\n".join(pins) + "\n")
+    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints, "--index-url", PYPI]
+    print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
+    done = subprocess.run(command, capture_output=True, text=True)
+    if done.returncode:
+        print("The install did not finish. What pip said:\n" + pip_said(done.stderr))
+        print("Nothing the runtime needs was changed.")
+        return
+    with open(requirements, encoding="utf-8") as handle:
+        wanted = handle.read().split("# --- optional ---")
+    if len(wanted) > 1:
+        spare = os.path.join(tempfile.gettempdir(), "optional.txt")
+        with open(spare, "w", encoding="utf-8") as handle:
+            handle.write(wanted[1])
+        extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
+        print("Optional packages (the PDF readers):", "installed." if not extra.returncode else "not installed; a PDF will say it could not be read.")
+    probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
+    if probe.returncode:
+        print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip())[-300:])
+        print("Restarting now would crash this notebook session. Detach this notebook from the cluster and attach it again to undo the install.")
+        return
+    still = subprocess.run([sys.executable, "-c", "import " + ", ".join(missing)], capture_output=True, text=True)
+    if still.returncode:
+        print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting would only bring "
+              "this cell back here." % ", ".join(missing))
+        print("What Python said:\n" + hide(still.stderr)[-600:])
+        print("Check that engine/requirements.txt names it, and that PyPI carries it for this cluster's Python.")
+        return
+    print("Installed. Restarting Python; then run this cell once more.")
+    dbutils.library.restartPython()
+
+def notebook_settings():
+    return make_settings({"reviewer_id": NOTEBOOK["user"]})
+
+def check_chat(chat):
+    """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's steps 04 and 05,
+    make the project's three input folders and say what belongs in each."""
+    if NOTEBOOK["dbutils"] is None:
+        print("Run cell 1 first.")
+        return
+    NOTEBOOK["chat"] = chat
+    try:
+        reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
+        print("chat() answered:", str(reply)[:60])
+        print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
+        print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
+        print("(searched by LLM), its count of flagged items, and the sheet Flagged_Items, one row per item.")
+    except Exception as problem:
+        print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
+              " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
+        return
+    widgets = NOTEBOOK["dbutils"].widgets
+    project_dir, missing, said = setup_project(NOTEBOOK["projects"], widgets.get("project_name"))
+    for line in said:
+        print("\n" + line)
+    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, in the project's folder beside Output.xlsm, then run cell 3:")
+    for _, folder, note in INPUT_FOLDERS:
+        print("  %s\n      %s" % (os.path.join(project_dir, folder), note))
+    print("\nOne methodology file, the model package as it ships (.tar.gz, .zip or the unpacked folder), and the")
+    print("model documentation. A folder with nothing in it stops the run and says so, rather than reading around it.")
+    print("\nBefore cell 3: " + " ".join(missing) if missing else "\nAll three folders have files in them. Next: cell 3.")
+
+def open_current():
+    """The run of the project the widgets name, carried on or started anew as open_run decides - asked each time
+    cell 3 runs, so that an input changed meanwhile is noticed - and said in plain words when it is not the run
+    this session worked on already. None, with what to do, while an input folder is empty or while a new run
+    would replace an Output.xlsm a person has changed."""
+    widgets = NOTEBOOK["dbutils"].widgets
+    project = widgets.get("project_name")
+    _, missing, said = setup_project(NOTEBOOK["projects"], project)
+    for line in said:
+        print(line)
+    if missing:
+        print("\n".join(missing))
+        print("Put the files in, then run cell 3.")
+        return None
+    try:
+        paths = open_run(NOTEBOOK["projects"], project, settings=notebook_settings())
+    except RunStopped as problem:
+        print(problem)
+        return None
+    before = NOTEBOOK["paths"]
+    if before is None or (before.project_dir, before.run_id) != (paths.project_dir, paths.run_id):
+        print(paths.opened)
+    NOTEBOOK["paths"] = paths
+    return paths
+
+def review():
+    """Cell 3: read the inputs, link the units of the package and put them to the organisation's model, in this
+    cell; then say what each step did. A step already finished is never repeated."""
+    if NOTEBOOK["dbutils"] is None:
+        print("Run cell 1 first.")
+        return
+    paths = open_current()
+    if paths is None:
+        return
+    settings = notebook_settings()
+    result = NOTEBOOK["result"] = run_pipeline(paths, settings)
+    print(result["message"])
+    store = open_store(paths, settings)
+    print("\nWhat each step did:")
+    latest = {}
+    for record in store.read("step_records"):                 # a step tried again says what its latest attempt did;
+        latest[record["step_id"]] = record                     # the audit log keeps every attempt
+    for record in (latest[step_id] for step_id in sorted(latest)):
+        print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
+        for message in record["messages"]:
+            print("      " + message)
+    print("\nProject folder:", paths.project_dir)
+    print("Open Output.xlsm there, beside the three input folders: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
+    print("organisation's model says of each piece, the chunks of the methodology it found for it, and how many items it")
+    print("flagged; Flagged_Items lists every item, one to a row, with a column for your decision and one for your notes.")
+    print("A click on a reference shows only the rows it names, once Excel lets the workbook's macro run;")
+    print("if it blocks it, unblock the file first (the manual, section 7: Letting the macro run).")
+    print("Beside it, _Audit holds Audit_Log.xlsx and a folder for each step: a JSON file for everything the step read, made")
+    print("or asked chat(), numbered in the order written, each listed on Audit_Log.xlsx's sheet Files.")
+    print("Then run cell 4 to check Output.xlsm and the _Audit folder against their own record.")
+
+def verify():
+    """Cell 4: check Output.xlsm and the _Audit folder against their own record."""
+    paths = NOTEBOOK["paths"]
+    if paths is None:
+        print("Cell 3 has not read the inputs yet. Run cell 3 first.")
+        return
+    print("Verifying the evidence pack:")
+    for what, verdict, detail in verify_evidence_pack(paths, notebook_settings(), live=NOTEBOOK["live"] or LiveValues()):
+        print("  %-62s %-16s %s" % (what, verdict, detail))
+    print("\nProject folder:", paths.project_dir, "- Output.xlsm is the deliverable; Audit_Log.xlsx beside it is the")
+    print("record of the run: every step, every record, and every exchange with the model.")
+
+
+# ======================================================================================================================
+# PART 2 of 4 - STEP 02, READ-INPUTS: THE METHODOLOGY AND THE DOCUMENTATION   (reviewer 2)
+# ======================================================================================================================
+
+
+# ---------------------------------------------------------------- 2.1 which files are read, and what each file is
 # ================================================================================================
-# ---------------------------------------------------------------- what a file is
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")
 MARKDOWN_NAMES = (".md", ".markdown", ".mdown", ".mkd")
@@ -919,7 +1682,6 @@ def decode_text(data):
             continue
     return data.decode("latin-1")
 
-# ---------------------------------------------------------------- which files of a folder are documents
 LEFT_BEHIND = re.compile(r"^(~\$.*|\.~lock\..*#|thumbs\.db|desktop\.ini|ehthumbs\.db|.*\.tmp|.*\.bak|.*\.swp|\.ds_store)$", re.I)
 
 def input_files(folder):
@@ -950,651 +1712,195 @@ def input_files(folder):
                 found.append(os.path.join(root, name))
     return sorted(found, key=lambda path: os.path.relpath(path, folder).lower()), sorted(skipped)
 
-# ---------------------------------------------------------------- formats the tool reads by converting them
-# Each converter returns (markup, words): the markup is what the walker reads, and the words are
-# the file with its syntax taken away by a rule named here, which is what the content account
-# counts. The two are made by DIFFERENT code - the markup by reading the structure, the words by
-# removing syntax - so that the account still sees the walker lose or add a word. It does trust
-# the syntax rule, and says so. Enforces: R13
 
-def element(tag, text):
-    """One element of markup, its text escaped so that a < in a document is never a tag."""
-    return "<%s>%s</%s>" % (tag, escape(text), tag)
+# ---------------------------------------------------------------- 2.2 read_methodology and read_documentation: a folder read into chunks
+def atoms_of_file(data, found, file_name, state, repairs):
+    """The smallest pieces of text the file holds, counted straight from the file and NOT from
+    the blocks the reader made of it. That independence is the whole point: an account drawn
+    from the reader's own output could never show what the reader missed. Enforces: R13"""
+    try:
+        if found == "docx":                  # every text run of every part; footnotes, endnotes, comments, headers and
+            archive, found = zipfile.ZipFile(io.BytesIO(data)), []   # footers are parts of their own, counted here even
+            named = list(DOCX_PARTS) + [(name, "header" if "header" in name else "footer")   # where the reader does not
+                                        for name in sorted(archive.namelist())             # read them, so that they show
+                                        if name.startswith("word/header") or name.startswith("word/footer")]   # as
+            for part, place in named:                                                      # unaccounted
+                if part not in archive.namelist():
+                    continue
+                try:
+                    root = safe_xml(archive.read(part))
+                except Exception:                        # a part that will not parse is counted and named here
+                    found.append(atom(place, "%s %s" % (file_name, part), ""))
+                    continue
+                for position, node in enumerate(root.iter(), start=1):
+                    if node.tag in (WORD_TEXT, WORD_DELETED) and (node.text or "").strip():
+                        kind = "tracked change" if node.tag == WORD_DELETED else place
+                        found.append(atom(kind, "%s %s run %d" % (file_name, part, position), node.text))
+            return found
+        if found == "pdf":                   # every word of every page's text layer; a page without one is one atom
+            import pdfplumber                # with no text, so that a scanned page shows as one the tool cannot count
+            with pdfplumber.open(io.BytesIO(data)) as document:
+                return [atom("body" if (page.extract_text() or "").strip() else "page without a text layer",
+                             "%s p.%d" % (file_name, number), page.extract_text() or "")
+                        for number, page in enumerate(document.pages, start=1)]
+        if found == "mhtml":
+            message = email.message_from_bytes(data)
+            for part in message.walk():
+                payload = part.get_payload(decode=True)
+                if part.get_content_type() == "text/html" and payload is not None:
+                    text = payload.decode(part.get_content_charset() or "utf-8", "replace")
+                    return atoms_of_markup(parse_markup(repair_markup(text, file_name, []), file_name, [], tolerant_only=True), file_name, state.rules)
+            return []
+        if found in ("xml", "html"):
+            text = repair_markup(decode_text(data), file_name, [])
+            return atoms_of_markup(parse_markup(text, file_name, [], tolerant_only=found == "html"), file_name, state.rules)
+        return atoms_of_plain_text(decode_text(data), file_name)
+    except Exception:                          # an account that cannot be drawn is written down, never a stopped run
+        state.notes.append("%s: the content account could not be drawn for this file." % file_name)
+        return []
+
+def read_file_blocks(path, file_name, state, repairs, max_bytes):
+    """One input file to blocks, by the format found in its content. Enforces: R6"""
+    if os.path.getsize(path) > max_bytes:
+        return "too large", [not_read_block(file_name, "the file is larger than the size limit for one input file")]
+    with open(path, "rb") as handle:
+        data = handle.read()
+    state.folder = os.path.dirname(os.path.abspath(path))
+    found = detect_format(data, file_name)
+    if found in NOT_READ:                    # said in plain words, with a next step; never decoded as text
+        state.atoms = [atom("whole file not read", file_name, "")]
+        return found, [not_read_block(file_name, "the file is " + NOT_READ[found])]
+    if found == "svg":                               # read by the text it holds, as a table or a figure
+        state.atoms = []
+        return found, svg_blocks(data, file_name, file_name, state)
+    state.atoms = atoms_of_file(data, found, file_name, state, repairs)
+    if found == "pdf":
+        return found, blocks_from_pdf(data, file_name, state)
+    if found == "docx":
+        return found, blocks_from_docx(data, file_name, state)
+    if found == "mhtml":
+        return found, blocks_from_mhtml(data, file_name, state, repairs)
+    if found in ("xml", "html"):
+        return found, blocks_from_markup(decode_text(data), file_name, state, repairs, tolerant_only=found == "html")
+    blocks = [new_block("paragraph", part, "paragraph %d" % number)
+              for number, part in enumerate(re.split(r"\n\s*\n", decode_text(data)), start=1) if part.strip()]
+    return "plain text", blocks
+
+def read_corner(ctx, corner, input_key, label):
+    """Read every file of one corner, in file-name order, into chunks numbered in reading order."""
+    options = ctx.options
+    rules = load_tag_rules(options["inputs"].get("tag_rules"))
+    notation = yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]   # names read as functions in a formula
+    chunks, repairs, info_rows, accounts, read_as_what = [], [], [], [], []
+    root = (options["inputs"].get("roots") or {}).get(input_key)
+    for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
+        info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
+    paths = options["inputs"][input_key]
+    svgs = {}                                        # every SVG of the corner, by name and by name without .svg
+    for path in paths:
+        if path.lower().endswith(".svg"):
+            svgs.setdefault(os.path.basename(path).lower(), path)
+            svgs.setdefault(os.path.splitext(os.path.basename(path))[0].lower(), path)
+    consumed = set()
+    # documents first, pictures last: a chart an XML refers to is read in place, where the XML puts it,
+    # and is not read a second time on its own; one nothing refers to is still read, on its own
+    for path in [p for p in paths if not p.lower().endswith(".svg")] + [p for p in paths if p.lower().endswith(".svg")]:
+        file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
+        if path in consumed:
+            info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
+            continue
+        state = WalkState(dict(rules), notation, {}, {}, [])
+        state.settings = ctx.settings
+        state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
+        try:
+            found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
+        except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
+            found, blocks = "unreadable", [not_read_block(file_name, reason_for(problem))]
+            state.atoms, state.blocks = [atom("whole file not read", file_name, "")], []
+        read_as_what.append((file_name, found, blocks[0].get("not_read_reason", "") if len(blocks) == 1 else ""))
+        new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
+        chunks.extend(new_chunks)
+        plain = [to_plain(chunk) for chunk in new_chunks]
+        found_account = account(file_name, state.atoms, plain, state.dropped,
+                                        marks_of_rendering(plain)
+                                        + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING],
+                                        os.path.getsize(path) if os.path.isfile(path) else 0)
+        accounts.append(found_account)
+        info_rows.extend({"group": label, "item": "%s: content account" % file_name, "value": line}
+                         for line in account_lines(found_account))
+        counts = {}
+        for chunk in new_chunks:
+            counts[chunk.kind] = counts.get(chunk.kind, 0) + 1
+        summary = ", ".join("%d %s" % (counts[kind], kind.lower() + ("s" if counts[kind] != 1 else ""))
+                            for kind in CHUNK_KINDS if kind in counts) or "nothing could be read"
+        info_rows.append({"group": label, "item": file_name, "value": "Read as %s: %d units (%s)"
+                          % (FORMAT_NAMES.get(found, found), len(new_chunks), summary)})
+        info_rows.extend({"group": label, "item": "%s: reading note" % file_name, "value": note} for note in state.notes)
+        for tag in sorted(state.unknown_tags):
+            seen = state.unknown_tags[tag]
+            because = ", because it %s" % seen["reason"] if seen.get("reason") else ""
+            info_rows.append({"group": label, "item": "%s: unrecognised tag" % file_name, "value":
+                              "Unrecognised tag '%s', %d times, read as %s%s. "
+                              "It can be added to the project's tag_rules.yaml."
+                              % (tag, seen["count"], seen.get("family") or seen.get("read_as"), because)})
+    kind = "chunks_canon" if corner == "canon" else "chunks_doc"
+    unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)
+    messages = ["%d units read from %d file(s)." % (len(chunks), len(options["inputs"][input_key]))]
+    read_as = {}
+    for _, found, _ in read_as_what:
+        if found in FORMAT_NAMES:
+            read_as[FORMAT_NAMES[found]] = read_as.get(FORMAT_NAMES[found], 0) + 1
+    if read_as:                                      # what each file was read as, and what was not read and why
+        messages.append("Read as: %s." % ", ".join("%d %s" % (count, name) for name, count in sorted(read_as.items())))
+    messages.extend("Not read: %s - %s." % (name, why) for name, found, why in read_as_what
+                    if why and (found in NOT_READ or found == "unreadable"))
+    skipped = (options["inputs"].get("skipped") or {}).get(input_key, [])
+    if skipped:
+        messages.append("%d file(s) in the folder were left out; Model_Package_Info lists them." % len(skipped))
+    if unreadable:
+        messages.append("%d equation(s) could not be read." % unreadable)
+    open_accounts = [one for one in accounts if not one["closed"]]
+    if open_accounts:
+        messages.append("The content account is open on %d file(s); Model_Package_Info says what could not be placed."
+                        % len(open_accounts))
+    return StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows},
+                             {"units": len(chunks), "repairs": len(repairs),
+                              "content account open on": len(open_accounts)}, messages)
+
+def read_methodology(ctx):
+    """Step 02, read-inputs, first part: the canonical methodology into chunks C-0001, C-0002, ..."""
+    return read_corner(ctx, "canon", "methodology", "Methodology files")
+
+def read_documentation(ctx):
+    """Step 02, read-inputs, second part: the model documentation into chunks D-0001, D-0002, ..."""
+    return read_corner(ctx, "doc", "documentation", "Documentation files")
 
 
-TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
-LIST_MARK = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
-
-HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+# ---------------------------------------------------------------- 2.3 markup: element helpers, repairs, tag rules, the block walker, schema discovery
+# ================================================================================================
 
 
 
-def delimiter_of(text):
-    """The separator of a file of delimited rows, where the first rows agree on one."""
-    rows = [line for line in text.split("\n") if line.strip()][:6]
-    if len(rows) < 2:
+def local_name(tag):
+    """'{namespace}oMath' and 'm:oMath' both become 'omath'."""
+    if not isinstance(tag, str):
         return ""
-    for separator in ("\t", ",", ";", "|"):
-        counts = {row.count(separator) for row in rows}
-        if len(counts) == 1 and counts.pop() >= 1:
-            return separator
+    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
+
+def attribute(element, name):
+    """The value of an attribute, whatever namespace prefix it carries."""
+    for key, value in element.attrib.items():
+        if local_name(key) == name:
+            return value
     return ""
 
-
-
-
-
-
-LATEX_HEADINGS = (("part", 1), ("chapter", 1), ("section", 1), ("subsection", 2), ("subsubsection", 3), ("paragraph", 4))
-
-
-
-
-
-def svg_number(value, fallback=0.0):
-    """An SVG coordinate or length as a number: its first figure, or `fallback` when it has none."""
-    try:
-        return float(re.split(r"[ ,]", (value or "").strip())[0])
-    except (ValueError, IndexError):
-        return fallback
-
-
-def svg_texts(root):
-    """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
-    a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
-    <a> inside it is read with it); and a <foreignObject>, where drawing tools put HTML - divs and
-    paragraphs - instead of SVG text. A transform is not applied, so a moved group keeps the order
-    it was written in."""
-    found = []
-    for node in root.iter():
-        name = local_name(node.tag)
-        if name == "text":
-            x, y = svg_number(node.get("x")), svg_number(node.get("y"))
-            placed = [span for span in node.iter() if local_name(span.tag) == "tspan" and (span.get("x") or span.get("y") or span.get("dy"))]
-            if not placed:
-                words = normalise_text("".join(node.itertext()))
-                if words:
-                    found.append((x, y, words))
-                continue
-            lead = normalise_text(node.text or "")
-            if lead:
-                found.append((x, y, lead))
-            line_y = y
-            for span in placed:
-                line_y = svg_number(span.get("y"), line_y + svg_number(span.get("dy"), 0.0))
-                words = normalise_text("".join(span.itertext()))
-                if words:
-                    found.append((svg_number(span.get("x"), x), line_y, words))
-        elif name == "foreignobject":                    # local_name lower-cases: foreignObject
-            words = normalise_text(" ".join(part for part in node.itertext() if part.strip()))
-            if words:
-                found.append((svg_number(node.get("x")), svg_number(node.get("y")), words))
-    return found
-
-def svg_embedded_pictures(root):
-    """The raster pictures an SVG carries inside itself as data: URIs - what a chart exported as an
-    image and wrapped in SVG looks like. Their words can only be read by OCR."""
-    import base64
-    pictures = []
-    for node in root.iter():
-        if local_name(node.tag) != "image":
-            continue
-        link = next((value for key, value in node.attrib.items() if local_name(key) == "href"), "")
-        found = re.match(r"data:image/(png|jpe?g|gif|bmp|webp);base64,(.*)", link.strip(), re.S)
-        if found:
-            try:
-                pictures.append(base64.b64decode(re.sub(r"\s", "", found.group(2))))
-            except (ValueError, TypeError):
-                continue
-    return pictures
-
-def svg_why_no_text(root):
-    """Why an SVG gave no text, in words an analyst can act on. Enforces: R2"""
-    if svg_embedded_pictures(root):
-        return "the chart is a picture stored inside the SVG, so its words can only be read by OCR"
-    glyphs = sum(1 for node in root.iter() if local_name(node.tag) == "use"
-                 and any("glyph" in (value or "").lower() for key, value in node.attrib.items() if local_name(key) == "href"))
-    shapes = sum(1 for node in root.iter() if local_name(node.tag) in ("path", "use"))
-    if glyphs or shapes > 40:
-        return ("its letters are drawn as shapes rather than stored as text, so they cannot be read as text; "
-                "export the chart with its text kept as text, or add its data as a table in the methodology")
-    return "it holds no text"
-
-def svg_rows(texts, tolerance=None):
-    """Texts grouped into rows by their y position, each row sorted by x. The tolerance is a
-    share of the median line height, so a chart's labels and a table's cells both group."""
-    if not texts:
-        return []
-    ys = sorted({round(y, 1) for _, y, _ in texts})
-    gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0.5]
-    tolerance = tolerance or (max(2.0, sorted(gaps)[len(gaps) // 2] * 0.4) if gaps else 2.0)
-    rows, current, last_y = [], [], None
-    for x, y, words in sorted(texts, key=lambda t: (t[1], t[0])):
-        if last_y is not None and y - last_y > tolerance:
-            rows.append(sorted(current))
-            current = []
-        current.append((x, y, words))
-        last_y = y
-    if current:
-        rows.append(sorted(current))
-    return [[words for _, _, words in row] for row in rows]
-
-def svg_to_markup(data, file_name):
-    """An SVG as markup the walker reads: its <title> and <desc> as the caption; its text, where
-    it stands in a grid of at least two rows of the same width, as a table with the first row
-    as the header; otherwise as a figure whose words are the labels of the picture in reading
-    order. An SVG holds text as text, so nothing is read from a picture by guesswork: every
-    word comes from a <text> element. Enforces: R7, R13"""
-    import xml.etree.ElementTree as ElementTree
-    root = ElementTree.fromstring(data)
-    caption = " ".join(normalise_text("".join(node.itertext())) for node in root
-                       if local_name(node.tag) in ("title", "desc") and normalise_text("".join(node.itertext())))
-    rows = svg_rows(svg_texts(root))
-    widths = {len(row) for row in rows}
-    words = [caption] + [" ".join(row) for row in rows]
-    if len(rows) >= 2 and len(widths) == 1 and widths.pop() >= 2:
-        body = "".join("<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
-                       for number, row in enumerate(rows))
-        markup = "<document><table><caption>%s</caption>%s</table></document>" % (escape(caption or os.path.basename(file_name)), body)
-        return markup, "\n".join(words), "a picture whose text stands in a grid, read as a table"
-    labels = " ".join(" ".join(row) for row in rows)
-    # no src: this markup IS the picture, so it must not send the reader looking for itself beside itself
-    markup = "<document><figure alt=\"%s\"><caption>%s</caption></figure></document>" % (escape(labels), escape(caption))
-    return markup, "\n".join(words), "a picture, read by its own text: %d label(s)" % sum(len(row) for row in rows)
-
-
-
-def reason_for(problem):
-    """Why a reader failed on a file, in words an analyst can act on. Enforces: R2"""
-    name, said = type(problem).__name__, str(problem).lower()
-    if isinstance(problem, IsADirectoryError):
-        return "it is a folder, not a file"
-    if isinstance(problem, PermissionError):
-        return "the tool is not allowed to open it; check who may read the file"
-    if "password" in said or "encrypt" in said or "decrypt" in said or "pdfminer" in name.lower():
-        return "it is protected by a password; save an unprotected copy and put that in its place"
-    if isinstance(problem, zipfile.BadZipFile) or name in ("ReadError", "CompressionError", "HeaderError", "EOFError"):
-        return "it is damaged, or is not the archive its name says; save it again and put the new copy in its place"
-    return "a reader failed on it (%s); the rest of the run went on without it" % name
-
-# ---------------------------------------------------------------- the three input folders of a project
-INPUT_FOLDERS = (
-    ("methodology", "1_Methodology", "Put the canonical methodology here: XML (also inside a .txt), .mhtml, .docx, "
-     ".pdf, Markdown, .csv, .xlsx, .rtf or .tex. Folders are read too, in name order; anything the tool cannot read is named."),
-    ("package", "2_Model_Package", "Put the R package here: its tarball (.tar.gz), a .zip of it, or its source folder."),
-    ("documentation", "3_Model_Documentation", "Put the model documentation here (.docx is preferred; .pdf, .mhtml, "
-     "XML, Markdown, .csv, .xlsx, .rtf and .tex are read too). Folders are read too, in name order."))
-
-def list_input_files(inputs_dir):
-    """The input files of a project, by corner, walking into folders; the folder each corner is
-    read from, so that a file can be named by its path inside it; and every file each corner left
-    out, with why. The optional glossary and tag rules sit beside the three folders. Enforces: R2"""
-    inputs = {"glossary": None, "tag_rules": None, "roots": {}, "skipped": {}}
-    for corner, folder, _ in INPUT_FOLDERS:
-        inputs["roots"][corner] = os.path.join(inputs_dir, folder)
-        inputs[corner], inputs["skipped"][corner] = input_files(inputs["roots"][corner])
-    for key, name in (("glossary", "glossary.xlsx"), ("tag_rules", "tag_rules.yaml")):
-        if os.path.exists(os.path.join(inputs_dir, name)):
-            inputs[key] = os.path.join(inputs_dir, name)
-    return inputs
-
-
-# ================================================================================================
-# reading the methodology, the documentation and the model package
-# ================================================================================================
-# ---------------------------------------------------------------- the methodology and the documentation, read into units
-class Unreadable(Exception):
-    """What the tool could not read, with why in plain words: a formula it does not read, a data file that expands past
-    its limit, or a reply of chat() that holds no answer. Each is caught where it can arise; the reason is shown."""
-
-# ---------------------------------------------------------------- the linear-notation parser
-SUPERSCRIPTS = {"\u207b\u00b9": "^-1", "\u00b2": "^2", "\u00b3": "^3", "\u00b9": "^1"}
-SIGNS = {"\u2212": "-", "\u00d7": "*", "\u00b7": "*", "\u22c5": "*", "\u2217": "*", "\u00f7": "/",
-         "\u2264": "<=", "\u2265": ">=", "**": "^", "\u2061": "", "\u2062": "*", "\u2009": " "}
-_TOKEN_RE = re.compile(
-    r"\s*(?:(?P<number>\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?P<percent>\s?%)?"
-    r"|(?P<name>[^\W\d_][\w]*(?:\.[^\W\d_]\w*)*(?:_\{[^{}]+\}|\[[^\[\]]+\])?)"
-    r"|(?P<sign><=|>=|[-+*/^(),=<>\u221a]))")
-
-# ---------------------------------------------------------------- reference data of the reader
-# The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
-# schemes. An analyst's tag_rules.yaml, beside the project's input folders, is laid
-# over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
-# caller that changes the rules it was given changes only its own copy.
-TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
-# Reviewer 1 owns this file. A project can override any part of it with its own tag_rules.yaml
-# (same layout; a family given there replaces the family given here).
-# Tag names are compared in lower case and without their namespace prefix.
-# A tag that is in no family is read as a paragraph (or, when it only wraps other blocks,
-# as a container) and is reported on Model_Package_Info, so that it can be added here.
-families:
-  heading:        [h1, h2, h3, h4, h5, h6, title, heading, head-line, sectiontitle]
-  container:      [html, body, div, section, sect, sect1, sect2, sect3, sect4, sect5, chapter, part,
-                   article, document, doc, annex, appendix, subsection, subsubsection, main, document-root]
-  paragraph:      [p, para, paragraph, text, blockquote, pre, dd, dt]
-  list_container: [ul, ol, list, itemizedlist, orderedlist, dl]
-  list_item:      [li, item, listitem]
-  table:          [table, informaltable, tbl]
-  table_part:     [thead, tbody, tfoot, tgroup, colgroup, col]
-  row:            [tr, row]
-  header_cell:    [th]
-  cell:           [td, entry, cell]
-  figure:         [img, image, figure, graphic, mediaobject, svg, object, chart, imagedata]
-  equation:       [math, equation, omath, omathpara, formula, informalequation]
-  caption:        [caption, figcaption, legend]
-  inline:         [a, b, i, u, em, strong, span, font, sub, sup, br, code, tt, small, big, emphasis, xref, o:p]
-  ignore:         [head, script, style, meta, link, toc, index, nav, xml]
-# Attributes that hold the numbering of a heading as written ("3.1").
-numbering_attributes: [number, num, label, n]
-# Numbering schemes, tried in this order. The first one that matches the start of a heading
-# names its scheme. "dotted" numbers give their depth directly; every other scheme gets the
-# level at which it first appeared (one deeper than the heading before it).
-numbering_schemes:
-  - {name: annex,          pattern: '^(?:Annex|Appendix|Annexe|Anhang)\s+([A-Z0-9]+)[.:]?(?=\s|$)'}
-  - {name: dotted,         pattern: '^(\d+(?:\.\d+)+)\.?(?=\s|$)'}
-  - {name: number,         pattern: '^(\d+)[.)]?(?=\s|$)'}
-  - {name: upper_roman,    pattern: '^([IVXLC]+)\.(?=\s|$)'}
-  - {name: upper_letter,   pattern: '^([A-Z])[.)](?=\s|$)'}
-  - {name: bracket_roman,  pattern: '^\(([ivxlc]+)\)(?=\s|$)'}
-  - {name: bracket_letter, pattern: '^\(([a-z])\)(?=\s|$)'}
-# Words that start a cross-reference as written ("see Table 3", "section 4.2").
-cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
-'''
-
-# The notation of R's mathematical functions: how each is written in the tool's linear notation and
-# which of its arguments are the operands. Shared with review.py, which reads it for its word lists.
-R_FUNCTION_MAP_YAML = r'''# r_function_map.yaml - how names in R code and in written formulas map to the tool's neutral
-# function names. Reviewers 1, 2 and 4 read this file.
-#
-# notation: names that the tool reads as a FUNCTION when a written formula shows name( ... ).
-#   Any other name followed by "(" could be a product or a function; the tool does not guess and
-#   marks the formula "could not be read".
-notation:
-  functions:
-    N: normal_cdf
-    "\u03a6": normal_cdf
-    Phi: normal_cdf
-    ln: log
-    log: log
-    exp: exp
-    sqrt: sqrt
-    max: max
-    min: min
-    abs: abs
-    sum_over: sum_over
-    piecewise: piecewise
-  inverse:                      # name^-1( ... ) is read as the inverse function
-    normal_cdf: normal_inverse
-# r_functions: R function -> neutral name, with the argument order the tool relies on and the
-#   domain in which the neutral function can be evaluated (used to draw valid sample points).
-r_functions:
-  pnorm:  {neutral: normal_cdf,     arguments: [q],      only_defaults: [mean, sd, lower.tail, log.p]}
-  qnorm:  {neutral: normal_inverse, arguments: [p],      only_defaults: [mean, sd, lower.tail, log.p]}
-  exp:    {neutral: exp,            arguments: [x]}
-  log:    {neutral: log,            arguments: [x],      only_defaults: [base]}
-  log1p:  {neutral: log1p,          arguments: [x]}
-  expm1:  {neutral: expm1,          arguments: [x]}
-  sqrt:   {neutral: sqrt,           arguments: [x]}
-  abs:    {neutral: abs,            arguments: [x]}
-  max:    {neutral: max,            variadic: true}
-  min:    {neutral: min,            variadic: true}
-  pmax:   {neutral: max,            variadic: true}
-  pmin:   {neutral: min,            variadic: true}
-  ifelse: {neutral: piecewise,      arguments: [test, "yes", "no"]}
-  sum:    {neutral: sum_over,       variadic: true}
-  round:  {neutral: round,          arguments: [x, digits], optional: 1}
-  floor:  {neutral: floor,          arguments: [x]}
-  ceiling: {neutral: ceiling,       arguments: [x]}
-# domains: where each neutral function has a value (open intervals; null means unbounded).
-domains:
-  normal_cdf:     {argument: [null, null]}
-  normal_inverse: {argument: [0, 1]}
-  log:            {argument: [0, null]}
-  log1p:          {argument: [-1, null]}
-  sqrt:           {argument: [0, null]}
-  exp:            {argument: [null, 50]}
-'''
-
-
-def tokenize_formula(text):
-    """Cut a written formula into numbers, names and signs. Anything else makes it unreadable."""
-    for written, plain in list(SUPERSCRIPTS.items()) + list(SIGNS.items()):
-        text = text.replace(written, plain)
-    text = re.sub(r"_\{([^{}]*)\}", lambda found: "_" + re.sub(r"\W", "", found.group(1)), text)   # x_{i,j} -> x_ij
-    tokens, position = [], 0
-    text = text.strip()
-    while position < len(text):
-        match = _TOKEN_RE.match(text, position)
-        if not match or match.end() == position:
-            raise Unreadable("it contains '%s', which the tool does not read in a formula" % text[position:position + 12].strip())
-        if match.group("number"):
-            value = Decimal(match.group("number"))
-            tokens.append(("number", plain_decimal(value / 100 if match.group("percent") else value)))
-        elif match.group("name"):
-            tokens.append(("name", match.group("name")))
-        else:
-            tokens.append(("sign", match.group("sign")))
-        position = match.end()
-    return tokens
-
-class FormulaReader:
-    """A small recursive-descent reader over the tokens of one formula. Order of strength, from
-    weakest: equals, comparison, plus and minus, times and divide, a leading minus, power.
-    Two terms side by side are read as a product only when `implicit_product` is set, which
-    is done for equation markup (its extent is exact) and never for running text."""
-    def __init__(self, tokens, notation, implicit_product=False):
-        self.tokens, self.position, self.notation = tokens, 0, notation
-        self.functions, self.implicit_product = notation.get("functions", {}), implicit_product
-
-    def peek(self, offset=0):
-        """The token at the reading position (or further on), without taking it."""
-        index = self.position + offset
-        return self.tokens[index] if index < len(self.tokens) else ("end", "")
-
-    def take(self, sign=None):
-        """Take the next token; with `sign`, insist that it is that sign."""
-        token = self.peek()
-        if sign is not None and token != ("sign", sign):
-            raise Unreadable("a '%s' was expected where '%s' stands" % (sign, token[1] or "the end"))
-        self.position += 1
-        return token
-
-    def statement(self):
-        """A whole formula: an expression, or `left = right`."""
-        left = self.comparison()
-        if self.peek() == ("sign", "="):
-            self.take()
-            left = Expr("eq", args=(left, self.comparison()))
-            if self.peek() == ("sign", "="):
-                raise Unreadable("it has more than one equals sign")
-        return left
-
-    def comparison(self):
-        """An expression, optionally compared with another one."""
-        left = self.sum()
-        if self.peek()[0] == "sign" and self.peek()[1] in ("<", ">", "<=", ">="):
-            sign = self.take()[1]
-            left = Expr("cmp", name=sign, args=(left, self.sum()))
-        return left
-
-    def sum(self):
-        """Terms joined by + and -, from left to right."""
-        left = self.product()
-        while self.peek() in (("sign", "+"), ("sign", "-")):
-            op = "add" if self.take()[1] == "+" else "sub"
-            left = Expr(op, args=(left, self.product()))
-        return left
-
-    def product(self):
-        """Factors joined by * and /, from left to right; juxtaposition only where the source allows it."""
-        left = self.unary()
-        while True:
-            if self.peek() in (("sign", "*"), ("sign", "/")):
-                op = "mul" if self.take()[1] == "*" else "div"
-                left = Expr(op, args=(left, self.unary()))
-            elif self.implicit_product and self.term_follows():
-                left = Expr("mul", args=(left, self.power()))
-            else:
-                return left
-
-    def term_follows(self):
-        """Does another factor start here without a sign in between?"""
-        kind, text = self.peek()
-        return kind in ("number", "name") or (kind == "sign" and text in ("(", "\u221a"))
-
-    def unary(self):
-        """A leading minus or plus. It binds less tightly than a power, as in mathematics and in R."""
-        if self.peek() == ("sign", "-"):
-            self.take()
-            return Expr("neg", args=(self.unary(),))
-        if self.peek() == ("sign", "+"):
-            self.take()
-            return self.unary()
-        return self.power()
-
-    def power(self):
-        """A base with an optional power (right-associative), an inverse-function mark or a percent sign."""
-        base = self.atom()
-        if self.peek() == ("sign", "^"):
-            self.take()
-            base = Expr("pow", args=(base, self.unary()))
-        if self.term_follows() and not self.implicit_product:
-            raise Unreadable("two terms stand side by side without a sign between them, which could "
-                              "mean a product or something else; the tool does not guess")
-        return base
-
-    def minus_one_follows(self):
-        """Is the next thing ^-1 or ^(-1) followed by an opening bracket? Returns tokens to skip."""
-        shapes = ([("sign", "^"), ("sign", "-"), ("number", "1"), ("sign", "(")],
-                  [("sign", "^"), ("sign", "("), ("sign", "-"), ("number", "1"), ("sign", ")"), ("sign", "(")])
-        for shape in shapes:
-            if [self.peek(i) for i in range(len(shape))] == shape:
-                return len(shape) - 1
-        return 0
-
-    def atom(self):
-        """A number, a symbol, a function call or a bracketed expression."""
-        kind, text = self.take()
-        if kind == "number":
-            return Expr("num", value=text)
-        if kind == "sign" and text == "(":
-            inner = self.statement()
-            self.take(")")
-            return inner
-        if kind == "sign" and text == "\u221a":
-            return Expr("call", name="sqrt", args=(self.atom(),))
-        if kind != "name":
-            raise Unreadable("'%s' stands where a number or a symbol was expected" % (text or "the end"))
-        function = self.functions.get(text) or self.functions.get(normalise_symbol(text))
-        skip = self.minus_one_follows() if function else 0
-        if skip:
-            inverse = self.notation.get("inverse", {}).get(function)
-            if not inverse:
-                raise Unreadable("the inverse of '%s' is not a function the tool knows" % text)
-            self.position += skip
-            function = inverse
-        if self.peek() == ("sign", "("):
-            if not function:
-                raise Unreadable("'%s(' could be a product or a function; the tool does not guess" % text)
-            self.take()
-            arguments = [self.statement()]
-            while self.peek() == ("sign", ","):
-                self.take()
-                arguments.append(self.statement())
-            self.take(")")
-            return Expr("call", name=function, args=tuple(arguments))
-        return Expr("sym", name=normalise_symbol(text))
-
-def parse_formula(text, notation, implicit_product=False):
-    """Read a formula written in linear notation into the tool's expression tree. Raises Unreadable
-    with a plain reason; it never guesses and never executes anything. Enforces: R7"""
-    tokens = tokenize_formula(text)
-    if not tokens:
-        raise Unreadable("it is empty")
-    reader = FormulaReader(tokens, notation, implicit_product)
-    tree = reader.statement()
-    if reader.peek()[0] != "end":
-        raise Unreadable("'%s' stands where the formula should have ended" % reader.peek()[1])
-    return tree
-
-def read_equation(source_form, linear, notation, image_sha256=""):
-    """Build the EquationData of a chunk: readable with its tree, or not readable with the reason."""
-    linear = normalise_text(linear)
-    if not linear:
-        reason = UNDECIDED_REASONS[0] if image_sha256 or source_form == "image" else "no formula text was found"
-        return EquationData(source_form, "", False, reason, image_sha256)
-    try:
-        tree = parse_formula(linear, notation, implicit_product=source_form in ("omml", "mathml", "latex"))
-    except Unreadable as problem:
-        return EquationData(source_form, linear, False, str(problem), image_sha256)
-    return EquationData(source_form, expr_to_text(tree), True, "", image_sha256)
-
-_INLINE_FORMULA_RE = re.compile(r"(?<![\w.])([^\W\d_][\w.\[\]{}]*)\s*=\s*([^=;]+)")
-
-def inline_formula(text, notation):
-    """A formula written inside running text, such as "K = LGD * N(x)". The right-hand side ends
-    at a semicolon, at ", where", or at the end of the sentence. When the notation is ambiguous
-    the paragraph simply stays a paragraph (plan 2.8). Returns EquationData or None."""
-    for match in _INLINE_FORMULA_RE.finditer(text or ""):
-        right = re.split(r",?\s+(?:where|with|and where|for)\b|\.\s+[A-Z]|\.$|:\s", match.group(2))[0]
-        right = right.strip().rstrip(".,")
-        if not re.search(r"[-+*/^(\u00d7\u00b7\u2212]", right):
-            continue                                  # "x = 5" or "a = b": a value, not a formula
-        try:
-            tree = parse_formula("%s = %s" % (match.group(1), right), notation)
-        except Unreadable:
-            continue
-        return EquationData("inline", expr_to_text(tree), True, "", "")
+def child_named(element, name):
+    """The first child with this local tag name, or None."""
+    for child in element:
+        if local_name(child.tag) == name:
+            return child
     return None
 
-# ---------------------------------------------------------------- equation markup -> linear notation
-def bracketed(text):
-    """Put brackets around a part unless it is one number, one symbol or one call."""
-    text = text.strip()
-    if re.fullmatch(r"[\w.]+|[\w.]+\([^()]*\)", text) or (text.startswith("(") and text.endswith(")") and
-                                                         text.count("(") == 1):
-        return text
-    return "(%s)" % text
-
-NARY_NAMES = {"\u2211": "sum_over", "\u220f": "product_over", "\u222b": "integral_over"}
-MATH_PROPERTIES = ("rpr", "ctrlpr", "fpr", "dpr", "narypr", "radpr", "ssuppr", "ssubpr", "ssubsuppr", "funcpr",
-                   "annotation", "omathparapr", "begchr", "endchr")
-
-def math_to_linear(element):
-    """Office Math (OMML) and MathML to linear notation, by the local names of the elements:
-    fractions, powers, subscripts, roots, brackets and function application. A sum is marked
-    as sum_over(...) and never expanded. Unknown elements contribute their text."""
-    name = local_name(element.tag)
-    def part(child_name):
-        child = child_named(element, child_name)
-        return math_children(child) if child is not None else ""
-    if name in ("t", "mi", "mn", "mtext"):
-        return (element.text or "").strip()
-    if name == "mo":
-        return " %s " % (element.text or "").strip()
-    if name == "f":                                               # OMML fraction
-        return "%s/%s" % (bracketed(part("num")), bracketed(part("den")))
-    if name == "ssup":
-        return "%s^%s" % (bracketed(part("e")), bracketed(part("sup")))
-    if name == "ssub":
-        return "%s_{%s}" % (part("e").strip(), part("sub").strip())
-    if name == "ssubsup":
-        return "%s_{%s}^%s" % (part("e").strip(), part("sub").strip(), bracketed(part("sup")))
-    if name == "rad":
-        degree = part("deg").strip()
-        return "sqrt(%s)" % part("e") if degree in ("", "2") else "%s^(1/%s)" % (bracketed(part("e")), bracketed(degree))
-    if name == "d":                                               # OMML brackets
-        return "(%s)" % ", ".join(math_children(child) for child in element if local_name(child.tag) == "e")
-    if name == "func":
-        argument = part("e").strip()                          # one pair of brackets round the whole argument is dropped
-        argument = argument[1:-1] if argument.startswith("(") and argument.endswith(")") and argument.count("(") == 1 else argument
-        return "%s(%s)" % (part("fname").strip(), argument)
-    if name == "nary":
-        properties = child_named(element, "narypr")
-        sign = child_named(properties, "chr") if properties is not None else None
-        kind = NARY_NAMES.get(attribute(sign, "val"), "sum_over") if sign is not None else "integral_over"
-        return "%s(%s, %s, %s)" % (kind, part("sub").strip() or "0", part("sup").strip() or "0", part("e"))
-    children = list(element)
-    if name == "mfrac" and len(children) == 2:
-        return "%s/%s" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
-    if name == "msup" and len(children) == 2:
-        return "%s^%s" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
-    if name == "msub" and len(children) == 2:
-        return "%s_{%s}" % (math_to_linear(children[0]).strip(), math_to_linear(children[1]).strip())
-    if name == "msubsup" and len(children) == 3:
-        return "%s_{%s}^%s" % (math_to_linear(children[0]).strip(), math_to_linear(children[1]).strip(),
-                               bracketed(math_to_linear(children[2])))
-    if name == "msqrt":
-        return "sqrt(%s)" % math_children(element)
-    if name == "mroot" and len(children) == 2:
-        return "%s^(1/%s)" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
-    if name == "mfenced":
-        return "(%s)" % ", ".join(math_to_linear(child) for child in children)
-    if name == "munderover" and len(children) == 3 and (children[0].text or "").strip() in NARY_NAMES:
-        return "%s(%s, %s, " % (NARY_NAMES[children[0].text.strip()], math_to_linear(children[1]).strip(),
-                                math_to_linear(children[2]).strip())
-    if name in MATH_PROPERTIES:
-        return ""                                                 # properties, not content
-    return math_children(element)
-
-def math_children(element):
-    """The linear text of all children, in order. An open "sum_over(a, b, " from MathML takes
-    the part that follows it as its body and is then closed."""
-    pieces = [(element.text or "").strip() if not len(element) else ""]
-    for child in element:
-        piece = math_to_linear(child)
-        if pieces[-1].endswith(", ") and pieces[-1].startswith(tuple(NARY_NAMES.values())):
-            pieces[-1] = pieces[-1] + piece.strip() + ")"
-        else:
-            pieces.append(piece)
-    return re.sub(r"\s+", " ", "".join(pieces)).strip()
-
-
-LATEX_WORDS = {"cdot": "*", "times": "*", "div": "/", "le": "<=", "leq": "<=", "ge": ">=", "geq": ">=",
-               "ln": "ln", "log": "log", "exp": "exp", "max": "max", "min": "min", "left": "", "right": "",
-               "quad": " ", "qquad": " ", ",": " ", ";": " ", "!": "", " ": " ", "displaystyle": ""}
-LATEX_WRAPPERS = ("text", "mathrm", "mathit", "mathbf", "operatorname", "mbox", "textit", "textbf", "code")
-
-def latex_group(source, position):
-    """The content of the {...} group that starts at `position`, and the position after it."""
-    if position >= len(source):
-        raise Unreadable("a LaTeX command lacks its argument")
-    if source[position] != "{":
-        return source[position], position + 1
-    depth, start = 0, position
-    while position < len(source):
-        depth += {"{": 1, "}": -1}.get(source[position], 0)
-        position += 1
-        if depth == 0:
-            return source[start + 1:position - 1], position
-    raise Unreadable("a LaTeX group is never closed")
-
-def latex_to_linear(source):
-    """The LaTeX subset found in roxygen \\eqn{} and \\deqn{} and in some XML, to linear notation:
-    \\frac, \\sqrt, ^{}, _{}, Greek letters, \\cdot, \\times, \\left, \\right, text wrappers.
-    An unknown command makes the formula unreadable; it is never skipped silently."""
-    source, output, position = source.strip().strip("$"), [], 0
-    while position < len(source):
-        char = source[position]
-        if char == "\\":
-            match = re.match(r"\\([A-Za-z]+|.)", source[position:])
-            word, position = match.group(1), position + match.end()
-            if word == "frac":
-                top, position = latex_group(source, position)
-                bottom, position = latex_group(source, position)
-                output.append("(%s)/(%s)" % (latex_to_linear(top), latex_to_linear(bottom)))
-            elif word == "sqrt":
-                degree = ""
-                if source[position:position + 1] == "[":
-                    end = source.index("]", position)
-                    degree, position = source[position + 1:end], end + 1
-                inner, position = latex_group(source, position)
-                inner = latex_to_linear(inner)
-                output.append("sqrt(%s)" % inner if degree in ("", "2") else "(%s)^(1/(%s))" % (inner, degree))
-            elif word in LATEX_WRAPPERS:
-                inner, position = latex_group(source, position)
-                output.append(re.sub(r"\s+", "_", inner.strip()))
-            elif word in GREEK:
-                output.append(GREEK[word])
-            elif word in LATEX_WORDS:
-                output.append(LATEX_WORDS[word])
-            else:
-                raise Unreadable("it uses the LaTeX command '\\%s', which the tool does not read" % word)
-        elif char == "^":
-            inner, position = latex_group(source, position + 1)
-            output.append("^(%s)" % latex_to_linear(inner))
-        elif char == "_":
-            inner, position = latex_group(source, position + 1)
-            output.append("_{%s}" % latex_to_linear(inner).replace(" ", ""))
-        elif char in "{}":
-            output.append("(" if char == "{" else ")")
-            position += 1
-        else:
-            output.append(char)
-            position += 1
-    return re.sub(r"\s+", " ", "".join(output)).strip()
-
-# ---------------------------------------------------------------- format from content, and repairs
 XML_ENTITIES = ("amp", "lt", "gt", "quot", "apos")
 
 def html_entity(found):
@@ -1738,7 +2044,6 @@ def parse_markup(text, file_name, repairs, tolerant_only=False):
     reader.feed(repaired)
     return reader.finish()
 
-# ---------------------------------------------------------------- tag rules and the block walker
 def load_tag_rules(override_path=None):
     """The shipped tag rules, with any part replaced by the project's own tag_rules.yaml."""
     rules = yaml.safe_load(TAG_RULES_YAML)
@@ -1763,7 +2068,6 @@ def load_tag_rules(override_path=None):
     rules.setdefault("header_tag_words", ["head", "header"])
     return rules
 
-# ---------------------------------------------------------------- discovering an unfamiliar schema
 BLOCKS_INSIDE = ("paragraph", "list_item", "list_container", "heading", "container", "row", "cell", "header_cell")
 
 def element_text(element, rules, skip=("figure", "equation", "ignore", "caption")):
@@ -2103,34 +2407,520 @@ def blocks_from_markup(text, file_name, state, repairs, tolerant_only=False):
     walk_element(root, "", 0, state)
     return state.blocks
 
-# ---------------------------------------------------------------- MHTML (a web page saved as one file)
-def blocks_from_mhtml(data, file_name, state, repairs):
-    """Parts are read with the standard `email` package. The HTML part goes through the tolerant
-    reader; every image part is fingerprinted so that a Figure chunk can name its content."""
-    message = email.message_from_bytes(data)
-    page = None
-    for part in message.walk():
-        content_type = part.get_content_type()
-        payload = part.get_payload(decode=True)
-        if payload is None:
+
+# ---------------------------------------------------------------- 2.4 equations: symbols, the expression tree, the linear-notation parser, reference data
+GREEK = {"alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3", "delta": "\u03b4",
+         "epsilon": "\u03b5", "theta": "\u03b8", "kappa": "\u03ba", "lambda": "\u03bb",
+         "mu": "\u03bc", "nu": "\u03bd", "pi": "\u03c0", "rho": "\u03c1", "sigma": "\u03c3",
+         "tau": "\u03c4", "phi": "\u03c6", "omega": "\u03c9", "Phi": "\u03a6", "Sigma": "\u03a3",
+         "Delta": "\u0394", "Omega": "\u03a9"}
+_GREEK_BY_CHAR = {char: name for name, char in GREEK.items()}
+_SUBSCRIPT_CHARS = str.maketrans("\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089"
+                                 "\u1d62\u2c7c\u2096\u2099\u209c", "0123456789ijknt")
+
+def normalise_symbol(symbol):
+    """One form for a symbol however it was written: the Greek letter by name, by
+    character or in LaTeX form; a subscript written PD_i, PD[i], PD_{i} or with a
+    subscript character. Case is kept for single letters and folded for words."""
+    text = unicodedata.normalize("NFC", symbol or "").strip().strip("$`")
+    text = re.sub(r"\\([A-Za-z]+)", r"\1", text)
+    subscript = ""
+    match = re.fullmatch(r"(.+?)(?:_\{?([^{}]+)\}?|\[([^\]]+)\])", text)
+    if match:
+        text, subscript = match.group(1), match.group(2) or match.group(3)
+    else:
+        tail = re.search(r"[\u2080-\u2089\u1d62\u2c7c\u2096\u2099\u209c]+$", text)
+        if tail and tail.start() > 0:
+            text, subscript = text[:tail.start()], tail.group(0).translate(_SUBSCRIPT_CHARS)
+    parts = []
+    for part in (text, subscript):
+        part = "".join(_GREEK_BY_CHAR.get(char, char) for char in part)
+        if len(part) > 1 and part not in GREEK:
+            part = part.lower()
+        parts.append(part)
+    return parts[0] + ("_" + parts[1] if parts[1] else "")
+
+@dataclass(frozen=True)
+class Expr:
+    """the tool's neutral tree for a formula. op is one of: num, sym, add, sub, mul, div,
+    pow, neg, call, cmp, piecewise, eq. `name` is a symbol, a neutral function name
+    (call) or a comparison sign (cmp); `value` is a decimal text (num)."""
+    op: str; name: Optional[str] = None; value: Optional[str] = None; args: tuple = ()
+    span: Optional[tuple] = None
+
+
+_INFIX = {"add": (" + ", 1), "sub": (" - ", 1), "mul": (" * ", 2), "div": (" / ", 2), "pow": ("^", 4)}
+
+def expr_to_text(expr, parent_rank=0):
+    """The tree in the tool's linear notation, the form shown to analysts and to the AI."""
+    if expr.op == "num":
+        return expr.value
+    if expr.op == "sym":
+        return expr.name
+    if expr.op == "neg":
+        text, rank = "-" + expr_to_text(expr.args[0], 3), 3
+    elif expr.op in _INFIX:
+        sign, rank = _INFIX[expr.op]
+        left = expr_to_text(expr.args[0], rank + (1 if expr.op == "pow" else 0))
+        text = left + sign + expr_to_text(expr.args[1], rank + (0 if expr.op == "pow" else 1))
+    elif expr.op == "call":
+        return "%s(%s)" % (expr.name, ", ".join(expr_to_text(arg) for arg in expr.args))
+    elif expr.op == "cmp":
+        text, rank = (" %s " % expr.name).join(expr_to_text(arg, 1) for arg in expr.args), 0
+    elif expr.op == "eq":
+        return "%s = %s" % (expr_to_text(expr.args[0]), expr_to_text(expr.args[1]))
+    elif expr.op == "piecewise":
+        return "piecewise(%s)" % ", ".join(expr_to_text(arg) for arg in expr.args)
+    else:
+        return "?"
+    return "(%s)" % text if rank < parent_rank else text
+
+SUPERSCRIPTS = {"\u207b\u00b9": "^-1", "\u00b2": "^2", "\u00b3": "^3", "\u00b9": "^1"}
+SIGNS = {"\u2212": "-", "\u00d7": "*", "\u00b7": "*", "\u22c5": "*", "\u2217": "*", "\u00f7": "/",
+         "\u2264": "<=", "\u2265": ">=", "**": "^", "\u2061": "", "\u2062": "*", "\u2009": " "}
+_TOKEN_RE = re.compile(
+    r"\s*(?:(?P<number>\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?P<percent>\s?%)?"
+    r"|(?P<name>[^\W\d_][\w]*(?:\.[^\W\d_]\w*)*(?:_\{[^{}]+\}|\[[^\[\]]+\])?)"
+    r"|(?P<sign><=|>=|[-+*/^(),=<>\u221a]))")
+
+# The tag rules: which tag of a document is what (heading, paragraph, table, ...), the numbering
+# schemes. An analyst's tag_rules.yaml, beside the project's input folders, is laid
+# over these for one project and always wins. Kept as YAML text and parsed on every call, so that a
+# caller that changes the rules it was given changes only its own copy.
+TAG_RULES_YAML = r'''# tag_rules.yaml - which tag belongs to which family when the tool reads XML or HTML.
+# Reviewer 1 owns this file. A project can override any part of it with its own tag_rules.yaml
+# (same layout; a family given there replaces the family given here).
+# Tag names are compared in lower case and without their namespace prefix.
+# A tag that is in no family is read as a paragraph (or, when it only wraps other blocks,
+# as a container) and is reported on Model_Package_Info, so that it can be added here.
+families:
+  heading:        [h1, h2, h3, h4, h5, h6, title, heading, head-line, sectiontitle]
+  container:      [html, body, div, section, sect, sect1, sect2, sect3, sect4, sect5, chapter, part,
+                   article, document, doc, annex, appendix, subsection, subsubsection, main, document-root]
+  paragraph:      [p, para, paragraph, text, blockquote, pre, dd, dt]
+  list_container: [ul, ol, list, itemizedlist, orderedlist, dl]
+  list_item:      [li, item, listitem]
+  table:          [table, informaltable, tbl]
+  table_part:     [thead, tbody, tfoot, tgroup, colgroup, col]
+  row:            [tr, row]
+  header_cell:    [th]
+  cell:           [td, entry, cell]
+  figure:         [img, image, figure, graphic, mediaobject, svg, object, chart, imagedata]
+  equation:       [math, equation, omath, omathpara, formula, informalequation]
+  caption:        [caption, figcaption, legend]
+  inline:         [a, b, i, u, em, strong, span, font, sub, sup, br, code, tt, small, big, emphasis, xref, o:p]
+  ignore:         [head, script, style, meta, link, toc, index, nav, xml]
+# Attributes that hold the numbering of a heading as written ("3.1").
+numbering_attributes: [number, num, label, n]
+# Numbering schemes, tried in this order. The first one that matches the start of a heading
+# names its scheme. "dotted" numbers give their depth directly; every other scheme gets the
+# level at which it first appeared (one deeper than the heading before it).
+numbering_schemes:
+  - {name: annex,          pattern: '^(?:Annex|Appendix|Annexe|Anhang)\s+([A-Z0-9]+)[.:]?(?=\s|$)'}
+  - {name: dotted,         pattern: '^(\d+(?:\.\d+)+)\.?(?=\s|$)'}
+  - {name: number,         pattern: '^(\d+)[.)]?(?=\s|$)'}
+  - {name: upper_roman,    pattern: '^([IVXLC]+)\.(?=\s|$)'}
+  - {name: upper_letter,   pattern: '^([A-Z])[.)](?=\s|$)'}
+  - {name: bracket_roman,  pattern: '^\(([ivxlc]+)\)(?=\s|$)'}
+  - {name: bracket_letter, pattern: '^\(([a-z])\)(?=\s|$)'}
+# Words that start a cross-reference as written ("see Table 3", "section 4.2").
+cross_reference_labels: [Table, Figure, Section, Sections, Equation, Annex, Appendix, Paragraph, Chapter]
+'''
+
+# The notation of R's mathematical functions: how each is written in the tool's linear notation and
+# which of its arguments are the operands. Shared with review.py, which reads it for its word lists.
+R_FUNCTION_MAP_YAML = r'''# r_function_map.yaml - how names in R code and in written formulas map to the tool's neutral
+# function names. Reviewers 1, 2 and 4 read this file.
+#
+# notation: names that the tool reads as a FUNCTION when a written formula shows name( ... ).
+#   Any other name followed by "(" could be a product or a function; the tool does not guess and
+#   marks the formula "could not be read".
+notation:
+  functions:
+    N: normal_cdf
+    "\u03a6": normal_cdf
+    Phi: normal_cdf
+    ln: log
+    log: log
+    exp: exp
+    sqrt: sqrt
+    max: max
+    min: min
+    abs: abs
+    sum_over: sum_over
+    piecewise: piecewise
+  inverse:                      # name^-1( ... ) is read as the inverse function
+    normal_cdf: normal_inverse
+# r_functions: R function -> neutral name, with the argument order the tool relies on and the
+#   domain in which the neutral function can be evaluated (used to draw valid sample points).
+r_functions:
+  pnorm:  {neutral: normal_cdf,     arguments: [q],      only_defaults: [mean, sd, lower.tail, log.p]}
+  qnorm:  {neutral: normal_inverse, arguments: [p],      only_defaults: [mean, sd, lower.tail, log.p]}
+  exp:    {neutral: exp,            arguments: [x]}
+  log:    {neutral: log,            arguments: [x],      only_defaults: [base]}
+  log1p:  {neutral: log1p,          arguments: [x]}
+  expm1:  {neutral: expm1,          arguments: [x]}
+  sqrt:   {neutral: sqrt,           arguments: [x]}
+  abs:    {neutral: abs,            arguments: [x]}
+  max:    {neutral: max,            variadic: true}
+  min:    {neutral: min,            variadic: true}
+  pmax:   {neutral: max,            variadic: true}
+  pmin:   {neutral: min,            variadic: true}
+  ifelse: {neutral: piecewise,      arguments: [test, "yes", "no"]}
+  sum:    {neutral: sum_over,       variadic: true}
+  round:  {neutral: round,          arguments: [x, digits], optional: 1}
+  floor:  {neutral: floor,          arguments: [x]}
+  ceiling: {neutral: ceiling,       arguments: [x]}
+# domains: where each neutral function has a value (open intervals; null means unbounded).
+domains:
+  normal_cdf:     {argument: [null, null]}
+  normal_inverse: {argument: [0, 1]}
+  log:            {argument: [0, null]}
+  log1p:          {argument: [-1, null]}
+  sqrt:           {argument: [0, null]}
+  exp:            {argument: [null, 50]}
+'''
+
+
+def tokenize_formula(text):
+    """Cut a written formula into numbers, names and signs. Anything else makes it unreadable."""
+    for written, plain in list(SUPERSCRIPTS.items()) + list(SIGNS.items()):
+        text = text.replace(written, plain)
+    text = re.sub(r"_\{([^{}]*)\}", lambda found: "_" + re.sub(r"\W", "", found.group(1)), text)   # x_{i,j} -> x_ij
+    tokens, position = [], 0
+    text = text.strip()
+    while position < len(text):
+        match = _TOKEN_RE.match(text, position)
+        if not match or match.end() == position:
+            raise Unreadable("it contains '%s', which the tool does not read in a formula" % text[position:position + 12].strip())
+        if match.group("number"):
+            value = Decimal(match.group("number"))
+            tokens.append(("number", plain_decimal(value / 100 if match.group("percent") else value)))
+        elif match.group("name"):
+            tokens.append(("name", match.group("name")))
+        else:
+            tokens.append(("sign", match.group("sign")))
+        position = match.end()
+    return tokens
+
+class FormulaReader:
+    """A small recursive-descent reader over the tokens of one formula. Order of strength, from
+    weakest: equals, comparison, plus and minus, times and divide, a leading minus, power.
+    Two terms side by side are read as a product only when `implicit_product` is set, which
+    is done for equation markup (its extent is exact) and never for running text."""
+    def __init__(self, tokens, notation, implicit_product=False):
+        self.tokens, self.position, self.notation = tokens, 0, notation
+        self.functions, self.implicit_product = notation.get("functions", {}), implicit_product
+
+    def peek(self, offset=0):
+        """The token at the reading position (or further on), without taking it."""
+        index = self.position + offset
+        return self.tokens[index] if index < len(self.tokens) else ("end", "")
+
+    def take(self, sign=None):
+        """Take the next token; with `sign`, insist that it is that sign."""
+        token = self.peek()
+        if sign is not None and token != ("sign", sign):
+            raise Unreadable("a '%s' was expected where '%s' stands" % (sign, token[1] or "the end"))
+        self.position += 1
+        return token
+
+    def statement(self):
+        """A whole formula: an expression, or `left = right`."""
+        left = self.comparison()
+        if self.peek() == ("sign", "="):
+            self.take()
+            left = Expr("eq", args=(left, self.comparison()))
+            if self.peek() == ("sign", "="):
+                raise Unreadable("it has more than one equals sign")
+        return left
+
+    def comparison(self):
+        """An expression, optionally compared with another one."""
+        left = self.sum()
+        if self.peek()[0] == "sign" and self.peek()[1] in ("<", ">", "<=", ">="):
+            sign = self.take()[1]
+            left = Expr("cmp", name=sign, args=(left, self.sum()))
+        return left
+
+    def sum(self):
+        """Terms joined by + and -, from left to right."""
+        left = self.product()
+        while self.peek() in (("sign", "+"), ("sign", "-")):
+            op = "add" if self.take()[1] == "+" else "sub"
+            left = Expr(op, args=(left, self.product()))
+        return left
+
+    def product(self):
+        """Factors joined by * and /, from left to right; juxtaposition only where the source allows it."""
+        left = self.unary()
+        while True:
+            if self.peek() in (("sign", "*"), ("sign", "/")):
+                op = "mul" if self.take()[1] == "*" else "div"
+                left = Expr(op, args=(left, self.unary()))
+            elif self.implicit_product and self.term_follows():
+                left = Expr("mul", args=(left, self.power()))
+            else:
+                return left
+
+    def term_follows(self):
+        """Does another factor start here without a sign in between?"""
+        kind, text = self.peek()
+        return kind in ("number", "name") or (kind == "sign" and text in ("(", "\u221a"))
+
+    def unary(self):
+        """A leading minus or plus. It binds less tightly than a power, as in mathematics and in R."""
+        if self.peek() == ("sign", "-"):
+            self.take()
+            return Expr("neg", args=(self.unary(),))
+        if self.peek() == ("sign", "+"):
+            self.take()
+            return self.unary()
+        return self.power()
+
+    def power(self):
+        """A base with an optional power (right-associative), an inverse-function mark or a percent sign."""
+        base = self.atom()
+        if self.peek() == ("sign", "^"):
+            self.take()
+            base = Expr("pow", args=(base, self.unary()))
+        if self.term_follows() and not self.implicit_product:
+            raise Unreadable("two terms stand side by side without a sign between them, which could "
+                              "mean a product or something else; the tool does not guess")
+        return base
+
+    def minus_one_follows(self):
+        """Is the next thing ^-1 or ^(-1) followed by an opening bracket? Returns tokens to skip."""
+        shapes = ([("sign", "^"), ("sign", "-"), ("number", "1"), ("sign", "(")],
+                  [("sign", "^"), ("sign", "("), ("sign", "-"), ("number", "1"), ("sign", ")"), ("sign", "(")])
+        for shape in shapes:
+            if [self.peek(i) for i in range(len(shape))] == shape:
+                return len(shape) - 1
+        return 0
+
+    def atom(self):
+        """A number, a symbol, a function call or a bracketed expression."""
+        kind, text = self.take()
+        if kind == "number":
+            return Expr("num", value=text)
+        if kind == "sign" and text == "(":
+            inner = self.statement()
+            self.take(")")
+            return inner
+        if kind == "sign" and text == "\u221a":
+            return Expr("call", name="sqrt", args=(self.atom(),))
+        if kind != "name":
+            raise Unreadable("'%s' stands where a number or a symbol was expected" % (text or "the end"))
+        function = self.functions.get(text) or self.functions.get(normalise_symbol(text))
+        skip = self.minus_one_follows() if function else 0
+        if skip:
+            inverse = self.notation.get("inverse", {}).get(function)
+            if not inverse:
+                raise Unreadable("the inverse of '%s' is not a function the tool knows" % text)
+            self.position += skip
+            function = inverse
+        if self.peek() == ("sign", "("):
+            if not function:
+                raise Unreadable("'%s(' could be a product or a function; the tool does not guess" % text)
+            self.take()
+            arguments = [self.statement()]
+            while self.peek() == ("sign", ","):
+                self.take()
+                arguments.append(self.statement())
+            self.take(")")
+            return Expr("call", name=function, args=tuple(arguments))
+        return Expr("sym", name=normalise_symbol(text))
+
+def parse_formula(text, notation, implicit_product=False):
+    """Read a formula written in linear notation into the tool's expression tree. Raises Unreadable
+    with a plain reason; it never guesses and never executes anything. Enforces: R7"""
+    tokens = tokenize_formula(text)
+    if not tokens:
+        raise Unreadable("it is empty")
+    reader = FormulaReader(tokens, notation, implicit_product)
+    tree = reader.statement()
+    if reader.peek()[0] != "end":
+        raise Unreadable("'%s' stands where the formula should have ended" % reader.peek()[1])
+    return tree
+
+def read_equation(source_form, linear, notation, image_sha256=""):
+    """Build the EquationData of a chunk: readable with its tree, or not readable with the reason."""
+    linear = normalise_text(linear)
+    if not linear:
+        reason = UNDECIDED_REASONS[0] if image_sha256 or source_form == "image" else "no formula text was found"
+        return EquationData(source_form, "", False, reason, image_sha256)
+    try:
+        tree = parse_formula(linear, notation, implicit_product=source_form in ("omml", "mathml", "latex"))
+    except Unreadable as problem:
+        return EquationData(source_form, linear, False, str(problem), image_sha256)
+    return EquationData(source_form, expr_to_text(tree), True, "", image_sha256)
+
+_INLINE_FORMULA_RE = re.compile(r"(?<![\w.])([^\W\d_][\w.\[\]{}]*)\s*=\s*([^=;]+)")
+
+def inline_formula(text, notation):
+    """A formula written inside running text, such as "K = LGD * N(x)". The right-hand side ends
+    at a semicolon, at ", where", or at the end of the sentence. When the notation is ambiguous
+    the paragraph simply stays a paragraph (plan 2.8). Returns EquationData or None."""
+    for match in _INLINE_FORMULA_RE.finditer(text or ""):
+        right = re.split(r",?\s+(?:where|with|and where|for)\b|\.\s+[A-Z]|\.$|:\s", match.group(2))[0]
+        right = right.strip().rstrip(".,")
+        if not re.search(r"[-+*/^(\u00d7\u00b7\u2212]", right):
+            continue                                  # "x = 5" or "a = b": a value, not a formula
+        try:
+            tree = parse_formula("%s = %s" % (match.group(1), right), notation)
+        except Unreadable:
             continue
-        if content_type == "text/html" and page is None:
-            page = payload.decode(part.get_content_charset() or "utf-8", "replace")
-        elif content_type.startswith("image/"):
-            fingerprint = digest(payload)
-            for key in (part.get("Content-Location", ""), (part.get("Content-ID", "") or "").strip("<>")):
-                if key:
-                    state.images[key] = fingerprint
-                    state.images[key.rsplit("/", 1)[-1]] = fingerprint
-    if page is None:
-        return [not_read_block(file_name, "the file holds no web page part")]
-    blocks = blocks_from_markup(page, file_name, state, repairs, tolerant_only=True)
-    title = re.search(r"<title[^>]*>(.*?)</title>", page, re.IGNORECASE | re.DOTALL)   # the page's title: a heading that
-    title = normalise_text(re.sub(r"<[^>]+>", " ", title.group(1))) if title else ""   # opens the file
-    return ([new_block("heading", title, "%s title" % file_name, level_hint=1)] if title else []) + blocks
+        return EquationData("inline", expr_to_text(tree), True, "", "")
+    return None
+
+def bracketed(text):
+    """Put brackets around a part unless it is one number, one symbol or one call."""
+    text = text.strip()
+    if re.fullmatch(r"[\w.]+|[\w.]+\([^()]*\)", text) or (text.startswith("(") and text.endswith(")") and
+                                                         text.count("(") == 1):
+        return text
+    return "(%s)" % text
+
+NARY_NAMES = {"\u2211": "sum_over", "\u220f": "product_over", "\u222b": "integral_over"}
+MATH_PROPERTIES = ("rpr", "ctrlpr", "fpr", "dpr", "narypr", "radpr", "ssuppr", "ssubpr", "ssubsuppr", "funcpr",
+                   "annotation", "omathparapr", "begchr", "endchr")
+
+def math_to_linear(element):
+    """Office Math (OMML) and MathML to linear notation, by the local names of the elements:
+    fractions, powers, subscripts, roots, brackets and function application. A sum is marked
+    as sum_over(...) and never expanded. Unknown elements contribute their text."""
+    name = local_name(element.tag)
+    def part(child_name):
+        child = child_named(element, child_name)
+        return math_children(child) if child is not None else ""
+    if name in ("t", "mi", "mn", "mtext"):
+        return (element.text or "").strip()
+    if name == "mo":
+        return " %s " % (element.text or "").strip()
+    if name == "f":                                               # OMML fraction
+        return "%s/%s" % (bracketed(part("num")), bracketed(part("den")))
+    if name == "ssup":
+        return "%s^%s" % (bracketed(part("e")), bracketed(part("sup")))
+    if name == "ssub":
+        return "%s_{%s}" % (part("e").strip(), part("sub").strip())
+    if name == "ssubsup":
+        return "%s_{%s}^%s" % (part("e").strip(), part("sub").strip(), bracketed(part("sup")))
+    if name == "rad":
+        degree = part("deg").strip()
+        return "sqrt(%s)" % part("e") if degree in ("", "2") else "%s^(1/%s)" % (bracketed(part("e")), bracketed(degree))
+    if name == "d":                                               # OMML brackets
+        return "(%s)" % ", ".join(math_children(child) for child in element if local_name(child.tag) == "e")
+    if name == "func":
+        argument = part("e").strip()                          # one pair of brackets round the whole argument is dropped
+        argument = argument[1:-1] if argument.startswith("(") and argument.endswith(")") and argument.count("(") == 1 else argument
+        return "%s(%s)" % (part("fname").strip(), argument)
+    if name == "nary":
+        properties = child_named(element, "narypr")
+        sign = child_named(properties, "chr") if properties is not None else None
+        kind = NARY_NAMES.get(attribute(sign, "val"), "sum_over") if sign is not None else "integral_over"
+        return "%s(%s, %s, %s)" % (kind, part("sub").strip() or "0", part("sup").strip() or "0", part("e"))
+    children = list(element)
+    if name == "mfrac" and len(children) == 2:
+        return "%s/%s" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
+    if name == "msup" and len(children) == 2:
+        return "%s^%s" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
+    if name == "msub" and len(children) == 2:
+        return "%s_{%s}" % (math_to_linear(children[0]).strip(), math_to_linear(children[1]).strip())
+    if name == "msubsup" and len(children) == 3:
+        return "%s_{%s}^%s" % (math_to_linear(children[0]).strip(), math_to_linear(children[1]).strip(),
+                               bracketed(math_to_linear(children[2])))
+    if name == "msqrt":
+        return "sqrt(%s)" % math_children(element)
+    if name == "mroot" and len(children) == 2:
+        return "%s^(1/%s)" % (bracketed(math_to_linear(children[0])), bracketed(math_to_linear(children[1])))
+    if name == "mfenced":
+        return "(%s)" % ", ".join(math_to_linear(child) for child in children)
+    if name == "munderover" and len(children) == 3 and (children[0].text or "").strip() in NARY_NAMES:
+        return "%s(%s, %s, " % (NARY_NAMES[children[0].text.strip()], math_to_linear(children[1]).strip(),
+                                math_to_linear(children[2]).strip())
+    if name in MATH_PROPERTIES:
+        return ""                                                 # properties, not content
+    return math_children(element)
+
+def math_children(element):
+    """The linear text of all children, in order. An open "sum_over(a, b, " from MathML takes
+    the part that follows it as its body and is then closed."""
+    pieces = [(element.text or "").strip() if not len(element) else ""]
+    for child in element:
+        piece = math_to_linear(child)
+        if pieces[-1].endswith(", ") and pieces[-1].startswith(tuple(NARY_NAMES.values())):
+            pieces[-1] = pieces[-1] + piece.strip() + ")"
+        else:
+            pieces.append(piece)
+    return re.sub(r"\s+", " ", "".join(pieces)).strip()
 
 
-# ---------------------------------------------------------------- .docx
+LATEX_WORDS = {"cdot": "*", "times": "*", "div": "/", "le": "<=", "leq": "<=", "ge": ">=", "geq": ">=",
+               "ln": "ln", "log": "log", "exp": "exp", "max": "max", "min": "min", "left": "", "right": "",
+               "quad": " ", "qquad": " ", ",": " ", ";": " ", "!": "", " ": " ", "displaystyle": ""}
+LATEX_WRAPPERS = ("text", "mathrm", "mathit", "mathbf", "operatorname", "mbox", "textit", "textbf", "code")
+
+def latex_group(source, position):
+    """The content of the {...} group that starts at `position`, and the position after it."""
+    if position >= len(source):
+        raise Unreadable("a LaTeX command lacks its argument")
+    if source[position] != "{":
+        return source[position], position + 1
+    depth, start = 0, position
+    while position < len(source):
+        depth += {"{": 1, "}": -1}.get(source[position], 0)
+        position += 1
+        if depth == 0:
+            return source[start + 1:position - 1], position
+    raise Unreadable("a LaTeX group is never closed")
+
+def latex_to_linear(source):
+    """The LaTeX subset found in roxygen \\eqn{} and \\deqn{} and in some XML, to linear notation:
+    \\frac, \\sqrt, ^{}, _{}, Greek letters, \\cdot, \\times, \\left, \\right, text wrappers.
+    An unknown command makes the formula unreadable; it is never skipped silently."""
+    source, output, position = source.strip().strip("$"), [], 0
+    while position < len(source):
+        char = source[position]
+        if char == "\\":
+            match = re.match(r"\\([A-Za-z]+|.)", source[position:])
+            word, position = match.group(1), position + match.end()
+            if word == "frac":
+                top, position = latex_group(source, position)
+                bottom, position = latex_group(source, position)
+                output.append("(%s)/(%s)" % (latex_to_linear(top), latex_to_linear(bottom)))
+            elif word == "sqrt":
+                degree = ""
+                if source[position:position + 1] == "[":
+                    end = source.index("]", position)
+                    degree, position = source[position + 1:end], end + 1
+                inner, position = latex_group(source, position)
+                inner = latex_to_linear(inner)
+                output.append("sqrt(%s)" % inner if degree in ("", "2") else "(%s)^(1/(%s))" % (inner, degree))
+            elif word in LATEX_WRAPPERS:
+                inner, position = latex_group(source, position)
+                output.append(re.sub(r"\s+", "_", inner.strip()))
+            elif word in GREEK:
+                output.append(GREEK[word])
+            elif word in LATEX_WORDS:
+                output.append(LATEX_WORDS[word])
+            else:
+                raise Unreadable("it uses the LaTeX command '\\%s', which the tool does not read" % word)
+        elif char == "^":
+            inner, position = latex_group(source, position + 1)
+            output.append("^(%s)" % latex_to_linear(inner))
+        elif char == "_":
+            inner, position = latex_group(source, position + 1)
+            output.append("_{%s}" % latex_to_linear(inner).replace(" ", ""))
+        elif char in "{}":
+            output.append("(" if char == "{" else ")")
+            position += 1
+        else:
+            output.append(char)
+            position += 1
+    return re.sub(r"\s+", " ", "".join(output)).strip()
+
+
+# ---------------------------------------------------------------- 2.5 Word (.docx)
 WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
            "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
            "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -2309,7 +3099,8 @@ def blocks_from_docx(data, file_name, state):
         blocks.extend(notes)
     return blocks
 
-# ---------------------------------------------------------------- .pdf
+
+# ---------------------------------------------------------------- 2.6 PDF
 MATH_CHARACTERS = set("=+\u2212\u00d7\u00f7\u2211\u221a\u222b^/\u2264\u2265\u2248()") | set(GREEK.values())
 
 BULLET = re.compile(r"^(?:[\u2022\u25aa\u25cf\u25e6\u2023\u2043\u2013\u2014*o-]|\(cid:\d+\))\s+(?=\S)")
@@ -2410,7 +3201,386 @@ def blocks_from_pdf(data, file_name, state):
     return blocks
 
 
-# ---------------------------------------------------------------- levels, references, chunks
+# ---------------------------------------------------------------- 2.7 MHTML and SVG
+# Each converter returns (markup, words): the markup is what the walker reads, and the words are
+# the file with its syntax taken away by a rule named here, which is what the content account
+# counts. The two are made by DIFFERENT code - the markup by reading the structure, the words by
+# removing syntax - so that the account still sees the walker lose or add a word. It does trust
+# the syntax rule, and says so. Enforces: R13
+
+def element(tag, text):
+    """One element of markup, its text escaped so that a < in a document is never a tag."""
+    return "<%s>%s</%s>" % (tag, escape(text), tag)
+
+
+TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+LIST_MARK = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
+
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+
+
+
+def delimiter_of(text):
+    """The separator of a file of delimited rows, where the first rows agree on one."""
+    rows = [line for line in text.split("\n") if line.strip()][:6]
+    if len(rows) < 2:
+        return ""
+    for separator in ("\t", ",", ";", "|"):
+        counts = {row.count(separator) for row in rows}
+        if len(counts) == 1 and counts.pop() >= 1:
+            return separator
+    return ""
+
+
+
+
+
+
+LATEX_HEADINGS = (("part", 1), ("chapter", 1), ("section", 1), ("subsection", 2), ("subsubsection", 3), ("paragraph", 4))
+
+
+
+
+
+def svg_number(value, fallback=0.0):
+    """An SVG coordinate or length as a number: its first figure, or `fallback` when it has none."""
+    try:
+        return float(re.split(r"[ ,]", (value or "").strip())[0])
+    except (ValueError, IndexError):
+        return fallback
+
+
+def svg_texts(root):
+    """Every piece of text an SVG holds as text, with where it is drawn: (x, y, text). Three places:
+    a <text> (its <tspan>s split it only where they carry positions of their own; a <textPath> or an
+    <a> inside it is read with it); and a <foreignObject>, where drawing tools put HTML - divs and
+    paragraphs - instead of SVG text. A transform is not applied, so a moved group keeps the order
+    it was written in."""
+    found = []
+    for node in root.iter():
+        name = local_name(node.tag)
+        if name == "text":
+            x, y = svg_number(node.get("x")), svg_number(node.get("y"))
+            placed = [span for span in node.iter() if local_name(span.tag) == "tspan" and (span.get("x") or span.get("y") or span.get("dy"))]
+            if not placed:
+                words = normalise_text("".join(node.itertext()))
+                if words:
+                    found.append((x, y, words))
+                continue
+            lead = normalise_text(node.text or "")
+            if lead:
+                found.append((x, y, lead))
+            line_y = y
+            for span in placed:
+                line_y = svg_number(span.get("y"), line_y + svg_number(span.get("dy"), 0.0))
+                words = normalise_text("".join(span.itertext()))
+                if words:
+                    found.append((svg_number(span.get("x"), x), line_y, words))
+        elif name == "foreignobject":                    # local_name lower-cases: foreignObject
+            words = normalise_text(" ".join(part for part in node.itertext() if part.strip()))
+            if words:
+                found.append((svg_number(node.get("x")), svg_number(node.get("y")), words))
+    return found
+
+def svg_embedded_pictures(root):
+    """The raster pictures an SVG carries inside itself as data: URIs - what a chart exported as an
+    image and wrapped in SVG looks like. Their words can only be read by OCR."""
+    import base64
+    pictures = []
+    for node in root.iter():
+        if local_name(node.tag) != "image":
+            continue
+        link = next((value for key, value in node.attrib.items() if local_name(key) == "href"), "")
+        found = re.match(r"data:image/(png|jpe?g|gif|bmp|webp);base64,(.*)", link.strip(), re.S)
+        if found:
+            try:
+                pictures.append(base64.b64decode(re.sub(r"\s", "", found.group(2))))
+            except (ValueError, TypeError):
+                continue
+    return pictures
+
+def svg_why_no_text(root):
+    """Why an SVG gave no text, in words an analyst can act on. Enforces: R2"""
+    if svg_embedded_pictures(root):
+        return "the chart is a picture stored inside the SVG, so its words can only be read by OCR"
+    glyphs = sum(1 for node in root.iter() if local_name(node.tag) == "use"
+                 and any("glyph" in (value or "").lower() for key, value in node.attrib.items() if local_name(key) == "href"))
+    shapes = sum(1 for node in root.iter() if local_name(node.tag) in ("path", "use"))
+    if glyphs or shapes > 40:
+        return ("its letters are drawn as shapes rather than stored as text, so they cannot be read as text; "
+                "export the chart with its text kept as text, or add its data as a table in the methodology")
+    return "it holds no text"
+
+def svg_rows(texts, tolerance=None):
+    """Texts grouped into rows by their y position, each row sorted by x. The tolerance is a
+    share of the median line height, so a chart's labels and a table's cells both group."""
+    if not texts:
+        return []
+    ys = sorted({round(y, 1) for _, y, _ in texts})
+    gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0.5]
+    tolerance = tolerance or (max(2.0, sorted(gaps)[len(gaps) // 2] * 0.4) if gaps else 2.0)
+    rows, current, last_y = [], [], None
+    for x, y, words in sorted(texts, key=lambda t: (t[1], t[0])):
+        if last_y is not None and y - last_y > tolerance:
+            rows.append(sorted(current))
+            current = []
+        current.append((x, y, words))
+        last_y = y
+    if current:
+        rows.append(sorted(current))
+    return [[words for _, _, words in row] for row in rows]
+
+def svg_to_markup(data, file_name):
+    """An SVG as markup the walker reads: its <title> and <desc> as the caption; its text, where
+    it stands in a grid of at least two rows of the same width, as a table with the first row
+    as the header; otherwise as a figure whose words are the labels of the picture in reading
+    order. An SVG holds text as text, so nothing is read from a picture by guesswork: every
+    word comes from a <text> element. Enforces: R7, R13"""
+    import xml.etree.ElementTree as ElementTree
+    root = ElementTree.fromstring(data)
+    caption = " ".join(normalise_text("".join(node.itertext())) for node in root
+                       if local_name(node.tag) in ("title", "desc") and normalise_text("".join(node.itertext())))
+    rows = svg_rows(svg_texts(root))
+    widths = {len(row) for row in rows}
+    words = [caption] + [" ".join(row) for row in rows]
+    if len(rows) >= 2 and len(widths) == 1 and widths.pop() >= 2:
+        body = "".join("<tr>%s</tr>" % "".join(element("th" if number == 0 else "td", cell) for cell in row)
+                       for number, row in enumerate(rows))
+        markup = "<document><table><caption>%s</caption>%s</table></document>" % (escape(caption or os.path.basename(file_name)), body)
+        return markup, "\n".join(words), "a picture whose text stands in a grid, read as a table"
+    labels = " ".join(" ".join(row) for row in rows)
+    # no src: this markup IS the picture, so it must not send the reader looking for itself beside itself
+    markup = "<document><figure alt=\"%s\"><caption>%s</caption></figure></document>" % (escape(labels), escape(caption))
+    return markup, "\n".join(words), "a picture, read by its own text: %d label(s)" % sum(len(row) for row in rows)
+
+
+
+def reason_for(problem):
+    """Why a reader failed on a file, in words an analyst can act on. Enforces: R2"""
+    name, said = type(problem).__name__, str(problem).lower()
+    if isinstance(problem, IsADirectoryError):
+        return "it is a folder, not a file"
+    if isinstance(problem, PermissionError):
+        return "the tool is not allowed to open it; check who may read the file"
+    if "password" in said or "encrypt" in said or "decrypt" in said or "pdfminer" in name.lower():
+        return "it is protected by a password; save an unprotected copy and put that in its place"
+    if isinstance(problem, zipfile.BadZipFile) or name in ("ReadError", "CompressionError", "HeaderError", "EOFError"):
+        return "it is damaged, or is not the archive its name says; save it again and put the new copy in its place"
+    return "a reader failed on it (%s); the rest of the run went on without it" % name
+
+def blocks_from_mhtml(data, file_name, state, repairs):
+    """Parts are read with the standard `email` package. The HTML part goes through the tolerant
+    reader; every image part is fingerprinted so that a Figure chunk can name its content."""
+    message = email.message_from_bytes(data)
+    page = None
+    for part in message.walk():
+        content_type = part.get_content_type()
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        if content_type == "text/html" and page is None:
+            page = payload.decode(part.get_content_charset() or "utf-8", "replace")
+        elif content_type.startswith("image/"):
+            fingerprint = digest(payload)
+            for key in (part.get("Content-Location", ""), (part.get("Content-ID", "") or "").strip("<>")):
+                if key:
+                    state.images[key] = fingerprint
+                    state.images[key.rsplit("/", 1)[-1]] = fingerprint
+    if page is None:
+        return [not_read_block(file_name, "the file holds no web page part")]
+    blocks = blocks_from_markup(page, file_name, state, repairs, tolerant_only=True)
+    title = re.search(r"<title[^>]*>(.*?)</title>", page, re.IGNORECASE | re.DOTALL)   # the page's title: a heading that
+    title = normalise_text(re.sub(r"<[^>]+>", " ", title.group(1))) if title else ""   # opens the file
+    return ([new_block("heading", title, "%s title" % file_name, level_hint=1)] if title else []) + blocks
+
+
+# ---------------------------------------------------------------- 2.8 a document's shape: headings, levels, references and chunks
+def attribute_text(element, names, digits_too=False):
+    """The first of the named attributes that holds text worth reading, with its name. A bare
+    number is no heading, so it is passed over unless digits_too."""
+    for name in names:
+        value = (element.get(name) or "").strip()
+        if value and (digits_too or not value.isdigit()):
+            return value, name
+    return "", ""
+
+BLOCK_FAMILIES = ("heading", "container", "list_container", "paragraph", "list_item", "table")
+
+
+def table_rows(element, rules):
+    """The rows of a table: the children that hold cells, looked for directly below the table
+    and below the wrappers the rules know (thead, tbody, tgroup)."""
+    known = rules["family_of"]
+    holders = [element] + [part for part in element if known.get(local_name(part.tag)) == "table_part"]
+    return [row for holder in holders for row in holder
+            if local_name(row.tag) and len(row) and known.get(local_name(row.tag)) in (None, "row")]
+
+def discover_table_shape(element, rules, is_table):
+    """Give a family to every tag used inside a table, whatever the tags are called. Everything
+    in a row is a cell. Two kinds are told apart by name, since only the name says what they are
+    for: a tag holding the table's number or title (<tablenumber>, <tabletitle>) is the caption,
+    one holding a column heading (<tablecolhead>) a header cell. A tag nobody anticipated
+    (<tablesub>, <tabletext>) is simply a cell and keeps its text.
+    An element the rules already name as a table (is_table) needs no more than that: real tables
+    have rows of differing width (a note below, a heading that spans). An element NOT known to be
+    a table has to make the case by its shape, and two guards keep the skeleton of a document,
+    which repeats twice over as a table does, from being read as one: a cell holds words and
+    never a block, and most rows are the same width. Returns (row tags, {tag: family}) or None."""
+    known, rows = rules["family_of"], table_rows(element, rules)
+    cells = [cell for row in rows for cell in row if local_name(cell.tag)]
+    if not cells:
+        return None
+    if not is_table:
+        widths = [sum(1 for cell in row if local_name(cell.tag)) for row in rows]
+        usual = max(set(widths), key=widths.count)
+        if (len(rows) < 2 or len({local_name(row.tag) for row in rows}) > 1 or usual < 2 or widths.count(usual) * 2 <= len(rows)
+                or any(known.get(local_name(cell.tag)) for cell in cells)
+                or any(known.get(local_name(below.tag)) in BLOCK_FAMILIES for cell in cells for below in cell)):
+            return None
+    families = {}
+    for name in {local_name(cell.tag) for cell in cells}:
+        if any(word in name for word in rules["caption_tag_words"]):
+            families[name] = "caption"
+        else:
+            families[name] = "header_cell" if any(word in name for word in rules["header_tag_words"]) else "cell"
+    return {local_name(row.tag) for row in rows}, families
+
+def readable_elements(known, element):
+    """Every element the walker will actually read. Discovery stops where the walker
+    stops: the inside of an equation or a figure is read by its own reader, and what the
+    rules ignore is never read at all, so neither is catalogued here."""
+    yield element
+    if known.get(local_name(element.tag)) in ("equation", "figure", "ignore"):
+        return
+    for child in element:
+        if local_name(child.tag):
+            yield from readable_elements(known, child)
+
+
+def discover_families(root, rules, report):
+    """Work out a family for each tag this document uses that the rules do not name, from the
+    way the tag behaves here. The rules always win, so a schema the tool already knows is read
+    exactly as before; discovery only speaks where they are silent. It looks, in order, for: a
+    table; an element carrying its own heading in an attribute; one holding other blocks (a
+    container); one holding text (a paragraph). Every decision is recorded with its reason in
+    plain words, shown on Model_Package_Info, and can be overridden by the project's tag_rules.yaml, beside its three input folders."""
+    known, found = rules["family_of"], {}
+
+    def note(tag, family, reason):
+        if tag not in known and tag not in found:
+            found[tag] = family
+            report[tag] = {"family": family, "reason": reason, "count": 1 if tag == name else 0}
+
+    # A tag that sits in running text, never holding a block of its own, is read inline: its
+    # words belong to the sentence around it, not to a paragraph of their own.
+
+    elements = list(readable_elements(known, root))
+    inline_looking = set()
+    for element in elements:
+        for child in element:
+            if (child.tail or "").strip() or (element.text or "").strip():
+                inline_looking.add(local_name(child.tag))
+
+    for element in elements:
+        name = local_name(element.tag)
+        if not name:
+            continue
+        if name in report:
+            report[name]["count"] += 1
+        # Table shape is looked for under a known table too: the element may be named in the
+        # rules while the row and cell tags inside it are not.
+        if known.get(name) == "table" or name not in known:
+            shape = discover_table_shape(element, rules, known.get(name) == "table")
+            if shape:
+                row_tags, families = shape
+                note(name, "table", "holds rows of cells")
+                for row_tag in sorted(row_tags):
+                    note(row_tag, "row", "holds the cells of <%s>" % name)
+                reasons = {"caption": "holds the number or the title of <%s>" % name,
+                           "header_cell": "holds a column heading of <%s>" % name,
+                           "cell": "sits in a row of <%s>" % name}
+                for tag in sorted(families):
+                    note(tag, families[tag], reasons[families[tag]])
+                continue
+        if name in known or name in found:
+            continue
+        blocks_below = any(local_name(child.tag) and known.get(local_name(child.tag)) not in ("inline", "ignore")
+                           for child in element)
+        heading, attribute = attribute_text(element, rules["heading_attributes"])
+        if heading and blocks_below:
+            note(name, "container", "carries its own heading in the %s attribute" % attribute)
+        elif blocks_below:
+            note(name, "container", "holds other blocks")
+        elif name in inline_looking and not len(element):
+            note(name, "inline", "appears inside running text")
+        elif (element.text or "").strip() or len(element):
+            note(name, "paragraph", "holds text")
+        else:
+            note(name, "paragraph", "empty")
+    return found
+
+def first_numbering(text, rules):
+    """The numbering at the start of a heading as written, and the name of its scheme."""
+    for scheme in rules["numbering_schemes"]:
+        match = re.match(scheme["pattern"], text)
+        if match:
+            return match.group(0).strip(), scheme["name"]
+    return "", ""
+
+def infer_levels(blocks, rules):
+    """Give every heading its level. When the file nests its sections, the nesting decides.
+    When nesting is flat, numbering decides: a dotted number gives its depth directly
+    (relative to the level of plain numbers); any other scheme seen for the first time is one
+    level deeper than the heading before it, and a scheme seen before returns to its level."""
+    headings = [b for b in blocks if b["type"] == "heading"]
+    hints = sorted({b["level_hint"] for b in headings if b["level_hint"] is not None})
+    nested = len(hints) > 1
+    scheme_level, current, run_hint, run_schemes = {}, 0, None, {}
+    for block in headings:
+        written, scheme = first_numbering(block["text"], rules)
+        if block["numbering"] and not scheme:
+            written, scheme = first_numbering(block["numbering"] + " ", rules)
+        block["numbering"] = block["numbering"] or written
+        if nested:                                       # a flat-numbered stretch inside a nested file (an annex)
+            if block["level_hint"] != run_hint:
+                run_hint, run_schemes = block["level_hint"], {}
+            if scheme and scheme != "dotted":
+                run_schemes.setdefault(scheme, len(run_schemes))
+            block["level"] = hints.index(block["level_hint"]) + 1 + run_schemes.get(scheme, 0)
+        elif scheme == "dotted":
+            depth = block["numbering"].strip(".").count(".") + 1
+            block["level"] = scheme_level.get("number", 1) + depth - 1
+        elif scheme:
+            if scheme not in scheme_level:
+                scheme_level[scheme] = current + 1
+            block["level"] = scheme_level[scheme]
+        else:
+            block["level"] = max(1, current) if current else 1
+        current = block["level"]
+    return blocks
+
+def without_page_furniture(lines, pages, state, file_name):
+    """Leave out what a page carries only because it is a page: the running title, the footer
+    with its date and page number, the logo. Such a line sits in the top or bottom margin and
+    comes back on most pages, the same but for its digits. It is not part of what the document
+    says, and left in it cuts a list or a sentence in two wherever a page ends. What was left
+    out is reported, so nothing goes missing unseen: this is the "declared drop" class of the
+    content account, and the note is what declares it. Enforces: R2, R13"""
+    same = lambda entry: (entry["edge"], re.sub(r"\d+", "#", entry["text"]))
+    on_pages = {}
+    for entry in lines:
+        if entry["edge"] and "text" in entry:
+            on_pages.setdefault(same(entry), set()).add(entry["page"])
+    furniture = {key for key, found in on_pages.items() if pages >= 3 and len(found) >= max(3, pages // 2)}
+    for entry in lines:                              # a declared drop: named, counted, and shown in the account
+        if entry.get("edge") and "text" in entry and same(entry) in furniture:
+            state.dropped.append(entry["text"])
+    for edge, text in sorted(furniture):
+        state.notes.append("%s: left out as a page header or footer, because it repeats in the %s margin of %d of %d pages: '%s'"
+                           % (file_name, edge, len(on_pages[(edge, text)]), pages, text))
+    return [entry for entry in lines if not (entry["edge"] and "text" in entry and same(entry) in furniture)]
+
+
 
 
 
@@ -2503,176 +3673,17 @@ def block_is_under_reconstructed(blocks, block):
     return bool(above and above["reconstructed"])
 
 
-# ---------------------------------------------------------------- the two steps
-def atoms_of_file(data, found, file_name, state, repairs):
-    """The smallest pieces of text the file holds, counted straight from the file and NOT from
-    the blocks the reader made of it. That independence is the whole point: an account drawn
-    from the reader's own output could never show what the reader missed. Enforces: R13"""
-    try:
-        if found == "docx":                  # every text run of every part; footnotes, endnotes, comments, headers and
-            archive, found = zipfile.ZipFile(io.BytesIO(data)), []   # footers are parts of their own, counted here even
-            named = list(DOCX_PARTS) + [(name, "header" if "header" in name else "footer")   # where the reader does not
-                                        for name in sorted(archive.namelist())             # read them, so that they show
-                                        if name.startswith("word/header") or name.startswith("word/footer")]   # as
-            for part, place in named:                                                      # unaccounted
-                if part not in archive.namelist():
-                    continue
-                try:
-                    root = safe_xml(archive.read(part))
-                except Exception:                        # a part that will not parse is counted and named here
-                    found.append(atom(place, "%s %s" % (file_name, part), ""))
-                    continue
-                for position, node in enumerate(root.iter(), start=1):
-                    if node.tag in (WORD_TEXT, WORD_DELETED) and (node.text or "").strip():
-                        kind = "tracked change" if node.tag == WORD_DELETED else place
-                        found.append(atom(kind, "%s %s run %d" % (file_name, part, position), node.text))
-            return found
-        if found == "pdf":                   # every word of every page's text layer; a page without one is one atom
-            import pdfplumber                # with no text, so that a scanned page shows as one the tool cannot count
-            with pdfplumber.open(io.BytesIO(data)) as document:
-                return [atom("body" if (page.extract_text() or "").strip() else "page without a text layer",
-                             "%s p.%d" % (file_name, number), page.extract_text() or "")
-                        for number, page in enumerate(document.pages, start=1)]
-        if found == "mhtml":
-            message = email.message_from_bytes(data)
-            for part in message.walk():
-                payload = part.get_payload(decode=True)
-                if part.get_content_type() == "text/html" and payload is not None:
-                    text = payload.decode(part.get_content_charset() or "utf-8", "replace")
-                    return atoms_of_markup(parse_markup(repair_markup(text, file_name, []), file_name, [], tolerant_only=True), file_name, state.rules)
-            return []
-        if found in ("xml", "html"):
-            text = repair_markup(decode_text(data), file_name, [])
-            return atoms_of_markup(parse_markup(text, file_name, [], tolerant_only=found == "html"), file_name, state.rules)
-        return atoms_of_plain_text(decode_text(data), file_name)
-    except Exception:                          # an account that cannot be drawn is written down, never a stopped run
-        state.notes.append("%s: the content account could not be drawn for this file." % file_name)
-        return []
-
-def read_file_blocks(path, file_name, state, repairs, max_bytes):
-    """One input file to blocks, by the format found in its content. Enforces: R6"""
-    if os.path.getsize(path) > max_bytes:
-        return "too large", [not_read_block(file_name, "the file is larger than the size limit for one input file")]
-    with open(path, "rb") as handle:
-        data = handle.read()
-    state.folder = os.path.dirname(os.path.abspath(path))
-    found = detect_format(data, file_name)
-    if found in NOT_READ:                    # said in plain words, with a next step; never decoded as text
-        state.atoms = [atom("whole file not read", file_name, "")]
-        return found, [not_read_block(file_name, "the file is " + NOT_READ[found])]
-    if found == "svg":                               # read by the text it holds, as a table or a figure
-        state.atoms = []
-        return found, svg_blocks(data, file_name, file_name, state)
-    state.atoms = atoms_of_file(data, found, file_name, state, repairs)
-    if found == "pdf":
-        return found, blocks_from_pdf(data, file_name, state)
-    if found == "docx":
-        return found, blocks_from_docx(data, file_name, state)
-    if found == "mhtml":
-        return found, blocks_from_mhtml(data, file_name, state, repairs)
-    if found in ("xml", "html"):
-        return found, blocks_from_markup(decode_text(data), file_name, state, repairs, tolerant_only=found == "html")
-    blocks = [new_block("paragraph", part, "paragraph %d" % number)
-              for number, part in enumerate(re.split(r"\n\s*\n", decode_text(data)), start=1) if part.strip()]
-    return "plain text", blocks
-
-def read_corner(ctx, corner, input_key, label):
-    """Read every file of one corner, in file-name order, into chunks numbered in reading order."""
-    options = ctx.options
-    rules = load_tag_rules(options["inputs"].get("tag_rules"))
-    notation = yaml.safe_load(R_FUNCTION_MAP_YAML)["notation"]   # names read as functions in a formula
-    chunks, repairs, info_rows, accounts, read_as_what = [], [], [], [], []
-    root = (options["inputs"].get("roots") or {}).get(input_key)
-    for left_out, why in (options["inputs"].get("skipped") or {}).get(input_key, []):
-        info_rows.append({"group": label, "item": "%s: left out of the folder" % left_out, "value": "Not read: %s." % why})
-    paths = options["inputs"][input_key]
-    svgs = {}                                        # every SVG of the corner, by name and by name without .svg
-    for path in paths:
-        if path.lower().endswith(".svg"):
-            svgs.setdefault(os.path.basename(path).lower(), path)
-            svgs.setdefault(os.path.splitext(os.path.basename(path))[0].lower(), path)
-    consumed = set()
-    # documents first, pictures last: a chart an XML refers to is read in place, where the XML puts it,
-    # and is not read a second time on its own; one nothing refers to is still read, on its own
-    for path in [p for p in paths if not p.lower().endswith(".svg")] + [p for p in paths if p.lower().endswith(".svg")]:
-        file_name = os.path.relpath(path, root).replace(os.sep, "/") if root else os.path.basename(path)
-        if path in consumed:
-            info_rows.append({"group": label, "item": file_name, "value": "Read in place, as part of the document that refers to it."})
-            continue
-        state = WalkState(dict(rules), notation, {}, {}, [])
-        state.settings = ctx.settings
-        state.svgs, state.consumed, state.file_name = svgs, consumed, file_name
-        try:
-            found, blocks = read_file_blocks(path, file_name, state, repairs, int(ctx.settings["max_file_mb"] * 1024 * 1024))
-        except Exception as problem:                 # a file that breaks a reader is named, never a stopped run (R2)
-            found, blocks = "unreadable", [not_read_block(file_name, reason_for(problem))]
-            state.atoms, state.blocks = [atom("whole file not read", file_name, "")], []
-        read_as_what.append((file_name, found, blocks[0].get("not_read_reason", "") if len(blocks) == 1 else ""))
-        new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
-        chunks.extend(new_chunks)
-        plain = [to_plain(chunk) for chunk in new_chunks]
-        found_account = account(file_name, state.atoms, plain, state.dropped,
-                                        marks_of_rendering(plain)
-                                        + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING],
-                                        os.path.getsize(path) if os.path.isfile(path) else 0)
-        accounts.append(found_account)
-        info_rows.extend({"group": label, "item": "%s: content account" % file_name, "value": line}
-                         for line in account_lines(found_account))
-        counts = {}
-        for chunk in new_chunks:
-            counts[chunk.kind] = counts.get(chunk.kind, 0) + 1
-        summary = ", ".join("%d %s" % (counts[kind], kind.lower() + ("s" if counts[kind] != 1 else ""))
-                            for kind in CHUNK_KINDS if kind in counts) or "nothing could be read"
-        info_rows.append({"group": label, "item": file_name, "value": "Read as %s: %d units (%s)"
-                          % (FORMAT_NAMES.get(found, found), len(new_chunks), summary)})
-        info_rows.extend({"group": label, "item": "%s: reading note" % file_name, "value": note} for note in state.notes)
-        for tag in sorted(state.unknown_tags):
-            seen = state.unknown_tags[tag]
-            because = ", because it %s" % seen["reason"] if seen.get("reason") else ""
-            info_rows.append({"group": label, "item": "%s: unrecognised tag" % file_name, "value":
-                              "Unrecognised tag '%s', %d times, read as %s%s. "
-                              "It can be added to the project's tag_rules.yaml."
-                              % (tag, seen["count"], seen.get("family") or seen.get("read_as"), because)})
-    kind = "chunks_canon" if corner == "canon" else "chunks_doc"
-    unreadable = sum(1 for chunk in chunks if chunk.kind == "Equation" and not chunk.equation.readable)
-    messages = ["%d units read from %d file(s)." % (len(chunks), len(options["inputs"][input_key]))]
-    read_as = {}
-    for _, found, _ in read_as_what:
-        if found in FORMAT_NAMES:
-            read_as[FORMAT_NAMES[found]] = read_as.get(FORMAT_NAMES[found], 0) + 1
-    if read_as:                                      # what each file was read as, and what was not read and why
-        messages.append("Read as: %s." % ", ".join("%d %s" % (count, name) for name, count in sorted(read_as.items())))
-    messages.extend("Not read: %s - %s." % (name, why) for name, found, why in read_as_what
-                    if why and (found in NOT_READ or found == "unreadable"))
-    skipped = (options["inputs"].get("skipped") or {}).get(input_key, [])
-    if skipped:
-        messages.append("%d file(s) in the folder were left out; Model_Package_Info lists them." % len(skipped))
-    if unreadable:
-        messages.append("%d equation(s) could not be read." % unreadable)
-    open_accounts = [one for one in accounts if not one["closed"]]
-    if open_accounts:
-        messages.append("The content account is open on %d file(s); Model_Package_Info says what could not be placed."
-                        % len(open_accounts))
-    return StepResult({kind: chunks, "read_repairs": repairs, "info_rows": info_rows},
-                             {"units": len(chunks), "repairs": len(repairs),
-                              "content account open on": len(open_accounts)}, messages)
-
-def read_methodology(ctx):
-    """Step 02, read-inputs, first part: the canonical methodology into chunks C-0001, C-0002, ..."""
-    return read_corner(ctx, "canon", "methodology", "Methodology files")
-
-def read_documentation(ctx):
-    """Step 02, read-inputs, second part: the model documentation into chunks D-0001, D-0002, ..."""
-    return read_corner(ctx, "doc", "documentation", "Documentation files")
+# ======================================================================================================================
+# PART 3 of 4 - STEP 02, READ-INPUTS: THE MODEL PACKAGE; STEP 03, LINK-CHUNKS   (reviewer 3)
+# ======================================================================================================================
 
 
+# ---------------------------------------------------------------- 3.1 the package: unpacking and inventory
 # ================================================================================================
-# ---------------------------------------------------------------- the model package, read into units
 TEXT_MEMBERS = (".r", ".txt", ".md", ".rd", ".rmd", ".csv", ".tsv", ".yaml", ".yml", ".json", ".html")
 PARSER_NAME = "flowR"
 
 
-# ---------------------------------------------------------------- safe unpacking and inventory
 ARCHIVE_NAMES = (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".zip")
 
 
@@ -2737,8 +3748,7 @@ def read_description(text):
     return fields
 
 
-
-# ---------------------------------------------------------------- the expression tree's node
+# ---------------------------------------------------------------- 3.2 flowR: fetching it, running it, and its syntax trees
 @dataclass
 class Node:
     """One node of the syntax tree. kind is one of: num, str, name, call, index, binary,
@@ -2751,7 +3761,6 @@ class Node:
 ASSIGNMENT_SIGNS = ("<-", "<<-", "=", "->", "->>")
 
 
-# ---------------------------------------------------------------- R code, read by flowR
 # flowR reads the package's R code; its syntax tree is turned into the tool's Node, the shape every reader of
 # R code here expects. One flowR run reads a whole package, and every source is read once per session.
 PARSED = {}                               # R source text -> its top-level expressions
@@ -3039,8 +4048,59 @@ def code_facts(node, skip_inner_functions=True):
     unique = lambda values: tuple(dict.fromkeys(values))
     return {"calls": unique(calls), "symbols_written": unique(written)}
 
+def flowr_ready(source=""):
+    """flowR's folder, fetched once from source - a staged archive, such as one in a Volume - or from the
+    pinned release, refused unless its SHA-256 is the pinned one, and run once: ready means it runs here.
+    The folder is this system user's own: a shared cluster runs every notebook session as a user of its
+    own, and a folder another session made can be neither read nor written. Enforces: R12"""
+    import tarfile, urllib.request
+    if source in FLOWR_FOLDERS:
+        return FLOWR_FOLDERS[source]
+    folder = os.path.join(tempfile.gettempdir(), "flowr-%s-%d" % (FLOWR_VERSION, os.getuid()))
+    binary = os.path.join(folder, "flowr")
+    if not all(os.path.exists(os.path.join(folder, name)) for name in ("flowr", "tree-sitter.wasm", "tree-sitter-r.wasm")):
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        archive = os.path.join(folder, "flowr.tar.gz")
+        shutil.copyfile(source, archive) if source else urllib.request.urlretrieve(FLOWR_URL.format(FLOWR_VERSION), archive)
+        if file_sha256(archive) != FLOWR_SHA256:
+            os.remove(archive)
+            raise RuntimeError("The flowR archive is not the pinned release %s: its checksum differs." % FLOWR_VERSION)
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(folder, members=[m for m in bundle.getmembers() if m.isfile() and "/" not in m.name.strip("./")])
+        os.chmod(binary, 0o700)
+    try:                                            # one line of R, read the way the review reads: ready means it ran
+        flowr_read(folder, "x <- 1\n")
+    except Exception as problem:
+        raise RuntimeError("flowR is here but could not run on this cluster: %s" % problem)
+    FLOWR_FOLDERS[source] = folder
+    return folder
 
-# ---------------------------------------------------------------- units from R source
+def flowr_read(folder, text, prefix=""):
+    """flowR's syntax tree of one R source, indexed by id, and its edges as {id: [(target, bits)]}; every
+    id carries the prefix, so that the answers for several sources can stand side by side. An answer too
+    large to read safely is refused before it is read: loading it would take the driver's memory."""
+    with tempfile.TemporaryDirectory() as work:
+        source = os.path.join(work, "package.R")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        found = flowr_answer(folder, source, [{"type": "dataflow"}, {"type": "normalized-ast"}], work, "--no-fs")
+    tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
+    edges = {prefix + str(s): [(prefix + str(t), e["types"]) for t, e in targets] for s, targets in found["dataflow"]["graph"]["edgeInformation"]}
+    nodes, stack = {}, [(tree, None)]
+    while stack:                                   # every node once, with its parent; no recursion, so no depth limit
+        node, up = stack.pop()
+        if isinstance(node, dict):
+            if "type" in node and "info" in node:
+                node["info"]["id"] = prefix + str(node["info"]["id"])
+                node["up"], up = up, node["info"]["id"]
+                nodes[up] = node
+            stack += [(value, up) for key, value in node.items() if key not in ("info", "location", "lexeme", "up")]
+        elif isinstance(node, list):
+            stack += [(value, up) for value in node]
+    return nodes, edges
+
+
+# ---------------------------------------------------------------- 3.3 units from R source; roxygen blocks and help pages
 def draft(kind, path, lines, name, text, **more):
     """A unit before it has its reference. References are given at the end, in reading order."""
     unit = {"kind": kind, "file": path, "lines": lines, "name": name, "inside": "", "text": text,
@@ -3141,7 +4201,6 @@ def self_contained(units):
             kept.append(unit)
     return kept
 
-# ---------------------------------------------------------------- roxygen blocks and help pages
 
 def roxygen_units(path, source_lines, parsed, context):
     """Consecutive #' lines form one block. It documents the object that follows: a function,
@@ -3204,7 +4263,8 @@ def vignette_units(path, text, context):
     close_prose(len(lines))
     return units
 
-# ---------------------------------------------------------------- stored parameter data
+
+# ---------------------------------------------------------------- 3.4 stored parameter data, and which code reads it
 COMPRESSION = ((b"\x1f\x8b", "gzip"), (b"BZh", "bzip2"), (b"\xfd7zXZ\x00", "xz"))
 
 def expand(data, cap):
@@ -3357,7 +4417,6 @@ def decode_data_file(path, data, settings):
     return units, fact
 
 
-# ---------------------------------------------------------------- which code reads which data
 def data_reads(function_node, formals, data_names, data_files):
     """Where a function reads stored data, and how the code shows it: a bare symbol that is
     neither an argument nor assigned in the function; data("x"); readRDS(...) or load(...) with
@@ -3390,7 +4449,67 @@ def data_reads(function_node, formals, data_names, data_files):
             note(node.args[0].value, "", column=columns[0] if columns else "", row_key=literals[0] if literals else "")
     return tuple(reads[name] for name in sorted(reads))
 
-# ---------------------------------------------------------------- reading the package
+
+# ---------------------------------------------------------------- 3.5 read_package, and the package's content account
+def account_of_package(files, units, refused, is_text_file, dropped=()):
+    """The content account of a package tarball. The atom of a package is a line: every
+    non-blank line of every member that holds text has to lie inside a unit, be refused with a
+    reason, or be named as not read. A member the tool cannot read as text (a compiled object, a
+    picture, stored data in a binary form) is counted as one atom of its own, because its lines
+    cannot be counted without reading it. Extends the line coverage that read_package already
+    kept for parsed R files to every member of the tarball. A member left out on purpose (dropped: a help
+    page, generated from the roxygen comments in the R files, which are read; a file of the package's tests)
+    is a declared drop, every line of it, or one piece when it is not text. Enforces: R13"""
+    inside, not_read, atoms, unaccounted, fenced, text_only, declared = 0, 0, 0, [], 0, 0, 0
+    covered = {}
+    for unit in units:
+        lines = unit.get("lines")
+        if unit.get("file") and lines:
+            covered.setdefault(unit["file"], set()).update(range(int(lines[0]), int(lines[1]) + 1))
+    for path in sorted(files):
+        if path in dropped:                           # not read on purpose, under a named rule
+            lines = 1 if not is_text_file(path) else sum(1 for line in files[path].decode("utf-8", "replace").split("\n") if line.strip())
+            atoms, declared = atoms + lines, declared + lines
+            continue
+        if not is_text_file(path):
+            atoms += 1
+            if any(unit.get("file") == path for unit in units):
+                inside += 1
+            else:
+                not_read += 1
+            continue
+        try:
+            lines = files[path].decode("utf-8", "replace").split("\n")
+        except Exception:
+            atoms += 1
+            not_read += 1
+            continue
+        numbers = [number for number, line in enumerate(lines, start=1) if line.strip()]
+        # A fence that opens or closes a block of code in a vignette separates content from
+        # content and says nothing itself. It is a declared drop, named here, rather than a
+        # line that lies in no unit for no stated reason. Enforces: R13
+        fences = {number for number in numbers if lines[number - 1].strip().startswith("```")}
+        numbers = [number for number in numbers if number not in fences]
+        atoms += len(numbers) + len(fences)
+        fenced += len(fences)
+        held = covered.get(path, set())
+        whole_file = any(unit.get("file") == path and not unit.get("lines") for unit in units)
+        if any(unit.get("file") == path and unit.get("kind") == "Other file" for unit in units):
+            text_only += len(numbers)
+        for number in numbers:
+            if number in held or whole_file:
+                inside += 1
+            elif any(unit.get("file") == path and unit.get("read_problem") for unit in units):
+                not_read += 1
+            else:
+                unaccounted.append("%s line %d" % (path, number))
+    found = {"file": "the package", "atoms": atoms + len(refused), "in unit text": inside, "relocated": 0,
+             "rewritten": 0, "declared drop": len(refused) + fenced + declared, "not read": not_read,
+             "unaccounted": len(unaccounted), "injected": 0, "where unaccounted": sorted(unaccounted)[:12],
+             "what unaccounted": [], "what injected": [], "held as text only": text_only}
+    found["closed"] = found["unaccounted"] == 0
+    return found
+
 DATA_EXTENSIONS = (".rda", ".rdata", ".rds")
 
 
@@ -3587,7 +4706,8 @@ def read_package(ctx):
                               },
                              {"units": len(units), "files": len(files), "members refused": len(refused)}, messages)
 
-# ---------------------------------------------------------------- flowR: the program R code is read with
+
+# ---------------------------------------------------------------- 3.6 step 03, link-chunks: which chunk feeds which
 # flowR (Sihler and Tichy, Ulm University; GPLv3) parses R with tree-sitter and tells, for every name, the
 # definition it reads, for every call, the function it calls, and for every argument, the parameter it becomes.
 # It is fetched once, verified against the pinned SHA-256, and run in one-shot mode: no R process, no server,
@@ -3599,57 +4719,6 @@ READS, CALLS = 1, 4                     # flowR's edge bits: reads, calls; any o
 FLOWR_ANSWER_MAX = 200 * 1024 * 1024    # flowR answers ~64 KB of JSON per line of R, and Python needs ~8x that to read it
 
 FLOWR_FOLDERS = {}                      # once ready in a session, ready for the rest of it
-
-def flowr_ready(source=""):
-    """flowR's folder, fetched once from source - a staged archive, such as one in a Volume - or from the
-    pinned release, refused unless its SHA-256 is the pinned one, and run once: ready means it runs here.
-    The folder is this system user's own: a shared cluster runs every notebook session as a user of its
-    own, and a folder another session made can be neither read nor written. Enforces: R12"""
-    import tarfile, urllib.request
-    if source in FLOWR_FOLDERS:
-        return FLOWR_FOLDERS[source]
-    folder = os.path.join(tempfile.gettempdir(), "flowr-%s-%d" % (FLOWR_VERSION, os.getuid()))
-    binary = os.path.join(folder, "flowr")
-    if not all(os.path.exists(os.path.join(folder, name)) for name in ("flowr", "tree-sitter.wasm", "tree-sitter-r.wasm")):
-        os.makedirs(folder, mode=0o700, exist_ok=True)
-        archive = os.path.join(folder, "flowr.tar.gz")
-        shutil.copyfile(source, archive) if source else urllib.request.urlretrieve(FLOWR_URL.format(FLOWR_VERSION), archive)
-        if file_sha256(archive) != FLOWR_SHA256:
-            os.remove(archive)
-            raise RuntimeError("The flowR archive is not the pinned release %s: its checksum differs." % FLOWR_VERSION)
-        with tarfile.open(archive) as bundle:
-            bundle.extractall(folder, members=[m for m in bundle.getmembers() if m.isfile() and "/" not in m.name.strip("./")])
-        os.chmod(binary, 0o700)
-    try:                                            # one line of R, read the way the review reads: ready means it ran
-        flowr_read(folder, "x <- 1\n")
-    except Exception as problem:
-        raise RuntimeError("flowR is here but could not run on this cluster: %s" % problem)
-    FLOWR_FOLDERS[source] = folder
-    return folder
-
-def flowr_read(folder, text, prefix=""):
-    """flowR's syntax tree of one R source, indexed by id, and its edges as {id: [(target, bits)]}; every
-    id carries the prefix, so that the answers for several sources can stand side by side. An answer too
-    large to read safely is refused before it is read: loading it would take the driver's memory."""
-    with tempfile.TemporaryDirectory() as work:
-        source = os.path.join(work, "package.R")
-        with open(source, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        found = flowr_answer(folder, source, [{"type": "dataflow"}, {"type": "normalized-ast"}], work, "--no-fs")
-    tree = found["normalized-ast"].get("normalized", found["normalized-ast"]).get("ast")
-    edges = {prefix + str(s): [(prefix + str(t), e["types"]) for t, e in targets] for s, targets in found["dataflow"]["graph"]["edgeInformation"]}
-    nodes, stack = {}, [(tree, None)]
-    while stack:                                   # every node once, with its parent; no recursion, so no depth limit
-        node, up = stack.pop()
-        if isinstance(node, dict):
-            if "type" in node and "info" in node:
-                node["info"]["id"] = prefix + str(node["info"]["id"])
-                node["up"], up = up, node["info"]["id"]
-                nodes[up] = node
-            stack += [(value, up) for key, value in node.items() if key not in ("info", "location", "lexeme", "up")]
-        elif isinstance(node, list):
-            stack += [(value, up) for value in node]
-    return nodes, edges
 
 @dataclass
 class FunctionReadings:
@@ -4209,506 +5278,12 @@ def link_chunks(ctx):
                       ["%d links between the units of Chunks_Model, read by flowR." % count] + notes)
 
 
-# ================================================================================================
-# ---------------------------------------------------------------- a fault inside the tool
-class RunStopped(Exception):
-    """Why the run cannot go on, in plain words: a defect in the tool - rows that do not rebuild their text, a question
-    too large for chat(), a workbook that does not match its records - or an Output.xlsm a person has changed, which a
-    new run would replace."""
+# ======================================================================================================================
+# PART 4 of 4 - STEP 04, INTERPRET-CODE; STEP 05, SEARCH-METHODOLOGY; THE DELIVERABLE   (reviewer 4)
+# ======================================================================================================================
 
 
-# ---------------------------------------------------------------- the run: its folder, its record and its two deliverables
-ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-# ---------------------------------------------------------------- settings (allow-list)
-DEFAULT_SETTINGS = {
-    "max_parameter_cells": 5000, "max_parameter_columns": 50,
-    "max_file_mb": 200.0, "reviewer_id": "",
-    "parallel_chats": 256,
-    "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
-
-def make_settings(overrides=None):
-    """The settings of a run. Only names on the allow-list above exist, so a new setting
-    can never leak into the manifest by default, and no setting can hold the token.
-    Enforces: R8"""
-    settings = json.loads(json.dumps(DEFAULT_SETTINGS))
-    for name, value in (overrides or {}).items():
-        if name not in DEFAULT_SETTINGS:
-            raise ValueError("'%s' is not a setting the tool knows" % name)
-        settings[name] = value
-    return settings
-
-# ---------------------------------------------------------------- paths and project setup
-PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
-OUTPUT_FILE = "Output.xlsm"               # the deliverable: a workbook with one macro (the workbook's macro)
-LEGACY_OUTPUT_FILE = "Output.xlsx"        # what the tool wrote before its workbook held the macro
-LONGEST_AUDIT_NAME = OUTPUT_FILE
-PATH_BUDGET = 100
-
-@dataclass
-class RunPaths:
-    """Where a project's run lives: Output.xlsm sits in the project folder, and the record of the run in its _Audit folder,
-    beside its three input folders - run_dir, outputs_dir, audit_dir and inputs_dir are that one folder, each name kept so that
-    every reader says which file it means - and local_dir is scratch space on the driver. previous is the
-    manifest of the run this one replaced, if any; opened says in plain words which run this is, and why."""
-    projects_dir: str; project: str; project_dir: str; inputs_dir: str
-    run_id: str; run_dir: str; outputs_dir: str; audit_dir: str; local_dir: str
-    previous: Optional[dict] = None; opened: str = ""
-
-
-
-
-LEGACY_INPUTS = "Inputs"                   # where the three folders were kept before they stood beside Output.xlsm
-BESIDE_FOLDERS = ("glossary.xlsx", "tag_rules.yaml")   # the optional files that sit beside the three folders
-
-
-def holds_nothing(path):
-    """Does a folder hold nothing but the tool's README.txt and hidden files?"""
-    return not [n for n in os.listdir(path) if n != "README.txt" and not n.startswith(".")]
-
-
-def lift_project(project_dir):
-    """A project laid out before brought to the present layout, once. Its three folders, if inside Inputs/: each folder,
-    and each optional file beside them, moved up into the project's folder whole, not a file of it changed. A folder
-    above that holds only its README.txt gives way to the one it replaces; one that holds more is never overwritten:
-    then nothing of that folder is moved, and the run cannot start until a person keeps one. Inputs is removed when
-    nothing but hidden files is left in it. Then its Audit_Log.xlsx, if it stands in the project's own folder, is moved
-    into _Audit - the tool's own file, moved whole. Returns (what was done, what stops the run), in plain words.
-    Enforces: R6"""
-    said, blocking = [], []
-    legacy = os.path.join(project_dir, LEGACY_INPUTS)
-    if os.path.isdir(legacy):
-        done = []
-        for name in [folder for _, folder, _ in INPUT_FOLDERS] + list(BESIDE_FOLDERS):
-            old, new = os.path.join(legacy, name), os.path.join(project_dir, name)
-            if not os.path.exists(old):
-                continue
-            if os.path.isdir(new) and os.path.isdir(old) and holds_nothing(new):
-                shutil.rmtree(new)                             # only the tool's README: the older folder takes its place
-            if os.path.exists(new):
-                blocking.append("%s is both in %s and beside it, and both hold files. Keep one: move what the one in Inputs "
-                                "holds into %s, or delete it, then remove Inputs and run cell 3 again." % (name, legacy, new))
-                continue
-            try:
-                os.rename(old, new)
-                done.append(name)
-            except OSError as problem:
-                blocking.append("%s could not be moved up out of %s (%s). Move it beside Output.xlsm yourself, then run "
-                                "cell 3 again." % (name, legacy, problem))
-        left = [n for n in os.listdir(legacy) if not n.startswith(".")]
-        said += (["Moved up out of Inputs, into the project's folder beside Output.xlsm: %s; no file in them was changed."
-                  % ", ".join(done)] if done else [])
-        if not left and not blocking:
-            shutil.rmtree(legacy)
-            said.append("Inputs, now empty, was removed.")
-        elif left and not blocking:
-            said.append("Inputs still holds %s, which the tool does not read; left as it is." % ", ".join(sorted(left)))
-    old, new = os.path.join(project_dir, AUDIT_FILE), os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
-    if os.path.isfile(old) and not os.path.exists(new):
-        os.makedirs(os.path.dirname(new), exist_ok=True)
-        os.rename(old, new)
-        said.append("Audit_Log.xlsx was moved into %s, where the record of a run is kept." % AUDIT_FOLDER)
-    return said, blocking
-
-
-PREVIOUS_RUNS = "previous_runs"            # in _Audit: each run a new run replaced, kept whole
-
-
-def archive_run(project_dir, run_id):
-    """The run a new run replaces, kept whole: everything in _Audit - Audit_Log.xlsx, run_log.txt, the step folders -
-    and the Output.xlsm, or the Output.xlsx of before, the tool wrote for it, moved into
-    _Audit/previous_runs/<its run id>/. Nothing of it is deleted or changed; a run kept before stays where it is.
-    An Output a person changed never comes here: open_run stops first (RunStopped). Returns the folder, or ""
-    when there was nothing to keep. Enforces: R4, R6"""
-    audit = os.path.join(project_dir, AUDIT_FOLDER)
-    kept = [os.path.join(audit, name) for name in sorted(os.listdir(audit)) if name != PREVIOUS_RUNS] if os.path.isdir(audit) else []
-    kept += [path for path in (os.path.join(project_dir, OUTPUT_FILE), os.path.join(project_dir, LEGACY_OUTPUT_FILE))
-             if os.path.exists(path)]
-    if not kept:
-        return ""
-    base = os.path.join(audit, PREVIOUS_RUNS, re.sub(r"[^A-Za-z0-9_.-]+", "-", run_id) or "run-before")
-    target, number = base, 1
-    while os.path.exists(target):
-        number += 1
-        target = "%s-%d" % (base, number)
-    os.makedirs(target)
-    for path in kept:
-        os.rename(path, os.path.join(target, os.path.basename(path)))
-    return target
-
-
-
-
-def setup_project(projects_dir, project):
-    """Create the project skeleton and say what is still missing: the three input folders, each with its README.txt,
-    in the project's folder beside Output.xlsm and Audit_Log.xlsx. A project laid out before, with its folders inside
-    Inputs/, is first brought to this layout (lift_project). Returns (project folder, what stops the run, what was
-    done). The content of an input is never touched. Enforces: R6"""
-    problem = "" if PROJECT_NAME_RE.match(project or "") else (
-        "The project name may hold at most 24 characters from letters, digits, hyphen and underscore. Please shorten or "
-        "change '%s'." % project)
-    if problem:
-        raise ValueError(problem)
-    project_dir = os.path.join(projects_dir, project)          # the project's folder: its three input folders, Output.xlsm and _Audit
-    os.makedirs(project_dir, exist_ok=True)
-    said, missing = lift_project(project_dir)
-    for _, folder, readme in INPUT_FOLDERS:
-        path = os.path.join(project_dir, folder)
-        os.makedirs(path, exist_ok=True)
-        readme_path = os.path.join(path, "README.txt")
-        if not os.path.exists(readme_path):
-            with open(readme_path, "w", encoding="utf-8") as handle:
-                handle.write(readme + "\n")
-        if holds_nothing(path):
-            missing.append("%s is still empty. %s" % (folder, readme))
-    return project_dir, missing, said
-
-def new_run_id(taken, now=None):
-    """A run is named by the minute it started, <date>_<HHMM>, with a letter added while that name is taken:
-    the run it replaces, or a run this driver has opened already."""
-    base = (now or datetime.datetime.now()).strftime("%Y-%m-%d_%H%M")
-    for suffix in [""] + list("bcdefghijklmnopqrstuvwxyz"):
-        if not taken(base + suffix):
-            return base + suffix
-    raise ValueError("Too many runs were started in the same minute; please wait a minute.")
-
-def recorded_manifest(project_dir):
-    """The manifest of the run the project's Audit_Log.xlsx records, read from its Run sheet alone; None when
-    there is none, or the workbook cannot be read."""
-    target = os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
-    if not os.path.exists(target):
-        return None
-    import openpyxl
-    try:
-        book = openpyxl.load_workbook(target, read_only=True)
-        parts = [row[1] or "" for row in book["Run"].iter_rows(min_row=2, values_only=True)
-                 if re.sub(r" \(part \d+\)$", "", str(row[0] or "")) == "run_manifest"]
-        book.close()
-        return json.loads("".join(parts)) if parts else None
-    except Exception:
-        return None
-
-def run_changes(record, inputs_dir, settings):
-    """Why the run a project records cannot be carried on, in plain words, or "" when it can: it is carried on
-    while its input files, the engine and the settings are the ones it started with. Who runs it does not count."""
-    if not record or not record.get("run_id") or "inputs" not in record:
-        return "no earlier run"
-    before = {f["file"]: f["sha256"] for f in record.get("inputs", [])}
-    now = {f["file"]: f["sha256"] for f in input_fingerprints(inputs_dir)}
-    if before != now:
-        return "the input files changed"
-    if record.get("engine_files") != engine_file_hashes():
-        return "the engine changed"
-    ignore = lambda values: {k: v for k, v in (values or {}).items() if k != "reviewer_id"}
-    if ignore(record.get("settings")) != ignore(json.loads(json.dumps(settings))):
-        return "the settings changed"
-    return ""
-
-def pick_scratch_root(preferred=""):
-    """The first folder on the driver the tool can actually write in, tried in order.
-
-    A run is built on the driver's own disk and copied whole into the Workspace afterwards
-    (R12), so this folder is needed before anything else can happen. A cluster is shared, and
-    a scratch folder made by one user cannot be written into by another; the folders tried
-    here therefore carry the user's own name. Writing is tested, not assumed, because a
-    folder can exist and still refuse."""
-    user = re.sub(r"[^A-Za-z0-9_.-]", "_", getpass.getuser() or "user")
-    refused = []
-    for root in ([preferred] if preferred else []) + [
-            os.path.join(tempfile.gettempdir(), "verifier_scratch_" + user),
-            os.path.join("/local_disk0", "verifier_scratch_" + user)]:
-        try:
-            os.makedirs(root, exist_ok=True)
-            probe = os.path.join(root, ".verifier_write_test")
-            with open(probe, "w") as handle:
-                handle.write("x")
-            os.remove(probe)
-            return root
-        except OSError as problem:
-            refused.append("%s (%s)" % (root, problem.strerror or problem))
-    raise PermissionError(
-        "the tool builds each run on the driver's own disk and copies the finished files into the "
-        "Workspace, so it needs one folder it may write in. These were refused: %s. Put a "
-        "folder you can write in into the 'Scratch folder' widget, or ask for one on this "
-        "cluster." % "; ".join(refused))
-
-def open_run(projects_dir, project, scratch_root="", now=None, settings=None):
-    """The project's run, and its local scratch folder. A project holds one run: Output.xlsm and the _Audit folder, with
-    Audit_Log.xlsx and the files of every step, sit beside its three input folders. The run the audit log records is carried on - by this session
-    or a later one - while its inputs, the engine and the settings are the ones it started with; otherwise a new
-    run starts, replaces both files, and records what changed since the run before. An Output.xlsm a person has
-    changed since the tool wrote it is never replaced: RunStopped says so. Inputs are never touched.
-    Enforces: R6, R12"""
-    project_dir, _, _ = setup_project(projects_dir, project)
-    inputs_dir = project_dir                                # the three input folders stand in the project's folder
-    record = recorded_manifest(project_dir)
-    why = run_changes(record, inputs_dir, settings or make_settings({}))
-    scratch_root = pick_scratch_root(scratch_root)
-    place = digest(os.path.abspath(project_dir))[:8]   # two Projects folders never share scratch space
-    local_of = lambda run: os.path.join(scratch_root, "%s_%s_%s" % (project, run, place))
-    previous = None
-    if not why:
-        run_id = record["run_id"]
-        opened = "Carrying on run %s, which Audit_Log.xlsx records: a finished step is not repeated." % run_id
-    else:
-        for name in (OUTPUT_FILE, LEGACY_OUTPUT_FILE):
-            workbook = os.path.join(project_dir, name)
-            if os.path.exists(workbook) and file_sha256(workbook) != (record or {}).get("last_workbook_sha256"):
-                raise RunStopped(
-                    "%s in %s has been changed since the tool wrote it, and a new run would replace it (%s). "
-                    "Move it to another folder or rename it, then run cell 3 again." % (name, project_dir, why))
-        replaced = os.path.exists(os.path.join(project_dir, LEGACY_OUTPUT_FILE))
-        kept = archive_run(project_dir, (record or {}).get("run_id") or "")   # the run before, kept whole: never deleted
-        previous = record if record and record.get("inputs") else None
-        archived = os.path.join(project_dir, AUDIT_FOLDER, PREVIOUS_RUNS)     # a run id is never used twice in a project
-        run_id = new_run_id(lambda run: run == (record or {}).get("run_id") or os.path.exists(local_of(run))
-                            or os.path.exists(os.path.join(archived, run)), now)
-        opened = ("A new run, %s: %s since run %s." % (run_id, why, record["run_id"])
-                  if record and record.get("run_id") else "A new run, %s." % run_id)
-        if kept:
-            opened += (" The run before - its Output.xlsm and its _Audit folder - is kept, whole, in %s."
-                       % os.path.relpath(kept, project_dir).replace(os.sep, "/"))
-        if replaced:
-            opened += (" %s, which the tool wrote before, is kept with it; %s takes its place: the same sheets, and a click "
-                       "on a reference shows only the chunks it names." % (LEGACY_OUTPUT_FILE, OUTPUT_FILE))
-    local_dir = local_of(run_id)
-    paths = RunPaths(projects_dir, project, project_dir, inputs_dir, run_id, project_dir,
-                     project_dir, os.path.join(project_dir, AUDIT_FOLDER), local_dir, previous, opened)
-    longest = os.path.join(paths.project_dir, LONGEST_AUDIT_NAME)
-    relative = os.path.relpath(longest, os.path.dirname(os.path.abspath(projects_dir)))
-    if len(relative) > PATH_BUDGET:
-        raise ValueError("The folder path is %d characters long and the limit is %d, so that "
-                         "Excel can still open downloaded files. Please use a shorter project name "
-                         "or Projects folder." % (len(relative), PATH_BUDGET))
-    os.makedirs(paths.local_dir, exist_ok=True)
-    if why:                                                 # a new run: the record of the one it replaces is not read back
-        OPEN_STORES[(paths.local_dir, paths.audit_dir)] = AuditStore(paths.local_dir, paths.audit_dir, loaded=True)
-    return paths
-
-# ---------------------------------------------------------------- live values (the token)
-@dataclass
-class LiveValues:
-    """The three values chat() reads when it is CALLED: endpoint, token, user id. They live
-    in memory only. `generation` goes up whenever a different token arrives, which is how
-    paused workers learn that a fresh one was pasted. Enforces: R8"""
-    values: dict = field(default_factory=dict); generation: int = 0; set_at: float = 0.0
-    recent_tokens: list = field(default_factory=list)
-    lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def update(self, llm_endpoint="", llm_token="", llm_user_id=""):
-        """Take the latest widget values; a different token starts a new generation."""
-        with self.lock:
-            if llm_token and llm_token != self.values.get("llm_token"):
-                self.generation += 1
-                self.set_at = time.time()
-                self.recent_tokens = ([llm_token] + self.recent_tokens)[:5]
-            self.values = {"llm_endpoint": llm_endpoint, "llm_token": llm_token, "llm_user_id": llm_user_id}
-
-    def get(self, name):
-        """One of the three values, read now. The user id is one value under two names: the widget is
-        called reviewer_id, because the same id records who made a decision and is sent to the LLM."""
-        with self.lock:
-            return self.values.get("llm_user_id" if name == "reviewer_id" else name, "")
-
-    def token_age_minutes(self):
-        """Minutes since the current token was pasted."""
-        return (time.time() - self.set_at) / 60.0 if self.set_at else 0.0
-
-    def redact(self, text):
-        """Remove the current and recent token strings from any text before it is kept."""
-        for token in list(self.recent_tokens):
-            if token:
-                text = text.replace(token, "[token removed]")
-        return text
-
-# ---------------------------------------------------------------- the audit store
-AUDIT_OBJECTS = ("run_manifest", "package_info")
-AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, in the project's _Audit folder
-AUDIT_FOLDER = "_Audit"                   # the record of a run: Audit_Log.xlsx, run_log.txt, and a folder for each step
-CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
-
-def copy_whole(source, target):
-    """Copy one whole file: to a temporary name, then replace; a plain copy if the file
-    system does not support replace (probe P-5). Enforces: R12"""
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    temporary = target + ".part"
-    shutil.copyfile(source, temporary)
-    try:
-        os.replace(temporary, target)
-    except OSError:
-        shutil.copyfile(source, target)
-        os.remove(temporary)
-
-@dataclass
-class AuditStore:
-    """The record of a run, as one workbook a person can open: Audit_Log.xlsx, in the project's _Audit folder.
-
-        Run            the run's manifest and account, one line per entry
-        Steps          every step that ran, what it counted and what it said
-        Records        every record of every kind, in the order written, each as its own JSON
-        Model_Calls    every exchange with the model: the question, the answer and the outcome
-        Files          every file of the audit folder, in the order written, with when an exchange was sent and
-                       returned, its size and its SHA-256
-
-    Records are held in memory while a cell runs and the workbook is written whole at each
-    sync, beside and then swapped in, so a reader never sees it half written. Text longer than
-    a cell holds is written in numbered parts and joined again when read, so nothing is cut.
-    Enforces: R4, R5, R12"""
-    local_dir: str; remote_dir: str
-    rows: list = field(default_factory=list)       # {"kind", "record"}, in the order written
-    calls: list = field(default_factory=list)
-    account: dict = field(default_factory=dict)    # the manifest and the other single-object kinds
-    loaded: bool = False
-    copied: set = field(default_factory=set)       # the files of the audit folder already in the project's _Audit
-
-    def write_file(self, step_id, step_name, label, payload, holds, about="", sent_at="", returned_at=""):
-        """One file of the audit folder: payload as JSON, in the step's own folder - 02_read-inputs - numbered after the
-        files the step wrote before it, so that a step's files, and a step tried again, read in the order written:
-        02_read-inputs/0003_methodology_capital_methodology.txt.json. Written on local disk with the token removed,
-        copied into _Audit at the next sync, and listed in the inventory (the record kind audit_files, the sheet
-        Files) with the time it was written, its size and its SHA-256. Enforces: R4, R5, R8, R12"""
-        self.restore()
-        inventory = self.read("audit_files")
-        number = 1 + sum(1 for entry in inventory if entry["step_id"] == step_id)
-        name = "%04d_%s.json" % (number, re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-")[:90])
-        relative = "%s_%s/%s" % (step_id, step_name, name)
-        data = ((NOTEBOOK["live"] or LiveValues()).redact(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
-                + "\n").encode("utf-8")
-        local = os.path.join(self.local_dir, AUDIT_FOLDER, *relative.split("/"))
-        os.makedirs(os.path.dirname(local), exist_ok=True)
-        with open(local, "wb") as handle:
-            handle.write(data)
-        self.append("audit_files", [{"number": len(inventory) + 1, "step_id": step_id, "step": step_name, "file": relative,
-                                     "holds": holds, "about": about, "sent_at": sent_at, "returned_at": returned_at,
-                                     "written_at": datetime.datetime.now().isoformat(timespec="seconds"),
-                                     "bytes": len(data), "sha256": digest(data)}])
-        return relative
-
-    def target(self):
-        return os.path.join(self.remote_dir, AUDIT_FILE)
-
-    def read(self, kind):
-        """Every record of one kind, in the order written."""
-        self.restore()
-        if kind == "llm_calls":
-            return list(self.calls)
-        if kind in AUDIT_OBJECTS:
-            found = self.account.get(kind)
-            return [found] if found is not None else []
-        return [row["record"] for row in self.rows if row["kind"] == kind]
-
-    def append(self, kind, records):
-        """Add records of one kind; the single-object kinds are replaced whole."""
-        self.restore()
-        if kind in AUDIT_OBJECTS:
-            self.account[kind] = to_plain(records[-1])
-            return
-        self.rows += [{"kind": kind, "record": to_plain(record)} for record in records]
-
-    def append_calls(self, records):
-        self.restore()
-        self.calls += [to_plain(record) for record in records]
-
-    def read_calls(self):
-        return self.read("llm_calls")
-
-    def sync(self):
-        """Write the whole workbook, beside and then swapped in. Returns what was written."""
-        import openpyxl
-        os.makedirs(self.remote_dir, exist_ok=True)
-        book = openpyxl.Workbook()
-        book.remove(book.active)
-        run = book.create_sheet("Run")
-        run.append(["Entry", "Value"])
-        for key in sorted(self.account):
-            for line, part in parts_of(canonical_json(self.account[key])):
-                run.append([key if line == 1 else "%s (part %d)" % (key, line), part])
-        steps = book.create_sheet("Steps")
-        steps.append(["Step", "Name", "Seconds", "What it counted", "What it said"])
-        for record in self.read("step_records"):
-            steps.append([record.get("step_id", ""), record.get("name") or record.get("step", ""), record.get("seconds", ""), canonical_json(record.get("counts") or {})[:CELL_LIMIT],
-                          "\n".join(record.get("messages") or [])[:CELL_LIMIT]])
-        records = book.create_sheet("Records")
-        records.append(["Kind", "Number", "Part", "Record (JSON)"])
-        for number, row in enumerate(self.rows, start=1):
-            for part_number, part in parts_of(canonical_json(row["record"])):
-                records.append([row["kind"], number, part_number, part])
-        calls = book.create_sheet("Model_Calls")
-        calls.append(["Number", "Question", "Step", "Question type", "Attempt", "Outcome", "Part", "Exchange (JSON)"])
-        for number, record in enumerate(self.calls, start=1):    # a question asked twice has two records: each its own number
-            for part_number, part in parts_of(canonical_json(record)):
-                calls.append([number, record.get("question_id", ""), record.get("step", ""), record.get("question_type", ""),
-                              record.get("attempt", ""), record.get("outcome", ""), part_number, part])
-        inventory = book.create_sheet("Files")          # every file of the audit folder, in the order written
-        inventory.append(["Number", "Step", "File", "What it holds", "About", "Sent at", "Returned at", "Written at", "Bytes",
-                          "SHA-256"])
-        for entry in self.read("audit_files"):
-            inventory.append([entry["number"], "%s %s" % (entry["step_id"], entry["step"]), entry["file"], entry["holds"],
-                              entry.get("about", ""), entry.get("sent_at", ""), entry.get("returned_at", ""), entry["written_at"],
-                              entry["bytes"], entry["sha256"]])
-            inventory.cell(row=inventory.max_row, column=3).hyperlink = entry["file"]     # opens the file beside the workbook
-        for sheet in book.worksheets:
-            sheet.freeze_panes = "A2"
-        written = []
-        for entry in self.read("audit_files"):          # each file of the audit folder copied once, whole - before the
-            local = os.path.join(self.local_dir, AUDIT_FOLDER, *entry["file"].split("/"))   # inventory that lists it
-            if entry["file"] in self.copied or not os.path.exists(local):
-                continue                                # copied before, or by the session that wrote it
-            copy_whole(local, os.path.join(self.remote_dir, *entry["file"].split("/")))
-            self.copied.add(entry["file"])
-            written.append(entry["file"])
-        partial = os.path.join(self.local_dir, AUDIT_FILE + ".writing")
-        os.makedirs(self.local_dir, exist_ok=True)
-        book.save(partial)
-        copy_whole(partial, self.target())
-        os.remove(partial)
-        written.insert(0, AUDIT_FILE)
-        log = os.path.join(self.local_dir, "run_log.txt")
-        if os.path.exists(log):                         # the technical log of the run, the token already removed
-            copy_whole(log, os.path.join(self.remote_dir, "run_log.txt"))
-        return written
-
-    def restore(self):
-        """On resume: read the project's Audit_Log.xlsx back, once."""
-        if self.loaded:
-            return
-        self.loaded = True
-        if not os.path.exists(self.target()):
-            return
-        import openpyxl
-        book = openpyxl.load_workbook(self.target(), read_only=True)
-        joined = {}
-        for row in book["Records"].iter_rows(min_row=2, values_only=True):
-            kind, number, _, part = row[0], row[1], row[2], row[3] or ""
-            joined.setdefault((kind, number), []).append(part)
-        self.rows = [{"kind": kind, "record": json.loads("".join(parts))}
-                     for (kind, number), parts in sorted(joined.items(), key=lambda pair: pair[0][1])]
-        whole = {}
-        for row in book["Model_Calls"].iter_rows(min_row=2, values_only=True):
-            whole.setdefault(row[0], []).append((row[6] or 1, row[7] or ""))
-        self.calls = [json.loads("".join(part for _, part in sorted(parts))) for _, parts in sorted(whole.items())]
-        entries = {}
-        for row in book["Run"].iter_rows(min_row=2, values_only=True):
-            key = re.sub(r" \(part \d+\)$", "", str(row[0] or ""))
-            entries.setdefault(key, []).append(row[1] or "")
-        self.account = {key: json.loads("".join(parts)) for key, parts in entries.items() if key}
-
-def parts_of(text):
-    """One long text as numbered parts, each short enough for a cell."""
-    return [(number + 1, text[at:at + CELL_LIMIT]) for number, at in enumerate(range(0, max(len(text), 1), CELL_LIMIT))]
-
-OPEN_STORES = {}                         # one store per run: two of them would overwrite each other's records
-
-def open_store(paths, settings):
-    """The audit store of a run, read back from the project's Audit_Log.xlsx when there is one and the run is
-    carried on. The same store is returned for the same run, so everything a run records goes into one account."""
-    key = (paths.local_dir, paths.audit_dir)
-    if key not in OPEN_STORES:
-        OPEN_STORES[key] = AuditStore(paths.local_dir, paths.audit_dir)
-    return OPEN_STORES[key]
-
-# ---------------------------------------------------------------- the organisation's model: what one question may hold
+# ---------------------------------------------------------------- 4.1 asking the organisation's model: what a question may hold, and many at once
 # chat() holds a question and its answer together up to chat_token_limit tokens (40,000 by default). The model's own
 # tokenizer is not at hand, so the tool counts tokens its own way, on the high side: measured on prose, R code, tables
 # of numbers, mathematics and JSON against six tokenizers (three of OpenAI's, Llama's, Mistral's and Claude's), its count
@@ -4781,7 +5356,6 @@ def shown_cut(text, tokens):
     return kept + "\n[Only the first %d characters are shown.]" % len(kept)
 
 
-# ---------------------------------------------------------------- the organisation's model: many questions at once
 # Steps 04 and 05 put their questions to the chat() of cell 2, as many at once as parallel_chats allows. A question is
 # exact - its id is the hash of what was sent - so an answer already recorded in this run is never asked for twice.
 # Every answer is kept, in memory, the moment it arrives, by the thread that received it; only the step's own thread
@@ -5108,7 +5682,7 @@ def log_technical(ctx, step_id, lines):
             handle.write("".join("step %s, %s\n" % (step_id, line) for line in lines))
 
 
-# ---------------------------------------------------------------- step 04: interpret-code
+# ---------------------------------------------------------------- 4.2 step 04, interpret-code
 # Step 04 puts every unit of Chunks_Model in front of the organisation's model, with the units it takes from and gives
 # to as context, and asks it to explain the credit concepts the code implements, for a CFA-level analyst checking it
 # against the methodology. The model's words go to one column, headed "(by LLM)", and to the audit log; nothing the
@@ -5262,7 +5836,7 @@ def interpret_code(ctx):
     return StepResult({"llm_calls": records}, counts, messages, finished=not missing)
 
 
-# ---------------------------------------------------------------- step 05: search-methodology
+# ---------------------------------------------------------------- 4.3 step 05, search-methodology
 # Step 05 finds, for every unit of Chunks_Model, the chunks of the methodology that describe, explain or inform it, and
 # then asks where the code departs from them. The methodology is the canonical description of the code. Two rounds:
 #   search      every unit is put to the model once for each batch of the methodology, until every chunk has been
@@ -5963,214 +6537,454 @@ def search_methodology(ctx):
     return StepResult({"llm_calls": records}, counts, messages, finished=not open_units)
 
 
-# ---------------------------------------------------------------- the pipeline runner
-PIPELINE = (                       # the steps, in order, each carried out by one function of STEP_FUNCTIONS. Enforces: R11
-    {"id": "01", "name": "prepare-run", "carried_out_by": "prepare_run"},
-    {"id": "02", "name": "read-inputs", "carried_out_by": "read_inputs"},
-    {"id": "03", "name": "link-chunks", "carried_out_by": "link_chunks"},
-    {"id": "04", "name": "interpret-code", "carried_out_by": "interpret_code"},
-    {"id": "05", "name": "search-methodology", "carried_out_by": "search_methodology"})
+# ---------------------------------------------------------------- 4.4 Output.xlsm: its rows, its layout, and how it is written
+CELL_WITHHELD = "This text could not be shown in plain words; the technical text is in the audit records."
+CUT_NOTE = " ... (cut here; the full text is in the audit files)"
+PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
+                           r"[:=(\[]\s*None\b|\{'|\['|^None$")
 
 
+def plain_cell(value, input_text, store):
+    """The last gate before a cell is written. the tool's own words must be free of Python
+    traces and of words the wording rule rejects; otherwise the text goes to run_log.txt
+    and the cell gets one fixed, plain sentence. Enforces: R1, R10"""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value == int(value) else plain_number(value)
+    text = str(value)
+    if not input_text:
+        said = own_words(text)
+        if PYTHON_TRACES.search(said):
+            log_line(store, "cell text withheld: " + text)
+            text = CELL_WITHHELD
+    return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
 
-def run_pipeline(paths, settings, stop_after=""):
-    """Run, or resume, the pipeline. Each finished step leaves a step record; called again,
-    the run continues at the first step without one. A step that says it did not finish - step 04 or 05 with
-    questions still unanswered - stops the run there, and is carried out again when cell 3 runs again.
-    Returns {"state", "message", "steps_run"}."""
-    store = open_store(paths, settings)
-    done = {record["step_id"] for record in store.read("step_records") if record.get("finished", True)}
-    steps_run = []
-    for step in PIPELINE:
-        if stop_after and step["id"] > stop_after:
-            break
-        if step["id"] in done:
+
+def run_identity(store, paths):
+    """What ties a workbook to its run: also written into the workbook's properties."""
+    return {"project": paths.project, "run_id": paths.run_id}
+
+def stored_data_rows(units, links):
+    """Model_Package_Info's account of the stored objects, once step 03 has linked them: how many the code reads, and
+    those no code reads - each of which says so in its own row of Immediate Downstream Model Chunk. Enforces: R2"""
+    if not links:
+        return []
+    linked = {record["ref"]: record for record in links}
+    data = [u for u in units if u["kind"] in (KIND_TABLE, KIND_OBJECT)]
+    unread = [u for u in data if not (linked.get(u["ref"]) or {}).get("downstream")
+              and not (linked.get(u["ref"]) or {}).get("possible_downstream")]
+    rows = [("Stored objects read by the code", "%d of %d" % (len(data) - len(unread), len(data)))] if data else []
+    if unread:
+        rows.append(("Stored objects no code reads", "; ".join("%s %s (%s)" % (u["ref"], u["name"], u["file"]) for u in unread)
+                     + ". The model's code reads them by no name, file, helper or environment the tool can see: each "
+                       "says so in Immediate Downstream Model Chunk."))
+    return rows
+
+
+def rows_package_info(store, paths, settings, progress, split=None):
+    """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
+    identity, rows = run_identity(store, paths), []
+    def add(group, item, value):
+        rows.append({"group": group, "item": item, "value": value})
+    add("Identity", "Project", identity["project"])
+    add("Identity", "Run", identity["run_id"])
+    add("Identity", "Run progress", progress)
+    manifest = (store.read("run_manifest") or [{}])[0]
+    if manifest.get("engine_files"):
+        add("Identity", "Engine files fingerprint", digest(canonical_json(manifest["engine_files"]))[:16] +
+            " (%d files; the full list is in the run manifest)" % len(manifest["engine_files"]))
+    for entry in manifest.get("inputs", []):
+        add("Inputs", entry["file"], "SHA-256 %s (%d bytes)" % (entry["sha256"], entry["bytes"]))
+    for change in manifest.get("changes_since_previous_run", []):
+        add("Inputs", "Changed since run %s" % manifest.get("previous_run", ""), change)
+    for info in store.read("package_info"):
+        for row in info.get("rows", []):
+            add(row["group"], row["item"], row["value"])
+    for row in store.read("info_rows"):
+        add(row["group"], row["item"], row["value"])
+    stored = stored_data_rows(store.read("model_units"), store.read("unit_links"))
+    at = max((number for number, row in enumerate(rows) if row["group"] == "Package data"), default=len(rows) - 1) + 1
+    rows[at:at] = [{"group": "Package data", "item": item, "value": value} for item, value in stored]
+    for group, several in (split or {}).items():          # beside the other rows of their group: what takes several rows
+        if several:
+            at = max((number for number, row in enumerate(rows) if row["group"] == group), default=len(rows) - 1) + 1
+            code = group == "Package"
+            rows.insert(at, {"group": group, "item": "Pieces shown in several rows" if code else "Chunks shown in several rows",
+                             "value": "; ".join("%s in %d rows, %s-1 to %s-%d" % (ref, n, ref, ref, n) for ref, n in several) +
+                                      (". Each is one piece of the package, too long for one row, and is treated as one wherever "
+                                       "it is used: what the model says of it stands together on its first row." if code else
+                                       ". Each is one chunk, too long for one row, and is treated as one wherever it is used.")})
+    repairs = {}
+    for repair in store.read("read_repairs"):
+        repairs.setdefault(repair["file"], []).append(repair["kind"])
+    for name in sorted(repairs):
+        kinds = sorted(set(repairs[name]))
+        add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
+    return rows
+
+
+def rows_chunks(chunks, slicer=None):
+    """The rows of Chunks_Methodology and Chunks_Documentation: a chunk in one row or, too long for one, in rows
+    C-0045-1, C-0045-2 and so on as `slicer` cuts it, each with the chunk's section, type and file. Enforces: R2, R13"""
+    rows = []
+    for c in chunks:
+        slices = slicer(c) if slicer else [(c["text"], False)]
+        for number, (part, joined) in enumerate(slices, start=1):
+            rows.append({"ref": c["ref"] if len(slices) == 1 else "%s-%d" % (c["ref"], number), "chunk_ref": c["ref"],
+                         "joined": joined, "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": part,
+                         "source_file": c["source_file"]})
+    return rows
+
+
+def interpretation_of(parts, said, unanswered, asked):
+    """What the organisation's model says of a unit: its answer, or, for a unit asked about in parts, the answers of
+    all its parts together, each under the part and the lines it explains."""
+    texts = []
+    for part in parts:
+        answer = said.get(part["ref"]) or (NO_ANSWER if part["ref"] in unanswered else "")
+        texts.append(answer or (NOT_ASKED if asked and not askable(part) else ""))
+    if len(parts) == 1:
+        return texts[0]
+    return "\n\n".join("Part %d of %d%s: %s" % (part["part"], part["parts"], ", lines %d-%d" % tuple(part["lines"]) if part.get("lines") else "", answer)
+                        for part, answer in zip(parts, texts) if answer)
+
+
+def spread_rows(ref, parts, columns):
+    """The rows a unit takes on Chunks_Model: its code down its parts, and each of its own columns from the first row
+    down, continued on the rows below where longer than a cell, never cut. A unit takes as many rows as the longest of
+    these needs; with more than one, they are numbered M-0003-1, M-0003-2 and so on. Enforces: R2, R13"""
+    cut = {field: ([value] if value is not None else []) if not isinstance(value, str) else
+                  [piece for piece, _ in text_slices(value, float("inf"), SLICE_CHARS)] if value else []
+           for field, value in columns.items()}
+    count = max([len(parts)] + [len(pieces) for pieces in cut.values()])
+    rows = []
+    for number in range(count):
+        part = parts[number] if number < len(parts) else None
+        lines = part.get("lines") if part else None
+        row = {"ref": ref if count == 1 else "%s-%d" % (ref, number + 1), "unit_ref": ref, "code_row": part is not None,
+               "joined": part["joined"] if part else False, "kind": parts[0]["kind"], "file": parts[0]["file"],
+               "text": part["text"] if part else "", "lines": "%d-%d" % tuple(lines) if lines else ""}
+        row.update({field: pieces[number] if number < len(pieces) else "" for field, pieces in cut.items()})
+        rows.append(row)
+    return rows
+
+
+def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
+    """The rows of Chunks_Model. `units` are the rows model_rows makes: a unit whole, or the parts of a long one. A unit
+    is one analytical chunk however many rows it takes: the units it takes something from and gives something to
+    (step 03), what the organisation's model says of it (step 04 - its parts' explanations together), and the chunks
+    of the methodology found for it with the potential deviations flagged (step 05) stand once, from its first row
+    down, and its code runs down its rows (spread_rows). Enforces: R2, R3"""
+    links, methodology = links or {}, (methodology or {}).get("units")
+    said, unanswered = {}, set()
+    for call in calls:
+        if call.get("question_type") == CODE_QUESTION:
+            if call.get("outcome") == "answered":
+                said[call["unit_ref"]] = call["answer"]
+                unanswered.discard(call["unit_ref"])
+            elif call["unit_ref"] not in said:
+                unanswered.add(call["unit_ref"])
+    was_asked, by_unit, questioned, rows = bool(said or unanswered), {}, {}, []
+    for row in units:
+        by_unit.setdefault(row["unit_ref"], []).append(row)
+    for row in asked if asked is not None else units:       # the rows the model was asked about: a dataset once
+        questioned.setdefault(row["unit_ref"], []).append(row)
+    for ref, parts in by_unit.items():
+        linked = links.get(ref) or {}
+        refs, count = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", None)
+        rows += spread_rows(ref, parts, {"interpretation": interpretation_of(questioned.get(ref, parts), said, unanswered, was_asked),
+                                         "methodology_refs": refs, "flagged_count": count,
+                                         "upstream": link_cell(linked, "upstream", parts[0]),
+                                         "downstream": link_cell(linked, "downstream", parts[0])})
+    return rows
+
+def link_cell(linked, side, unit):
+    """A unit's cell of Immediate Upstream or Immediate Downstream Model Chunk: the units the code shows it takes from
+    or gives to, then those a name known only in part could be, each marked (possible), then what could not be known.
+    A stored object no code reads says so. Empty before step 03 has run. Enforces: R2"""
+    if not linked:
+        return ""
+    proven = list(linked.get(side) or ())
+    items = proven + [ref + POSSIBLE for ref in linked.get("possible_" + side) or () if ref not in proven]
+    if side == "upstream":
+        items += list(linked.get("notes") or ())
+    elif not items and unit.get("kind") in (KIND_TABLE, KIND_OBJECT):
+        items = [READ_BY_NO_CODE]
+    return "; ".join(items)
+
+
+def rows_flagged_items(unit_rows, methodology):
+    """Flagged_Items: one row per item the model flagged, numbered F-0001, F-0002 ... in the order of Chunks_Model and,
+    within a piece, in the order the model gave them; with the piece it was found in, the chunks of the methodology
+    it rests on, each of its parts in a column of its own, and the reviewer's decision and notes, left empty. The
+    items of a piece shown in several rows, or compared in several questions, are one list. Enforces: R2, R3"""
+    states = (methodology or {}).get("units") or {}          # methodology_account: its state of each piece
+    rows = []
+    for ref in dict.fromkeys(row["unit_ref"] for row in unit_rows):
+        for item in (states.get(ref) or {}).get("deviations") or ():
+            head, title = DEVIATION_KINDS.get(item.get("kind"), "Flagged"), item.get("title") or ""
+            rows.append({"ref": "F-%04d" % (len(rows) + 1), "location": ref, "methodology_refs": "; ".join(item.get("refs") or ()),
+                         "type": "%s: %s" % (head, title) if title else head + ".",
+                         "methodology": item.get("methodology") or "", "code": item.get("code") or "",
+                         "why": item.get("why") or "", "effect": item.get("effect") or "",
+                         "example": item.get("example") or NO_EXAMPLE, "decision": "", "notes": ""})
+    return rows
+
+
+def several_rows(rows, key):
+    """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)]."""
+    counts = {}
+    for row in rows:
+        counts[row[key]] = counts.get(row[key], 0) + 1
+    return [(ref, count) for ref, count in counts.items() if count > 1]
+
+
+def sheet_rows(store, paths, settings, progress):
+    """The rows of all five sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
+    links = {r["ref"]: r for r in store.read("unit_links")}
+    whole, calls, canon = store.read("model_units"), store.read("llm_calls"), store.read("chunks_canon")
+    parts, asked = model_rows(whole, settings), asked_rows(whole, settings)
+    searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
+        call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
+    methodology = methodology_account(asked, canon, calls, settings) if searched else None
+    unit_rows = rows_model_units(parts, calls, links, methodology, asked)
+    cap = piece_cap(settings)
+    canon_rows = rows_chunks(canon, lambda chunk: methodology_slices(chunk, cap))
+    doc_rows = rows_chunks(store.read("chunks_doc"), lambda chunk: piece_slices(chunk["text"] or "", 0, float("inf"), SLICE_CHARS))
+    split = {"Package": several_rows(unit_rows, "unit_ref"), "Methodology files": several_rows(canon_rows, "chunk_ref"),
+             "Documentation files": several_rows(doc_rows, "chunk_ref")}
+    return {"Model_Package_Info": rows_package_info(store, paths, settings, progress, split),
+            "Chunks_Methodology": canon_rows, "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows,
+            "Flagged_Items": rows_flagged_items(unit_rows, methodology)}
+
+def check_written_totals(rows, store):
+    """The identity of the workbook: every unit read is one row of its sheet, or several, and no row is anything else;
+    a unit's rows, joined back, are its text exactly, character for character. Raised as a fault of the tool, never as
+    a remark about the model. Enforces: R2, R13"""
+    for kind, sheet, key in (("model_units", "Chunks_Model", "unit_ref"), ("chunks_doc", "Chunks_Documentation", "chunk_ref"),
+                             ("chunks_canon", "Chunks_Methodology", "chunk_ref")):
+        read, written, texts = {record["ref"]: record for record in store.read(kind)}, rows[sheet], {}
+        for row in written:
+            if row.get("code_row", True):
+                texts.setdefault(row[key], []).append(row)
+        refs = [row["ref"] for row in written]
+        if {row[key] for row in written} != set(read) or len(set(refs)) != len(refs) or \
+                any(joined_rows(texts.get(ref, [])) != (read[ref]["text"] or "") for ref in read):
+            raise RunStopped(
+                "The workbook does not hold exactly what was read: %d unit(s) read for %s and %d row(s) written. "
+                "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
+    flagged, counted, pieces = {}, {}, {row["unit_ref"] for row in rows["Chunks_Model"]}
+    for row in rows.get("Flagged_Items") or ():
+        flagged[row["location"]] = flagged.get(row["location"], 0) + 1
+    for row in rows["Chunks_Model"]:
+        value = row.get("flagged_count")
+        if isinstance(value, int) or (isinstance(value, str) and value[:1].isdigit()):
+            counted[row["unit_ref"]] = int(str(value).split()[0])
+    ids = [row["ref"] for row in rows.get("Flagged_Items") or ()]
+    if set(flagged) - pieces or set(flagged) - set(counted) or len(set(ids)) != len(ids) or \
+            any(flagged.get(ref, 0) != number for ref, number in counted.items()):
+        raise RunStopped("The workbook's flagged items do not match the counts of Chunks_Model: %d item(s) on "
+                          "Flagged_Items. This is a defect in the tool, not in the model under review." % len(ids))
+
+# Every sheet of Output.xlsm in order, and every column of each: its header, its colour group, the
+# field of the row it shows, its width, and whether it is typed by a person (input_text). One line
+# per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
+WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC, links: D0E0E3, reviewer: C6EFCE}
+sheets:
+- name: Model_Package_Info
+  columns:
+  - {header: Group, group: identity, field: group, width: 26}
+  - {header: Item, group: identity, field: item, width: 40}
+  - {header: Value, group: assessments, field: value, width: 90}
+- name: Chunks_Methodology
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Section (heading chain), group: identity, field: section, width: 44}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Text, group: methodology, field: text, width: 90, input_text: true}
+  - {header: Source file, group: identity, field: source_file, width: 28}
+- name: Chunks_Documentation
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Section (heading chain), group: identity, field: section, width: 44}
+  - {header: Type, group: identity, field: kind, width: 11}
+  - {header: Text, group: documentation, field: text, width: 90, input_text: true}
+  - {header: Source file, group: identity, field: source_file, width: 28}
+- name: Chunks_Model
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Kind, group: identity, field: kind, width: 20}
+  - {header: File, group: identity, field: file, width: 30}
+  - {header: Lines, group: identity, field: lines, width: 10}
+  - {header: Text, group: code_text, field: text, width: 80, input_text: true}
+  - {header: Immediate Upstream Model Chunk, group: links, field: upstream, width: 22}
+  - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
+  - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
+  - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
+  - {header: Count of Flagged Items (by LLM), group: model, field: flagged_count, width: 14}
+- name: Flagged_Items
+  columns:
+  - {header: Ref, group: identity, field: ref, width: 10}
+  - {header: Location of Flagged Item, group: links, field: location, width: 14}
+  - {header: Ref in Chunks_Methodology, group: links, field: methodology_refs, width: 20}
+  - {header: Type, group: model, field: type, width: 36}
+  - {header: Methodology Says, group: model, field: methodology, width: 50}
+  - {header: Code Does, group: model, field: code, width: 50}
+  - {header: Why Potential Flagged Item, group: model, field: why, width: 50}
+  - {header: Effect, group: model, field: effect, width: 40}
+  - {header: Concrete Example of Potential Deviation, group: model, field: example, width: 55}
+  - {header: Decision (by Human Reviewer), group: reviewer, field: decision, width: 22, editable: true, choices: ['True Positive', 'False Positive', 'True Negative', 'False Negative', 'For further discussion', 'Other Case (see notes)']}
+  - {header: "Human Reviewer's Notes", group: reviewer, field: notes, width: 45, editable: true}
+'''
+
+def load_layout():
+    """The workbook layout: every sheet and every column of Output.xlsm."""
+    return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
+
+def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
+    """One generic writer for every sheet: header row and first column frozen, filter on
+    the header, wrapped text, no merged cells; a column a person fills in (editable) shaded in the reviewer's colour,
+    with a dropdown of its choices where the layout gives them, and unlocked, should a person protect the sheet. No
+    sheet is protected: Excel greys out Data > Clear on a protected sheet, whatever it allows."""
+    from openpyxl.styles import Alignment, Font, PatternFill, Protection
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.utils import get_column_letter
+    columns = sheet_layout["columns"]
+    wrap = Alignment(wrap_text=True, vertical="top")
+    for number, column in enumerate(columns, start=1):
+        header = column["header"]
+        cell = sheet.cell(row=1, column=number, value=header)
+        cell.font, cell.alignment = Font(bold=True), wrap
+        cell.fill = PatternFill("solid", start_color=colours[column["group"]])
+        sheet.column_dimensions[get_column_letter(number)].width = column.get("width", 20)
+    for row_number, row in enumerate(rows, start=2):
+        for number, column in enumerate(columns, start=1):
+            value = row.get(column["field"])
+            cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
+            cell.alignment = wrap
+    for number, column in enumerate(columns, start=1):     # a column a person fills in: unlocked, shaded, its choices
+        if not column.get("editable"):
             continue
-        finished = run_step(step, store, paths, settings)
-        steps_run.append(step["name"])
-        if not finished:
-            message = "Step %s (%s) did not finish. Run cell 3 again to carry on from it." % (step["id"], step["name"])
-            rebuild_outputs(store, paths, settings, message)
-            return {"state": "unfinished", "message": message, "steps_run": steps_run}
-        if stop_after and step["id"] == stop_after:
-            break
-    message = "Every step has run." if not stop_after else "Stopped after step %s as asked." % stop_after
-    rebuild_outputs(store, paths, settings, message)
-    return {"state": "finished", "message": message, "steps_run": steps_run}
+        letter = get_column_letter(number)
+        for row_number in range(2, len(rows) + 2):
+            cell = sheet.cell(row=row_number, column=number)
+            cell.protection = Protection(locked=False)
+            cell.fill = PatternFill("solid", start_color=colours[column["group"]])
+        if column.get("choices") and rows:
+            check = DataValidation(type="list", formula1='"%s"' % ",".join(column["choices"]), allow_blank=True,
+                                   showErrorMessage=True, errorTitle=column["header"], error="Choose one of the listed values.")
+            check.add("%s2:%s%d" % (letter, letter, len(rows) + 1))
+            sheet.add_data_validation(check)
+    last = get_column_letter(len(columns))
+    sheet.freeze_panes = "B2"
+    sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
 
-def run_step(step, store, paths, settings):
-    """Build the context, call the step function, write what it returns, record the step,
-    rebuild the outputs and sync. Steps never touch the store themselves."""
-    notes = []
-    provenance = Provenance(paths.run_id, step["id"], step["name"])
-    options = dict(step.get("with") or {})
-    options.update({"inputs": list_input_files(paths.inputs_dir), "paths": paths,
-                    "run": {"project": paths.project, "run_id": paths.run_id}})
-    work_dir = os.path.join(paths.local_dir, "work")
-    os.makedirs(work_dir, exist_ok=True)
-    context = StepContext(settings, options, store.read, work_dir, notes.append, provenance)
-    function = STEP_FUNCTIONS[step["carried_out_by"]]
-    attempt = 1 + sum(1 for record in store.read("step_records") if record["step_id"] == step["id"])
-    started, fault = time.time(), ""
-    try:
-        result = function(context)
-    except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
-        result = StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
-        fault = "".join(traceback.format_exception(type(problem), problem, problem.__traceback__))
-    for kind in sorted(result.records):
-        if kind == "llm_calls":                      # exchanges with the model: the audit log's Model_Calls sheet
-            store.append_calls(result.records[kind])
-        else:
-            store.append(kind, result.records[kind])
-    result.messages = list(result.messages) + notes
-    audit_step_files(store, step, result, context.exchanges)
-    record_step(store, step, result, time.time() - started)
-    store.write_file(step["id"], step["name"], "step_attempt-%d" % attempt, store.read("step_records")[-1],
-                     "What the step did: the records it made by kind, what it counted and said, whether it finished, "
-                     "when it ended and how long it took", "attempt %d" % attempt)
-    if fault:
-        store.write_file(step["id"], step["name"], "fault_attempt-%d" % attempt, {"trace": fault},
-                         "Why the step could not finish: the fault inside the tool, for whoever maintains it", "attempt %d" % attempt)
-    rebuild_outputs(store, paths, settings, "")
-    store.sync()
-    return result.finished
-
-def audit_step_files(store, step, result, exchanges):
-    """The files a step leaves in the audit folder, before its own record: what it read and made - for each input file,
-    how it was read, the repairs made to it and every chunk made of it; for each file of the package, its units;
-    the package's account, the lines of Model_Package_Info and the links - and each exchange with chat(), the
-    SystemPrompt and MainPrompt as sent, the answer as returned, and what came of it. In the order the step made
-    them, which is the same for the same inputs. Enforces: R2, R4, R5"""
-    records = {kind: [to_plain(record) for record in items] for kind, items in result.records.items()}
-    def write(label, payload, holds, about="", sent_at="", returned_at=""):
-        store.write_file(step["id"], step["name"], label, payload, holds, about, sent_at, returned_at)
-    for manifest in records.get("run_manifest") or ():
-        write("run-manifest", manifest, "The run's identity, the fingerprints of its input files and of the engine's files, "
-                                        "the packages' versions, the settings, and what changed since the run before")
-    info, repairs = list(records.get("info_rows") or ()), list(records.get("read_repairs") or ())
-    for kind, corner in (("chunks_canon", "methodology"), ("chunks_doc", "documentation")):
-        by_file = {}
-        for chunk in records.get(kind) or ():
-            by_file.setdefault(chunk.get("source_file") or "", []).append(chunk)
-        for source, chunks in by_file.items():
-            write("%s_%s" % (corner, source.replace("/", "~")),
-                  {"input": source, "how it was read": [row for row in info if str(row.get("item", "")).split(":")[0] == source],
-                   "repairs made while reading": [row for row in repairs if row.get("file") == source], "chunks": chunks},
-                  "How one %s file was read, the repairs made to it, and every chunk made of it" % corner, source)
-    by_member = {}
-    for unit in records.get("model_units") or ():
-        by_member.setdefault(unit.get("file") or "", []).append(unit)
-    for member, units in by_member.items():
-        write("package_%s" % member.replace("/", "~"), {"package file": member, "units": units},
-              "Every unit made of one file of the model package", member)
-    for record in records.get("package_info") or ():
-        write("package-account", record, "What the package says of itself, and its content account")
-    if info:
-        write("model-package-info", info, "Every line the step wrote to Model_Package_Info")
-    if repairs:
-        write("repairs-made-while-reading", repairs, "Every repair made to a malformed file while reading it")
-    if records.get("unit_links"):
-        write("unit-links", records["unit_links"], "Each unit's links to the units it takes from and gives to, and how "
-                                                   "each was found")
-    sent = {(exchange["question_id"], exchange["attempt"]): exchange for exchange in exchanges}
-    for call in records.get("llm_calls") or ():
-        exchange = sent.get((call["question_id"], call["attempt"]), {})
-        pieces = [piece[0] if isinstance(piece, (list, tuple)) else piece for piece in call.get("pieces") or ()]
-        detail = ("_" + pieces[0] + ("-" + pieces[-1] if len(pieces) > 1 else "")) if pieces else ""
-        payload = {key: value for key, value in call.items() if key != "answer"}
-        payload.update({key: exchange[key] for key in ("sent_at", "returned_at", "chat_input", "chat_input_on_later_tries",
-                                                       "chat_output", "technical") if key in exchange})
-        write("%s_%s%s" % (call.get("unit_ref") or "", str(call.get("question_type") or "").replace(" ", "-"), detail), payload,
-              "One exchange with chat(): the SystemPrompt and MainPrompt sent, the answer returned, and what came of it",
-              call.get("unit_ref") or "", exchange.get("sent_at", ""), exchange.get("returned_at", ""))
+def build_workbook(store, paths, settings, progress, target):
+    """Build Output.xlsm on local disk from the record of the run. All five sheets always
+    exist; a sheet whose step has not run shows its header only."""
+    import openpyxl
+    layout = load_layout()
+    rows = sheet_rows(store, paths, settings, progress)
+    check_written_totals(rows, store)
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    for sheet_layout in layout["sheets"]:
+        sheet = workbook.create_sheet(sheet_layout["name"])
+        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
+    link_references(workbook, rows)
+    workbook.code_name = "ThisWorkbook"
+    for number, sheet in enumerate(workbook.worksheets, start=1):
+        sheet.sheet_properties.codeName = "Sheet%d" % number
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as parts:                 # openpyxl takes a macro from a workbook it read:
+        parts.writestr("xl/vbaProject.bin", vba_project(tuple(s.sheet_properties.codeName for s in workbook.worksheets)))
+        parts.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        parts.writestr("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+    workbook.vba_archive = zipfile.ZipFile(archive)              # the two empty parts say it declared nothing else
+    workbook.properties.title = "the tool Output"
+    workbook.properties.description = canonical_json(run_identity(store, paths))
+    workbook.save(target)
+    return rows
 
 
-def step_failure(step, problem, work_dir):
-    """What the analyst is told when a step could not finish, and where the details are kept for
-    whoever maintains the tool. The run goes on: the steps after this one work with what there is, and
-    each says what it could not do. The details go to the run's work folder, not to the evidence
-    pack, because they are about the tool and not about the model under review. Enforces: R2"""
-    with open(os.path.join(work_dir, "step_%s_did_not_finish.txt" % step["id"]), "w", encoding="utf-8") as handle:
-        handle.write("".join(traceback.format_exception(type(problem), problem, problem.__traceback__)))
-    return ("Step %s (%s) could not finish, because of a fault inside the tool (%s). The steps after it ran on what there "
-            "was, and say what they could not do. The details are in the run's work folder, for whoever maintains the tool."
-            % (step["id"], step["name"], type(problem).__name__))
+def link_references(workbook, rows):
+    """A hyperlink on each cell that names chunks (LINK_COLUMNS): on Chunks_Model, Relevant Chunks in Methodology,
+    Immediate Upstream and Immediate Downstream Model Chunk, and the count of a piece's flagged items; on
+    Flagged_Items, the location of each item and the chunks of the methodology it rests on. Each leads to the first
+    row it names, where the workbook's macro then shows only the rows named (WORKBOOK_MACRO); a count leads to the
+    piece's first item. One link to a cell: Excel holds no more. Enforces: R2"""
+    from openpyxl.styles import Font
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    first_row = {}
+    for name, key in LINK_KEYS.items():
+        at = first_row.setdefault(name, {})
+        for number, row in enumerate(rows.get(name) or (), start=2):
+            at.setdefault(re.sub(r"^([CDM]-\d+)-\d+$", r"\1", str(row.get(key) or "")), number)
+    column_of = {s["name"]: {c["field"]: n for n, c in enumerate(s["columns"], start=1)} for s in load_layout()["sheets"]}
+    for (name, field), (target, tip) in LINK_COLUMNS.items():
+        sheet = workbook[name]
+        for number, row in enumerate(rows.get(name) or (), start=2):
+            value = row.get(field)
+            if field == "flagged_count":                    # a count leads to the piece's items, if it has any
+                shown = int(str(value).split()[0]) if isinstance(value, int) or (isinstance(value, str) and value[:1].isdigit()) else 0
+                first = row.get("unit_ref") if shown else None
+            else:
+                matched = REF_LIST.match(value) if isinstance(value, str) else None
+                first = matched.group(1) if matched else None
+            if not first or first not in first_row[target]:
+                continue
+            cell = sheet.cell(row=number, column=column_of[name][field])
+            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, first_row[target][first]), tooltip=tip)
+            cell.font = Font(color=LINK_FONT, underline="single")
 
-def record_step(store, step, result, seconds):
-    """Leave the step record that makes a finished step visible and resume possible."""
-    produced = {kind: len(records) for kind, records in sorted(result.records.items())}
-    store.append("step_records", [{
-        "step_id": step["id"], "name": step["name"],
-        "carried_out_by": step["carried_out_by"], "produced": produced, "counts": result.counts,
-        "messages": result.messages, "finished": result.finished,
-        "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "seconds": round(seconds, 3)}])
 
-def log_line(store, text):
-    """Technical text (exception messages, Python names) belongs in run_log.txt only."""
-    with open(os.path.join(store.local_dir, "run_log.txt"), "a", encoding="utf-8") as handle:
-        handle.write("%s  %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), text))
-
-# ---------------------------------------------------------------- step 01: prepare-run
-PACKAGES_RECORDED = ("PyYAML", "openpyxl", "python-docx", "numpy", "scipy", "sympy", "rdata",
-                     "pdfplumber", "pypdf", "pyreadr")
-
-def fingerprint_file(path, corner, inputs_dir):
-    """Name, corner, size, SHA-256 and content identifier of one input file."""
+def file_sha256(path):
+    """SHA-256 of a file's bytes."""
     with open(path, "rb") as handle:
-        data = handle.read()
-    return {"corner": corner, "file": os.path.relpath(path, inputs_dir).replace(os.sep, "/"),
-            "bytes": len(data), "sha256": digest(data), "swhid": swhid_content(data)}
+        return digest(handle.read())
 
-def engine_file_hashes():
-    """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts and reference
-    data, and its requirements - so that an evidence pack names exactly the code that produced it."""
-    import glob
-    found = {}
-    for pattern in ("*.py", "requirements.txt"):
-        for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
-            if os.path.isfile(path):
-                found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
-    return found
 
-def prepare_run(ctx):
-    """Step 01. Fingerprint every input, record the environment and the allow-listed
-    settings, and say what changed since the run of the project this one replaced."""
-    import importlib.metadata
-    paths, inputs = ctx.options["paths"], ctx.options["inputs"]
-    fingerprints = input_fingerprints(paths.inputs_dir, inputs)
-    versions = {"python": sys.version.split()[0]}
-    for name in PACKAGES_RECORDED:
-        try:
-            versions[name] = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            versions[name] = "not installed"
-    previous, changes = paths.previous, []
-    if previous is not None:
-        before = {f["file"]: f["sha256"] for f in previous["inputs"]}
-        now = {f["file"]: f["sha256"] for f in fingerprints}
-        changes = ["%s: changed" % n for n in sorted(now) if n in before and before[n] != now[n]]
-        changes += ["%s: new" % n for n in sorted(now) if n not in before]
-        changes += ["%s: no longer present" % n for n in sorted(before) if n not in now]
-    manifest = dict(ctx.options["run"], versions=versions, engine_files=engine_file_hashes(),
-                    settings=ctx.settings, inputs=fingerprints, changes_since_previous_run=changes,
-                    previous_run=previous["run_id"] if previous else "",
-                    started_at=datetime.datetime.now().isoformat(timespec="seconds"))
-    return StepResult({"run_manifest": [manifest]}, {"input files": len(fingerprints)},
-                             ["%d input files fingerprinted." % len(fingerprints)])
+def progress_text(store, waiting_message):
+    """Where the run stands, in one or two plain sentences."""
+    records = [record for record in store.read("step_records") if record.get("finished", True)]
+    if not records:
+        return "The run has been opened; no step has finished yet."
+    last = records[-1]
+    text = "Step %s (%s) is the last finished step." % (last["step_id"], last["name"])
+    return text + (" " + waiting_message if waiting_message else "")
 
-def input_fingerprints(inputs_dir, inputs=None):
-    """The fingerprint of every input file of a project, corner by corner, in the order they are read."""
-    inputs = inputs or list_input_files(inputs_dir)
-    found = []
-    for corner, _, _ in INPUT_FOLDERS:
-        found.extend(fingerprint_file(path, corner, inputs_dir) for path in inputs[corner])
-    for key in ("glossary", "tag_rules"):
-        if inputs[key]:
-            found.append(fingerprint_file(inputs[key], key, inputs_dir))
-    return found
+def rebuild_outputs(store, paths, settings, waiting_message):
+    """Rebuild Output.xlsm (and the report once flagged items exist) on local disk and copy
+    them whole into the project folder. The guard: a workbook there that differs from the last
+    one the tool wrote is a reviewer's work in progress and is never overwritten before it has
+    been read in. Afterwards the project folder holds Output.xlsm and the _Audit folder beside its three input folders. Enforces: R6, R12"""
+    work = os.path.join(store.local_dir, "work")
+    os.makedirs(work, exist_ok=True)
+    progress = progress_text(store, waiting_message)
+    manifest = (store.read("run_manifest") or [{}])[0]
+    target = os.path.join(paths.outputs_dir, OUTPUT_FILE)
+    guarded = (os.path.exists(target) and manifest.get("last_workbook_sha256")
+               and file_sha256(target) not in (manifest["last_workbook_sha256"], manifest.get("last_upload_sha256")))
+    local_workbook = os.path.join(work, OUTPUT_FILE)
+    build_workbook(store, paths, settings, progress, local_workbook)
+    if guarded:
+        log_line(store, "Output.xlsm in the project folder was edited and not yet read in: left untouched")
+    else:
+        copy_whole(local_workbook, target)
+        if manifest:
+            kept_manifest = (store.read("run_manifest") or [{}])[0]   # the manifest keeps the fingerprint of the workbook written
+            kept_manifest["last_workbook_sha256"] = file_sha256(target)
+            store.append("run_manifest", [kept_manifest])
+    store.sync()
+    return not guarded
 
-# ---------------------------------------------------------------- the workbook's macro
+
+# ---------------------------------------------------------------- 4.5 the workbook's macro
 # Output.xlsm carries one macro, in the workbook's own module: a reference in Chunks_Model, clicked, shows only the
 # chunks it names. Its source is WORKBOOK_MACRO below, and vba_project() packs it into the part Excel reads macros
 # from, xl/vbaProject.bin, written here from Microsoft's published formats - [MS-OVBA] for the project, [MS-CFB] for
@@ -6481,807 +7295,3 @@ def cfb_file(streams):
                          minifat_sectors, END, 0)
     header += struct.pack("<109I", *([fat_start + number for number in range(fat_sectors)] + [FREE] * (109 - fat_sectors)))
     return header + b"".join(sectors)
-
-
-# ---------------------------------------------------------------- Output.xlsm
-CELL_WITHHELD = "This text could not be shown in plain words; the technical text is in the audit records."
-CUT_NOTE = " ... (cut here; the full text is in the audit files)"
-PYTHON_TRACES = re.compile(r"Traceback|\b\w+(Err" r"or|Exception)\b|<class |object at 0x|\bnan\b|\bverifier\d_\w+|"
-                           r"[:=(\[]\s*None\b|\{'|\['|^None$")
-
-
-def plain_cell(value, input_text, store):
-    """The last gate before a cell is written. the tool's own words must be free of Python
-    traces and of words the wording rule rejects; otherwise the text goes to run_log.txt
-    and the cell gets one fixed, plain sentence. Enforces: R1, R10"""
-    if value is None or value == "":
-        return ""
-    if isinstance(value, bool):
-        return "Yes" if value else "No"
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value) if value == int(value) else plain_number(value)
-    text = str(value)
-    if not input_text:
-        said = own_words(text)
-        if PYTHON_TRACES.search(said):
-            log_line(store, "cell text withheld: " + text)
-            text = CELL_WITHHELD
-    return text if len(text) <= 32000 else text[:31900] + CUT_NOTE
-
-
-def run_identity(store, paths):
-    """What ties a workbook to its run: also written into the workbook's properties."""
-    return {"project": paths.project, "run_id": paths.run_id}
-
-def stored_data_rows(units, links):
-    """Model_Package_Info's account of the stored objects, once step 03 has linked them: how many the code reads, and
-    those no code reads - each of which says so in its own row of Immediate Downstream Model Chunk. Enforces: R2"""
-    if not links:
-        return []
-    linked = {record["ref"]: record for record in links}
-    data = [u for u in units if u["kind"] in (KIND_TABLE, KIND_OBJECT)]
-    unread = [u for u in data if not (linked.get(u["ref"]) or {}).get("downstream")
-              and not (linked.get(u["ref"]) or {}).get("possible_downstream")]
-    rows = [("Stored objects read by the code", "%d of %d" % (len(data) - len(unread), len(data)))] if data else []
-    if unread:
-        rows.append(("Stored objects no code reads", "; ".join("%s %s (%s)" % (u["ref"], u["name"], u["file"]) for u in unread)
-                     + ". The model's code reads them by no name, file, helper or environment the tool can see: each "
-                       "says so in Immediate Downstream Model Chunk."))
-    return rows
-
-
-def rows_package_info(store, paths, settings, progress, split=None):
-    """The rows of Model_Package_Info: identity, inputs, what was read, and the repairs made while reading."""
-    identity, rows = run_identity(store, paths), []
-    def add(group, item, value):
-        rows.append({"group": group, "item": item, "value": value})
-    add("Identity", "Project", identity["project"])
-    add("Identity", "Run", identity["run_id"])
-    add("Identity", "Run progress", progress)
-    manifest = (store.read("run_manifest") or [{}])[0]
-    if manifest.get("engine_files"):
-        add("Identity", "Engine files fingerprint", digest(canonical_json(manifest["engine_files"]))[:16] +
-            " (%d files; the full list is in the run manifest)" % len(manifest["engine_files"]))
-    for entry in manifest.get("inputs", []):
-        add("Inputs", entry["file"], "SHA-256 %s (%d bytes)" % (entry["sha256"], entry["bytes"]))
-    for change in manifest.get("changes_since_previous_run", []):
-        add("Inputs", "Changed since run %s" % manifest.get("previous_run", ""), change)
-    for info in store.read("package_info"):
-        for row in info.get("rows", []):
-            add(row["group"], row["item"], row["value"])
-    for row in store.read("info_rows"):
-        add(row["group"], row["item"], row["value"])
-    stored = stored_data_rows(store.read("model_units"), store.read("unit_links"))
-    at = max((number for number, row in enumerate(rows) if row["group"] == "Package data"), default=len(rows) - 1) + 1
-    rows[at:at] = [{"group": "Package data", "item": item, "value": value} for item, value in stored]
-    for group, several in (split or {}).items():          # beside the other rows of their group: what takes several rows
-        if several:
-            at = max((number for number, row in enumerate(rows) if row["group"] == group), default=len(rows) - 1) + 1
-            code = group == "Package"
-            rows.insert(at, {"group": group, "item": "Pieces shown in several rows" if code else "Chunks shown in several rows",
-                             "value": "; ".join("%s in %d rows, %s-1 to %s-%d" % (ref, n, ref, ref, n) for ref, n in several) +
-                                      (". Each is one piece of the package, too long for one row, and is treated as one wherever "
-                                       "it is used: what the model says of it stands together on its first row." if code else
-                                       ". Each is one chunk, too long for one row, and is treated as one wherever it is used.")})
-    repairs = {}
-    for repair in store.read("read_repairs"):
-        repairs.setdefault(repair["file"], []).append(repair["kind"])
-    for name in sorted(repairs):
-        kinds = sorted(set(repairs[name]))
-        add("Repairs made while reading", name, "; ".join("%s (%d)" % (k, repairs[name].count(k)) for k in kinds))
-    return rows
-
-
-def rows_chunks(chunks, slicer=None):
-    """The rows of Chunks_Methodology and Chunks_Documentation: a chunk in one row or, too long for one, in rows
-    C-0045-1, C-0045-2 and so on as `slicer` cuts it, each with the chunk's section, type and file. Enforces: R2, R13"""
-    rows = []
-    for c in chunks:
-        slices = slicer(c) if slicer else [(c["text"], False)]
-        for number, (part, joined) in enumerate(slices, start=1):
-            rows.append({"ref": c["ref"] if len(slices) == 1 else "%s-%d" % (c["ref"], number), "chunk_ref": c["ref"],
-                         "joined": joined, "section": " > ".join(c["heading_chain"]), "kind": c["kind"], "text": part,
-                         "source_file": c["source_file"]})
-    return rows
-
-
-def interpretation_of(parts, said, unanswered, asked):
-    """What the organisation's model says of a unit: its answer, or, for a unit asked about in parts, the answers of
-    all its parts together, each under the part and the lines it explains."""
-    texts = []
-    for part in parts:
-        answer = said.get(part["ref"]) or (NO_ANSWER if part["ref"] in unanswered else "")
-        texts.append(answer or (NOT_ASKED if asked and not askable(part) else ""))
-    if len(parts) == 1:
-        return texts[0]
-    return "\n\n".join("Part %d of %d%s: %s" % (part["part"], part["parts"], ", lines %d-%d" % tuple(part["lines"]) if part.get("lines") else "", answer)
-                        for part, answer in zip(parts, texts) if answer)
-
-
-def spread_rows(ref, parts, columns):
-    """The rows a unit takes on Chunks_Model: its code down its parts, and each of its own columns from the first row
-    down, continued on the rows below where longer than a cell, never cut. A unit takes as many rows as the longest of
-    these needs; with more than one, they are numbered M-0003-1, M-0003-2 and so on. Enforces: R2, R13"""
-    cut = {field: ([value] if value is not None else []) if not isinstance(value, str) else
-                  [piece for piece, _ in text_slices(value, float("inf"), SLICE_CHARS)] if value else []
-           for field, value in columns.items()}
-    count = max([len(parts)] + [len(pieces) for pieces in cut.values()])
-    rows = []
-    for number in range(count):
-        part = parts[number] if number < len(parts) else None
-        lines = part.get("lines") if part else None
-        row = {"ref": ref if count == 1 else "%s-%d" % (ref, number + 1), "unit_ref": ref, "code_row": part is not None,
-               "joined": part["joined"] if part else False, "kind": parts[0]["kind"], "file": parts[0]["file"],
-               "text": part["text"] if part else "", "lines": "%d-%d" % tuple(lines) if lines else ""}
-        row.update({field: pieces[number] if number < len(pieces) else "" for field, pieces in cut.items()})
-        rows.append(row)
-    return rows
-
-
-def rows_model_units(units, calls=(), links=None, methodology=None, asked=None):
-    """The rows of Chunks_Model. `units` are the rows model_rows makes: a unit whole, or the parts of a long one. A unit
-    is one analytical chunk however many rows it takes: the units it takes something from and gives something to
-    (step 03), what the organisation's model says of it (step 04 - its parts' explanations together), and the chunks
-    of the methodology found for it with the potential deviations flagged (step 05) stand once, from its first row
-    down, and its code runs down its rows (spread_rows). Enforces: R2, R3"""
-    links, methodology = links or {}, (methodology or {}).get("units")
-    said, unanswered = {}, set()
-    for call in calls:
-        if call.get("question_type") == CODE_QUESTION:
-            if call.get("outcome") == "answered":
-                said[call["unit_ref"]] = call["answer"]
-                unanswered.discard(call["unit_ref"])
-            elif call["unit_ref"] not in said:
-                unanswered.add(call["unit_ref"])
-    was_asked, by_unit, questioned, rows = bool(said or unanswered), {}, {}, []
-    for row in units:
-        by_unit.setdefault(row["unit_ref"], []).append(row)
-    for row in asked if asked is not None else units:       # the rows the model was asked about: a dataset once
-        questioned.setdefault(row["unit_ref"], []).append(row)
-    for ref, parts in by_unit.items():
-        linked = links.get(ref) or {}
-        refs, count = methodology_cells(methodology[ref]) if methodology and ref in methodology else ("", None)
-        rows += spread_rows(ref, parts, {"interpretation": interpretation_of(questioned.get(ref, parts), said, unanswered, was_asked),
-                                         "methodology_refs": refs, "flagged_count": count,
-                                         "upstream": link_cell(linked, "upstream", parts[0]),
-                                         "downstream": link_cell(linked, "downstream", parts[0])})
-    return rows
-
-def link_cell(linked, side, unit):
-    """A unit's cell of Immediate Upstream or Immediate Downstream Model Chunk: the units the code shows it takes from
-    or gives to, then those a name known only in part could be, each marked (possible), then what could not be known.
-    A stored object no code reads says so. Empty before step 03 has run. Enforces: R2"""
-    if not linked:
-        return ""
-    proven = list(linked.get(side) or ())
-    items = proven + [ref + POSSIBLE for ref in linked.get("possible_" + side) or () if ref not in proven]
-    if side == "upstream":
-        items += list(linked.get("notes") or ())
-    elif not items and unit.get("kind") in (KIND_TABLE, KIND_OBJECT):
-        items = [READ_BY_NO_CODE]
-    return "; ".join(items)
-
-
-def rows_flagged_items(unit_rows, methodology):
-    """Flagged_Items: one row per item the model flagged, numbered F-0001, F-0002 ... in the order of Chunks_Model and,
-    within a piece, in the order the model gave them; with the piece it was found in, the chunks of the methodology
-    it rests on, each of its parts in a column of its own, and the reviewer's decision and notes, left empty. The
-    items of a piece shown in several rows, or compared in several questions, are one list. Enforces: R2, R3"""
-    states = (methodology or {}).get("units") or {}          # methodology_account: its state of each piece
-    rows = []
-    for ref in dict.fromkeys(row["unit_ref"] for row in unit_rows):
-        for item in (states.get(ref) or {}).get("deviations") or ():
-            head, title = DEVIATION_KINDS.get(item.get("kind"), "Flagged"), item.get("title") or ""
-            rows.append({"ref": "F-%04d" % (len(rows) + 1), "location": ref, "methodology_refs": "; ".join(item.get("refs") or ()),
-                         "type": "%s: %s" % (head, title) if title else head + ".",
-                         "methodology": item.get("methodology") or "", "code": item.get("code") or "",
-                         "why": item.get("why") or "", "effect": item.get("effect") or "",
-                         "example": item.get("example") or NO_EXAMPLE, "decision": "", "notes": ""})
-    return rows
-
-
-def several_rows(rows, key):
-    """The chunks a sheet shows in more than one row, with how many, in order: [(ref, rows)]."""
-    counts = {}
-    for row in rows:
-        counts[row[key]] = counts.get(row[key], 0) + 1
-    return [(ref, count) for ref, count in counts.items() if count > 1]
-
-
-def sheet_rows(store, paths, settings, progress):
-    """The rows of all five sheets, by sheet name. A chunk too long for one row takes several, on every sheet."""
-    links = {r["ref"]: r for r in store.read("unit_links")}
-    whole, calls, canon = store.read("model_units"), store.read("llm_calls"), store.read("chunks_canon")
-    parts, asked = model_rows(whole, settings), asked_rows(whole, settings)
-    searched = any(record.get("step_id") == "05" for record in store.read("step_records")) or any(
-        call.get("question_type") in (METHODOLOGY_SEARCH, METHODOLOGY_COMPARISON) for call in calls)
-    methodology = methodology_account(asked, canon, calls, settings) if searched else None
-    unit_rows = rows_model_units(parts, calls, links, methodology, asked)
-    cap = piece_cap(settings)
-    canon_rows = rows_chunks(canon, lambda chunk: methodology_slices(chunk, cap))
-    doc_rows = rows_chunks(store.read("chunks_doc"), lambda chunk: piece_slices(chunk["text"] or "", 0, float("inf"), SLICE_CHARS))
-    split = {"Package": several_rows(unit_rows, "unit_ref"), "Methodology files": several_rows(canon_rows, "chunk_ref"),
-             "Documentation files": several_rows(doc_rows, "chunk_ref")}
-    return {"Model_Package_Info": rows_package_info(store, paths, settings, progress, split),
-            "Chunks_Methodology": canon_rows, "Chunks_Documentation": doc_rows, "Chunks_Model": unit_rows,
-            "Flagged_Items": rows_flagged_items(unit_rows, methodology)}
-
-def check_written_totals(rows, store):
-    """The identity of the workbook: every unit read is one row of its sheet, or several, and no row is anything else;
-    a unit's rows, joined back, are its text exactly, character for character. Raised as a fault of the tool, never as
-    a remark about the model. Enforces: R2, R13"""
-    for kind, sheet, key in (("model_units", "Chunks_Model", "unit_ref"), ("chunks_doc", "Chunks_Documentation", "chunk_ref"),
-                             ("chunks_canon", "Chunks_Methodology", "chunk_ref")):
-        read, written, texts = {record["ref"]: record for record in store.read(kind)}, rows[sheet], {}
-        for row in written:
-            if row.get("code_row", True):
-                texts.setdefault(row[key], []).append(row)
-        refs = [row["ref"] for row in written]
-        if {row[key] for row in written} != set(read) or len(set(refs)) != len(refs) or \
-                any(joined_rows(texts.get(ref, [])) != (read[ref]["text"] or "") for ref in read):
-            raise RunStopped(
-                "The workbook does not hold exactly what was read: %d unit(s) read for %s and %d row(s) written. "
-                "This is a defect in the tool, not in the model under review." % (len(read), sheet, len(written)))
-    flagged, counted, pieces = {}, {}, {row["unit_ref"] for row in rows["Chunks_Model"]}
-    for row in rows.get("Flagged_Items") or ():
-        flagged[row["location"]] = flagged.get(row["location"], 0) + 1
-    for row in rows["Chunks_Model"]:
-        value = row.get("flagged_count")
-        if isinstance(value, int) or (isinstance(value, str) and value[:1].isdigit()):
-            counted[row["unit_ref"]] = int(str(value).split()[0])
-    ids = [row["ref"] for row in rows.get("Flagged_Items") or ()]
-    if set(flagged) - pieces or set(flagged) - set(counted) or len(set(ids)) != len(ids) or \
-            any(flagged.get(ref, 0) != number for ref, number in counted.items()):
-        raise RunStopped("The workbook's flagged items do not match the counts of Chunks_Model: %d item(s) on "
-                          "Flagged_Items. This is a defect in the tool, not in the model under review." % len(ids))
-
-# ---------------------------------------------------------------- the workbook layout
-# Every sheet of Output.xlsm in order, and every column of each: its header, its colour group, the
-# field of the row it shows, its width, and whether it is typed by a person (input_text). One line
-# per column. Parsed on every call, so a caller's change stays its own. Enforces: R10
-WORKBOOK_LAYOUT_YAML = r'''colours: {identity: D9E1F2, code_text: E2EFDA, methodology: FCE4D6, documentation: E4DFEC, assessments: DDEBF7, model: FFF2CC, links: D0E0E3, reviewer: C6EFCE}
-sheets:
-- name: Model_Package_Info
-  columns:
-  - {header: Group, group: identity, field: group, width: 26}
-  - {header: Item, group: identity, field: item, width: 40}
-  - {header: Value, group: assessments, field: value, width: 90}
-- name: Chunks_Methodology
-  columns:
-  - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Section (heading chain), group: identity, field: section, width: 44}
-  - {header: Type, group: identity, field: kind, width: 11}
-  - {header: Text, group: methodology, field: text, width: 90, input_text: true}
-  - {header: Source file, group: identity, field: source_file, width: 28}
-- name: Chunks_Documentation
-  columns:
-  - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Section (heading chain), group: identity, field: section, width: 44}
-  - {header: Type, group: identity, field: kind, width: 11}
-  - {header: Text, group: documentation, field: text, width: 90, input_text: true}
-  - {header: Source file, group: identity, field: source_file, width: 28}
-- name: Chunks_Model
-  columns:
-  - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Kind, group: identity, field: kind, width: 20}
-  - {header: File, group: identity, field: file, width: 30}
-  - {header: Lines, group: identity, field: lines, width: 10}
-  - {header: Text, group: code_text, field: text, width: 80, input_text: true}
-  - {header: Immediate Upstream Model Chunk, group: links, field: upstream, width: 22}
-  - {header: Immediate Downstream Model Chunk, group: links, field: downstream, width: 22}
-  - {header: Code Interpretation (by LLM), group: model, field: interpretation, width: 80}
-  - {header: Relevant Chunks in Methodology (searched by LLM), group: model, field: methodology_refs, width: 24}
-  - {header: Count of Flagged Items (by LLM), group: model, field: flagged_count, width: 14}
-- name: Flagged_Items
-  columns:
-  - {header: Ref, group: identity, field: ref, width: 10}
-  - {header: Location of Flagged Item, group: links, field: location, width: 14}
-  - {header: Ref in Chunks_Methodology, group: links, field: methodology_refs, width: 20}
-  - {header: Type, group: model, field: type, width: 36}
-  - {header: Methodology Says, group: model, field: methodology, width: 50}
-  - {header: Code Does, group: model, field: code, width: 50}
-  - {header: Why Potential Flagged Item, group: model, field: why, width: 50}
-  - {header: Effect, group: model, field: effect, width: 40}
-  - {header: Concrete Example of Potential Deviation, group: model, field: example, width: 55}
-  - {header: Decision (by Human Reviewer), group: reviewer, field: decision, width: 22, editable: true, choices: ['True Positive', 'False Positive', 'True Negative', 'False Negative', 'For further discussion', 'Other Case (see notes)']}
-  - {header: "Human Reviewer's Notes", group: reviewer, field: notes, width: 45, editable: true}
-'''
-
-def load_layout():
-    """The workbook layout: every sheet and every column of Output.xlsm."""
-    return yaml.safe_load(WORKBOOK_LAYOUT_YAML)
-
-def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
-    """One generic writer for every sheet: header row and first column frozen, filter on
-    the header, wrapped text, no merged cells; a column a person fills in (editable) shaded in the reviewer's colour,
-    with a dropdown of its choices where the layout gives them, and unlocked, should a person protect the sheet. No
-    sheet is protected: Excel greys out Data > Clear on a protected sheet, whatever it allows."""
-    from openpyxl.styles import Alignment, Font, PatternFill, Protection
-    from openpyxl.worksheet.datavalidation import DataValidation
-    from openpyxl.utils import get_column_letter
-    columns = sheet_layout["columns"]
-    wrap = Alignment(wrap_text=True, vertical="top")
-    for number, column in enumerate(columns, start=1):
-        header = column["header"]
-        cell = sheet.cell(row=1, column=number, value=header)
-        cell.font, cell.alignment = Font(bold=True), wrap
-        cell.fill = PatternFill("solid", start_color=colours[column["group"]])
-        sheet.column_dimensions[get_column_letter(number)].width = column.get("width", 20)
-    for row_number, row in enumerate(rows, start=2):
-        for number, column in enumerate(columns, start=1):
-            value = row.get(column["field"])
-            cell = sheet.cell(row=row_number, column=number, value=plain_cell(value, column.get("input_text"), store))
-            cell.alignment = wrap
-    for number, column in enumerate(columns, start=1):     # a column a person fills in: unlocked, shaded, its choices
-        if not column.get("editable"):
-            continue
-        letter = get_column_letter(number)
-        for row_number in range(2, len(rows) + 2):
-            cell = sheet.cell(row=row_number, column=number)
-            cell.protection = Protection(locked=False)
-            cell.fill = PatternFill("solid", start_color=colours[column["group"]])
-        if column.get("choices") and rows:
-            check = DataValidation(type="list", formula1='"%s"' % ",".join(column["choices"]), allow_blank=True,
-                                   showErrorMessage=True, errorTitle=column["header"], error="Choose one of the listed values.")
-            check.add("%s2:%s%d" % (letter, letter, len(rows) + 1))
-            sheet.add_data_validation(check)
-    last = get_column_letter(len(columns))
-    sheet.freeze_panes = "B2"
-    sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
-
-def build_workbook(store, paths, settings, progress, target):
-    """Build Output.xlsm on local disk from the record of the run. All five sheets always
-    exist; a sheet whose step has not run shows its header only."""
-    import openpyxl
-    layout = load_layout()
-    rows = sheet_rows(store, paths, settings, progress)
-    check_written_totals(rows, store)
-    workbook = openpyxl.Workbook()
-    workbook.remove(workbook.active)
-    for sheet_layout in layout["sheets"]:
-        sheet = workbook.create_sheet(sheet_layout["name"])
-        write_sheet(sheet, sheet_layout, rows[sheet_layout["name"]], layout["colours"], settings, store)
-    link_references(workbook, rows)
-    workbook.code_name = "ThisWorkbook"
-    for number, sheet in enumerate(workbook.worksheets, start=1):
-        sheet.sheet_properties.codeName = "Sheet%d" % number
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w") as parts:                 # openpyxl takes a macro from a workbook it read:
-        parts.writestr("xl/vbaProject.bin", vba_project(tuple(s.sheet_properties.codeName for s in workbook.worksheets)))
-        parts.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
-        parts.writestr("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
-    workbook.vba_archive = zipfile.ZipFile(archive)              # the two empty parts say it declared nothing else
-    workbook.properties.title = "the tool Output"
-    workbook.properties.description = canonical_json(run_identity(store, paths))
-    workbook.save(target)
-    return rows
-
-
-def link_references(workbook, rows):
-    """A hyperlink on each cell that names chunks (LINK_COLUMNS): on Chunks_Model, Relevant Chunks in Methodology,
-    Immediate Upstream and Immediate Downstream Model Chunk, and the count of a piece's flagged items; on
-    Flagged_Items, the location of each item and the chunks of the methodology it rests on. Each leads to the first
-    row it names, where the workbook's macro then shows only the rows named (WORKBOOK_MACRO); a count leads to the
-    piece's first item. One link to a cell: Excel holds no more. Enforces: R2"""
-    from openpyxl.styles import Font
-    from openpyxl.worksheet.hyperlink import Hyperlink
-    first_row = {}
-    for name, key in LINK_KEYS.items():
-        at = first_row.setdefault(name, {})
-        for number, row in enumerate(rows.get(name) or (), start=2):
-            at.setdefault(re.sub(r"^([CDM]-\d+)-\d+$", r"\1", str(row.get(key) or "")), number)
-    column_of = {s["name"]: {c["field"]: n for n, c in enumerate(s["columns"], start=1)} for s in load_layout()["sheets"]}
-    for (name, field), (target, tip) in LINK_COLUMNS.items():
-        sheet = workbook[name]
-        for number, row in enumerate(rows.get(name) or (), start=2):
-            value = row.get(field)
-            if field == "flagged_count":                    # a count leads to the piece's items, if it has any
-                shown = int(str(value).split()[0]) if isinstance(value, int) or (isinstance(value, str) and value[:1].isdigit()) else 0
-                first = row.get("unit_ref") if shown else None
-            else:
-                matched = REF_LIST.match(value) if isinstance(value, str) else None
-                first = matched.group(1) if matched else None
-            if not first or first not in first_row[target]:
-                continue
-            cell = sheet.cell(row=number, column=column_of[name][field])
-            cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, first_row[target][first]), tooltip=tip)
-            cell.font = Font(color=LINK_FONT, underline="single")
-
-
-def file_sha256(path):
-    """SHA-256 of a file's bytes."""
-    with open(path, "rb") as handle:
-        return digest(handle.read())
-
-
-def progress_text(store, waiting_message):
-    """Where the run stands, in one or two plain sentences."""
-    records = [record for record in store.read("step_records") if record.get("finished", True)]
-    if not records:
-        return "The run has been opened; no step has finished yet."
-    last = records[-1]
-    text = "Step %s (%s) is the last finished step." % (last["step_id"], last["name"])
-    return text + (" " + waiting_message if waiting_message else "")
-
-def rebuild_outputs(store, paths, settings, waiting_message):
-    """Rebuild Output.xlsm (and the report once flagged items exist) on local disk and copy
-    them whole into the project folder. The guard: a workbook there that differs from the last
-    one the tool wrote is a reviewer's work in progress and is never overwritten before it has
-    been read in. Afterwards the project folder holds Output.xlsm and the _Audit folder beside its three input folders. Enforces: R6, R12"""
-    work = os.path.join(store.local_dir, "work")
-    os.makedirs(work, exist_ok=True)
-    progress = progress_text(store, waiting_message)
-    manifest = (store.read("run_manifest") or [{}])[0]
-    target = os.path.join(paths.outputs_dir, OUTPUT_FILE)
-    guarded = (os.path.exists(target) and manifest.get("last_workbook_sha256")
-               and file_sha256(target) not in (manifest["last_workbook_sha256"], manifest.get("last_upload_sha256")))
-    local_workbook = os.path.join(work, OUTPUT_FILE)
-    build_workbook(store, paths, settings, progress, local_workbook)
-    if guarded:
-        log_line(store, "Output.xlsm in the project folder was edited and not yet read in: left untouched")
-    else:
-        copy_whole(local_workbook, target)
-        if manifest:
-            kept_manifest = (store.read("run_manifest") or [{}])[0]   # the manifest keeps the fingerprint of the workbook written
-            kept_manifest["last_workbook_sha256"] = file_sha256(target)
-            store.append("run_manifest", [kept_manifest])
-    store.sync()
-    return not guarded
-
-# ---------------------------------------------------------------- verification, and the steps' allow-list
-def contents_of(path):
-    """Every byte string a file holds, looking INSIDE the compressed ones: the call log is gzip,
-    and the workbook and the report are ZIP archives, so a token written into any of them would
-    be invisible to a search of the raw bytes. Yields the raw bytes first, then each member of a
-    ZIP and the decompressed stream of a gzip. Enforces: R8"""
-    with open(path, "rb") as handle:
-        raw = handle.read()
-    yield raw
-    try:
-        if raw.startswith(b"\x1f\x8b"):
-            yield gzip.decompress(raw)
-        elif raw.startswith(b"PK\x03\x04"):
-            import zipfile
-            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-                for member in archive.namelist():
-                    yield archive.read(member)
-    except Exception:
-        return                                       # a damaged archive is caught by the other lines of the verification
-
-def verify_evidence_pack(paths, settings, live=None):
-    """Works from Output.xlsm, the _Audit folder and the three input folders alone. Returns rows (what was checked,
-    "Confirmed" or "Not confirmed", detail). Re-reading the inputs is reperformance: every
-    content hash is computed again from the input files and compared with the record."""
-    store, rows = AuditStore(paths.audit_dir, paths.audit_dir), []        # read the pack itself, not the scratch copy of this driver
-    def line(what, good, detail=""):
-        """good is True, False, or None for a check the run has not reached yet - which is not a failure
-        and must not read as one. Found on a real run that stopped after step 06: the coverage line said
-        Not confirmed, as if the pack had been tampered with."""
-        rows.append((what, "Confirmed" if good else "Not reached yet" if good is None else "Not confirmed", detail))
-    manifest = (store.read("run_manifest") or [{}])[0]
-    changed = [e["file"] for e in manifest.get("inputs", []) if not os.path.exists(os.path.join(paths.inputs_dir, e["file"]))
-               or file_sha256(os.path.join(paths.inputs_dir, e["file"])) != e["sha256"]]
-    line("Input files have the recorded fingerprints", not changed, ", ".join(changed))
-    installed, recorded = engine_file_hashes(), manifest.get("engine_files", {})
-    other = sorted(name for name in set(installed) | set(recorded) if installed.get(name) != recorded.get(name))
-    line("The engine files that produced this run are the ones installed here", not other, ", ".join(other[:5]))
-    options = {"inputs": list_input_files(paths.inputs_dir)}
-    context = StepContext(settings, options, lambda kind: [], None, paths.local_dir, lambda text: None)
-    for kind, function in (("chunks_canon", read_methodology), ("chunks_doc", read_documentation),
-                           ("model_units", read_package)):
-        fresh = {to_plain(r)["ref"]: to_plain(r)["content_hash"] for r in function(context).records.get(kind, [])}
-        recorded = {r["ref"]: r["content_hash"] for r in store.read(kind)}
-        differing = sorted(ref for ref in set(fresh) | set(recorded) if fresh.get(ref) != recorded.get(ref))
-        sheet = {"chunks_canon": "Chunks_Methodology", "chunks_doc": "Chunks_Documentation", "model_units": "Chunks_Model"}.get(kind, kind)
-        line("Re-reading the inputs gives the recorded content hashes (%s)" % sheet, not differing, ", ".join(differing[:5]))
-    written = {kind: len(store.read(kind)) for kind in ("chunks_canon", "chunks_doc", "model_units")}
-    line("Every unit read is in the record", all(written.values()),
-         ", ".join("%s: %d" % pair for pair in sorted(written.items())))
-    identity = run_identity(store, paths)
-    try:
-        import openpyxl
-        found = json.loads(openpyxl.load_workbook(os.path.join(paths.outputs_dir, OUTPUT_FILE), read_only=True).properties.description)
-        line("The workbook carries this run's ids and fingerprints", all(found.get(k) == v for k, v in identity.items()))
-    except Exception:
-        line("The workbook carries this run's ids and fingerprints", False, "Output.xlsm could not be opened")
-    secrets = [value.encode("utf-8") for value in (list(live.recent_tokens) if live else []) if value]
-    leaked, written = [], [os.path.join(paths.outputs_dir, OUTPUT_FILE)]   # the tool's own files: Output.xlsm and _Audit
-    for folder, _, names in os.walk(paths.audit_dir):
-        written += [os.path.join(folder, name) for name in sorted(names)]
-    for path in written:
-        if os.path.exists(path):
-            leaked += [os.path.relpath(path, paths.project_dir) for data in contents_of(path) for value in secrets if value in data]
-    line("No access token was written into Output.xlsm or the audit folder", not leaked, ", ".join(sorted(set(leaked))[:5]))
-    inventory = store.read("audit_files")
-    missing = [entry["file"] for entry in inventory
-               if not os.path.exists(os.path.join(paths.audit_dir, *entry["file"].split("/")))
-               or file_sha256(os.path.join(paths.audit_dir, *entry["file"].split("/"))) != entry["sha256"]]
-    line("The audit folder holds every file its inventory lists, unchanged", not missing if inventory else None,
-         ", ".join(missing[:5]) if missing else "%d files" % len(inventory))
-    return rows
-
-def combine(ctx, *parts):
-    """One step that carries out several: each part in order, everything they record kept, their counts
-    and their messages side by side. A later part reads what the earlier ones have just recorded, as it
-    would if each were still a step of its own - the records of a step reach the store only when the step
-    ends. Enforces: R2"""
-    records, counts, messages = {}, {}, []
-    for part in parts:
-        stored = ctx.read
-        so_far = {kind: [to_plain(row) for row in rows] for kind, rows in records.items()}   # as the store would hand them back
-        reading = dataclasses.replace(ctx, read=lambda kind, stored=stored, so_far=so_far: list(stored(kind)) + so_far.get(kind, []))
-        found = part(reading)
-        for kind, rows in (found.records or {}).items():
-            records.setdefault(kind, []).extend(rows)
-        for name, value in (found.counts or {}).items():     # two parts that count the same thing add up
-            counts[name] = counts.get(name, 0) + value if isinstance(value, (int, float)) and isinstance(counts.get(name, 0), (int, float)) else value
-        messages += found.messages or []
-    return StepResult(records, counts, messages)
-
-def read_inputs(ctx):
-    """Step 02, read-inputs: the methodology, the model documentation and the model package, each read
-    into units, in that order. Enforces: R2, R7"""
-    return combine(ctx, read_methodology, read_documentation, read_package)
-
-STEP_FUNCTIONS = {        # the function that carries out each step of PIPELINE. Enforces: R11
-    "read_methodology": read_methodology,
-    "read_documentation": read_documentation,
-    "read_package": read_package,
-    "interpret_code": interpret_code,
-    "search_methodology": search_methodology,
-    "prepare_run": prepare_run,
-    "read_inputs": read_inputs,
-    "link_chunks": link_chunks}
-
-# ---------------------------------------------------------------- the notebook: four cells, each one call
-# Everything the notebook does is here, so that it holds no code of its own but the organisation's chat():
-# cell 1 is setup(dbutils), cell 2 check_chat(chat), cell 3 review(), cell 4 verify(). The session - the
-# widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
-REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
-WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
-           ("project_name", "", "03 Project Name (can be a model ID)"))
-OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
-               "reviewer_id", "jfrog_index_url", "concurrency_limit", "token_cap", "model_id", "project")
-PYPI = "https://pypi.org/simple/"          # where every package comes from: named here, so no pip setting of the cluster redirects it
-NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": None, "chat": None, "paths": None, "result": None}
-
-def databricks_user(dbutils):
-    """Who runs the notebook, as Databricks knows them: the notebook context's user name; on a cluster that keeps
-    that context from Python, Spark's current_user(); outside Databricks, the system user."""
-    try:
-        return dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
-    except Exception:
-        pass
-    try:
-        from pyspark.sql import SparkSession
-        session = SparkSession.getActiveSession()
-        if session is not None:
-            return session.sql("SELECT current_user()").first()[0]
-    except Exception:
-        pass
-    return getpass.getuser()
-
-def live(name):
-    """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
-    while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8"""
-    session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
-    if getattr(CHAT_WORKER, "active", False):       # a worker of step 04: the values its step last read
-        return session.get(name)
-    try:
-        widgets = NOTEBOOK["dbutils"].widgets
-        session.update(widgets.get("llm_endpoint"), widgets.get("llm_token"), NOTEBOOK["user"])
-    except Exception:
-        pass                                        # no notebook, or a widget read failed: the last values stand
-    return session.get(name)
-
-def notebook_folder(dbutils):
-    try:
-        path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-        return os.path.dirname(path if path.startswith("/Workspace") else "/Workspace" + path)
-    except Exception:
-        return os.getcwd()
-
-def setup(dbutils, home=None, projects=None):
-    """Cell 1: the widgets, the packages the engine needs (installed only if one is missing), flowR, and
-    what to do next. Safe to run any number of times; run it again after anything restarts Python."""
-    import importlib.util
-    widgets = dbutils.widgets
-    carried = {}                                      # a project name typed into an earlier notebook's 03 Model ID stays
-    try:
-        carried["project_name"] = widgets.get("model_id")
-    except Exception:
-        pass
-    for name, default, label in WIDGETS:              # made before anything is installed: a bare cluster works
-        try:
-            widgets.get(name)
-        except Exception:
-            widgets.text(name, carried.get(name, default), label)
-    for name in OLD_WIDGETS:                          # widgets of an earlier notebook, no longer used
-        try:
-            widgets.remove(name)
-        except Exception:
-            pass
-    home = home or notebook_folder(dbutils)
-    NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"), user=databricks_user(dbutils))
-    missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
-    if missing:
-        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
-        return
-    print("Folder:", home, "| Python", sys.version.split()[0])
-    for name in REQUIRED_PACKAGES + ("pdfplumber", "pypdf"):
-        found = importlib.util.find_spec(name)
-        print("  %-11s %s" % (name, "installed" if found else "not installed" + ("" if name in ("pdfplumber", "pypdf") else " - run this cell again")))
-    token = live("llm_token")
-    print("Endpoint set:", bool(live("llm_endpoint")), "| token:", ("%d characters" % len(token)) if token else "not set")
-    staged = os.path.join(home, FLOWR_URL.format(FLOWR_VERSION).rsplit("/", 1)[-1])
-    try:                                              # flowR reads the R code: fetched once, checked against its SHA-256
-        print("flowR %s ready in %s" % (FLOWR_VERSION, flowr_ready(staged if os.path.exists(staged) else "")))
-    except Exception as problem:
-        print("flowR IS NOT READY: %s" % problem)
-        if problem.__class__.__module__.startswith("urllib"):   # only a failed download is helped by putting it here
-            print("The cluster could not download it. Download %s on an approved machine and put it in %s, next to this"
-                  " notebook." % (FLOWR_URL.format(FLOWR_VERSION), home))
-    print("\nTHE ENGINE IS READY. What happens next:")
-    print("  Cell 2  paste your organisation's chat(), check it answers, and see where to put your files.")
-    print("  Cell 3  read the inputs and run the review; it prints what each step did.")
-    print("  Cell 4  check the project's Output.xlsm and Audit_Log.xlsx against their own record.")
-    print("Widgets 01 and 02 carry the endpoint and the token; 03 the project's name, which names its folder in Projects.")
-    print("Your user id is taken from Databricks: %s. Paste a fresh token into widget 02 at any time - chat() reads it" % NOTEBOOK["user"])
-    print("at the moment it calls.")
-    print("Next: cell 2.")
-
-def pip_said(stderr):
-    """What pip said, without any credentials of an index URL, and what its most common failure means."""
-    text = re.sub(r"//[^/@\s]+@", "//...@", stderr or "")[-1500:]
-    missing = re.findall(r"satisfies the requirement ([\w.\-\[\]]+)", stderr or "")
-    if "from versions: none" in (stderr or ""):
-        text += ("\nPyPI offered no version of %s that fits this cluster's Python, or the cluster cannot reach %s: its network "
-                 "has to let the cluster reach PyPI." % (missing[0] if missing else "that package", PYPI))
-    elif "ResolutionImpossible" in (stderr or "") or "conflicting dependencies" in (stderr or ""):
-        text += "\nThe packages asked for cannot be installed together; the lines above say which."
-    return text
-
-def install(missing, dbutils, requirements):
-    """Install what the engine needs from PyPI, the runtime's own packages pinned as they are, and restart Python
-    only if those still import together afterwards."""
-    import importlib.metadata
-    hide = lambda text: re.sub(r"//[^/@\s]+@", "//...@", text or "")    # no credentials of an index URL are shown
-    pins = []
-    for name in ("numpy", "pandas", "pyarrow", "scipy"):
-        try:
-            pins.append("%s==%s" % (name, importlib.metadata.version(name)))
-        except importlib.metadata.PackageNotFoundError:
-            pass
-    constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
-    with open(constraints, "w") as handle:
-        handle.write("\n".join(pins) + "\n")
-    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints, "--index-url", PYPI]
-    print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
-    done = subprocess.run(command, capture_output=True, text=True)
-    if done.returncode:
-        print("The install did not finish. What pip said:\n" + pip_said(done.stderr))
-        print("Nothing the runtime needs was changed.")
-        return
-    with open(requirements, encoding="utf-8") as handle:
-        wanted = handle.read().split("# --- optional ---")
-    if len(wanted) > 1:
-        spare = os.path.join(tempfile.gettempdir(), "optional.txt")
-        with open(spare, "w", encoding="utf-8") as handle:
-            handle.write(wanted[1])
-        extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
-        print("Optional packages (the PDF readers):", "installed." if not extra.returncode else "not installed; a PDF will say it could not be read.")
-    probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
-    if probe.returncode:
-        print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip())[-300:])
-        print("Restarting now would crash this notebook session. Detach this notebook from the cluster and attach it again to undo the install.")
-        return
-    still = subprocess.run([sys.executable, "-c", "import " + ", ".join(missing)], capture_output=True, text=True)
-    if still.returncode:
-        print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting would only bring "
-              "this cell back here." % ", ".join(missing))
-        print("What Python said:\n" + hide(still.stderr)[-600:])
-        print("Check that engine/requirements.txt names it, and that PyPI carries it for this cluster's Python.")
-        return
-    print("Installed. Restarting Python; then run this cell once more.")
-    dbutils.library.restartPython()
-
-def notebook_settings():
-    return make_settings({"reviewer_id": NOTEBOOK["user"]})
-
-def check_chat(chat):
-    """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's steps 04 and 05,
-    make the project's three input folders and say what belongs in each."""
-    if NOTEBOOK["dbutils"] is None:
-        print("Run cell 1 first.")
-        return
-    NOTEBOOK["chat"] = chat
-    try:
-        reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
-        print("chat() answered:", str(reply)[:60])
-        print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
-        print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
-        print("(searched by LLM), its count of flagged items, and the sheet Flagged_Items, one row per item.")
-    except Exception as problem:
-        print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
-              " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
-        return
-    widgets = NOTEBOOK["dbutils"].widgets
-    project_dir, missing, said = setup_project(NOTEBOOK["projects"], widgets.get("project_name"))
-    for line in said:
-        print("\n" + line)
-    print("\nPUT YOUR FILES IN THESE THREE FOLDERS, in the project's folder beside Output.xlsm, then run cell 3:")
-    for _, folder, note in INPUT_FOLDERS:
-        print("  %s\n      %s" % (os.path.join(project_dir, folder), note))
-    print("\nOne methodology file, the model package as it ships (.tar.gz, .zip or the unpacked folder), and the")
-    print("model documentation. A folder with nothing in it stops the run and says so, rather than reading around it.")
-    print("\nBefore cell 3: " + " ".join(missing) if missing else "\nAll three folders have files in them. Next: cell 3.")
-
-def open_current():
-    """The run of the project the widgets name, carried on or started anew as open_run decides - asked each time
-    cell 3 runs, so that an input changed meanwhile is noticed - and said in plain words when it is not the run
-    this session worked on already. None, with what to do, while an input folder is empty or while a new run
-    would replace an Output.xlsm a person has changed."""
-    widgets = NOTEBOOK["dbutils"].widgets
-    project = widgets.get("project_name")
-    _, missing, said = setup_project(NOTEBOOK["projects"], project)
-    for line in said:
-        print(line)
-    if missing:
-        print("\n".join(missing))
-        print("Put the files in, then run cell 3.")
-        return None
-    try:
-        paths = open_run(NOTEBOOK["projects"], project, settings=notebook_settings())
-    except RunStopped as problem:
-        print(problem)
-        return None
-    before = NOTEBOOK["paths"]
-    if before is None or (before.project_dir, before.run_id) != (paths.project_dir, paths.run_id):
-        print(paths.opened)
-    NOTEBOOK["paths"] = paths
-    return paths
-
-def review():
-    """Cell 3: read the inputs, link the units of the package and put them to the organisation's model, in this
-    cell; then say what each step did. A step already finished is never repeated."""
-    if NOTEBOOK["dbutils"] is None:
-        print("Run cell 1 first.")
-        return
-    paths = open_current()
-    if paths is None:
-        return
-    settings = notebook_settings()
-    result = NOTEBOOK["result"] = run_pipeline(paths, settings)
-    print(result["message"])
-    store = open_store(paths, settings)
-    print("\nWhat each step did:")
-    latest = {}
-    for record in store.read("step_records"):                 # a step tried again says what its latest attempt did;
-        latest[record["step_id"]] = record                     # the audit log keeps every attempt
-    for record in (latest[step_id] for step_id in sorted(latest)):
-        print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
-        for message in record["messages"]:
-            print("      " + message)
-    print("\nProject folder:", paths.project_dir)
-    print("Open Output.xlsm there, beside the three input folders: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
-    print("organisation's model says of each piece, the chunks of the methodology it found for it, and how many items it")
-    print("flagged; Flagged_Items lists every item, one to a row, with a column for your decision and one for your notes.")
-    print("A click on a reference shows only the rows it names, once Excel lets the workbook's macro run;")
-    print("if it blocks it, unblock the file first (the manual, section 7: Letting the macro run).")
-    print("Beside it, _Audit holds Audit_Log.xlsx and a folder for each step: a JSON file for everything the step read, made")
-    print("or asked chat(), numbered in the order written, each listed on Audit_Log.xlsx's sheet Files.")
-    print("Then run cell 4 to check Output.xlsm and the _Audit folder against their own record.")
-
-def verify():
-    """Cell 4: check Output.xlsm and the _Audit folder against their own record."""
-    paths = NOTEBOOK["paths"]
-    if paths is None:
-        print("Cell 3 has not read the inputs yet. Run cell 3 first.")
-        return
-    print("Verifying the evidence pack:")
-    for what, verdict, detail in verify_evidence_pack(paths, notebook_settings(), live=NOTEBOOK["live"] or LiveValues()):
-        print("  %-62s %-16s %s" % (what, verdict, detail))
-    print("\nProject folder:", paths.project_dir, "- Output.xlsm is the deliverable; Audit_Log.xlsx beside it is the")
-    print("record of the run: every step, every record, and every exchange with the model.")
