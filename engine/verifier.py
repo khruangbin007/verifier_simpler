@@ -4509,7 +4509,7 @@ ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------- settings (allow-list)
 DEFAULT_SETTINGS = {
-    "max_parameter_cells": 5000, "max_parameter_columns": 50, "protect_sheets": True,
+    "max_parameter_cells": 5000, "max_parameter_columns": 50,
     "max_file_mb": 200.0, "reviewer_id": "", "read_pictures": True,
     "parallel_chats": 256,
     "chat_token_limit": 40000, "methodology_batch_tokens": 12000}
@@ -6377,7 +6377,7 @@ End Function
 Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String, ByVal byColumn As Long, Optional ByVal returnTo As Range)
     ' Filter the sheet on one column - Ref, or Flagged_Items' Location - to the chunks named, each with every row it takes.
     ' A filter of the sheet clicked on ends on the cell clicked (returnTo); a filter of another sheet, on its first row.
-    Dim wanted As Variant, shown As String, cellRef As String, last As Long, rowNumber As Long, i As Long, locked As Boolean
+    Dim wanted As Variant, shown As String, cellRef As String, last As Long, rowNumber As Long, i As Long
     If Len(refs) = 0 Then Exit Sub
     wanted = Split(refs, "|")
     last = onSheet.UsedRange.Row + onSheet.UsedRange.Rows.Count - 1
@@ -6393,12 +6393,9 @@ Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String, ByVal byC
         Next i
     Next rowNumber
     If Len(shown) = 0 Then Exit Sub
-    locked = onSheet.ProtectContents
-    On Error GoTo Restore
-    If locked Then onSheet.Unprotect
     On Error Resume Next
     onSheet.ShowAllData                                ' clears any filter; with none on, there is nothing to clear
-    On Error GoTo Restore
+    On Error GoTo Finish
     If Not onSheet.AutoFilterMode Then onSheet.Range("A1").CurrentRegion.AutoFilter
     onSheet.AutoFilter.Range.AutoFilter Field:=byColumn, Criteria1:=Split(Mid$(shown, 2), "|"), Operator:=xlFilterValues
     onSheet.Activate
@@ -6407,8 +6404,7 @@ Private Sub ShowOnly(ByVal onSheet As Worksheet, ByVal refs As String, ByVal byC
     Else
         returnTo.Select
     End If
-Restore:
-    If locked Then onSheet.Protect DrawingObjects:=False, Contents:=True, Scenarios:=False, AllowFormattingColumns:=True, AllowFiltering:=True
+Finish:
 End Sub
 """
 
@@ -6912,8 +6908,9 @@ def load_layout():
 
 def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     """One generic writer for every sheet: header row and first column frozen, filter on
-    the header, wrapped text, no merged cells; a column a person fills in (editable) unlocked and shaded in the
-    reviewer's colour, with a dropdown of its choices where the layout gives them."""
+    the header, wrapped text, no merged cells; a column a person fills in (editable) shaded in the reviewer's colour,
+    with a dropdown of its choices where the layout gives them, and unlocked, should a person protect the sheet. No
+    sheet is protected: Excel greys out Data > Clear on a protected sheet, whatever it allows."""
     from openpyxl.styles import Alignment, Font, PatternFill, Protection
     from openpyxl.worksheet.datavalidation import DataValidation
     from openpyxl.utils import get_column_letter
@@ -6946,10 +6943,6 @@ def write_sheet(sheet, sheet_layout, rows, colours, settings, store):
     last = get_column_letter(len(columns))
     sheet.freeze_panes = "B2"
     sheet.auto_filter.ref = "A1:%s%d" % (last, max(1, len(rows) + 1))
-    if settings["protect_sheets"]:
-        sheet.protection.sheet = True
-        sheet.protection.autoFilter = False          # False = not locked: filtering stays possible
-        sheet.protection.formatColumns = False
 
 def build_workbook(store, paths, settings, progress, target):
     """Build Output.xlsm on local disk from the record of the run. All five sheets always
