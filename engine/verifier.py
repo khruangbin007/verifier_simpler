@@ -58,9 +58,7 @@ from xml.sax.saxutils import escape
 # ================================================================================================
 # the contracts, the reading floor and the front door
 # ================================================================================================
-# ---------------------------------------------------------------- the contracts: what every record is, and the words the tool may use
-
-# ---------------------------------------------------------------- vocabulary (Appendix B)
+# ---------------------------------------------------------------- vocabulary, and the words the tool may never use
 
 UNDECIDED_REASONS = ("the equation is an image", "the equation could not be read")   # why an equation was not read
 
@@ -86,7 +84,7 @@ def has_banned_wording(text):
     found = _BANNED_RE.search(text or "")
     return found.group(0) if found else ""
 
-# ---------------------------------------------------------------- data contracts (plan 2.3)
+# ---------------------------------------------------------------- data contracts: the records (plan 2.7)
 @dataclass(frozen=True)
 class TableData:
     """A table kept whole: header cells, body rows, and which column identifies a row."""
@@ -810,7 +808,7 @@ def account_of_package(files, units, refused, is_text_file, dropped=()):
     non-blank line of every member that holds text has to lie inside a unit, be refused with a
     reason, or be named as not read. A member the tool cannot read as text (a compiled object, a
     picture, stored data in a binary form) is counted as one atom of its own, because its lines
-    cannot be counted without reading it. Extends the line coverage that read-package already
+    cannot be counted without reading it. Extends the line coverage that read_package already
     kept for parsed R files to every member of the tarball. A member left out on purpose (dropped: a help
     page, generated from the roxygen comments in the R files, which are read) is a declared drop, every
     line of it. Enforces: R13"""
@@ -865,45 +863,7 @@ def account_of_package(files, units, refused, is_text_file, dropped=()):
     return found
 
 
-# ---------------------------------------------------------------- the shape digest and the rules it asks for
-# What a model is shown about a file it must help slice: its STRUCTURE and a few short samples,
-# never the file. The digest is built by code from plain facts, is bounded, and is recorded, so
-# a reviewer can see exactly what was put in front of the model. Enforces: R3, R7
-
-# The families a PROPOSAL may use, and why it is only these five. Each keeps the words of the
-# element it is given to wherever that element sits: a heading's text goes into the chain of
-# everything below it and, where nothing sits below it, into a unit of its own; a paragraph's
-# and a list item's into a unit; a container's children are walked.
-#
-# The families left out fall into two groups. Table, row, cell, header_cell, caption, figure
-# and equation rest on counting the shape of the file rather than on anybody's opinion, and
-# their readers may put text somewhere other than a unit or drop it where a shape does not hold
-# up. "inline" is left out for a different reason, and the property test found it rather than
-# anyone reasoning it out: an inline mark keeps its words only when it sits inside something
-# that has running text, so the same answer is safe in one place and loses words in another.
-# A family whose safety depends on where a tag sits is not a family a proposal may give.
-# This is what makes "no answer can lose a word" true by construction rather than by hope.
-# Enforces: R13
-
-
-# Families discovery does not guess at: it counts the widths of the rows and refuses to call
-# something a table unless the counting holds up. A proposal may not overturn them.
-
-
-# ---------------------------------------------------------------- asking how to read a package
-# A tarball laid out in an unusual way loses content in a quieter way than a document does: a
-# file of R code under inst/ rather than R/ is not parsed, and its two thousand first characters
-# become one unit of running text while the rest of it reaches nothing. The question here picks
-# WHICH EXISTING READER takes a member. It never touches the R tokenizer, the parser, the
-# expression trees or the decoder of stored data: a model's reading of code is an assertion
-# ABOUT the code, not a parse OF it. Enforces: R7, R13
-
-
 # ================================================================================================
-# ---------------------------------------------------------------- the reading floor
-
-# ---------------------------------------------------------------- the front door: what a file is, and how it becomes markup
-
 # ---------------------------------------------------------------- what a file is
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM", b"II*\x00", b"MM\x00*", b"RIFF")
@@ -2076,7 +2036,6 @@ class WalkState:
     dropped: list = field(default_factory=list)    # text left out under a named rule, kept so the account can show it
     lent_numbering: str = ""                       # a number a container carries for the heading inside it
     settings: dict = field(default_factory=dict)
-    guided: dict = field(default_factory=dict)     # tag -> family, where the model's proposal was applied
     folder: str = ""                               # where the file being read stands, so a picture beside it can be found
     svgs: dict = field(default_factory=dict)       # the corner's SVG files, by lower-case name and by name without .svg
     consumed: set = field(default_factory=set)     # SVGs already read in place by a document of the corner (shared by the corner)
@@ -2910,9 +2869,6 @@ def read_corner(ctx, corner, input_key, label):
         new_chunks = blocks_to_chunks(blocks, corner, file_name, len(chunks) + 1, state)
         chunks.extend(new_chunks)
         plain = [to_plain(chunk) for chunk in new_chunks]
-        for tag in sorted(state.guided):
-            info_rows.append({"group": label, "item": "%s: how it was read" % file_name,
-                              "value": "<%s> was read as %s on the model's proposal." % (tag, state.guided[tag])})
         found_account = account(file_name, state.atoms, plain, state.dropped,
                                         marks_of_rendering(plain)
                                         + [LIST_MARKER] * (len(plain) + 1) + [NOTES_HEADING],
@@ -2960,11 +2916,11 @@ def read_corner(ctx, corner, input_key, label):
                               "content account open on": len(open_accounts)}, messages)
 
 def read_methodology(ctx):
-    """Step 02, read-methodology: the canonical methodology into chunks C-0001, C-0002, ..."""
+    """Step 02, read-inputs, first part: the canonical methodology into chunks C-0001, C-0002, ..."""
     return read_corner(ctx, "canon", "methodology", "Methodology files")
 
 def read_documentation(ctx):
-    """Step 03, read-documentation: the model documentation into chunks D-0001, D-0002, ..."""
+    """Step 02, read-inputs, second part: the model documentation into chunks D-0001, D-0002, ..."""
     return read_corner(ctx, "doc", "documentation", "Documentation files")
 
 
@@ -3068,11 +3024,7 @@ def is_exported(name, namespace):
         return None
     return name in namespace["exports"] or any(re.search(pattern, name) for pattern in namespace["patterns"])
 
-# ---------------------------------------------------------------- the R tokenizer
-
-
-
-# ---------------------------------------------------------------- the R parser
+# ---------------------------------------------------------------- the expression tree's node
 @dataclass
 class Node:
     """One node of the syntax tree. kind is one of: num, str, name, call, index, binary,
@@ -3295,13 +3247,6 @@ def assignment_parts(node):
     left, right = node.args
     return (right, left) if node.value in ("->", "->>") else (left, right)
 
-def number_token(node):
-    """A number as written in the code, brought to one form, with its line."""
-    written = node.value.rstrip("Li")
-    text = str(int(written, 16)) if written.lower().startswith("0x") else written
-    parsed = parse_number(text) or {"value": text, "as_written": text, "decimals": 0, "unit": ""}
-    parsed.update(as_written=node.value, line=node.line)
-    return parsed
 
 def unparse(node):
     """The tree back as short R-like text: used to show defaults and conditions as written."""
@@ -3837,7 +3782,7 @@ def package_rows(description, namespace, units, facts, refused):
 
 
 def read_package(ctx):
-    """Step 04, read-package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
+    """Step 02, read-inputs, third part: the package. Files are taken in a fixed order (DESCRIPTION, NAMESPACE, R/,
     data, man/, tests/, vignettes/, the rest; by name inside each), so references are stable
     for an unchanged tarball. Enforces: R2, R5"""
     tarballs = ctx.options["inputs"]["package"]
@@ -4425,7 +4370,7 @@ class LiveValues:
         return text
 
 # ---------------------------------------------------------------- the audit store
-AUDIT_OBJECTS = ("run_manifest", "package_info", "coverage")
+AUDIT_OBJECTS = ("run_manifest", "package_info")
 AUDIT_FILE = "Audit_Log.xlsx"            # the record of a run: one workbook, beside Output.xlsm and the Inputs folder
 CELL_LIMIT = 30000                       # Excel holds 32,767 characters in a cell; longer text is written in parts
 
@@ -4626,19 +4571,6 @@ def cut_to_tokens(text, tokens):
     return kept, True
 
 
-def split_to_tokens(text, tokens):
-    """A text in consecutive parts of at most `tokens` each, cut at line ends where possible; together they hold
-    every character of it but the line breaks the cuts fall on."""
-    parts, rest = [], text
-    while rest:
-        kept, cut = cut_to_tokens(rest, tokens)
-        parts.append(kept)
-        rest = rest[len(kept):]
-        if rest.startswith("\n"):
-            rest = rest[1:]
-        if not cut:
-            break
-    return parts or [""]
 
 
 def shown_cut(text, tokens):
@@ -6569,7 +6501,7 @@ def rebuild_outputs(store, paths, settings, waiting_message):
     store.sync()
     return not guarded
 
-# ---------------------------------------------------------------- determinations
+# ---------------------------------------------------------------- verification, and the steps' allow-list
 def contents_of(path):
     """Every byte string a file holds, looking INSIDE the compressed ones: the call log is gzip,
     and the workbook and the report are ZIP archives, so a token written into any of them would
