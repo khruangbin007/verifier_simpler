@@ -632,38 +632,7 @@ DOCX_PARTS = (("word/document.xml", "body"), ("word/footnotes.xml", "footnote"),
 WORD_TEXT = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
 WORD_DELETED = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}delText"
 
-def atoms_of_docx(archive, parse, file_name):
-    """Every run of text in a Word file, wherever Word put it. Text boxes sit inside the body
-    part and are counted with it; footnotes, endnotes, comments, headers and footers are parts
-    of their own and are counted here even where the reader does not yet read them, so that
-    they show as unaccounted rather than vanishing without a word."""
-    found = []
-    named = list(DOCX_PARTS) + [(name, "header" if "header" in name else "footer")
-                                for name in sorted(archive.namelist())
-                                if name.startswith("word/header") or name.startswith("word/footer")]
-    for part, place in named:
-        if part not in archive.namelist():
-            continue
-        try:
-            root = parse(archive.read(part))
-        except Exception:                                # a part that will not parse is counted and named here
-            found.append(atom(place, "%s %s" % (file_name, part), ""))
-            continue
-        for position, node in enumerate(root.iter(), start=1):
-            if node.tag in (WORD_TEXT, WORD_DELETED) and (node.text or "").strip():
-                kind = "tracked change" if node.tag == WORD_DELETED else place
-                found.append(atom(kind, "%s %s run %d" % (file_name, part, position), node.text))
-    return found
 
-def atoms_of_pdf(document, file_name):
-    """Every word the text layer of every page yields. A page with no text layer is counted as
-    one atom with no text, so that a scanned page is visible in the account as a page that
-    carries something the tool cannot count rather than as a page that carries nothing."""
-    found = []
-    for number, page in enumerate(document.pages, start=1):
-        text = page.extract_text() or ""
-        found.append(atom("body" if text.strip() else "page without a text layer", "%s p.%d" % (file_name, number), text))
-    return found
 
 def atoms_of_plain_text(text, file_name):
     """Every non-blank line of a plain text file."""
@@ -2391,8 +2360,19 @@ def blocks_from_pdf(data, file_name, state):
     With only pypdf: text and numbering alone. With neither: one block that could not be read."""
     try:
         import pdfplumber
-    except ImportError:
-        return blocks_from_pdf_text_only(data, file_name, state)
+    except ImportError:                                  # without pdfplumber: pypdf's page texts, and numbering alone
+        try:
+            import pypdf
+        except ImportError:
+            return [not_read_block(file_name, "no PDF reader is installed, so this file was not read")]
+        blocks = []
+        for page_number, page in enumerate(pypdf.PdfReader(io.BytesIO(data)).pages, start=1):
+            for paragraph in re.split(r"\n\s*\n", page.extract_text() or ""):
+                text = normalise_text(paragraph)
+                if text:
+                    kind = "heading" if first_numbering(text, state.rules)[0] and len(text) < 100 else "paragraph"
+                    blocks.append(new_block(kind, text, "page %d" % page_number))
+        return blocks
     blocks, open_block, on_page = [], None, {}
     with pdfplumber.open(io.BytesIO(data)) as document:
         lines = without_page_furniture(pdf_lines(document, file_name), len(document.pages), state, file_name)
@@ -2440,20 +2420,6 @@ def blocks_from_pdf(data, file_name, state):
                 open_block.update(page=entry["page"], bottom=entry["bottom"])
     return blocks
 
-def blocks_from_pdf_text_only(data, file_name, state):
-    """The fallback PDF reader: page texts as paragraphs, when the layout-aware reader cannot open the file."""
-    try:
-        import pypdf
-    except ImportError:
-        return [not_read_block(file_name, "no PDF reader is installed, so this file was not read")]
-    blocks = []
-    for page_number, page in enumerate(pypdf.PdfReader(io.BytesIO(data)).pages, start=1):
-        for paragraph in re.split(r"\n\s*\n", page.extract_text() or ""):
-            text = normalise_text(paragraph)
-            if text:
-                kind = "heading" if first_numbering(text, state.rules)[0] and len(text) < 100 else "paragraph"
-                blocks.append(new_block(kind, text, "page %d" % page_number))
-    return blocks
 
 # ---------------------------------------------------------------- levels, references, chunks
 
@@ -2554,12 +2520,30 @@ def atoms_of_file(data, found, file_name, state, repairs):
     the blocks the reader made of it. That independence is the whole point: an account drawn
     from the reader's own output could never show what the reader missed. Enforces: R13"""
     try:
-        if found == "docx":
-            return atoms_of_docx(zipfile.ZipFile(io.BytesIO(data)), safe_xml, file_name)
-        if found == "pdf":
-            import pdfplumber
+        if found == "docx":                  # every text run of every part; footnotes, endnotes, comments, headers and
+            archive, found = zipfile.ZipFile(io.BytesIO(data)), []   # footers are parts of their own, counted here even
+            named = list(DOCX_PARTS) + [(name, "header" if "header" in name else "footer")   # where the reader does not
+                                        for name in sorted(archive.namelist())             # read them, so that they show
+                                        if name.startswith("word/header") or name.startswith("word/footer")]   # as
+            for part, place in named:                                                      # unaccounted
+                if part not in archive.namelist():
+                    continue
+                try:
+                    root = safe_xml(archive.read(part))
+                except Exception:                        # a part that will not parse is counted and named here
+                    found.append(atom(place, "%s %s" % (file_name, part), ""))
+                    continue
+                for position, node in enumerate(root.iter(), start=1):
+                    if node.tag in (WORD_TEXT, WORD_DELETED) and (node.text or "").strip():
+                        kind = "tracked change" if node.tag == WORD_DELETED else place
+                        found.append(atom(kind, "%s %s run %d" % (file_name, part, position), node.text))
+            return found
+        if found == "pdf":                   # every word of every page's text layer; a page without one is one atom
+            import pdfplumber                # with no text, so that a scanned page shows as one the tool cannot count
             with pdfplumber.open(io.BytesIO(data)) as document:
-                return atoms_of_pdf(document, file_name)
+                return [atom("body" if (page.extract_text() or "").strip() else "page without a text layer",
+                             "%s p.%d" % (file_name, number), page.extract_text() or "")
+                        for number, page in enumerate(document.pages, start=1)]
         if found == "mhtml":
             message = email.message_from_bytes(data)
             for part in message.walk():
@@ -2704,33 +2688,7 @@ class NotParsed(Exception):
 # ---------------------------------------------------------------- safe unpacking and inventory
 ARCHIVE_NAMES = (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".zip")
 
-def is_archive(path):
-    """Whether a file of the package folder is an archive holding the package, rather than one
-    file of a package that was put there unpacked."""
-    return path.lower().endswith(ARCHIVE_NAMES) or (os.path.getsize(path) > 0 and tarfile.is_tarfile(path))
 
-def unpack_zip(zip_path, max_member_bytes):
-    """A package delivered as a ZIP, under exactly the limits a tarball is read under: no absolute
-    path, no path that climbs out, no link, nothing over the cap, and nothing protected by a
-    password. The size checked is the one the archive declares, before anything is expanded.
-    Enforces: R6"""
-    files, refused = {}, []
-    with zipfile.ZipFile(zip_path) as archive:
-        for member in archive.infolist():
-            name = member.filename.replace("\\", "/")
-            if name.endswith("/"):
-                continue
-            if name.startswith("/") or re.match(r"^[A-Za-z]:", name) or ".." in name.split("/"):
-                refused.append((name, "its path leaves the package folder"))
-            elif (member.external_attr >> 16) & 0o170000 == 0o120000:
-                refused.append((name, "it is a link"))
-            elif member.file_size > max_member_bytes:
-                refused.append((name, "it is larger than the size limit for one file"))
-            elif member.flag_bits & 0x1:
-                refused.append((name, "it is protected by a password"))
-            else:
-                files[name] = archive.read(member)
-    return files, refused
 
 def loose_package(paths, root, max_member_bytes):
     """A package put in the folder unpacked - its source folder rather than a built tarball -
@@ -2746,26 +2704,37 @@ def loose_package(paths, root, max_member_bytes):
                 files[name] = handle.read()
     return files, refused
 
-def unpack_package(tar_path, max_member_bytes):
-    """Read the tarball member by member, into memory, never onto disk by path. A member with
-    an absolute path, a path that climbs out with "..", a link, or a size over the cap is
-    refused and reported; everything else is returned as {path: bytes}. Enforces: R6"""
-    if tar_path.lower().endswith(".zip") and zipfile.is_zipfile(tar_path):
-        return unpack_zip(tar_path, max_member_bytes)
+def unpack_package(path, max_member_bytes):
+    """The package's archive - a tarball, or a ZIP of it - read member by member, into memory, never onto disk by path.
+    A member whose path is absolute or climbs out with "..", a link, anything but a regular file, a member over the
+    size cap - the size the archive declares, before anything is expanded - or one protected by a password is refused
+    and reported; everything else is returned as {path: bytes}. Enforces: R6"""
+    if path.lower().endswith(".zip") and zipfile.is_zipfile(path):
+        archive = zipfile.ZipFile(path)
+        members = [(m.filename, m.filename.endswith("/"), (m.external_attr >> 16) & 0o170000 == 0o120000, True,
+                    m.file_size, bool(m.flag_bits & 0x1), lambda m=m: archive.read(m)) for m in archive.infolist()]
+    else:
+        archive = tarfile.open(path, "r:*")
+        members = [(m.name, m.isdir(), m.issym() or m.islnk(), m.isfile(), m.size, False,
+                    lambda m=m: archive.extractfile(m).read()) for m in archive]
     files, refused = {}, []
-    with tarfile.open(tar_path, "r:*") as archive:
-        for member in archive:
-            name = member.name.replace("\\", "/")
+    with archive:
+        for name, folder, link, regular, size, locked, read in members:
+            name = name.replace("\\", "/")
             if name.startswith("/") or re.match(r"^[A-Za-z]:", name) or ".." in name.split("/"):
-                refused.append((name, "its path leaves the package folder"))
-            elif member.issym() or member.islnk():
+                refused.append((name.rstrip("/"), "its path leaves the package folder"))
+            elif folder:
+                continue
+            elif link:
                 refused.append((name, "it is a link"))
-            elif member.isfile() and member.size > max_member_bytes:
-                refused.append((name, "it is larger than the size limit for one file"))
-            elif member.isfile():
-                files[name] = archive.extractfile(member).read()
-            elif not member.isdir():
+            elif not regular:
                 refused.append((name, "it is not a regular file"))
+            elif size > max_member_bytes:
+                refused.append((name, "it is larger than the size limit for one file"))
+            elif locked:
+                refused.append((name, "it is protected by a password"))
+            else:
+                files[name] = read()
     return files, refused
 
 def strip_top_folder(files):
@@ -2787,11 +2756,6 @@ def read_description(text):
     return fields
 
 
-def is_exported(name, namespace):
-    """Is `name` exported by this NAMESPACE (by name, by pattern or as an S3 method)? None when there is no NAMESPACE."""
-    if namespace is None:
-        return None
-    return name in namespace["exports"] or any(re.search(pattern, name) for pattern in namespace["patterns"])
 
 # ---------------------------------------------------------------- the expression tree's node
 @dataclass
@@ -3115,7 +3079,10 @@ def function_units(name, function_node, lines, path, source_lines, context, insi
     function_map = context["function_map"]
     formals = tuple((formal, unparse(default)) for formal, default in zip(function_node.names, function_node.args[:-1]))
     detail = code_detail(function_node, function_map, context["settings"], )
-    detail.update(formals=formals, exported=is_exported(name, context["namespace"]) if not inside else False)
+    namespace = context["namespace"]                    # exported by name, by pattern or as an S3 method; None without one
+    exported = False if inside else None if namespace is None else (
+        name in namespace["exports"] or any(re.search(pattern, name) for pattern in namespace["patterns"]))
+    detail.update(formals=formals, exported=exported)
     unit = draft(KIND_FUNCTION, path, lines, name, "\n".join(source_lines[lines[0] - 1:lines[1]]),
                  inside=inside, parent_key=parent_key, code=detail, node=function_node)
     return [unit]
@@ -3452,12 +3419,6 @@ def data_reads(function_node, formals, data_names, data_files):
 # ---------------------------------------------------------------- reading the package
 DATA_EXTENSIONS = (".rda", ".rdata", ".rds")
 
-def is_data_file(path):
-    """Does this path name a stored-data file that the tool decodes?"""
-    lowered = path.lower()
-    if lowered.endswith(DATA_EXTENSIONS):
-        return True
-    return lowered.endswith((".csv", ".tsv")) and lowered.split("/")[0] in ("data", "inst")
 
 def is_test_path(path):
     """Is this member one of the package's tests - a file anywhere under tests/: testthat scripts, their helpers
@@ -3479,7 +3440,8 @@ def file_units(path, data, context, facts, reader=""):
         facts["tests"].append(path)
         return []
     lowered = path.lower()
-    if reader and not is_data_file(path) and not lowered.startswith("src/"):
+    data_file = lowered.endswith(DATA_EXTENSIONS) or (lowered.endswith((".csv", ".tsv")) and lowered.split("/")[0] in ("data", "inst"))
+    if reader and not data_file and not lowered.startswith("src/"):
         text = decode_text(data) if b"\x00" not in data[:4096] else None
         if text is not None:
             if reader == "r-source":
@@ -3493,7 +3455,7 @@ def file_units(path, data, context, facts, reader=""):
                 units, fact = decode_data_file(path, data, context["settings"])
                 facts["data"].append(fact)
                 return units
-    if is_data_file(path):
+    if data_file:
         units, fact = decode_data_file(path, data, context["settings"])
         facts["data"].append(fact)
         return units
@@ -3576,7 +3538,8 @@ def read_package(ctx):
     if not tarballs:
         return StepResult({}, {"units": 0}, ["No package was found in 2_Model_Package."])
     limit, root = int(ctx.settings["max_file_mb"] * 1024 * 1024), (ctx.options["inputs"].get("roots") or {}).get("package")
-    archives = [path for path in tarballs if is_archive(path)]
+    archives = [path for path in tarballs                # an archive holding the package, not a file of one put there
+                if path.lower().endswith(ARCHIVE_NAMES) or (os.path.getsize(path) > 0 and tarfile.is_tarfile(path))]
     try:
         files, refused = unpack_package(archives[0], limit) if archives else loose_package(tarballs, root, limit)
     except Exception as problem:                     # a package that cannot be opened is named, never a stopped run (R2)
@@ -4332,40 +4295,47 @@ def holds_nothing(path):
     return not [n for n in os.listdir(path) if n != "README.txt" and not n.startswith(".")]
 
 
-def lift_inputs(project_dir):
-    """A project laid out before - its three folders inside Inputs/ - brought to the present layout, once: each folder,
+def lift_project(project_dir):
+    """A project laid out before brought to the present layout, once. Its three folders, if inside Inputs/: each folder,
     and each optional file beside them, moved up into the project's folder whole, not a file of it changed. A folder
     above that holds only its README.txt gives way to the one it replaces; one that holds more is never overwritten:
     then nothing of that folder is moved, and the run cannot start until a person keeps one. Inputs is removed when
-    nothing but hidden files is left in it. Returns (what was done, what stops the run), in plain words. Enforces: R6"""
+    nothing but hidden files is left in it. Then its Audit_Log.xlsx, if it stands in the project's own folder, is moved
+    into _Audit - the tool's own file, moved whole. Returns (what was done, what stops the run), in plain words.
+    Enforces: R6"""
+    said, blocking = [], []
     legacy = os.path.join(project_dir, LEGACY_INPUTS)
-    if not os.path.isdir(legacy):
-        return [], []
-    done, blocking = [], []
-    for name in [folder for _, folder, _ in INPUT_FOLDERS] + list(BESIDE_FOLDERS):
-        old, new = os.path.join(legacy, name), os.path.join(project_dir, name)
-        if not os.path.exists(old):
-            continue
-        if os.path.isdir(new) and os.path.isdir(old) and holds_nothing(new):
-            shutil.rmtree(new)                                 # only the tool's README: the older folder takes its place
-        if os.path.exists(new):
-            blocking.append("%s is both in %s and beside it, and both hold files. Keep one: move what the one in Inputs holds "
-                            "into %s, or delete it, then remove Inputs and run cell 3 again." % (name, legacy, new))
-            continue
-        try:
-            os.rename(old, new)
-            done.append(name)
-        except OSError as problem:
-            blocking.append("%s could not be moved up out of %s (%s). Move it beside Output.xlsm yourself, then run cell 3 "
-                            "again." % (name, legacy, problem))
-    left = [n for n in os.listdir(legacy) if not n.startswith(".")]
-    said = (["Moved up out of Inputs, into the project's folder beside Output.xlsm: %s; no file in them was changed."
-             % ", ".join(done)] if done else [])
-    if not left and not blocking:
-        shutil.rmtree(legacy)
-        said.append("Inputs, now empty, was removed.")
-    elif left and not blocking:
-        said.append("Inputs still holds %s, which the tool does not read; left as it is." % ", ".join(sorted(left)))
+    if os.path.isdir(legacy):
+        done = []
+        for name in [folder for _, folder, _ in INPUT_FOLDERS] + list(BESIDE_FOLDERS):
+            old, new = os.path.join(legacy, name), os.path.join(project_dir, name)
+            if not os.path.exists(old):
+                continue
+            if os.path.isdir(new) and os.path.isdir(old) and holds_nothing(new):
+                shutil.rmtree(new)                             # only the tool's README: the older folder takes its place
+            if os.path.exists(new):
+                blocking.append("%s is both in %s and beside it, and both hold files. Keep one: move what the one in Inputs "
+                                "holds into %s, or delete it, then remove Inputs and run cell 3 again." % (name, legacy, new))
+                continue
+            try:
+                os.rename(old, new)
+                done.append(name)
+            except OSError as problem:
+                blocking.append("%s could not be moved up out of %s (%s). Move it beside Output.xlsm yourself, then run "
+                                "cell 3 again." % (name, legacy, problem))
+        left = [n for n in os.listdir(legacy) if not n.startswith(".")]
+        said += (["Moved up out of Inputs, into the project's folder beside Output.xlsm: %s; no file in them was changed."
+                  % ", ".join(done)] if done else [])
+        if not left and not blocking:
+            shutil.rmtree(legacy)
+            said.append("Inputs, now empty, was removed.")
+        elif left and not blocking:
+            said.append("Inputs still holds %s, which the tool does not read; left as it is." % ", ".join(sorted(left)))
+    old, new = os.path.join(project_dir, AUDIT_FILE), os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
+    if os.path.isfile(old) and not os.path.exists(new):
+        os.makedirs(os.path.dirname(new), exist_ok=True)
+        os.rename(old, new)
+        said.append("Audit_Log.xlsx was moved into %s, where the record of a run is kept." % AUDIT_FOLDER)
     return said, blocking
 
 
@@ -4395,29 +4365,19 @@ def archive_run(project_dir, run_id):
     return target
 
 
-def lift_audit_log(project_dir):
-    """A project whose Audit_Log.xlsx stands in its own folder, as it did before, has it moved into _Audit, once - the
-    tool's own file, moved whole. Returns what was done, in plain words."""
-    old, new = os.path.join(project_dir, AUDIT_FILE), os.path.join(project_dir, AUDIT_FOLDER, AUDIT_FILE)
-    if not os.path.isfile(old) or os.path.exists(new):
-        return []
-    os.makedirs(os.path.dirname(new), exist_ok=True)
-    os.rename(old, new)
-    return ["Audit_Log.xlsx was moved into %s, where the record of a run is kept." % AUDIT_FOLDER]
 
 
 def setup_project(projects_dir, project):
     """Create the project skeleton and say what is still missing: the three input folders, each with its README.txt,
     in the project's folder beside Output.xlsm and Audit_Log.xlsx. A project laid out before, with its folders inside
-    Inputs/, is first brought to this layout (lift_inputs). Returns (project folder, what stops the run, what was
+    Inputs/, is first brought to this layout (lift_project). Returns (project folder, what stops the run, what was
     done). The content of an input is never touched. Enforces: R6"""
     problem = check_project_name(project)
     if problem:
         raise ValueError(problem)
     project_dir = os.path.join(projects_dir, project)          # the project's folder: its three input folders, Output.xlsm and _Audit
     os.makedirs(project_dir, exist_ok=True)
-    said, missing = lift_inputs(project_dir)
-    said += lift_audit_log(project_dir)
+    said, missing = lift_project(project_dir)
     for _, folder, readme in INPUT_FOLDERS:
         path = os.path.join(project_dir, folder)
         os.makedirs(path, exist_ok=True)
@@ -4931,6 +4891,12 @@ def own_words(text):
     return re.sub(r"\u201c.*?\u201d", "", text or "", flags=re.S)
 
 
+def ask_again(plain, ask):
+    """What a check returns for an answer it turns down: nothing read, the question to be asked again with `ask` added
+    to it, and `plain` - what was wrong, in plain words - for the record."""
+    return None, {"plain": plain, "ask": ask}, ""
+
+
 def check_words(answer, last):
     """Step 04's check of an answer: technical text the workbook does not show - a Python trace, an internal name - is
     asked about again, and kept on the last try. Returns (what was read, what to ask again or None, a note)."""
@@ -4939,9 +4905,9 @@ def check_words(answer, last):
         return None, None, ""
     if last:
         return None, None, "the answer still held technical text the workbook does not show"
-    return None, {"plain": "the answer held technical text the workbook does not show (%s)" % ", ".join(unwelcome),
-                  "ask": "Your last description held technical text this workbook does not show (%s). Write it again "
-                         "without it." % ", ".join(unwelcome)}, ""
+    return ask_again("the answer held technical text the workbook does not show (%s)" % ", ".join(unwelcome),
+                 "Your last description held technical text this workbook does not show (%s). Write it again "
+                         "without it." % ", ".join(unwelcome))
 
 
 def ask_model(chat, system, main, check=None, halt=None):
@@ -5741,9 +5707,9 @@ def search_check(question):
                 detail = item if isinstance(item, dict) else {}
                 relevant[ref] = {"ref": ref, "relation": plain_text(detail.get("relation")).lower(), "why": plain_text(detail.get("why"))}
         if unknown and not last:
-            return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
-                          "ask": "Your last answer named chunks that are not in this part of the methodology (%s). Name only "
-                                 "chunks shown above, and answer with the JSON object alone." % ", ".join(unknown)}, ""
+            return ask_again("the answer named chunks that were not shown (%s)" % ", ".join(unknown),
+                         "Your last answer named chunks that are not in this part of the methodology (%s). Name only "
+                                 "chunks shown above, and answer with the JSON object alone." % ", ".join(unknown))
         reading = {"relevant": [relevant[ref] for ref in dict.fromkeys(shown) if ref in relevant]}
         return reading, None, "the chunks it named that were not shown were left out (%s)" % ", ".join(unknown) if unknown else ""
     return check
@@ -5774,15 +5740,15 @@ def compare_check(question):
             if any(entry[part] for part in ("title",) + tuple(part for part, _ in DEVIATION_PARTS)) and entry not in deviations:
                 deviations.append(entry)
         if unknown and not last:
-            return None, {"plain": "the answer named chunks that were not shown (%s)" % ", ".join(unknown),
-                          "ask": "Your last answer named chunks that are not among those shown (%s). Rest every deviation "
-                                 "on chunks shown above, and answer with the JSON object alone." % ", ".join(unknown)}, ""
+            return ask_again("the answer named chunks that were not shown (%s)" % ", ".join(unknown),
+                         "Your last answer named chunks that are not among those shown (%s). Rest every deviation "
+                                 "on chunks shown above, and answer with the JSON object alone." % ", ".join(unknown))
         said = " ".join(str(entry.get(part) or "") for entry in deviations for part in ("title",) + tuple(p for p, _ in DEVIATION_PARTS))
         unwelcome = unwelcome_words(own_words(said))
         if unwelcome and not last:
-            return None, {"plain": "the answer held technical text the workbook does not show (%s)" % ", ".join(unwelcome),
-                          "ask": "Your last answer held technical text this workbook does not show outside quotations (%s). "
-                                 "Write it again without it; inside curly quotes \u201c \u201d it may stay." % ", ".join(unwelcome)}, ""
+            return ask_again("the answer held technical text the workbook does not show (%s)" % ", ".join(unwelcome),
+                         "Your last answer held technical text this workbook does not show outside quotations (%s). "
+                                 "Write it again without it; inside curly quotes \u201c \u201d it may stay." % ", ".join(unwelcome))
         notes = (["the chunks it named that were not shown were left out (%s)" % ", ".join(unknown)] if unknown else []) + \
                 (["the answer still held technical text the workbook does not show"] if unwelcome else [])
         return {"deviations": deviations}, None, "; ".join(notes)
