@@ -61,7 +61,7 @@ from xml.sax.saxutils import escape
 # ======================================================================================================================
 # CONTENTS - four parts, in the order a run goes; each part is one reviewer's contiguous share of the file.
 #
-#   PART 1   lines   102-1755   foundations and the run   (reviewer 1)
+#   PART 1   lines   102-1757   foundations and the run   (reviewer 1)
 #     1.1    lines   110-224    the vocabulary, the records and the two exceptions
 #     1.2    lines   225-361    canonical JSON, digests and numbers
 #     1.3    lines   362-603    the content account: what every reading must close, and a document's smallest pieces
@@ -71,29 +71,29 @@ from xml.sax.saxutils import escape
 #     1.7    lines   948-1140   the audit store and the _Audit folder
 #     1.8    lines  1141-1401   the pipeline, its runner, and step 01: prepare-run
 #     1.9    lines  1402-1480   cell 4: verification
-#     1.10   lines  1481-1755   the notebook's four cells
-#   PART 2   lines  1756-4008   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
-#     2.1    lines  1764-1903   which files are read, and what each file is
-#     2.2    lines  1904-2081   read_methodology and read_documentation: a folder read into chunks
-#     2.3    lines  2082-2664   markup: element helpers, repairs, tag rules, the block walker, schema discovery
-#     2.4    lines  2665-3200   equations: symbols, the expression tree, the linear-notation parser, reference data
-#     2.5    lines  3201-3396   Word (.docx)
-#     2.6    lines  3397-3502   PDF
-#     2.7    lines  3503-3710   MHTML and SVG
-#     2.8    lines  3711-4008   a document's shape: headings, levels, references and chunks
-#   PART 3   lines  4009-5725   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
-#     3.1    lines  4017-4089   the package: unpacking and inventory
-#     3.2    lines  4090-4469   flowR: fetching it, running it, and its syntax trees
-#     3.3    lines  4470-4649   units from R source; roxygen blocks and help pages
-#     3.4    lines  4650-4848   stored parameter data, and which code reads it
-#     3.5    lines  4849-5122   read_package, and the package's content account
-#     3.6    lines  5123-5725   step 03, link-chunks: which chunk feeds which
-#   PART 4   lines  5726-7913   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
-#     4.1    lines  5734-6190   asking the organisation's model: what a question may hold, and many at once
-#     4.2    lines  6191-6355   step 04, interpret-code
-#     4.3    lines  6356-7112   step 05, search-methodology
-#     4.4    lines  7113-7595   Output.xlsm: its rows, its layout, and how it is written
-#     4.5    lines  7596-7913   the workbook's macro
+#     1.10   lines  1481-1757   the notebook's four cells
+#   PART 2   lines  1758-4010   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
+#     2.1    lines  1766-1905   which files are read, and what each file is
+#     2.2    lines  1906-2083   read_methodology and read_documentation: a folder read into chunks
+#     2.3    lines  2084-2666   markup: element helpers, repairs, tag rules, the block walker, schema discovery
+#     2.4    lines  2667-3202   equations: symbols, the expression tree, the linear-notation parser, reference data
+#     2.5    lines  3203-3398   Word (.docx)
+#     2.6    lines  3399-3504   PDF
+#     2.7    lines  3505-3712   MHTML and SVG
+#     2.8    lines  3713-4010   a document's shape: headings, levels, references and chunks
+#   PART 3   lines  4011-5727   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
+#     3.1    lines  4019-4091   the package: unpacking and inventory
+#     3.2    lines  4092-4471   flowR: fetching it, running it, and its syntax trees
+#     3.3    lines  4472-4651   units from R source; roxygen blocks and help pages
+#     3.4    lines  4652-4850   stored parameter data, and which code reads it
+#     3.5    lines  4851-5124   read_package, and the package's content account
+#     3.6    lines  5125-5727   step 03, link-chunks: which chunk feeds which
+#   PART 4   lines  5728-7915   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
+#     4.1    lines  5736-6192   asking the organisation's model: what a question may hold, and many at once
+#     4.2    lines  6193-6357   step 04, interpret-code
+#     4.3    lines  6358-7114   step 05, search-methodology
+#     4.4    lines  7115-7597   Output.xlsm: its rows, its layout, and how it is written
+#     4.5    lines  7598-7915   the workbook's macro
 #
 # Every docstring ends with its signposts - Used by, Uses, Holds - generated from the code (see the docstring above).
 # ======================================================================================================================
@@ -1315,13 +1315,13 @@ def fingerprint_file(path, corner, inputs_dir):
             "bytes": len(data), "sha256": digest(data), "swhid": swhid_content(data)}
 
 def engine_file_hashes():
-    """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts and reference
-    data, and its requirements - so that an evidence pack names exactly the code that produced it.
+    """SHA-256 of every file that makes up the engine - its code, which holds its steps, prompts, reference data and
+    what it needs installed - so that an evidence pack names exactly the code that produced it.
     Used by: run_changes (1.5), prepare_run, verify_evidence_pack (1.9).
     Uses: file_sha256 (4.4)."""
     import glob
     found = {}
-    for pattern in ("*.py", "requirements.txt"):
+    for pattern in ("*.py",):
         for path in sorted(glob.glob(os.path.join(ENGINE_DIR, pattern), recursive=True)):
             if os.path.isfile(path):
                 found["engine/" + os.path.relpath(path, ENGINE_DIR).replace(os.sep, "/")] = file_sha256(path)
@@ -1485,6 +1485,13 @@ def verify_evidence_pack(paths, settings, live=None):
 # cell 1 is setup(dbutils), cell 2 check_chat(chat), cell 3 review(), cell 4 verify(). The session - the
 # widgets, the chat() that answered, the run being worked on - is kept in NOTEBOOK, not in the notebook.
 REQUIRED_PACKAGES = ("yaml", "openpyxl", "numpy", "rdata")   # what the engine imports; installed only if missing
+# What cell 1 installs, from PyPI, when one of REQUIRED_PACKAGES is missing: lower bounds, not pins - a managed runtime
+# usually has openpyxl and PyYAML already, and forcing an exact version would replace the runtime's own copy for no gain.
+REQUIREMENTS = ("openpyxl>=3.1", "PyYAML>=6.0", "numpy>=1.24", "rdata>=1.0")
+# Installed in a second step that is allowed to fail: each one missing degrades a named capability into a plain note,
+# and nothing else changes. pdfplumber reads text and tables from PDF (the manual recommends .docx where there is a
+# choice); pypdf is a second PDF reader, used where pdfplumber cannot read a page.
+OPTIONAL_REQUIREMENTS = ("pdfplumber>=0.10", "pypdf>=4.0")
 WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
            ("project_name", "", "03 Project Name (can be a model ID)"))
 OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
@@ -1559,10 +1566,10 @@ def setup(dbutils, home=None, projects=None):
     NOTEBOOK.update(dbutils=dbutils, home=home, projects=projects or os.path.join(home, "Projects"), user=databricks_user(dbutils))
     missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
     if missing:
-        install(missing, dbutils, os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
+        install(missing, dbutils)
         return
     print("Folder:", home, "| Python", sys.version.split()[0])
-    for name in REQUIRED_PACKAGES + ("pdfplumber", "pypdf"):
+    for name in REQUIRED_PACKAGES + tuple(re.split(r"[<>=]", spec)[0] for spec in OPTIONAL_REQUIREMENTS):
         found = importlib.util.find_spec(name)
         print("  %-11s %s" % (name, "installed" if found else "not installed" + ("" if name in ("pdfplumber", "pypdf") else " - run this cell again")))
     token = live("llm_token")
@@ -1596,7 +1603,7 @@ def pip_said(stderr):
         text += "\nThe packages asked for cannot be installed together; the lines above say which."
     return text
 
-def install(missing, dbutils, requirements):
+def install(missing, dbutils):
     """Install what the engine needs from PyPI, the runtime's own packages pinned as they are, and restart Python
     only if those still import together afterwards.
     Used by: setup.
@@ -1612,21 +1619,16 @@ def install(missing, dbutils, requirements):
     constraints = os.path.join(tempfile.mkdtemp(prefix="verifier_"), "constraints.txt")
     with open(constraints, "w") as handle:
         handle.write("\n".join(pins) + "\n")
-    command = [sys.executable, "-m", "pip", "install", "-r", requirements, "-c", constraints, "--index-url", PYPI]
+    command = [sys.executable, "-m", "pip", "install"] + list(REQUIREMENTS) + ["-c", constraints, "--index-url", PYPI]
     print("Installing", ", ".join(missing), "| kept as the runtime has them:", ", ".join(pins) or "none found")
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode:
         print("The install did not finish. What pip said:\n" + pip_said(done.stderr))
         print("Nothing the runtime needs was changed.")
         return
-    with open(requirements, encoding="utf-8") as handle:
-        wanted = handle.read().split("# --- optional ---")
-    if len(wanted) > 1:
-        spare = os.path.join(tempfile.gettempdir(), "optional.txt")
-        with open(spare, "w", encoding="utf-8") as handle:
-            handle.write(wanted[1])
-        extra = subprocess.run(command[:4] + ["-r", spare] + command[6:], capture_output=True, text=True)
-        print("Optional packages (the PDF readers):", "installed." if not extra.returncode else "not installed; a PDF will say it could not be read.")
+    extra = subprocess.run([sys.executable, "-m", "pip", "install"] + list(OPTIONAL_REQUIREMENTS) + ["-c", constraints, "--index-url", PYPI],
+                           capture_output=True, text=True)       # allowed to fail: a missing PDF reader is a plain note
+    print("Optional packages (the PDF readers):", "installed." if not extra.returncode else "not installed; a PDF will say it could not be read.")
     probe = subprocess.run([sys.executable, "-c", "import numpy, pandas, pyarrow"], capture_output=True, text=True)
     if probe.returncode:
         print("STOPPED BEFORE RESTARTING PYTHON: the runtime's own packages no longer import together (%s)." % hide((probe.stderr or "").strip())[-300:])
@@ -1637,7 +1639,7 @@ def install(missing, dbutils, requirements):
         print("STOPPED BEFORE RESTARTING PYTHON: %s is still missing after the install, so restarting would only bring "
               "this cell back here." % ", ".join(missing))
         print("What Python said:\n" + hide(still.stderr)[-600:])
-        print("Check that engine/requirements.txt names it, and that PyPI carries it for this cluster's Python.")
+        print("Check that verifier.REQUIREMENTS names it, and that PyPI carries it for this cluster's Python.")
         return
     print("Installed. Restarting Python; then run this cell once more.")
     dbutils.library.restartPython()
