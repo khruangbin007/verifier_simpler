@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lendingrules xmlns="urn:example:lending:1">
+  <ruleblock idx="1.">
+    <blockcaption>Loan periods</blockcaption>
+    <statementbody>A standard loan runs for fourteen days from the day of issue.</statementbody>
+    <statementbody>A short loan runs for two days and may not be renewed.</statementbody>
+    <gridholder>
+      <gridcaption>Table 1. Loan period by item class</gridcaption>
+      <gridline>
+        <gridcolhead>Item class</gridcolhead><gridcolhead>Days</gridcolhead><gridcolhead>Conditions</gridcolhead>
+      </gridline>
+      <gridline>
+        <gridcell>Standard</gridcell><gridcell>14</gridcell>
+        <gridcell><bullets><point>renewable twice</point><point>no fine in the first two days</point></bullets></gridcell>
+      </gridline>
+      <gridline>
+        <gridcell>Short</gridcell><gridcell>2</gridcell>
+        <gridcell><bullets><point>not renewable</point><point>fine from the first day</point></bullets></gridcell>
+      </gridline>
+      <gridline>
+        <gridcell>Reference</gridcell><gridcell>0</gridcell>
+        <gridcell>consulted on the premises only</gridcell>
+      </gridline>
+    </gridholder>
+  </ruleblock>
+  <ruleblock idx="2.">
+    <blockcaption>Fines</blockcaption>
+    <statementbody>The fine is the number of days overdue multiplied by the daily rate for the item class.</statementbody>
+    <statementbody>The fine for one item is capped at eight units.</statementbody>
+    <statementbody>No fine is charged where the overdue period is two days or fewer for a standard loan.</statementbody>
+    <sidenote>Librarians may waive a fine; a waiver is recorded but does not change the calculation.</sidenote>
+  </ruleblock>
+  <ruleblock idx="3.">
+    <blockcaption>Renewals</blockcaption>
+    <statementbody>A standard loan may be renewed twice, each renewal running for a further fourteen days.</statementbody>
+    <statementbody>A loan with a reservation against it may not be renewed.</statementbody>
+  </ruleblock>
+</lendingrules>

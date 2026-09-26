@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<doc><title>Harbour Facility Scoring: Methodology</title>
+<section num="1."><title>Overview</title>
+<para>Each harbour receives one rating from four factors, their weights, adjustments and an anchor.</para></section>
+<section num="2."><title>Factor scores</title>
+<para>The throughput is scored against the high and low thresholds: 1 at or above the high threshold, 3 at or above the low threshold, 5 below it.</para>
+<para>The berth utilisation is scored 1 at or below 60%, 3 at or below 85%, and 5 above 85%.</para>
+<para>The liquidity is scored 1 where the liquidity days are 180 or more, and 4 otherwise.</para></section>
+<section num="3."><title>Weighted score</title>
+<para>The weighted score is the sum of each factor score times its weight: throughput 40%, utilisation 35%, liquidity 25%.</para></section>
+<section num="4."><title>Adjustments</title>
+<para>The size and governance adjustments add their points to the weighted score, giving the adjusted score.</para></section>
+<section num="5."><title>Anchor and cap</title>
+<para>The adjusted score, rounded to the half point, is looked up in the anchor table to give the anchor rating.</para>
+<para>An adjusted score above 4.5 takes the rating two notches below the anchor.</para></section>
+<section num="6."><title>Stress test</title>
+<para>The rating is lowered by one notch when the throughput falls by more than 20% in the stress scenario.</para></section>
+</doc>

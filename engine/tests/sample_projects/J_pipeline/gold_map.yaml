@@ -1,0 +1,39 @@
+# What a complete Model Implementation Map of harbourscore must hold. Written by hand from the code;
+# every name here is written in R/harbourscore.R as it stands.
+package: harbourscore
+final_outputs: [harbour_rating]
+not_reached: [combine_results, legacy_score, "%||%"]
+calls:                                   # the implementation hierarchy: who calls whom, in the package
+  harbour_rating: [factor_scores, weighted_score, adjust_score, anchor_rating, cap_rating]
+  cap_rating: [notch_down]
+  notch_down: [notch_down]               # recursion: a loop, not an infinite tree
+flows:                                   # within a function: each value, and the values it is computed from
+  harbour_rating:
+    scored: [facilities]
+    adjusted: [scored, adjustments]
+    anchored: [adjusted]
+  factor_scores:
+    limits: ["inst/extdata/thresholds.csv"]
+  weighted_score:
+    w: [factor_weights]
+  adjust_score:
+    steps: [adjustments, adjustment_table]
+columns:                                 # data-frame columns a dplyr verb creates, and what each is computed from
+  throughput_score: [throughput, limits]
+  utilisation_score: [berth_utilisation]
+  liquidity_score: [liquidity_days]
+  base_score: [throughput_score, utilisation_score, liquidity_score]
+  adjusted_score: [base_score, steps]
+  score_band: [adjusted_score]
+  final_rating: [anchor, adjusted_score]
+raw_inputs:
+  argument: [facilities, adjustments]
+  column_of_an_argument: [throughput, berth_utilisation, liquidity_days]
+  stored_data: [factor_weights, adjustment_table, anchor_table, rating_scale]
+  file: ["inst/extdata/thresholds.csv"]
+  hard_coded_number: ["0.6", "0.85", "180", "4.5", "2"]
+gaps:                                    # what code alone cannot follow; the agents' work
+  - {function: adjust_score, code: "function(name) adjustment_table$points[adjustment_table$adjustment == name]", why: "a purrr lambda"}
+  - {function: combine_results, code: "do.call(rbind, parts)", why: "do.call over a list built at run time"}
+methodology_not_implemented: ["Stress test"]
+documentation_describing_nothing: ["quarterly dashboard"]
