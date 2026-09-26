@@ -61,7 +61,7 @@ from xml.sax.saxutils import escape
 # ======================================================================================================================
 # CONTENTS - four parts, in the order a run goes; each part is one reviewer's contiguous share of the file.
 #
-#   PART 1   lines   102-1757   foundations and the run   (reviewer 1)
+#   PART 1   lines   102-1763   foundations and the run   (reviewer 1)
 #     1.1    lines   110-224    the vocabulary, the records and the two exceptions
 #     1.2    lines   225-361    canonical JSON, digests and numbers
 #     1.3    lines   362-603    the content account: what every reading must close, and a document's smallest pieces
@@ -71,29 +71,29 @@ from xml.sax.saxutils import escape
 #     1.7    lines   948-1140   the audit store and the _Audit folder
 #     1.8    lines  1141-1401   the pipeline, its runner, and step 01: prepare-run
 #     1.9    lines  1402-1480   cell 4: verification
-#     1.10   lines  1481-1757   the notebook's four cells
-#   PART 2   lines  1758-4010   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
-#     2.1    lines  1766-1905   which files are read, and what each file is
-#     2.2    lines  1906-2083   read_methodology and read_documentation: a folder read into chunks
-#     2.3    lines  2084-2666   markup: element helpers, repairs, tag rules, the block walker, schema discovery
-#     2.4    lines  2667-3202   equations: symbols, the expression tree, the linear-notation parser, reference data
-#     2.5    lines  3203-3398   Word (.docx)
-#     2.6    lines  3399-3504   PDF
-#     2.7    lines  3505-3712   MHTML and SVG
-#     2.8    lines  3713-4010   a document's shape: headings, levels, references and chunks
-#   PART 3   lines  4011-5727   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
-#     3.1    lines  4019-4091   the package: unpacking and inventory
-#     3.2    lines  4092-4471   flowR: fetching it, running it, and its syntax trees
-#     3.3    lines  4472-4651   units from R source; roxygen blocks and help pages
-#     3.4    lines  4652-4850   stored parameter data, and which code reads it
-#     3.5    lines  4851-5124   read_package, and the package's content account
-#     3.6    lines  5125-5727   step 03, link-chunks: which chunk feeds which
-#   PART 4   lines  5728-7915   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
-#     4.1    lines  5736-6192   asking the organisation's model: what a question may hold, and many at once
-#     4.2    lines  6193-6357   step 04, interpret-code
-#     4.3    lines  6358-7114   step 05, search-methodology
-#     4.4    lines  7115-7597   Output.xlsm: its rows, its layout, and how it is written
-#     4.5    lines  7598-7915   the workbook's macro
+#     1.10   lines  1481-1763   the notebook's four cells
+#   PART 2   lines  1764-4012   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
+#     2.1    lines  1772-1911   which files are read, and what each file is
+#     2.2    lines  1912-2089   read_methodology and read_documentation: a folder read into chunks
+#     2.3    lines  2090-2672   markup: element helpers, repairs, tag rules, the block walker, schema discovery
+#     2.4    lines  2673-3208   equations: symbols, the expression tree, the linear-notation parser, reference data
+#     2.5    lines  3209-3404   Word (.docx)
+#     2.6    lines  3405-3510   PDF
+#     2.7    lines  3511-3714   MHTML and SVG
+#     2.8    lines  3715-4012   a document's shape: headings, levels, references and chunks
+#   PART 3   lines  4013-5730   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
+#     3.1    lines  4021-4093   the package: unpacking and inventory
+#     3.2    lines  4094-4474   flowR: fetching it, running it, and its syntax trees
+#     3.3    lines  4475-4654   units from R source; roxygen blocks and help pages
+#     3.4    lines  4655-4853   stored parameter data, and which code reads it
+#     3.5    lines  4854-5127   read_package, and the package's content account
+#     3.6    lines  5128-5730   step 03, link-chunks: which chunk feeds which
+#   PART 4   lines  5731-7916   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
+#     4.1    lines  5739-6195   asking the organisation's model: what a question may hold, and many at once
+#     4.2    lines  6196-6360   step 04, interpret-code
+#     4.3    lines  6361-7115   step 05, search-methodology
+#     4.4    lines  7116-7598   Output.xlsm: its rows, its layout, and how it is written
+#     4.5    lines  7599-7916   the workbook's macro
 #
 # Every docstring ends with its signposts - Used by, Uses, Holds - generated from the code (see the docstring above).
 # ======================================================================================================================
@@ -912,7 +912,7 @@ class LiveValues:
     """The three values chat() reads when it is CALLED: endpoint, token, user id. They live
     in memory only. `generation` goes up whenever a different token arrives, which is how
     paused workers learn that a fresh one was pasted. Enforces: R8
-    Used by: AuditStore (1.7), live (1.10), verify (1.10), journal_answer (4.1), ask_all (4.1),
+    Used by: AuditStore (1.7), step_failure (1.8), live (1.10), verify (1.10), journal_answer (4.1), ask_all (4.1),
              model_still_answers (4.1), interpret_code (4.2), search_methodology (4.3)."""
     values: dict = field(default_factory=dict); generation: int = 0; set_at: float = 0.0
     recent_tokens: list = field(default_factory=list)
@@ -1278,9 +1278,11 @@ def step_failure(step, problem, work_dir):
     whoever maintains the tool. The run goes on: the steps after this one work with what there is, and
     each says what it could not do. The details go to the run's work folder, not to the evidence
     pack, because they are about the tool and not about the model under review. Enforces: R2
-    Used by: run_step."""
+    Used by: run_step.
+    Uses: LiveValues (1.6)."""
     with open(os.path.join(work_dir, "step_%s_did_not_finish.txt" % step["id"]), "w", encoding="utf-8") as handle:
-        handle.write("".join(traceback.format_exception(type(problem), problem, problem.__traceback__)))
+        handle.write((NOTEBOOK["live"] or LiveValues()).redact(       # the token removed, as from every file
+            "".join(traceback.format_exception(type(problem), problem, problem.__traceback__))))
     return ("Step %s (%s) could not finish, because of a fault inside the tool (%s). The steps after it ran on what there "
             "was, and say what they could not do. The details are in the run's work folder, for whoever maintains the tool."
             % (step["id"], step["name"], type(problem).__name__))
@@ -1302,8 +1304,6 @@ def log_line(store, text):
     with open(os.path.join(store.local_dir, "run_log.txt"), "a", encoding="utf-8") as handle:
         handle.write("%s  %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), text))
 
-PACKAGES_RECORDED = ("PyYAML", "openpyxl", "python-docx", "numpy", "scipy", "sympy", "rdata",
-                     "pdfplumber", "pypdf", "pyreadr")
 
 def fingerprint_file(path, corner, inputs_dir):
     """Name, corner, size, SHA-256 and content identifier of one input file.
@@ -1492,6 +1492,10 @@ REQUIREMENTS = ("openpyxl>=3.1", "PyYAML>=6.0", "numpy>=1.24", "rdata>=1.0")
 # and nothing else changes. pdfplumber reads text and tables from PDF (the manual recommends .docx where there is a
 # choice); pypdf is a second PDF reader, used where pdfplumber cannot read a page.
 OPTIONAL_REQUIREMENTS = ("pdfplumber>=0.10", "pypdf>=4.0")
+# The packages whose versions each run's manifest records (step 01, 1.8): every one the engine installs, derived from
+# the lists above so that it cannot drift; pandas, which the runtime brings and stored data is read with; and pyspark,
+# which only finds who runs the notebook. One not installed is recorded as such.
+PACKAGES_RECORDED = tuple(re.split(r"[<>=!~]", spec)[0] for spec in REQUIREMENTS + OPTIONAL_REQUIREMENTS) + ("pandas", "pyspark")
 WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM token"),
            ("project_name", "", "03 Project Name (can be a model ID)"))
 OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
@@ -1519,7 +1523,7 @@ def databricks_user(dbutils):
 def live(name):
     """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
     while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8
-    Used by: setup, ask_all (4.1), model_still_answers (4.1), the notebook's cell 2.
+    Used by: setup, check_chat, ask_all (4.1), model_still_answers (4.1), the notebook's cell 2.
     Uses: LiveValues (1.6)."""
     session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
     if getattr(CHAT_WORKER, "active", False):       # a worker of step 04: the values its step last read
@@ -1654,20 +1658,22 @@ def check_chat(chat):
     """Cell 2: ask the organisation's chat() one question and, once it answers, keep it for cell 3's steps 04 and 05,
     make the project's three input folders and say what belongs in each.
     Used by: the notebook's cell 2.
-    Uses: setup_project (1.5)."""
+    Uses: setup_project (1.5), live."""
     if NOTEBOOK["dbutils"] is None:
         print("Run cell 1 first.")
         return
     NOTEBOOK["chat"] = chat
+    live("llm_token")                                    # the token as widget 02 holds it, so that it can be removed
+    redact = NOTEBOOK["live"].redact                     # from all this cell shows: a cell's output is kept in the notebook
     try:
         reply = chat(STILL_ANSWERING, STILL_ANSWERING)["answer"]
-        print("chat() answered:", str(reply)[:60])
+        print("chat() answered:", redact(str(reply))[:60])
         print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
         print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
         print("(searched by LLM), its count of flagged items, and the sheet Flagged_Items, one row per item.")
     except Exception as problem:
         print("chat() did not answer (%s: %s). Check widgets 01 and 02 - and that the gateway knows your Databricks user id, %s -"
-              " then run this cell again." % (type(problem).__name__, problem, NOTEBOOK["user"]))
+              " then run this cell again." % (type(problem).__name__, redact(str(problem)), NOTEBOOK["user"]))
         return
     widgets = NOTEBOOK["dbutils"].widgets
     project_dir, missing, said = setup_project(NOTEBOOK["projects"], widgets.get("project_name"))
@@ -1751,8 +1757,9 @@ def verify():
     print("Verifying the evidence pack:")
     for what, verdict, detail in verify_evidence_pack(paths, notebook_settings(), live=NOTEBOOK["live"] or LiveValues()):
         print("  %-62s %-16s %s" % (what, verdict, detail))
-    print("\nProject folder:", paths.project_dir, "- Output.xlsm is the deliverable; Audit_Log.xlsx beside it is the")
-    print("record of the run: every step, every record, and every exchange with the model.")
+    print("\nProject folder:", paths.project_dir, "- Output.xlsm is the deliverable; the _Audit folder beside it is the")
+    print("record of the run: Audit_Log.xlsx - every step, every record, every exchange with the model - and a folder of")
+    print("JSON files for each step.")
 
 
 # ======================================================================================================================
@@ -3515,10 +3522,7 @@ def element(tag, text):
     return "<%s>%s</%s>" % (tag, escape(text), tag)
 
 
-TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
-LIST_MARK = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 
-HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
 
 
 
@@ -3539,7 +3543,6 @@ def delimiter_of(text):
 
 
 
-LATEX_HEADINGS = (("part", 1), ("chapter", 1), ("section", 1), ("subsection", 2), ("subsubsection", 3), ("paragraph", 4))
 
 
 
@@ -4433,7 +4436,8 @@ def flowr_ready(source=""):
             os.remove(archive)
             raise RuntimeError("The flowR archive is not the pinned release %s: its checksum differs." % FLOWR_VERSION)
         with tarfile.open(archive) as bundle:
-            bundle.extractall(folder, members=[m for m in bundle.getmembers() if m.isfile() and "/" not in m.name.strip("./")])
+            bundle.extractall(folder, members=[m for m in bundle.getmembers() if m.isfile() and "/" not in m.name.strip("./")],
+                              **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))   # no link, no path out
         os.chmod(binary, 0o700)
     try:                                            # one line of R, read the way the review reads: ready means it ran
         flowr_read(folder, "x <- 1\n")
@@ -4752,7 +4756,7 @@ def table_of(value):
 
 
 def data_object_unit(name, value, path, settings):
-    """One stored object to a unit: a table shown whole (table_display), or, when it has no tabular meaning, described
+    """One stored object to a unit: a table shown whole, a line for each row, or, when it has no tabular meaning, described
     in a sentence - either opening with the object's name, its file and its size, so that every link to it can be
     recognised. Too large to be a parameter table, it is marked not assessable: a dataset (asked_rows).
     Used by: decode_data_file.
@@ -6374,8 +6378,6 @@ DEVIATION_KINDS = {"differs": "The code differs", "omits": "Not done in the code
 DEVIATION_PARTS = (("methodology", "Methodology"), ("code", "Code"), ("why", "Why it potentially deviates"), ("effect", "Effect"),
                    ("example", "Concrete example"))
 NO_EXAMPLE = "The model gave no example."
-FLAGGED_DECISIONS = ("True Positive", "False Positive", "True Negative", "False Negative", "For further discussion",
-                     "Other Case (see notes)")
 NOT_SEARCHED = "Not searched: nothing was read from this file."
 SEARCH_SYSTEM_PROMPT = (
     "You help credit analysts check whether an R package implements the methodology it was built from. The methodology "
@@ -7532,11 +7534,11 @@ def link_references(workbook, rows):
         for number, row in enumerate(rows.get(name) or (), start=2):
             at.setdefault(re.sub(r"^([CDM]-\d+)-\d+$", r"\1", str(row.get(key) or "")), number)
     column_of = {s["name"]: {c["field"]: n for n, c in enumerate(s["columns"], start=1)} for s in load_layout()["sheets"]}
-    for (name, field), (target, tip) in LINK_COLUMNS.items():
+    for (name, link_field), (target, tip) in LINK_COLUMNS.items():
         sheet = workbook[name]
         for number, row in enumerate(rows.get(name) or (), start=2):
-            value = row.get(field)
-            if field == "flagged_count":                    # a count leads to the piece's items, if it has any
+            value = row.get(link_field)
+            if link_field == "flagged_count":                    # a count leads to the piece's items, if it has any
                 shown = int(str(value).split()[0]) if isinstance(value, int) or (isinstance(value, str) and value[:1].isdigit()) else 0
                 first = row.get("unit_ref") if shown else None
             else:
@@ -7544,7 +7546,7 @@ def link_references(workbook, rows):
                 first = matched.group(1) if matched else None
             if not first or first not in first_row[target]:
                 continue
-            cell = sheet.cell(row=number, column=column_of[name][field])
+            cell = sheet.cell(row=number, column=column_of[name][link_field])
             cell.hyperlink = Hyperlink(ref=cell.coordinate, location="'%s'!A%d" % (target, first_row[target][first]), tooltip=tip)
             cell.font = Font(color=LINK_FONT, underline="single")
 
