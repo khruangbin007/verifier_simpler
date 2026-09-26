@@ -45,7 +45,8 @@ a model would, from what the question shows, and can be made to fail, refuse, ex
 | `rerun_audit.py` | an expired token, a new PAT, every cell again: `_Audit` only grows | `cell 4: 9 confirmed`, `tokens in _Audit: none` |
 | `archive_test.py` | a new run keeps the run before, byte for byte | `byte for byte ... True`, `9 of 9 confirmed` |
 | `audit_test.py`, `audit_resume.py` | the `_Audit` folder: its files, its inventory, a retried step | `9 of 9`, `files holding the token: none` |
-| `outage.py` | four outages through the notebook's cells | each `after the fix ... finished \| ... as without an outage: True` |
+| `outage.py` | four outages through the notebook's cells: cell 3 halts, and ends saying what chat() returned and to run the whole notebook again | during each outage `cell 3 ends with the stop notice ... True`; after it, each `after the fix ... finished \| ... as without an outage: True` |
+| `test_halt.py` | a token that expires in cell 3: the stop notice, what chat() returned (never the token), the whole notebook again, and the run finished after a new token | `every check passed` (exit code 0) |
 | `ship05.py` | the four cells of `Verifier.ipynb`, end to end | nine checks, each `Confirmed` |
 
 `check_plan.py <path to Verifier_Build_Plan.md>` checks the Build Plan's contracts against the code: every line

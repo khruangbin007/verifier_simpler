@@ -77,7 +77,8 @@ def model_sheet():
     return list(book["Chunks_Model"].iter_rows(values_only=True))
 
 def said_by(text):
-    keep = ("did not finish", "stopped answering", "Run cell", "no interpretation", "could not", "interrupted", "Carrying on", "carry on", "Starting")
+    keep = ("did not finish", "was halted", "STOPPED", "What chat() returned", "Run cell", "no interpretation", "could not",
+            "interrupted", "Carrying on", "carry on", "Starting")
     return [line.strip() for line in text.splitlines() if any(k in line for k in keep)][:4]
 
 print("=== a run without an outage")
@@ -89,7 +90,7 @@ print("questions answered:", asked_in_clean)
 
 for name, how, after, interrupt, broken_reruns in (("S1_503", "503", 10, False, 1),
                                                     ("S2_token_expired", "expired", 34, False, 0),
-                                                    ("S3_503_compare", "503", 52, False, 0),
+                                                    ("S3_503_compare", "503", 45, False, 0),
                                                     ("S4_interrupted", "503", 14, True, 0)):
     print("\n===", name)
     project(name)
@@ -99,6 +100,12 @@ for name, how, after, interrupt, broken_reruns in (("S1_503", "503", 10, False, 
     start = time.time()
     cell(0); cell(1, chat); text = cell(2)
     print("cell 3 during the outage (%.0f s):" % (time.time() - start), said_by(text))
+    if not interrupt:                                  # a halt ends cell 3 with what chat() returned and what to do
+        parts = {"STOPPED": "STOPPED" in text, "what chat() returned": "What chat() returned" in text,
+                 "the whole notebook again": "Run the whole notebook again" in text, "no cell 4": "run cell 4" not in text.lower()}
+        print("  cell 3 ends with the stop notice, what chat() returned and the whole notebook again, and not with cell 4:",
+              all(parts.values()), "" if all(parts.values()) else "- missing: %s | the end of cell 3: %s" % (
+                  [k for k, v in parts.items() if not v], " / ".join(text.rstrip().split("\n")[-4:])[:300]))
     store = verifier.open_store(verifier.NOTEBOOK["paths"], verifier.notebook_settings())
     print("  answers kept: %d recorded in the audit log, %d held in memory" % (
         sum(1 for c in store.read("llm_calls") if c["outcome"] == "answered"),
