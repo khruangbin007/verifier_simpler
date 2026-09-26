@@ -308,7 +308,7 @@ The sheet *Files* of `Audit_Log.xlsx` lists every one of them, numbered across t
 | 3 | Step 02 for the model package, and step 03: unpacking, flowR, units from R source, stored data, `read_package`, chunk links |
 | 4 | Steps 04 and 05, and the deliverable: asking the organisation's model, interpret-code, search-methodology, `Output.xlsm` and its macro |
 
-The contents at the top of the file give each part's and each of its 29 sections' lines, and each part's banner says in which cell it runs, its entry points and the records it writes. Every function's and class's docstring ends with its signposts: *Used by* - the functions that call it, a notebook cell, or the runner by its name in `STEP_FUNCTIONS`; *Uses* - the functions and classes of the file it calls; *Holds* - the helpers written inside it. A name from another section carries that section's number. Beside the engine is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`, and carried out only by the functions `verifier.STEP_FUNCTIONS` names. The tests and the maintainer's tools live on the branch `maintainer-tools`, under `engine/tests/`, beside a copy of the engine they test; the tool ships without them.
+The contents at the top of the file give each part's and each of its 29 sections' lines, and each part's banner says in which cell it runs, its entry points and the records it writes. Every function's and class's docstring ends with its signposts: *Used by* - the functions that call it, a notebook cell, or the runner by its name in `STEP_FUNCTIONS`; *Uses* - the functions and classes of the file it calls; *Holds* - the helpers written inside it. A name from another section carries that section's number. The engine names what it needs installed itself, in `verifier.REQUIREMENTS` and `verifier.OPTIONAL_REQUIREMENTS`, and its steps too, in `verifier.PIPELINE`, and carried out only by the functions `verifier.STEP_FUNCTIONS` names. The tests and the maintainer's tools live on the branch `maintainer-tools`, under `engine/tests/`, beside a copy of the engine they test; the tool ships without them.
 
 ## 12. The pipeline
 
@@ -348,7 +348,7 @@ Every file read keeps a **content account** (`verifier.account`): the file's sma
 
 ## 15. What ships
 
-The tool is `Verifier.ipynb` and two files in `engine/`: `verifier.py` and `requirements.txt`; this manual, `engine/Manual.md`, sits beside them. The repository holds nothing else that runs: no tests, sample projects or maintainer's scripts, and nothing in the engine ever read them. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
+The tool is `Verifier.ipynb` and one file in `engine/`: `verifier.py`, which also names what it needs installed; this manual, `engine/Manual.md`, sits beside it. The branch holds nothing else that runs: the tests, the sample projects and the maintainer's tools are on the branch `maintainer-tools`, and nothing in the engine ever reads them. To change the notebook, edit its four cells directly: each is one call into the engine, and the only code of your own is `chat()` in cell 2.
 
 ---
 

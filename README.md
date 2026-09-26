@@ -5,8 +5,7 @@ Reads a model's methodology, its package of code and data, and its documentation
 ```
 Verifier.ipynb          the notebook: four cells, each one call into the engine
 engine/
-  verifier.py           the whole tool: its steps, reading, chunking, the links, the model's questions, the workbook
-  requirements.txt      what the tool needs installed
+  verifier.py           the whole tool, and what it needs installed: its steps, reading, chunking, the links, the model's questions, the workbook
   Manual.md             the one manual, for everyone
 ```
 
