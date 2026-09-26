@@ -3,6 +3,10 @@ import os, sys, re, shutil, tempfile, warnings
 warnings.filterwarnings("ignore")
 sys.path.insert(0, TESTS); sys.path.insert(0, ENGINE)
 import verifier, openpyxl
+# The six choices the Build Plan gives the Decision column: the layout must carry exactly these, and the workbook use them.
+DECISIONS = ("True Positive", "False Positive", "True Negative", "False Negative", "For further discussion", "Other Case (see notes)")
+_layout = next(c["choices"] for s in verifier.load_layout()["sheets"] if s["name"] == "Flagged_Items" for c in s["columns"] if c.get("choices"))
+assert tuple(_layout) == DECISIONS, "the layout's Decision choices are %s" % (_layout,)
 from harness import Gateway, SETTINGS, attach, run_until_done
 unit_of = lambda ref: re.sub(r"^([CDM]-\d+)-\d+$", r"\1", ref)
 faults, totals = [], {"items": 0, "location links": 0, "methodology links": 0, "count links": 0}
@@ -57,7 +61,7 @@ for sample in sorted(os.listdir(SAMPLES)):
         elif cell.hyperlink:
             faults.append((sample, cell.coordinate, "a link on a count of 0"))
     checks = items.data_validations.dataValidation
-    if locations and (len(checks) != 1 or checks[0].formula1 != '"%s"' % ",".join(verifier.FLAGGED_DECISIONS) or str(checks[0].sqref) != "J2:J%d" % (len(locations) + 1)):
+    if locations and (len(checks) != 1 or checks[0].formula1 != '"%s"' % ",".join(DECISIONS) or str(checks[0].sqref) != "J2:J%d" % (len(locations) + 1)):
         faults.append((sample, "J", "dropdown %s" % [(c.formula1, str(c.sqref)) for c in checks]))
     protected = [name for name in book.sheetnames if book[name].protection.sheet]
     if protected:

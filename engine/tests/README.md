@@ -35,6 +35,7 @@ a model would, from what the question shows, and can be made to fail, refuse, ex
 | `test_a.py` | every cell of the eight samples against what the stand-in gateway was asked | `wrong 0` for every sample |
 | `test_faults.py` | B: 1 and 256 questions at once give the same workbook; C: faults everywhere; D: a token expires and a fresh one is pasted; E: the cell is interrupted twice; F: oversized questions refused. `TESTS=F` runs one | every line `wrong 0 \| answered twice 0`, each ending `finished`; B `same workbook ... True` |
 | `test_words.py` | the model's words are kept as written; technical text is still kept out | `asked again for words: 0`, `cells withheld anywhere: 0` |
+| `test_hygiene.py` | the installer, with a stand-in pip; the token in what cell 2 shows and in a failed step's file; the packages each run records. `--fresh-flowr` also fetches and unpacks flowR (needs GitHub) | `every check passed` (exit code 0) |
 | `still_answering.py` | the short question a step asks before it stops | refused: `stopped: False`, 30 of 30; outage: `stopped: True`; `main thread still reads the widgets ... True` |
 | `flagged_test.py` | Flagged_Items: its links, its dropdown | `faults: none` |
 | `param_links.py` | fourteen ways code reads stored data | `wrong: 0` |
