@@ -61,39 +61,39 @@ from xml.sax.saxutils import escape
 # ======================================================================================================================
 # CONTENTS - four parts, in the order a run goes; each part is one reviewer's contiguous share of the file.
 #
-#   PART 1   lines   102-1751   foundations and the run   (reviewer 1)
-#     1.1    lines   110-223    the vocabulary, the records and the two exceptions
-#     1.2    lines   224-359    canonical JSON, digests and numbers
-#     1.3    lines   360-601    the content account: what every reading must close, and a document's smallest pieces
-#     1.4    lines   602-621    settings
-#     1.5    lines   622-906    the project: its folders, its runs, and the layout of before
-#     1.6    lines   907-945    live values: the notebook's widgets and the token
-#     1.7    lines   946-1138   the audit store and the _Audit folder
-#     1.8    lines  1139-1397   the pipeline, its runner, and step 01: prepare-run
-#     1.9    lines  1398-1476   cell 4: verification
-#     1.10   lines  1477-1751   the notebook's four cells
-#   PART 2   lines  1752-4004   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
-#     2.1    lines  1760-1899   which files are read, and what each file is
-#     2.2    lines  1900-2077   read_methodology and read_documentation: a folder read into chunks
-#     2.3    lines  2078-2660   markup: element helpers, repairs, tag rules, the block walker, schema discovery
-#     2.4    lines  2661-3196   equations: symbols, the expression tree, the linear-notation parser, reference data
-#     2.5    lines  3197-3392   Word (.docx)
-#     2.6    lines  3393-3498   PDF
-#     2.7    lines  3499-3706   MHTML and SVG
-#     2.8    lines  3707-4004   a document's shape: headings, levels, references and chunks
-#   PART 3   lines  4005-5721   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
-#     3.1    lines  4013-4085   the package: unpacking and inventory
-#     3.2    lines  4086-4465   flowR: fetching it, running it, and its syntax trees
-#     3.3    lines  4466-4645   units from R source; roxygen blocks and help pages
-#     3.4    lines  4646-4844   stored parameter data, and which code reads it
-#     3.5    lines  4845-5118   read_package, and the package's content account
-#     3.6    lines  5119-5721   step 03, link-chunks: which chunk feeds which
-#   PART 4   lines  5722-7885   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
-#     4.1    lines  5730-6162   asking the organisation's model: what a question may hold, and many at once
-#     4.2    lines  6163-6327   step 04, interpret-code
-#     4.3    lines  6328-7084   step 05, search-methodology
-#     4.4    lines  7085-7567   Output.xlsm: its rows, its layout, and how it is written
-#     4.5    lines  7568-7885   the workbook's macro
+#   PART 1   lines   102-1755   foundations and the run   (reviewer 1)
+#     1.1    lines   110-224    the vocabulary, the records and the two exceptions
+#     1.2    lines   225-361    canonical JSON, digests and numbers
+#     1.3    lines   362-603    the content account: what every reading must close, and a document's smallest pieces
+#     1.4    lines   604-623    settings
+#     1.5    lines   624-908    the project: its folders, its runs, and the layout of before
+#     1.6    lines   909-947    live values: the notebook's widgets and the token
+#     1.7    lines   948-1140   the audit store and the _Audit folder
+#     1.8    lines  1141-1401   the pipeline, its runner, and step 01: prepare-run
+#     1.9    lines  1402-1480   cell 4: verification
+#     1.10   lines  1481-1755   the notebook's four cells
+#   PART 2   lines  1756-4008   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
+#     2.1    lines  1764-1903   which files are read, and what each file is
+#     2.2    lines  1904-2081   read_methodology and read_documentation: a folder read into chunks
+#     2.3    lines  2082-2664   markup: element helpers, repairs, tag rules, the block walker, schema discovery
+#     2.4    lines  2665-3200   equations: symbols, the expression tree, the linear-notation parser, reference data
+#     2.5    lines  3201-3396   Word (.docx)
+#     2.6    lines  3397-3502   PDF
+#     2.7    lines  3503-3710   MHTML and SVG
+#     2.8    lines  3711-4008   a document's shape: headings, levels, references and chunks
+#   PART 3   lines  4009-5725   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
+#     3.1    lines  4017-4089   the package: unpacking and inventory
+#     3.2    lines  4090-4469   flowR: fetching it, running it, and its syntax trees
+#     3.3    lines  4470-4649   units from R source; roxygen blocks and help pages
+#     3.4    lines  4650-4848   stored parameter data, and which code reads it
+#     3.5    lines  4849-5122   read_package, and the package's content account
+#     3.6    lines  5123-5725   step 03, link-chunks: which chunk feeds which
+#   PART 4   lines  5726-7913   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
+#     4.1    lines  5734-6190   asking the organisation's model: what a question may hold, and many at once
+#     4.2    lines  6191-6355   step 04, interpret-code
+#     4.3    lines  6356-7112   step 05, search-methodology
+#     4.4    lines  7113-7595   Output.xlsm: its rows, its layout, and how it is written
+#     4.5    lines  7596-7913   the workbook's macro
 #
 # Every docstring ends with its signposts - Used by, Uses, Holds - generated from the code (see the docstring above).
 # ======================================================================================================================
@@ -191,6 +191,7 @@ class StepContext:
     settings: dict; options: dict; read: Callable
     work_dir: str; note: Callable; provenance: Optional[Provenance] = None
     exchanges: list = field(default_factory=list)  # each exchange with chat(), as sent and returned, for the audit folder
+    checks: list = field(default_factory=list)     # the short question asked before a step would stop, as llm_calls records
 
 @dataclass
 class StepResult:
@@ -245,7 +246,8 @@ def digest(value):
     """SHA-256 in hexadecimal: of bytes as they are, of text in UTF-8.
     Used by: content_hash, open_run (1.5), AuditStore (1.7), fingerprint_file (1.8), svg_blocks (2.3),
              equation_block (2.3), docx_figure (2.5), pdf_lines (2.6), blocks_from_mhtml (2.7), read_package (3.5),
-             call_record (4.1), code_question (4.2), question_of (4.3), rows_package_info (4.4), file_sha256 (4.4)."""
+             model_still_answers (4.1), call_record (4.1), code_question (4.2), question_of (4.3),
+             rows_package_info (4.4), file_sha256 (4.4)."""
     return hashlib.sha256(value.encode("utf-8") if isinstance(value, str) else value).hexdigest()
 
 
@@ -910,8 +912,8 @@ class LiveValues:
     """The three values chat() reads when it is CALLED: endpoint, token, user id. They live
     in memory only. `generation` goes up whenever a different token arrives, which is how
     paused workers learn that a fresh one was pasted. Enforces: R8
-    Used by: AuditStore (1.7), live (1.10), verify (1.10), journal_answer (4.1), ask_all (4.1), interpret_code (4.2),
-             search_methodology (4.3)."""
+    Used by: AuditStore (1.7), live (1.10), verify (1.10), journal_answer (4.1), ask_all (4.1),
+             model_still_answers (4.1), interpret_code (4.2), search_methodology (4.3)."""
     values: dict = field(default_factory=dict); generation: int = 0; set_at: float = 0.0
     recent_tokens: list = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -1198,6 +1200,8 @@ def run_step(step, store, paths, settings):
     except Exception as problem:                     # a step that fails is written down, never a stopped run (R2)
         result = StepResult({}, {"step did not finish": 1}, [step_failure(step, problem, work_dir)])
         fault = "".join(traceback.format_exception(type(problem), problem, problem.__traceback__))
+    if context.checks:                               # the short question asked before stopping: an exchange like any other
+        result.records.setdefault("llm_calls", []).extend(context.checks)
     for kind in sorted(result.records):
         if kind == "llm_calls":                      # exchanges with the model: the audit log's Model_Calls sheet
             store.append_calls(result.records[kind])
@@ -1508,7 +1512,7 @@ def databricks_user(dbutils):
 def live(name):
     """The endpoint and token, read from the widgets at the moment chat() calls - a token pasted into widget 02
     while a run works is used by its next call - and the user id (asked for as "reviewer_id"), from Databricks. Enforces: R8
-    Used by: setup, ask_all (4.1), the notebook's cell 2.
+    Used by: setup, ask_all (4.1), model_still_answers (4.1), the notebook's cell 2.
     Uses: LiveValues (1.6)."""
     session = NOTEBOOK["live"] = NOTEBOOK["live"] or LiveValues()
     if getattr(CHAT_WORKER, "active", False):       # a worker of step 04: the values its step last read
@@ -1654,7 +1658,7 @@ def check_chat(chat):
         return
     NOTEBOOK["chat"] = chat
     try:
-        reply = chat("Reply with the single word OK.", "Reply with the single word OK.")["answer"]
+        reply = chat(STILL_ANSWERING, STILL_ANSWERING)["answer"]
         print("chat() answered:", str(reply)[:60])
         print("Cell 3 sends each piece of the model's code to this chat(), for the column Code Interpretation (by LLM);")
         print("then the methodology, batch by batch, with each piece, for the columns Relevant Chunks in Methodology")
@@ -5838,7 +5842,7 @@ JOURNAL = "answers.jsonl"    # in the run's work folder: every answer, as it arr
 
 def sent_stamp(moment):
     """When a question was sent, as the records and the files of the audit folder give it.
-    Used by: restore_answers, call_record."""
+    Used by: restore_answers, model_still_answers, call_record."""
     return datetime.datetime.fromtimestamp(moment).isoformat(timespec="milliseconds") if moment else ""
 
 
@@ -5931,7 +5935,7 @@ def ask_model(chat, system, main, check=None, halt=None):
     further try is made: the question stays open for the next time cell 3 runs. Returns what happened, in plain words
     and in technical ones, and what check read from the answer; it never raises and never writes, because only the
     step's own thread writes. Enforces: R5, R8
-    Used by: ask_all.
+    Used by: ask_all, model_still_answers.
     Uses: Unreadable (1.1), check_words."""
     check = check or check_words
     halt = halt or threading.Event()
@@ -6000,7 +6004,8 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
     questions that were out at once. Enforces: R2, R5, R8
     Used by: interpret_code (4.2), search_methodology (4.3).
-    Uses: LiveValues (1.6), live (1.10), journal_answer, restore_answers, ask_model, stop_message.
+    Uses: LiveValues (1.6), live (1.10), journal_answer, restore_answers, ask_model, model_still_answers,
+          stop_message.
     Holds: hold, keep, progress."""
     restore_answers(ctx)
     held = ANSWERS.setdefault(ctx.options["paths"].local_dir, {})
@@ -6075,9 +6080,12 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
                         last_problem = re.sub(r"^try \d+: ", "", result["technical"][-1]) if result["technical"] else last_problem
                     follow = after(question, result) if after else []
                     if not stopped and in_a_row >= out_when_failing + CHAT_STOP_AFTER:
-                        stopped, stopped_at = stop_message(failures[-in_a_row:], answered,
-                                                           (NOTEBOOK["live"] or LiveValues()).redact(last_problem)), time.time()
-                        waiting.clear()
+                        if not halt.is_set() and model_still_answers(ctx, chat, halt):
+                            in_a_row = 0                     # refused one by one, not a model that stopped: each question
+                        else:                                # goes on to its own end, and is recorded unanswered if so
+                            stopped, stopped_at = stop_message(failures[-in_a_row:], answered,
+                                                               (NOTEBOOK["live"] or LiveValues()).redact(last_problem)), time.time()
+                            waiting.clear()
                     if follow and not stopped:
                         waiting.extendleft(reversed(follow))
                 if stopped and running and time.time() - stopped_at > CHAT_STOP_WAIT:
@@ -6093,6 +6101,26 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
         taken = [held.pop(key) for key in [key for key, (question, _) in held.items() if question["type"] in types]]
         consumed.update((question["id"], result.get("started")) for question, result in taken)
     return taken, stopped, peak
+
+
+STILL_ANSWERING = "Reply with the single word OK."   # the question cell 2 asks, and a step asks before it stops
+
+
+def model_still_answers(ctx, chat, halt):
+    """Before a step stops because question after question came back unanswered: one short question, not theirs. If
+    the model answers it, it has not stopped answering - it is refusing those questions, perhaps as too large, and each
+    goes on to its own end, recorded unanswered if so, while the step goes on; stopping instead would leave a rerun
+    to meet the same questions first and stop again, for ever. If it does not answer, the step stops. The exchange is
+    recorded like any other: a record of llm_calls, with its file in the audit folder. Enforces: R2, R4
+    Used by: ask_all.
+    Uses: digest (1.2), LiveValues (1.6), live (1.10), sent_stamp, ask_model, call_record."""
+    live("llm_token")                                    # the values the worker uses, read here, now: a token pasted since
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:   # asked on a worker thread, as every question is:
+        result = pool.submit(ask_model, chat, STILL_ANSWERING, STILL_ANSWERING, None, halt).result()   # this one reads no widget
+    asked = {"id": digest("%s %s %d %s" % (STILL_ANSWERING, ctx.provenance.step_id, len(ctx.checks), sent_stamp(result.get("started")))),
+             "type": "availability check", "unit_ref": None}
+    ctx.checks.append(call_record(ctx, asked, result, (NOTEBOOK["live"] or LiveValues()).redact))
+    return bool(result["answer"])
 
 
 def stop_message(failures, answered, last_problem=""):
@@ -6115,7 +6143,7 @@ def call_record(ctx, asked, result, redact, **extra):
     """The record of one exchange with the model, as the audit log's Model_Calls sheet holds it: the token removed
     from everything the model wrote, the technical account of what went wrong left to run_log.txt. `extra` may hold
     the question itself, as step 04 keeps it. Enforces: R4, R8, R10
-    Used by: interpret_code (4.2), search_methodology (4.3).
+    Used by: model_still_answers, interpret_code (4.2), search_methodology (4.3).
     Uses: digest (1.2), sent_stamp, redacted."""
     answer = redact(result["answer"])
     record = {"run_id": ctx.provenance.run_id, "step_id": ctx.provenance.step_id, "step": ctx.provenance.step,
