@@ -299,7 +299,16 @@ The sheet *Files* of `Audit_Log.xlsx` lists every one of them, numbered across t
 
 ## 11. The one engine file
 
-`engine/verifier.py` is the whole tool: the contracts and the words it may use, the front door that decides what a file is, the readers for the methodology and the documentation, the reader for the R package, the links between its units, the organisation's model and the two steps that ask it, the run, and `Output.xlsm`. Beside it is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`. The tests and the maintainer's tooling live in `engine/tests/`, outside the tool itself.
+`engine/verifier.py` is the whole tool, in four parts, in the order a run goes, each one reviewer's contiguous share:
+
+| Part | What it holds |
+|---|---|
+| 1 | Foundations and the run: the records, JSON and digests, the content account, settings, the project and its runs, live values, the audit store, the pipeline and its runner, step 01, cell 4's verification, and the notebook's four cells |
+| 2 | Step 02 for the methodology and the documentation: which files are read, reading a folder into chunks, markup, equations, Word, PDF, MHTML and SVG, a document's shape |
+| 3 | Step 02 for the model package, and step 03: unpacking, flowR, units from R source, stored data, `read_package`, chunk links |
+| 4 | Steps 04 and 05, and the deliverable: asking the organisation's model, interpret-code, search-methodology, `Output.xlsm` and its macro |
+
+The contents at the top of the file give each part's and each of its 29 sections' lines, and each part's banner says in which cell it runs, its entry points and the records it writes. Every function's and class's docstring ends with its signposts: *Used by* - the functions that call it, a notebook cell, or the runner by its name in `STEP_FUNCTIONS`; *Uses* - the functions and classes of the file it calls; *Holds* - the helpers written inside it. A name from another section carries that section's number. Beside the engine is only `requirements.txt`; the steps are named in the engine itself, in `verifier.PIPELINE`, and carried out only by the functions `verifier.STEP_FUNCTIONS` names. The tests and the maintainer's tooling live outside the tool itself.
 
 ## 12. The pipeline
 
@@ -389,4 +398,4 @@ After any change, see section 19.
 
 ## 19. Maintaining the tool
 
-Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 17). After a change, run a review on a project you know and compare its `Output.xlsm` with the one before: every sheet should differ only where the change meant it to.
+Everything that runs is in `engine/verifier.py`; the manual names the one place each thing lives (section 17). After a change, run a review on a project you know and compare its `Output.xlsm` with the one before: every sheet should differ only where the change meant it to. Then regenerate the contents, the part banners and the signposts with the maintainer's signpost tool: they are generated from the code, never written by hand, and its check fails while any of them is stale - a function added, removed, renamed or called from somewhere new. A new function goes in the section of the step that uses it, or in part 1 when several parts do.
