@@ -61,7 +61,7 @@ from xml.sax.saxutils import escape
 # ======================================================================================================================
 # CONTENTS - four parts, in the order a run goes; each part is one reviewer's contiguous share of the file.
 #
-#   PART 1   lines   102-1763   foundations and the run   (reviewer 1)
+#   PART 1   lines   102-1779   foundations and the run   (reviewer 1)
 #     1.1    lines   110-224    the vocabulary, the records and the two exceptions
 #     1.2    lines   225-361    canonical JSON, digests and numbers
 #     1.3    lines   362-603    the content account: what every reading must close, and a document's smallest pieces
@@ -69,31 +69,31 @@ from xml.sax.saxutils import escape
 #     1.5    lines   624-908    the project: its folders, its runs, and the layout of before
 #     1.6    lines   909-947    live values: the notebook's widgets and the token
 #     1.7    lines   948-1140   the audit store and the _Audit folder
-#     1.8    lines  1141-1401   the pipeline, its runner, and step 01: prepare-run
-#     1.9    lines  1402-1480   cell 4: verification
-#     1.10   lines  1481-1763   the notebook's four cells
-#   PART 2   lines  1764-4012   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
-#     2.1    lines  1772-1911   which files are read, and what each file is
-#     2.2    lines  1912-2089   read_methodology and read_documentation: a folder read into chunks
-#     2.3    lines  2090-2672   markup: element helpers, repairs, tag rules, the block walker, schema discovery
-#     2.4    lines  2673-3208   equations: symbols, the expression tree, the linear-notation parser, reference data
-#     2.5    lines  3209-3404   Word (.docx)
-#     2.6    lines  3405-3510   PDF
-#     2.7    lines  3511-3714   MHTML and SVG
-#     2.8    lines  3715-4012   a document's shape: headings, levels, references and chunks
-#   PART 3   lines  4013-5730   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
-#     3.1    lines  4021-4093   the package: unpacking and inventory
-#     3.2    lines  4094-4474   flowR: fetching it, running it, and its syntax trees
-#     3.3    lines  4475-4654   units from R source; roxygen blocks and help pages
-#     3.4    lines  4655-4853   stored parameter data, and which code reads it
-#     3.5    lines  4854-5127   read_package, and the package's content account
-#     3.6    lines  5128-5730   step 03, link-chunks: which chunk feeds which
-#   PART 4   lines  5731-7916   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
-#     4.1    lines  5739-6195   asking the organisation's model: what a question may hold, and many at once
-#     4.2    lines  6196-6360   step 04, interpret-code
-#     4.3    lines  6361-7115   step 05, search-methodology
-#     4.4    lines  7116-7598   Output.xlsm: its rows, its layout, and how it is written
-#     4.5    lines  7599-7916   the workbook's macro
+#     1.8    lines  1141-1403   the pipeline, its runner, and step 01: prepare-run
+#     1.9    lines  1404-1482   cell 4: verification
+#     1.10   lines  1483-1779   the notebook's four cells
+#   PART 2   lines  1780-4028   step 02, read-inputs: the methodology and the documentation   (reviewer 2)
+#     2.1    lines  1788-1927   which files are read, and what each file is
+#     2.2    lines  1928-2105   read_methodology and read_documentation: a folder read into chunks
+#     2.3    lines  2106-2688   markup: element helpers, repairs, tag rules, the block walker, schema discovery
+#     2.4    lines  2689-3224   equations: symbols, the expression tree, the linear-notation parser, reference data
+#     2.5    lines  3225-3420   Word (.docx)
+#     2.6    lines  3421-3526   PDF
+#     2.7    lines  3527-3730   MHTML and SVG
+#     2.8    lines  3731-4028   a document's shape: headings, levels, references and chunks
+#   PART 3   lines  4029-5746   step 02, read-inputs: the model package; step 03, link-chunks   (reviewer 3)
+#     3.1    lines  4037-4109   the package: unpacking and inventory
+#     3.2    lines  4110-4490   flowR: fetching it, running it, and its syntax trees
+#     3.3    lines  4491-4670   units from R source; roxygen blocks and help pages
+#     3.4    lines  4671-4869   stored parameter data, and which code reads it
+#     3.5    lines  4870-5143   read_package, and the package's content account
+#     3.6    lines  5144-5746   step 03, link-chunks: which chunk feeds which
+#   PART 4   lines  5747-7932   step 04, interpret-code; step 05, search-methodology; the deliverable   (reviewer 4)
+#     4.1    lines  5755-6211   asking the organisation's model: what a question may hold, and many at once
+#     4.2    lines  6212-6376   step 04, interpret-code
+#     4.3    lines  6377-7131   step 05, search-methodology
+#     4.4    lines  7132-7614   Output.xlsm: its rows, its layout, and how it is written
+#     4.5    lines  7615-7932   the workbook's macro
 #
 # Every docstring ends with its signposts - Used by, Uses, Holds - generated from the code (see the docstring above).
 # ======================================================================================================================
@@ -1166,7 +1166,9 @@ def run_pipeline(paths, settings, stop_after=""):
         finished = run_step(step, store, paths, settings)
         steps_run.append(step["name"])
         if not finished:
-            message = "Step %s (%s) did not finish. Run cell 3 again to carry on from it." % (step["id"], step["name"])
+            message = ("Step %s (%s) was halted: chat() stopped giving an answer. What it returned, and what to do, is at the end."
+                       % (step["id"], step["name"]) if NOTEBOOK["halted"] else
+                       "Step %s (%s) did not finish. Run cell 3 again to carry on from it." % (step["id"], step["name"]))
             rebuild_outputs(store, paths, settings, message)
             return {"state": "unfinished", "message": message, "steps_run": steps_run}
         if stop_after and step["id"] == stop_after:
@@ -1501,7 +1503,8 @@ WIDGETS = (("llm_endpoint", "", "01 LLM endpoint"), ("llm_token", "", "02 LLM to
 OLD_WIDGETS = ("llm_user_id", "reviewer_role", "run", "projects_dir", "scratch_dir", "concept_subject", "flowr_archive",
                "reviewer_id", "jfrog_index_url", "concurrency_limit", "token_cap", "model_id", "project")
 PYPI = "https://pypi.org/simple/"          # where every package comes from: named here, so no pip setting of the cluster redirects it
-NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": None, "chat": None, "paths": None, "result": None}
+NOTEBOOK = {"dbutils": None, "home": "", "projects": "", "user": "", "live": None, "chat": None, "paths": None, "result": None,
+            "halted": None}                  # halted: what chat() returned when a step of cell 3 halted, the token removed
 
 def databricks_user(dbutils):
     """Who runs the notebook, as Databricks knows them: the notebook context's user name; on a cluster that keeps
@@ -1725,6 +1728,7 @@ def review():
     if paths is None:
         return
     settings = notebook_settings()
+    NOTEBOOK["halted"] = None
     result = NOTEBOOK["result"] = run_pipeline(paths, settings)
     print(result["message"])
     store = open_store(paths, settings)
@@ -1736,6 +1740,17 @@ def review():
         print("  step %s %-14s %s" % (record["step_id"], record["name"], ", ".join("%s: %s" % item for item in sorted((record["counts"] or {}).items()))))
         for message in record["messages"]:
             print("      " + message)
+    if NOTEBOOK["halted"]:                                  # chat() stopped giving an answer: what it returned, what to do
+        print("\n" + "=" * 110)
+        print("STOPPED: chat() stopped giving an answer, so the run was halted.")
+        print("What chat() returned: " + NOTEBOOK["halted"].rstrip(".")[:300] + ".")
+        print("Nothing received is lost: every answer so far is kept.")
+        print("1. Fix chat(): an expired access token - paste a new one into widget 02; a gateway that is down - wait until it")
+        print("   is back; a fault in chat() itself - correct it in cell 2.")
+        print("2. Run the whole notebook again, cells 1 to 4. The run carries on from where it stopped: nothing finished is done")
+        print("   again, and only the questions still open are asked.")
+        print("=" * 110)
+        return
     print("\nProject folder:", paths.project_dir)
     print("Open Output.xlsm there, beside the three input folders: the three Chunks sheets show everything that was read, and Chunks_Model also what the")
     print("organisation's model says of each piece, the chunks of the methodology it found for it, and how many items it")
@@ -5837,7 +5852,7 @@ CHAT_START = 32              # questions out at once when asking starts, doubled
 CHAT_REFRESH_SECONDS = 1     # how often the step's own thread reads the widgets again while it asks
 CHAT_WORKER = threading.local()
 CHAT_STOP_AFTER = 4          # questions in a row without an answer, beyond those already out: the model has stopped answering
-CHAT_STOP_WAIT = 120         # seconds a stopped step waits for the questions still out
+CHAT_CHECK_EVERY = 30        # seconds, after the model answered the short question, before a question left unanswered asks it again
 CHAT_PROGRESS_SECONDS = 60   # how often a long step says how far it has got
 ANSWERS = {}                 # run (its scratch folder) -> {question id: (question, what came back)}, until written
 ANSWERS_LOCK = threading.Lock()
@@ -6005,13 +6020,15 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     check its answers pass; after(question, result) returns the next items, which go before the rest. Every answer is
     held in ANSWERS as this loop takes it back - Python wakes the loop before a finished call's callback has run, so the
     callback alone could hold an answer too late to be taken - and, when it comes back after the loop has ended, by the
-    thread that received it; so an interrupted cell loses none, and an answer a step has taken is never held again. When the questions already out,
-    and CHAT_STOP_AFTER more, all come back without an answer, no more are sent: the model has stopped answering.
+    thread that received it; so an interrupted cell loses none, and an answer a step has taken is never held again. When a question ends because chat() gave
+    no answer on any try - or question after question ends without one - the short question of model_still_answers is
+    asked (at most every CHAT_CHECK_EVERY seconds while it is answered): answered, the step goes on; unanswered, the step
+    halts at once, sends nothing more, and says what chat() returned (halted_message).
     Returns (every held result of these types, taken, as (question, result)), why it stopped or "", and the most
     questions that were out at once. Enforces: R2, R5, R8
     Used by: interpret_code (4.2), search_methodology (4.3).
     Uses: LiveValues (1.6), live (1.10), journal_answer, restore_answers, ask_model, model_still_answers,
-          stop_message.
+          halted_message.
     Holds: hold, keep, progress."""
     restore_answers(ctx)
     held = ANSWERS.setdefault(ctx.options["paths"].local_dir, {})
@@ -6019,7 +6036,7 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
     waiting, running = collections.deque(work), {}
     window, threshold = float(min(CHAT_START, most)), float(most)      # how many may be out; where doubling gives way to adding
     answered = failed = in_a_row = out_when_failing = completed = calm_after = peak = 0
-    stopped, stopped_at, said, refreshed, failures, last_problem = "", 0.0, time.time(), time.time(), [], ""
+    stopped, checked_at, said, refreshed, last_problem = "", 0.0, time.time(), time.time(), ""
     halt = threading.Event()                                  # set when this cell stops asking, however it ends
     consumed = CONSUMED.setdefault(ctx.options["paths"].local_dir, set())
 
@@ -6082,20 +6099,23 @@ def ask_all(ctx, chat, work, build, check_of, after=None, label="questions", typ
                     else:
                         failed, in_a_row = failed + 1, in_a_row + 1
                         out_when_failing = len(running) + 1 if in_a_row == 1 else out_when_failing
-                        failures.append(bool(result["failed calls"]))
                         last_problem = re.sub(r"^try \d+: ", "", result["technical"][-1]) if result["technical"] else last_problem
                     follow = after(question, result) if after else []
-                    if not stopped and in_a_row >= out_when_failing + CHAT_STOP_AFTER:
-                        if not halt.is_set() and model_still_answers(ctx, chat, halt):
-                            in_a_row = 0                     # refused one by one, not a model that stopped: each question
-                        else:                                # goes on to its own end, and is recorded unanswered if so
-                            stopped, stopped_at = stop_message(failures[-in_a_row:], answered,
-                                                               (NOTEBOOK["live"] or LiveValues()).redact(last_problem)), time.time()
+                    no_answer = not result["answer"] and bool(result["failed calls"])   # chat() gave no answer, try after try,
+                    in_a_run = in_a_row >= out_when_failing + CHAT_STOP_AFTER           # or question after question came back empty
+                    if not stopped and not halt.is_set() and ((no_answer and time.time() - checked_at > CHAT_CHECK_EVERY) or in_a_run):
+                        if model_still_answers(ctx, chat, halt):     # it answers a short question: these were refused, one by
+                            checked_at, in_a_row = time.time(), 0    # one; each goes on to its own end, unanswered if so
+                        else:                                        # it answers nothing: halt now, and say what chat() returned
+                            problem = (NOTEBOOK["live"] or LiveValues()).redact(last_problem) or "no answer, and no error"
+                            stopped, NOTEBOOK["halted"] = halted_message(problem, answered), problem
                             waiting.clear()
+                            halt.set()                               # no question out is tried again; each is held as it ends
+                            break
                     if follow and not stopped:
                         waiting.extendleft(reversed(follow))
-                if stopped and running and time.time() - stopped_at > CHAT_STOP_WAIT:
-                    break                                    # what is still out is held when it arrives
+                if stopped:
+                    break                                    # halted: what is still out is held when it arrives, for the rerun
                 if time.time() - said >= CHAT_PROGRESS_SECONDS:
                     progress()
                     said = time.time()
@@ -6129,20 +6149,15 @@ def model_still_answers(ctx, chat, halt):
     return bool(result["answer"])
 
 
-def stop_message(failures, answered, last_problem=""):
-    """Why a step stopped asking, in plain words: the calls failed - the token may have run out, or the gateway be
-    down - or the answers came back in a form that could not be read. `last_problem` is what the last failed call
-    returned, the token removed.
+def halted_message(problem, answered):
+    """What a step says when chat() stops giving an answer and the step halts: what chat() returned instead, the token
+    removed; that every answer received is kept; and what to do - fix chat(), then run the whole notebook again, which
+    carries the run on from where it stopped. Enforces: R2, R8, R10
     Used by: ask_all."""
-    if all(failures):
-        return ("The model stopped answering: the last %d questions got no answer, so no more were sent.%s If the access token "
-                "has run out, paste a new one into widget 02; if the gateway is down, wait until it is back. Then run cell 3 "
-                "again - or every cell, from cell 1: the %d answers received in this cell are kept, with every answer received "
-                "before, and only the questions still open are asked." % (
-                    len(failures), " The last call returned: %s." % last_problem.rstrip(".")[:300] if last_problem else "", answered))
-    return ("The last %d answers of the model could not be read in the form asked for, so no more questions were sent. "
-            "Run cell 3 again to carry on: the %d answers received in this cell are kept; what the model wrote is in "
-            "run_log.txt." % (len(failures), answered))
+    return ("Stopped: chat() gave no answer. What it returned: %s. The %d answers received in this cell are kept, with every "
+            "answer received before. Fix chat() - an expired access token: paste a new one into widget 02; a gateway that is "
+            "down: wait until it is back - then run the whole notebook again, cells 1 to 4: the run carries on from where it "
+            "stopped, and asks only the questions still open." % (problem.rstrip(".")[:300], answered))
 
 
 def call_record(ctx, asked, result, redact, **extra):
