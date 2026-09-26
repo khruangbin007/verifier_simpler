@@ -45,3 +45,10 @@ kinds_plan = [k for k in re.findall(r"^\| ([A-Z][a-z]+(?:[ -][a-z]+)*) \| ", sec
 print("unit kinds as in the plan:", kinds_plan == list(verifier.UNIT_KINDS), kinds_plan)
 named = re.findall(r"(?i)khruangbin|verifier_simpler", open(PLAN).read())
 print("the plan never names the repository:", not named)
+
+source = open(os.path.join(ENGINE, "verifier.py")).read().split("\n")
+first = next(i for i, l in enumerate(source) if l.startswith("# What cell 1 installs"))
+last = next(i for i, l in enumerate(source) if l.startswith("OPTIONAL_REQUIREMENTS = "))
+appendix = plan[plan.index("# Appendix C."):]
+block = appendix[appendix.index("```python\n") + len("```python\n"):appendix.index("```", appendix.index("```python\n") + 10)]
+print("Appendix C as REQUIREMENTS and OPTIONAL_REQUIREMENTS in verifier.py:", block.strip() == "\n".join(source[first:last + 1]).strip())

@@ -5,7 +5,8 @@ without it: nothing the tool runs ever reads this folder.
 
 ## Before you start
 
-- Python 3.12 with the engine's packages (`engine/requirements.txt`) and pandas.
+- Python 3.12 with the packages the engine names in `verifier.REQUIREMENTS` and `verifier.OPTIONAL_REQUIREMENTS`,
+  and pandas.
 - flowR, as the engine gets it: it fetches the pinned release from GitHub. Where GitHub cannot be reached, put the
   pinned archive (`flowr-2.15.8-linux-x64.tar.gz`) in a folder and name that folder in `VERIFIER_FLOWR_DIR`.
 - Run everything from this folder: `cd engine/tests`. `paths.py` finds the engine, the notebook and the samples
